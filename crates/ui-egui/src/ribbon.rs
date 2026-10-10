@@ -2798,6 +2798,40 @@ fn single_area(app: &SheetApp) -> bool {
 
 /// `Some(true)` when every selected area is whole rows, `Some(false)` when every one is whole
 /// columns, `None` otherwise (including the whole sheet).
+/// Width of one window-control button on the title bar.
+pub const CONTROL_W: f32 = 46.0;
+const TITLE_H: f32 = 38.0;
+const RESIZE_BAND: f32 = 5.0;
+
+/// Draw application controls and edge resizing for frameless windows.
+pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
+    if !app.window_controls { return; }
+    let (maximized, fullscreen) = ctx.input(|i| (i.viewport().maximized.unwrap_or(false), i.viewport().fullscreen.unwrap_or(false)));
+    if fullscreen { return; }
+    let t = Tokens::get(ctx);
+    let screen = ctx.content_rect();
+    let controls = egui::Rect::from_min_size(egui::pos2(screen.max.x - 3.0 * CONTROL_W, screen.min.y), egui::vec2(3.0 * CONTROL_W, TITLE_H));
+    egui::Area::new(egui::Id::new("gc_window_controls")).order(egui::Order::Foreground).fixed_pos(controls.min).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        ui.horizontal(|ui| {
+            for kind in ["minimize", "maximize", "close"] {
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(CONTROL_W, TITLE_H), egui::Sense::click());
+                let hot = resp.hovered() || resp.is_pointer_button_down_on();
+                if hot { ui.painter().rect_filled(r, 0.0, if kind == "close" { egui::Color32::from_rgb(0xC4,0x2B,0x1C) } else if resp.is_pointer_button_down_on() { t.pressed } else { t.hover }); }
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, kind));
+                let m = r.center(); let stroke = egui::Stroke::new(1.0, if kind == "close" && hot { egui::Color32::WHITE } else { t.text });
+                match kind { "minimize" => ui.painter().line_segment([egui::pos2(m.x-5.0,m.y),egui::pos2(m.x+5.0,m.y)], stroke), "maximize" => { ui.painter().rect_stroke(r.shrink(15.0), 0.0, stroke, egui::StrokeKind::Inside); }, _ => { ui.painter().line_segment([m-egui::vec2(5.0,5.0),m+egui::vec2(5.0,5.0)], stroke); ui.painter().line_segment([m+egui::vec2(5.0,-5.0),m-egui::vec2(5.0,-5.0)], stroke); } }
+                if resp.clicked() { match kind { "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)), "maximize" => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)), "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close), _ => {} } }
+            }
+        });
+    });
+    if maximized { return; }
+    let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return; };
+    let l = pos.x <= screen.min.x + RESIZE_BAND; let r = pos.x >= screen.max.x - RESIZE_BAND; let top = pos.y <= screen.min.y + RESIZE_BAND; let b = pos.y >= screen.max.y - RESIZE_BAND;
+    let dir = match (l,r,top,b) { (true,false,true,false)=>Some(egui::viewport::ResizeDirection::NorthWest),(false,true,true,false)=>Some(egui::viewport::ResizeDirection::NorthEast),(true,false,false,true)=>Some(egui::viewport::ResizeDirection::SouthWest),(false,true,false,true)=>Some(egui::viewport::ResizeDirection::SouthEast),(true,false,_,_)=>Some(egui::viewport::ResizeDirection::West),(false,true,_,_)=>Some(egui::viewport::ResizeDirection::East),(_,_,true,false)=>Some(egui::viewport::ResizeDirection::North),(_,_,false,true)=>Some(egui::viewport::ResizeDirection::South), _=>None };
+    if let Some(dir) = dir { if ctx.input(|i| i.pointer.primary_pressed()) && !controls.contains(pos) { ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir)); } }
+}
+
 fn whole_lines(app: &SheetApp) -> Option<bool> {
     let sel = &app.session.active()?.selection;
     let rows = sel.ranges.iter().all(|r| r.is_full_rows() && !r.is_full_cols());

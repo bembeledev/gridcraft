@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (UI building blocks: theme tokens) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (UI building blocks: theme tokens, ribbon widgets) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -54,6 +54,12 @@ drawing its own:
   foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
   token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
   colours (`theme::Cat`) from the tokens.
+- **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
+  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
+  `i18n` in one place. Split buttons return the main and arrow responses separately, with
+  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
+  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  and a test keeps every tab within the card's three rows.
 
 ## Agent control
 
@@ -80,5 +86,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | UI building blocks: ribbon widgets and overflow |
 | 2026-10-11 | minor | UI building blocks: theme tokens and the contrast test |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

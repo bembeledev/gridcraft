@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (UI building blocks: theme tokens) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -43,6 +43,18 @@ including tests, 2026-10-10.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
+## UI building blocks
+
+The panels in `crates/ui-egui` share a few pieces, so a new feature reuses them instead of
+drawing its own:
+
+- **Colours**: `theme::Tokens`, each with a light and a dark value. The sheet stays white in both
+  themes, so colours drawn on it (`sheet_ref_colors`, `sheet_control_*`, icons through
+  `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
+  foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
+  token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
+  colours (`theme::Cat`) from the tokens.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -68,4 +80,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | UI building blocks: theme tokens and the contrast test |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

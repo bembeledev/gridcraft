@@ -65,6 +65,8 @@ pub struct Tokens {
     pub ref_colors: [Color32; 8],
     /// Reference colours on the sheet (outlines and the in-cell editor). The sheet stays white.
     pub sheet_ref_colors: [Color32; 8],
+    /// Code colours in the code editor (and the window-coloured fields it sits in).
+    pub syntax: Syntax,
     /// The message box warning disc and its glyph.
     pub warning: Color32,
     pub on_warning: Color32,
@@ -102,6 +104,20 @@ const fn rgb(hex: u32) -> Color32 {
 /// theme). The light theme's formula bar is white too, so it uses them as well.
 const SHEET_REF_COLORS: [Color32; 8] =
     [rgb(0x2E6FD8), rgb(0xD03C3C), rgb(0x7A4FC9), rgb(0x23803D), rgb(0xB5531A), rgb(0x16798A), rgb(0xB83B8E), rgb(0x77681A)];
+/// Code colours for one background; plain text uses the surface's own text colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Syntax {
+    pub keyword: Color32,
+    pub string: Color32,
+    pub number: Color32,
+    pub comment: Color32,
+    pub builtin: Color32,
+}
+
+const LIGHT_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x0B57B3), string: rgb(0xA3361B), number: rgb(0x157A5A), comment: rgb(0x6B7280), builtin: rgb(0x7B3FB5) };
+const DARK_SYNTAX: Syntax =
+    Syntax { keyword: rgb(0x6FAEFF), string: rgb(0xF09A7A), number: rgb(0x7FD1A8), comment: rgb(0x9AA3AE), builtin: rgb(0xC69BF2) };
 const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
@@ -152,6 +168,7 @@ impl Tokens {
             paper: Color32::WHITE,
             ref_colors: SHEET_REF_COLORS,
             sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: LIGHT_SYNTAX,
             warning: rgb(0xF2C32E),
             on_warning: rgb(0x1F1F1F),
             sheet_control_bg: SHEET_CONTROL_BG,
@@ -205,6 +222,7 @@ impl Tokens {
             paper: rgb(0x454545),
             ref_colors: [rgb(0x6FA3F5), rgb(0xF27C7C), rgb(0xB394EE), rgb(0x6CCB85), rgb(0xF0A061), rgb(0x5CC9DA), rgb(0xE77FC4), rgb(0xD4C25A)],
             sheet_ref_colors: SHEET_REF_COLORS,
+            syntax: DARK_SYNTAX,
             warning: rgb(0xF2C32E),
             on_warning: rgb(0x1F1F1F),
             sheet_control_bg: SHEET_CONTROL_BG,
@@ -928,6 +946,10 @@ mod contrast_tests {
         add("selected header text", t.header_sel_text, t.header_sel_bg, TEXT);
         for (i, c) in t.ref_colors.iter().enumerate() {
             add(&format!("formula bar reference {i}"), *c, t.input_bg, TEXT);
+        }
+        let s = t.syntax;
+        for (name, c) in [("keyword", s.keyword), ("string", s.string), ("number", s.number), ("comment", s.comment), ("builtin", s.builtin)] {
+            add(&format!("code {name} on input"), c, t.input_bg, TEXT);
         }
         // On the sheet.
         add("cell text", t.cell_text, t.grid_bg, TEXT);

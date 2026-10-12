@@ -54,6 +54,8 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            window_controls: None,
+            app_frame_shown: HashMap::new(),
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -202,7 +204,12 @@ impl SheetApp {
         if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
-        if self.chrome.title_bar {
+        self.sync_window_frame(&ctx);
+        if self.draws_window_frame() {
+            window_controls::resize_edges(&ctx);
+        }
+        // The title bar carries the window buttons when the app draws the frame.
+        if self.chrome.title_bar || self.draws_window_frame() {
             ribbon::title_bar(self, ui);
         }
         if self.backstage.is_some() {

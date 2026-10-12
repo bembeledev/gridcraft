@@ -462,6 +462,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Alle Blätter",
         "New sheet (⇧F11)" => "Neues Blatt (⇧F11)",
         "Text Box" => "Textfeld",
+        "Minimize" => "Minimieren",
+        "Maximize" => "Maximieren",
+        "Restore" => "Wiederherstellen",
+        "Use system title bar" => "System-Titelleiste verwenden",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Eine einfache Titelleiste für die Fensterknöpfe über der von GridCraft anzeigen. GNOME zeichnet für Apps keine Titelleisten, daher folgt diese nicht seinem Design."
+        }
         _ => return None,
     })
 }

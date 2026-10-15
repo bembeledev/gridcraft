@@ -27,7 +27,8 @@ fn harness() -> Harness {
         SheetApp::new(session, Default::default()),
     );
     h.run_steps(4);
-    // The headless harness disables animation by default. Enable it because production does too.
+    // Exercise the opt-in path: a drag must stay responsive even when animations are enabled.
+    h.state_mut().ui.animations = true;
     h.ctx.all_styles_mut(|style| style.animation_time = 0.1);
     h.step();
     h

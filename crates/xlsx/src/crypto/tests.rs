@@ -155,3 +155,37 @@ fn non_ascii_passwords_hash_as_utf16le_like_msoffcrypto() {
         hex("2bca96ca0a7e8d88d9314a2eb1819a1ece94ff9ce34266ff82f891a88c4240c4c9f39c729b7c5c410c27fc8e2b7ad90d8c005eb68a603377b8a4ab858041c76a")
     );
 }
+
+#[test]
+fn hmac_matches_rfc_4231() {
+    // Test cases 2 and 6 (a key longer than the block is hashed first).
+    assert_eq!(
+        hmac_sha512(b"Jefe", b"what do ya want for nothing?"),
+        hex("164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737")
+    );
+    assert_eq!(
+        hmac_sha512(&[0xAA; 131], b"Test Using Larger Than Block-Size Key - Hash Key First"),
+        hex("80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598")
+    );
+}
+
+#[test]
+fn encrypted_packages_carry_a_valid_data_integrity_hmac() {
+    // [MS-OFFCRYPTO] 2.3.4.14: the HMAC of the whole EncryptedPackage stream, its key and value
+    // encrypted with the package key.
+    let secrets = Secrets::random().unwrap();
+    let (info, package) = encrypt_streams(&payload(10_000), PASSWORD, 1000, &secrets).unwrap();
+    assert_eq!(decrypt_streams(&info, &package, PASSWORD).unwrap(), payload(10_000));
+    let root = crate::xml::parse(&info[8..]).unwrap();
+    let key_data = Params::read(root.child("keyData").unwrap()).unwrap();
+    let integrity = root.child("dataIntegrity").unwrap();
+    let aes = Aes::new(&secrets.key).unwrap();
+    let field = |name: &str, block_key: &[u8]| {
+        let mut v = base64(integrity.attr(name).unwrap()).unwrap();
+        aes.decrypt_cbc(&key_data.iv(Some(block_key)), &mut v).unwrap();
+        v
+    };
+    let hmac_key = field("encryptedHmacKey", &BLOCK_HMAC_KEY);
+    assert_eq!(hmac_key, secrets.hmac_key);
+    assert_eq!(field("encryptedHmacValue", &BLOCK_HMAC_VALUE), hmac_sha512(&hmac_key, &package));
+}

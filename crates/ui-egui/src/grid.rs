@@ -724,7 +724,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     } else {
-        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
+        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t, cell_editor_here(app, &wb))
     };
     // Objects above cells.
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
@@ -782,6 +782,7 @@ fn paint_panes(
     outline: Rect,
     cf: &mut CfCache,
     t: &Tokens,
+    editor_here: bool,
 ) -> Vec<((u32, u32), (u32, u32), Rect)> {
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
@@ -805,7 +806,7 @@ fn paint_panes(
         }
         let p = painter.with_clip_rect(*clip);
         paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
-        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
+        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols, editor_here);
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -1594,7 +1595,15 @@ pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
     sides.into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
 }
 
+/// True while the in-cell editor paints over `wb`'s active sheet (mirroring `in_cell_editor`'s
+/// own guard): the editor then owns the active-cell border and the selection outline yields.
+pub(crate) fn cell_editor_here(app: &SheetApp, wb: &Workbook) -> bool {
+    app.editor.as_ref().is_some_and(|e| !e.from_formula_bar && e.sheet == wb.active_sheet)
+}
+
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
+/// `editor_here` is true while the in-cell editor paints over this sheet: it draws this same
+/// border itself, so the outline stays out and there is exactly one border.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_selection(
     p: &Painter,
@@ -1606,6 +1615,7 @@ pub(crate) fn paint_selection(
     app: &SheetApp,
     rows: (u32, u32),
     cols: (u32, u32),
+    editor_here: bool,
 ) {
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
@@ -1635,7 +1645,7 @@ pub(crate) fn paint_selection(
             }
         }
     }
-    if cur_here {
+    if cur_here && !editor_here {
         for side in outline_bands(outline.expand(0.25), 1.5, p.clip_rect()) {
             p.rect_filled(side, 0.0, t.sel_border);
         }
@@ -2704,11 +2714,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    // Single-line text that fits stays exactly cell-sized, like Excel: the edit box only
-    // grows once the text overflows the cell (wider) or wraps to more lines (taller).
-    let fits = lines <= 1.0 && text_w + 14.0 <= rect.width();
-    let w = if fits { rect.width() } else { (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left()) };
-    let h = if fits { rect.height() } else { (size * 1.3 * lines + 4.0).max(rect.height()) };
+    // The box only ever grows wider for overflowing text or taller for explicit newlines: a
+    // single line stays exactly row height, so the active-cell border never moves while typing,
+    // like Excel.
+    let multi = lines > 1.0;
+    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
+    let h = if multi { (size * 1.3 * lines + 4.0).max(rect.height()) } else { rect.height() };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {
@@ -2723,11 +2734,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
-    // While the text fits, the selection outline already draws the border on the cell edge,
-    // so the editor draws no border of its own: typing and focused look pixel-identical,
-    // like Excel. A grown (overflowing) box gets its own border to mark its extent.
-    if !fits {
-        painter.rect_stroke(erect.expand(0.75), 0.0, Stroke::new(1.5, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // The editor owns the active-cell border while it is open (the selection outline yields,
+    // see `paint_selection`), drawn exactly like the outline bands: typing and focused look
+    // pixel-identical, like Excel.
+    let sel_border = Tokens::get(ui.ctx()).sel_border;
+    for side in outline_bands(erect.expand(0.25), 1.5, clip) {
+        painter.rect_filled(side, 0.0, sel_border);
     }
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));

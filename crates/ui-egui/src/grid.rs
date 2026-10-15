@@ -1595,6 +1595,14 @@ pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
     sides.into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
 }
 
+/// Whole-pixel edges for the active-cell border. Gridlines snap to pixels
+/// (`round() - 0.5`), so an unsnapped 1.5-wide band rasterises half over two pixels and reads
+/// as a faint excess line on the neighbour. Snapped, the band's outer edge lands exactly on a
+/// pixel (crisp, no spill) and its faint half-pixel hides inside the cell.
+fn snap_rect(r: Rect) -> Rect {
+    Rect::from_min_max(pos2(r.min.x.round(), r.min.y.round()), pos2(r.max.x.round(), r.max.y.round()))
+}
+
 /// True while the in-cell editor paints over `wb`'s active sheet (mirroring `in_cell_editor`'s
 /// own guard): the editor then owns the active-cell border and the selection outline yields.
 pub(crate) fn cell_editor_here(app: &SheetApp, wb: &Workbook) -> bool {
@@ -1646,7 +1654,7 @@ pub(crate) fn paint_selection(
         }
     }
     if cur_here && !editor_here {
-        for side in outline_bands(outline.expand(0.25), 1.5, p.clip_rect()) {
+        for side in outline_bands(snap_rect(outline).expand(0.25), 1.5, p.clip_rect()) {
             p.rect_filled(side, 0.0, t.sel_border);
         }
     }
@@ -2738,7 +2746,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     // see `paint_selection`), drawn exactly like the outline bands: typing and focused look
     // pixel-identical, like Excel.
     let sel_border = Tokens::get(ui.ctx()).sel_border;
-    for side in outline_bands(erect.expand(0.25), 1.5, clip) {
+    for side in outline_bands(snap_rect(erect).expand(0.25), 1.5, clip) {
         painter.rect_filled(side, 0.0, sel_border);
     }
     let id = egui::Id::new("gridcraft.cell_editor");

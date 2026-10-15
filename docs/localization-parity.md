@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (function help follows the interface language) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Brazilian Portuguese function help) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,9 +21,9 @@ right-to-left sheets and full complex-script support. Part of
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
-  hint is assembled with the formula syntax's function name and separator. Spanish translates
-  the 10 common functions it had help for (SUM, AVERAGE, IF…); other languages show the English
-  help.
+  hint is assembled with the formula syntax's function name and separator. Brazilian Portuguese
+  translates all 479 descriptions and 283 argument names; Spanish the 10 common functions it had
+  help for (SUM, AVERAGE, IF…); other languages show the English help.
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
@@ -55,7 +55,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
+| Portuguese | pt-BR | 923 (~42%) + function help | dialogs and tooltips (dialogs take effect with #669); function descriptions and arguments | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
@@ -84,6 +84,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Brazilian Portuguese function help: all 479 descriptions and 283 argument names |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |

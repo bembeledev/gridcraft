@@ -1598,8 +1598,7 @@ pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
 /// Snap to whole *device* pixels, not logical ones. The window can render at a fractional
 /// scale (e.g. 1.25 from the OS text-scaling factor), where integer logical edges still land
 /// between device pixels — and, with 51.2 px columns, the leftover phase repeats every five
-/// columns. Snapped, the 1.5-wide bands' outer edge is crisp with no faint spill onto the
-/// neighbour: no excess, in any column, at any scale.
+/// columns. Snapped, the bands sit on exact device pixels: no excess, in any column.
 fn device_ppp(ppp: f32) -> f32 {
     if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 }
 }
@@ -1611,6 +1610,19 @@ fn snap_pos(p: Pos2, ppp: f32) -> Pos2 {
 
 fn snap_rect(r: Rect, ppp: f32) -> Rect {
     Rect::from_min_max(snap_pos(r.min, ppp), snap_pos(r.max, ppp))
+}
+
+/// The active-cell border, painted the same for a focused cell and an open editor (so the two
+/// look pixel-identical). One device pixel outside the snapped edge, up to two inside — every
+/// edge on a whole device pixel, so the gridline stays covered and no faint spill lands on the
+/// neighbour. At integer scales this is the familiar thin 1.5-wide band; at fractional scales
+/// the width rounds to whole device pixels instead of smearing.
+fn paint_active_border(p: &Painter, rect: Rect, clip: Rect, color: Color32, ppp: f32) {
+    let ppp = device_ppp(ppp);
+    let (w, x) = if (ppp - ppp.round()).abs() < 1e-6 { (1.5, 0.25) } else { (3.0 / ppp, -0.5 / ppp) };
+    for side in outline_bands(snap_rect(rect, ppp).expand(x), w, clip) {
+        p.rect_filled(side, 0.0, color);
+    }
 }
 
 /// True while the in-cell editor paints over `wb`'s active sheet (mirroring `in_cell_editor`'s
@@ -1664,9 +1676,7 @@ pub(crate) fn paint_selection(
         }
     }
     if cur_here && !editor_here {
-        for side in outline_bands(snap_rect(outline, p.ctx().pixels_per_point()).expand(0.25), 1.5, p.clip_rect()) {
-            p.rect_filled(side, 0.0, t.sel_border);
-        }
+        paint_active_border(p, outline, p.clip_rect(), t.sel_border, p.ctx().pixels_per_point());
     }
     if active_here && sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
@@ -2756,9 +2766,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     // see `paint_selection`), drawn exactly like the outline bands: typing and focused look
     // pixel-identical, like Excel.
     let sel_border = Tokens::get(ui.ctx()).sel_border;
-    for side in outline_bands(snap_rect(erect, ui.ctx().pixels_per_point()).expand(0.25), 1.5, clip) {
-        painter.rect_filled(side, 0.0, sel_border);
-    }
+    paint_active_border(&painter, erect, clip, sel_border, ui.ctx().pixels_per_point());
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);

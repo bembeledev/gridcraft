@@ -540,8 +540,8 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
             gridcraft_plugin::office::OfficeCommand::ShowTaskpane { url, taskpane_id } => {
                 UiRequest::OfficePane { plugin: plugin.to_string(), title, url: url.clone(), pane: taskpane_id.clone() }
             }
-            gridcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url } => {
-                UiRequest::OfficeFunction { plugin: plugin.to_string(), url: url.clone(), function: function.clone() }
+            gridcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url, control } => {
+                UiRequest::OfficeFunction { plugin: plugin.to_string(), url: url.clone(), function: function.clone(), control: control.clone() }
             }
         });
         return Ok(json!({"ran": 0, "office": office}));

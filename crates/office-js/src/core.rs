@@ -192,13 +192,31 @@ pub fn load_props(arg: &Json) -> Vec<String> {
 /// The requirement sets this library supports, with the highest version of each. The plugin
 /// host checks Office add-ins' `<Requirements>` against the same table
 /// (`gridcraft_plugin::office::API_SETS`; a test keeps them equal).
-pub const SUPPORTED_SETS: &[(&str, (u32, u32))] =
-    &[("ExcelApi", (1, 4)), ("Settings", (1, 1)), ("Selection", (1, 1)), ("TextCoercion", (1, 1)), ("MatrixCoercion", (1, 1))];
+///
+/// ExcelApi 1.4 is reported so add-ins written for it load; only the objects `js` defines exist
+/// (docs/officejs.md), the rest answers `NotImplemented`.
+pub const SUPPORTED_SETS: &[(&str, (u32, u32))] = &[
+    ("ExcelApi", (1, 4)),
+    ("AddinCommands", (1, 1)),
+    ("DocumentEvents", (1, 1)),
+    ("Settings", (1, 1)),
+    ("Selection", (1, 1)),
+    ("TextCoercion", (1, 1)),
+    ("MatrixCoercion", (1, 1)),
+];
 
 /// The Common API methods this library implements (`<Requirements><Methods>`), as the plugin
 /// host checks them (`gridcraft_plugin::office::API_METHODS`).
-pub const SUPPORTED_METHODS: &[&str] =
-    &["Document.getSelectedDataAsync", "Document.setSelectedDataAsync", "Settings.get", "Settings.set", "Settings.remove", "Settings.saveAsync"];
+pub const SUPPORTED_METHODS: &[&str] = &[
+    "Document.getSelectedDataAsync",
+    "Document.setSelectedDataAsync",
+    "Document.addHandlerAsync",
+    "Document.removeHandlerAsync",
+    "Settings.get",
+    "Settings.set",
+    "Settings.remove",
+    "Settings.saveAsync",
+];
 
 /// `Office.context.requirements.isSetSupported(name, minVersion)`.
 pub fn is_set_supported(name: &str, min: Option<&str>) -> bool {
@@ -282,5 +300,7 @@ mod tests {
         assert!(is_set_supported("ExcelApi", Some("1.4")) && is_set_supported("excelapi", Some("1.1")) && is_set_supported("ExcelApi", None));
         assert!(!is_set_supported("ExcelApi", Some("1.5")) && !is_set_supported("ExcelApi", Some("1.10")));
         assert!(!is_set_supported("WordApi", Some("1.1")));
+        assert!(is_set_supported("AddinCommands", Some("1.1")) && !is_set_supported("AddinCommands", Some("1.3")));
+        assert!(is_set_supported("DocumentEvents", None) && !is_set_supported("DialogApi", Some("1.1")));
     }
 }

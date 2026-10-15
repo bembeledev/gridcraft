@@ -17,6 +17,8 @@ use serde_json::{Value as Json, json};
 use super::{CommandSpec, always, bad, cmd, str_param};
 use crate::{EngineError, Result, Session};
 
+mod colors;
+
 /// Most cells one read or write may cover.
 const MAX_CELLS: u64 = 1_000_000;
 /// Most cells whose formats are read one by one (`numberFormat`).
@@ -68,6 +70,50 @@ fn engine(e: EngineError) -> OfficeError {
 fn settings_store() -> &'static std::sync::Mutex<HashMap<(u64, String), Json>> {
     static S: std::sync::OnceLock<std::sync::Mutex<HashMap<(u64, String), Json>>> = std::sync::OnceLock::new();
     S.get_or_init(Default::default)
+}
+
+/// Worksheets added without a name, per open workbook: the library's token → the name given.
+fn added_store() -> &'static std::sync::Mutex<HashMap<(u64, String), String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<HashMap<(u64, String), String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Most tokens kept (they are only needed while the add-in's proxy lives).
+const MAX_ADDED: usize = 10_000;
+
+fn remember_added(s: &Session, token: &str, name: &str) {
+    let uid = s.active().map(|d| d.uid).unwrap_or(0);
+    let mut store = match added_store().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if store.len() >= MAX_ADDED {
+        store.clear();
+    }
+    store.insert((uid, token.chars().take(64).collect()), name.to_string());
+}
+
+fn added_name(s: &Session, token: &str) -> Option<String> {
+    let uid = s.active().map(|d| d.uid).unwrap_or(0);
+    let store = match added_store().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    store.get(&(uid, token.chars().take(64).collect())).cloned()
+}
+
+/// A worksheet renamed through the bridge: tokens that named it follow it.
+fn renamed(s: &Session, old: &str, new: &str) {
+    let uid = s.active().map(|d| d.uid).unwrap_or(0);
+    let mut store = match added_store().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    for ((u, _), name) in store.iter_mut() {
+        if *u == uid && name == old {
+            *name = new.to_string();
+        }
+    }
 }
 
 fn sync(s: &mut Session, p: &Json) -> Result<Json> {
@@ -213,6 +259,13 @@ fn resolve(s: &Session, path: &[Step]) -> R<Obj> {
                 Obj::Range(d.wb.active_sheet, r)
             }
             (Obj::Worksheets, Step::Method { m, .. }) if m == "getActiveWorksheet" => Obj::Worksheet(active_sheet(s)),
+            (Obj::Worksheets, Step::Method { m, a }) if m == "getAdded" => {
+                let token = arg_str(a, 0).ok_or_else(|| invalid("getAdded needs a token"))?;
+                let name = added_name(s, token).ok_or_else(|| OfficeError("ItemNotFound", "the added worksheet is gone".into()))?;
+                let i =
+                    sheet_names(s).iter().position(|n| *n == name).ok_or_else(|| OfficeError("ItemNotFound", format!("no worksheet `{name}`")))?;
+                Obj::Worksheet(i)
+            }
             (Obj::Worksheets, Step::Method { m, a }) if m == "getItem" => {
                 let name = arg_str(a, 0).ok_or_else(|| invalid("getItem needs a worksheet name"))?;
                 let i = sheet_names(s)
@@ -439,6 +492,19 @@ fn grid(r: RangeRef, value: &Json) -> R<Json> {
     }
 }
 
+/// A colour an add-in set: `#RRGGBB` (or `#RGB`) or a colour name (`"yellow"`, `"LightBlue"`), as
+/// `#RRGGBB`. A fill may also be `"none"` (`fill.clear()`).
+fn color_arg(value: &Json, fill: bool) -> R<String> {
+    let text = value.as_str().ok_or_else(|| invalid("a colour is text: #RRGGBB or a colour name such as \"yellow\""))?;
+    if fill && text.trim().eq_ignore_ascii_case("none") {
+        return Ok("none".into());
+    }
+    colors::to_hex(text).ok_or_else(|| {
+        let shown: String = text.chars().take(40).collect();
+        invalid(format!("`{shown}` isn't a colour: use #RRGGBB or a colour name such as \"yellow\""))
+    })
+}
+
 fn run(s: &mut Session, id: &str, params: Json) -> R<Json> {
     s.execute(id, params).map_err(engine)
 }
@@ -488,21 +554,21 @@ fn set(s: &mut Session, obj: &Obj, prop: &str, value: &Json) -> R<()> {
                     };
                     run(s, "home.underline", json!({"range": range, "on": on, "style": style}))?
                 }
-                "color" => {
-                    run(s, "home.fontColor", json!({"range": range, "color": value.as_str().ok_or_else(|| invalid("a colour is text: #RRGGBB"))?}))?
-                }
+                "color" => run(s, "home.fontColor", json!({"range": range, "color": color_arg(value, false)?}))?,
                 "size" => run(s, "home.fontSize", json!({"range": range, "size": value.as_f64().ok_or_else(|| invalid("font.size is a number"))?}))?,
                 "name" => run(s, "home.fontName", json!({"range": range, "name": value.as_str().ok_or_else(|| invalid("font.name is text"))?}))?,
                 other => return Err(OfficeError("NotImplemented", format!("RangeFont.{other} can't be set yet"))),
             };
         }
         (Obj::Fill(i, r), "color") => {
-            let c = value.as_str().ok_or_else(|| invalid("a colour is text: #RRGGBB"))?;
+            let c = color_arg(value, true)?;
             run(s, "home.fillColor", json!({"range": address(s, *i, *r), "color": c}))?;
         }
         (Obj::Worksheet(i), "name") => {
             let name = value.as_str().ok_or_else(|| invalid("a worksheet's name is text"))?;
+            let old = sheet_names(s).get(*i).cloned().unwrap_or_default();
             run(s, "sheet.rename", json!({"sheet": i, "name": name}))?;
+            renamed(s, &old, name);
         }
         (o, p) => return Err(OfficeError("NotImplemented", format!("{o:?}.{p} can't be set yet"))),
     }
@@ -537,12 +603,26 @@ fn call(s: &mut Session, addin: &str, obj: &Obj, method: &str, args: &[Json]) ->
             Ok(Json::Null)
         }
         (Obj::Worksheets, "add") => {
-            let mut params = json!({});
-            if let Some(name) = arg_str(args, 0) {
+            // Excel adds the worksheet at the end and leaves the active one as it was; without a
+            // name it is the next "SheetN".
+            let before = s.active().map(|d| (d.wb.active_sheet, d.selection.clone()));
+            let mut params = json!({"before": sheet_names(s).len()});
+            if let Some(name) = arg_str(args, 0).filter(|n| !n.trim().is_empty()) {
                 params["name"] = json!(name);
             }
             let out = run(s, "home.insertSheet", params)?;
-            Ok(json!({"name": out.get("name").cloned().unwrap_or(Json::Null)}))
+            if let Some((active, selection)) = before {
+                run(s, "sheet.activate", json!({"sheet": active}))?;
+                if let Some(d) = s.active_mut() {
+                    d.selection = selection;
+                }
+            }
+            let name = out.get("name").and_then(Json::as_str).unwrap_or_default().to_string();
+            // The library's proxy for an unnamed worksheet finds it by this token (`getAdded`).
+            if let Some(token) = args.get(1).and_then(|o| o.get("token")).and_then(Json::as_str) {
+                remember_added(s, token, &name);
+            }
+            Ok(json!({"name": name}))
         }
         (Obj::Document, "getSelectedData") => {
             let d = s.active().ok_or_else(|| OfficeError("GeneralException", "no workbook is open".into()))?;

@@ -22,7 +22,19 @@ thread_local! {
     static SETTINGS: RefCell<Map<String, Json>> = RefCell::new(Map::new());
     static INSTALLED: Cell<bool> = const { Cell::new(false) };
     static READY: RefCell<Option<Promise>> = const { RefCell::new(None) };
+    /// Whether the library is ready (`Office.initialize` assigned later is called at once).
+    static IS_READY: Cell<bool> = const { Cell::new(false) };
+    static INITIALIZE: RefCell<Option<Function>> = const { RefCell::new(None) };
+    /// `Office.actions.associate(name, fn)`.
+    static ACTIONS: RefCell<HashMap<String, Function>> = RefCell::new(HashMap::new());
+    /// `Office.context.document.addHandlerAsync(DocumentSelectionChanged, fn)`.
+    static SELECTION_HANDLERS: RefCell<Vec<Function>> = const { RefCell::new(Vec::new()) };
+    /// Worksheets added without a name so far (their tokens).
+    static ADDED: Cell<u64> = const { Cell::new(0) };
 }
+
+/// Most actions and handlers kept.
+const MAX_REGISTERED: usize = 1000;
 
 // ---------------------------------------------------------------- values and errors
 
@@ -121,6 +133,36 @@ fn num(v: f64) -> Json {
     if v.fract() == 0.0 && v.is_finite() && v.abs() < 1e15 { json!(v as i64) } else { json!(v) }
 }
 
+/// The own properties of a plain object, as `(name, value)`.
+fn entries(props: &JsValue) -> Vec<(String, JsValue)> {
+    let Ok(o) = props.clone().dyn_into::<Object>() else { return Vec::new() };
+    Object::entries(&o)
+        .iter()
+        .filter_map(|e| {
+            let pair: Array = e.dyn_into().ok()?;
+            Some((pair.get(0).as_string()?, pair.get(1)))
+        })
+        .collect()
+}
+
+/// `proxy.set({...})`: each of `props` as if assigned, `nested` ones into the object they name
+/// (`range.set({format: {font: {bold: true}}})`).
+fn set_all(props: &JsValue, scalar: &[&str], p: &P, mut nested: impl FnMut(&str, &JsValue) -> Option<Result<(), JsValue>>) -> Result<(), JsValue> {
+    if !props.is_object() {
+        return Err(js_error(&OfficeError::new("InvalidArgument", "set() takes an object of properties")));
+    }
+    for (k, v) in entries(props) {
+        if scalar.contains(&k.as_str()) {
+            p.set(&k, &v);
+        } else if let Some(r) = nested(&k, &v) {
+            r?;
+        } else {
+            return Err(js_error(&OfficeError::new("InvalidArgument", format!("the property '{k}' can't be set here"))));
+        }
+    }
+    Ok(())
+}
+
 #[wasm_bindgen]
 #[derive(Clone)]
 pub struct RequestContext {
@@ -212,13 +254,25 @@ impl WorksheetCollection {
     pub fn get_item(&self, key: String) -> Worksheet {
         Worksheet { p: self.p.to(method("getItem", vec![json!(key)])) }
     }
-    /// Adds a worksheet; the proxy finds it by the name given (a name is needed here).
-    pub fn add(&self, name: Option<String>) -> Result<Worksheet, JsValue> {
-        let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
-            return Err(not_implemented("worksheets.add() without a name"));
-        };
-        self.p.call("add", vec![json!(name)]);
-        Ok(self.get_item(name))
+    /// Adds a worksheet at the end (the next "SheetN" without a name). The proxy finds it by
+    /// the name given, or by a token the host remembers for it (`getAdded`).
+    pub fn add(&self, name: Option<String>) -> Worksheet {
+        match name.filter(|n| !n.trim().is_empty()) {
+            Some(name) => {
+                self.p.call("add", vec![json!(name)]);
+                self.get_item(name)
+            }
+            None => {
+                let n = ADDED.with(|a| {
+                    let n = a.get().wrapping_add(1);
+                    a.set(n);
+                    n
+                });
+                let token = format!("{n:x}-{:x}", (js_sys::Math::random() * 1e15) as u64);
+                self.p.call("add", vec![Json::Null, json!({"token": token})]);
+                Worksheet { p: self.p.to(method("getAdded", vec![json!(token)])) }
+            }
+        }
     }
     /// The worksheets, once `load("items")` and a sync have run.
     #[wasm_bindgen(getter)]
@@ -284,6 +338,10 @@ impl Worksheet {
     pub fn load(&self, props: JsValue) -> Worksheet {
         self.p.load(&props);
         Worksheet { p: self.p.clone() }
+    }
+    /// `set({name})`.
+    pub fn set(&self, props: JsValue) -> Result<(), JsValue> {
+        set_all(&props, &["name"], &self.p, |_, _| None)
     }
 }
 
@@ -400,6 +458,10 @@ impl Range {
         self.p.load(&props);
         Range { p: self.p.clone() }
     }
+    /// `set({values, formulas, numberFormat, format: {...}})`.
+    pub fn set(&self, props: JsValue) -> Result<(), JsValue> {
+        set_all(&props, &["values", "formulas", "numberFormat"], &self.p, |k, v| (k == "format").then(|| self.format().set(v.clone())))
+    }
 }
 
 #[wasm_bindgen]
@@ -420,6 +482,14 @@ impl RangeFormat {
     pub fn load(&self, props: JsValue) -> RangeFormat {
         self.p.load(&props);
         RangeFormat { p: self.p.clone() }
+    }
+    /// `set({font: {...}, fill: {...}})`.
+    pub fn set(&self, props: JsValue) -> Result<(), JsValue> {
+        set_all(&props, &[], &self.p, |k, v| match k {
+            "font" => Some(self.font().set(v.clone())),
+            "fill" => Some(self.fill().set(v.clone())),
+            _ => None,
+        })
     }
 }
 
@@ -490,6 +560,10 @@ impl RangeFont {
         self.p.load(&props);
         RangeFont { p: self.p.clone() }
     }
+    /// `set({bold, italic, underline, strikethrough, color, size, name})`.
+    pub fn set(&self, props: JsValue) -> Result<(), JsValue> {
+        set_all(&props, &["bold", "italic", "underline", "strikethrough", "color", "size", "name"], &self.p, |_, _| None)
+    }
 }
 
 #[wasm_bindgen]
@@ -514,6 +588,10 @@ impl RangeFill {
     pub fn load(&self, props: JsValue) -> RangeFill {
         self.p.load(&props);
         RangeFill { p: self.p.clone() }
+    }
+    /// `set({color})`.
+    pub fn set(&self, props: JsValue) -> Result<(), JsValue> {
+        set_all(&props, &["color"], &self.p, |_, _| None)
     }
 }
 
@@ -607,10 +685,118 @@ fn document() -> Object {
             finish(cb, options, r);
         });
     });
-    let doc = obj(&[("getSelectedDataAsync", get_selected.into_js_value()), ("setSelectedDataAsync", set_selected.into_js_value())]);
+    let doc = obj(&[
+        ("getSelectedDataAsync", get_selected.into_js_value()),
+        ("setSelectedDataAsync", set_selected.into_js_value()),
+        ("addHandlerAsync", add_handler()),
+        ("removeHandlerAsync", remove_handler()),
+        ("goToByIdAsync", unsupported_async("goToByIdAsync")),
+        ("getFileAsync", unsupported_async("getFileAsync")),
+        ("getFilePropertiesAsync", unsupported_async("getFilePropertiesAsync")),
+    ]);
+    let bindings = obj(&[
+        ("addFromNamedItemAsync", unsupported_async("bindings")),
+        ("addFromPromptAsync", unsupported_async("bindings")),
+        ("addFromSelectionAsync", unsupported_async("bindings")),
+        ("getAllAsync", unsupported_async("bindings")),
+        ("getByIdAsync", unsupported_async("bindings")),
+        ("releaseByIdAsync", unsupported_async("bindings")),
+    ]);
+    let _ = Reflect::set(&doc, &"bindings".into(), &bindings.into());
     let _ = Reflect::set(&doc, &"settings".into(), &settings().into());
     let _ = Reflect::set(&doc, &"mode".into(), &"readWrite".into());
     doc
+}
+
+/// Calls `callback(asyncResult)` later, as Office does (never before the method returns).
+fn finish_later(callback: Option<Function>, options: JsValue, r: Result<JsValue, OfficeError>) {
+    if callback.is_some() {
+        spawn_local(async move { finish(callback, options, r) });
+    }
+}
+
+fn not_supported(what: &str) -> OfficeError {
+    OfficeError::new("NotSupported", format!("{what} isn't supported by GridCraft yet"))
+}
+
+/// A common-API `*Async` method GridCraft doesn't have: its callback (the last function among the
+/// arguments) gets a failed result with code `NotSupported`, instead of the page getting a `TypeError`.
+fn unsupported_async(what: &'static str) -> JsValue {
+    Closure::<dyn Fn(JsValue, JsValue, JsValue, JsValue)>::new(move |a: JsValue, b: JsValue, c: JsValue, d: JsValue| {
+        let args = [a, b, c, d];
+        let cb = args.iter().rev().find_map(|v| v.clone().dyn_into::<Function>().ok());
+        let options = args.iter().rev().find(|v| v.is_object() && !v.is_function()).cloned().unwrap_or(JsValue::UNDEFINED);
+        finish_later(cb, options, Err(not_supported(what)));
+    })
+    .into_js_value()
+}
+
+/// A Promise-based method GridCraft doesn't have: rejects with `NotImplemented`.
+fn rejecting(what: &'static str) -> JsValue {
+    Closure::<dyn Fn() -> Promise>::new(move || Promise::reject(&not_implemented(what))).into_js_value()
+}
+
+const SELECTION_CHANGED: &str = "documentSelectionChanged";
+
+/// `addHandlerAsync(eventType, handler, options?, callback?)`: `DocumentSelectionChanged` is
+/// delivered (`__craftOfficeEvent`); other events answer `NotSupported`.
+fn add_handler() -> JsValue {
+    Closure::<dyn Fn(JsValue, JsValue, JsValue, JsValue)>::new(|kind: JsValue, handler: JsValue, a: JsValue, b: JsValue| {
+        let (options, cb) = options_and_callback(a, b);
+        let kind = kind.as_string().unwrap_or_default();
+        let r = if kind != SELECTION_CHANGED {
+            Err(not_supported(&format!("the event `{kind}`")))
+        } else {
+            match handler.dyn_into::<Function>() {
+                Ok(f) => SELECTION_HANDLERS.with(|h| {
+                    let mut h = h.borrow_mut();
+                    if h.len() >= MAX_REGISTERED {
+                        return Err(OfficeError::new("InvalidArgument", "too many handlers"));
+                    }
+                    h.push(f);
+                    Ok(JsValue::UNDEFINED)
+                }),
+                Err(_) => Err(OfficeError::new("InvalidArgument", "addHandlerAsync needs a handler function")),
+            }
+        };
+        finish_later(cb, options, r);
+    })
+    .into_js_value()
+}
+
+/// `removeHandlerAsync(eventType, options?, callback?)`: `options.handler`, or all of them.
+fn remove_handler() -> JsValue {
+    Closure::<dyn Fn(JsValue, JsValue, JsValue)>::new(|kind: JsValue, a: JsValue, b: JsValue| {
+        let (options, cb) = options_and_callback(a, b);
+        let kind = kind.as_string().unwrap_or_default();
+        let r = if kind == SELECTION_CHANGED {
+            let which = Reflect::get(&options, &"handler".into()).ok().and_then(|f| f.dyn_into::<Function>().ok());
+            SELECTION_HANDLERS.with(|h| match which {
+                Some(f) => h.borrow_mut().retain(|g| !Object::is(g, &f)),
+                None => h.borrow_mut().clear(),
+            });
+            Ok(JsValue::UNDEFINED)
+        } else {
+            Err(not_supported(&format!("the event `{kind}`")))
+        };
+        finish_later(cb, options, r);
+    })
+    .into_js_value()
+}
+
+/// `globalThis.__craftOfficeEvent(json)`: the host tells the page something happened
+/// (`{"type": "documentSelectionChanged"}`).
+fn host_event(text: String) {
+    let kind = serde_json::from_str::<Json>(&text).ok().and_then(|v| v.get("type").and_then(Json::as_str).map(str::to_string));
+    if kind.as_deref() != Some(SELECTION_CHANGED) {
+        return;
+    }
+    let office = Reflect::get(&js_sys::global(), &"Office".into()).unwrap_or(JsValue::UNDEFINED);
+    let document = Reflect::get(&office, &"context".into()).and_then(|c| Reflect::get(&c, &"document".into())).unwrap_or(JsValue::UNDEFINED);
+    let args = obj(&[("type", SELECTION_CHANGED.into()), ("document", document)]);
+    for f in SELECTION_HANDLERS.with(|h| h.borrow().clone()) {
+        let _ = f.call1(&JsValue::UNDEFINED, &args);
+    }
 }
 
 /// `Office.context.document.settings`: kept here, saved to the host with `saveAsync`.
@@ -646,6 +832,252 @@ async fn load_settings() {
     }
 }
 
+/// Sends the host an event (`{"event": "ready"}`, `{"event": "functionDone", …}`); no answer.
+fn post_event(event: Json) {
+    let text = event.to_string();
+    if let Some(t) = TRANSPORT.with(|t| t.borrow().clone()) {
+        let _ = t(text);
+        return;
+    }
+    let host = Reflect::get(&js_sys::global(), &"__craftOffice".into()).unwrap_or(JsValue::UNDEFINED);
+    if let Ok(post) = Reflect::get(&host, &"post".into()).and_then(|f| f.dyn_into::<Function>()) {
+        let _ = post.call1(&host, &text.into());
+    }
+}
+
+/// Resolves once the page has loaded (its scripts have run, so their functions are associated).
+async fn page_loaded() {
+    let global = js_sys::global();
+    let doc = Reflect::get(&global, &"document".into()).unwrap_or(JsValue::UNDEFINED);
+    if !doc.is_object() || Reflect::get(&doc, &"readyState".into()).ok().and_then(|s| s.as_string()).as_deref() == Some("complete") {
+        return;
+    }
+    let loaded = Promise::new(&mut |resolve, _| match Reflect::get(&global, &"addEventListener".into()).and_then(|f| f.dyn_into::<Function>()) {
+        Ok(add) => {
+            let _ = add.call2(&global, &"load".into(), &resolve);
+        }
+        Err(_) => {
+            let _ = resolve.call0(&JsValue::UNDEFINED);
+        }
+    });
+    let _ = JsFuture::from(loaded).await;
+}
+
+/// The function an `ExecuteFunction` command names: associated with `Office.actions.associate`,
+/// else a global function (`name` or `a.b.name`), as function files without `associate` have.
+fn find_function(name: &str) -> Option<Function> {
+    if let Some(f) = ACTIONS.with(|a| a.borrow().get(name).cloned()) {
+        return Some(f);
+    }
+    let mut at: JsValue = js_sys::global().into();
+    for part in name.split('.') {
+        at = Reflect::get(&at, &part.into()).ok().filter(|v| v.is_object() || v.is_function())?;
+    }
+    at.dyn_into::<Function>().ok()
+}
+
+fn error_text(e: &JsValue) -> String {
+    Reflect::get(e, &"message".into()).ok().and_then(|m| m.as_string()).or_else(|| e.as_string()).unwrap_or_else(|| "the function failed".into())
+}
+
+/// `globalThis.__craftOfficeRunFunction({"call", "name", "control"})`: runs a function command
+/// once the library and the page are ready. The function gets `event.source.id` (the control's id
+/// in the manifest) and `event.completed()`, which tells the host it has finished.
+fn run_function(text: String) {
+    let call: Json = serde_json::from_str(&text).unwrap_or(Json::Null);
+    let id = call.get("call").cloned().unwrap_or(Json::Null);
+    let name = call.get("name").and_then(Json::as_str).unwrap_or_default().to_string();
+    let control = call.get("control").and_then(Json::as_str).unwrap_or_default().to_string();
+    let ready = READY.with(|r| r.borrow().clone());
+    spawn_local(async move {
+        if let Some(ready) = ready {
+            let _ = JsFuture::from(ready).await;
+        }
+        page_loaded().await;
+        let done = Rc::new(Cell::new(false));
+        let fail = {
+            let (done, id) = (done.clone(), id.clone());
+            move |message: String| {
+                if !done.replace(true) {
+                    post_event(json!({"event": "functionDone", "call": id, "error": message}));
+                }
+            }
+        };
+        let Some(f) = find_function(&name) else {
+            fail(format!("the add-in's function file has no function `{name}`"));
+            return;
+        };
+        let completed = {
+            let (done, id) = (done.clone(), id.clone());
+            Closure::<dyn Fn(JsValue)>::new(move |_options: JsValue| {
+                if !done.replace(true) {
+                    post_event(json!({"event": "functionDone", "call": id}));
+                }
+            })
+            .into_js_value()
+        };
+        let event = obj(&[("source", obj(&[("id", control.as_str().into())]).into()), ("completed", completed)]);
+        match f.call1(&JsValue::UNDEFINED, &event) {
+            Ok(v) => {
+                if let Ok(p) = v.dyn_into::<Promise>()
+                    && let Err(e) = JsFuture::from(p).await
+                {
+                    fail(error_text(&e));
+                }
+            }
+            Err(e) => fail(error_text(&e)),
+        }
+    });
+}
+
+/// `Office.actions`: `associate(name, fn)` for function commands; the keyboard-shortcut methods
+/// reject with `NotImplemented`.
+fn actions() -> Object {
+    let associate = Closure::<dyn Fn(JsValue, JsValue)>::new(|name: JsValue, f: JsValue| {
+        if let (Some(name), Ok(f)) = (name.as_string(), f.dyn_into::<Function>()) {
+            ACTIONS.with(|a| {
+                let mut a = a.borrow_mut();
+                if a.len() < MAX_REGISTERED || a.contains_key(&name) {
+                    a.insert(name, f);
+                }
+            });
+        }
+    });
+    obj(&[
+        ("associate", associate.into_js_value()),
+        ("areShortcutsInUse", rejecting("Office.actions.areShortcutsInUse")),
+        ("getShortcuts", rejecting("Office.actions.getShortcuts")),
+        ("replaceShortcuts", rejecting("Office.actions.replaceShortcuts")),
+    ])
+}
+
+fn enums(pairs: &[(&str, &str)]) -> JsValue {
+    let o = Object::new();
+    for (k, v) in pairs {
+        let _ = Reflect::set(&o, &(*k).into(), &(*v).into());
+    }
+    o.into()
+}
+
+/// The common API's enumerations, as the API reference lists them.
+fn office_enums() -> Vec<(&'static str, JsValue)> {
+    vec![
+        ("AsyncResultStatus", enums(&[("Succeeded", "succeeded"), ("Failed", "failed")])),
+        (
+            "CoercionType",
+            enums(&[
+                ("Text", "text"),
+                ("Matrix", "matrix"),
+                ("Table", "table"),
+                ("Html", "html"),
+                ("Ooxml", "ooxml"),
+                ("SlideRange", "slideRange"),
+                ("Image", "image"),
+                ("XmlSvg", "xmlSvg"),
+            ]),
+        ),
+        (
+            "HostType",
+            enums(&[
+                ("Word", "Word"),
+                ("Excel", "Excel"),
+                ("PowerPoint", "PowerPoint"),
+                ("Outlook", "Outlook"),
+                ("OneNote", "OneNote"),
+                ("Project", "Project"),
+                ("Access", "Access"),
+            ]),
+        ),
+        (
+            "PlatformType",
+            enums(&[
+                ("PC", "PC"),
+                ("OfficeOnline", "OfficeOnline"),
+                ("Mac", "Mac"),
+                ("iOS", "iOS"),
+                ("Android", "Android"),
+                ("Universal", "Universal"),
+            ]),
+        ),
+        (
+            "EventType",
+            enums(&[
+                ("ActiveViewChanged", "activeViewChanged"),
+                ("AppointmentTimeChanged", "olkAppointmentTimeChanged"),
+                ("AttachmentsChanged", "olkAttachmentsChanged"),
+                ("BindingDataChanged", "bindingDataChanged"),
+                ("BindingSelectionChanged", "bindingSelectionChanged"),
+                ("DialogEventReceived", "dialogEventReceived"),
+                ("DialogMessageReceived", "dialogMessageReceived"),
+                ("DialogParentMessageReceived", "dialogParentMessageReceived"),
+                ("DocumentSelectionChanged", "documentSelectionChanged"),
+                ("DragAndDropEvent", "olkDragAndDropEvent"),
+                ("EnhancedLocationsChanged", "olkEnhancedLocationsChanged"),
+                ("InfobarClicked", "olkInfobarClicked"),
+                ("ItemChanged", "olkItemSelectedChanged"),
+                ("NodeDeleted", "nodeDeleted"),
+                ("NodeInserted", "nodeInserted"),
+                ("NodeReplaced", "nodeReplaced"),
+                ("OfficeThemeChanged", "officeThemeChanged"),
+                ("RecipientsChanged", "olkRecipientsChanged"),
+                ("RecurrenceChanged", "olkRecurrenceChanged"),
+                ("ResourceSelectionChanged", "resourceSelectionChanged"),
+                ("SelectedItemsChanged", "olkSelectedItemsChanged"),
+                ("SensitivityLabelChanged", "olkSensitivityLabelChanged"),
+                ("SettingsChanged", "settingsChanged"),
+                ("SpamReporting", "olkSpamReporting"),
+                ("TaskSelectionChanged", "taskSelectionChanged"),
+                ("ViewSelectionChanged", "viewSelectionChanged"),
+            ]),
+        ),
+        ("Index", enums(&[("First", "first"), ("Last", "last"), ("Next", "next"), ("Previous", "previous")])),
+        ("GoToType", enums(&[("Binding", "binding"), ("NamedItem", "namedItem"), ("Slide", "slide"), ("Index", "index")])),
+        ("BindingType", enums(&[("Text", "text"), ("Matrix", "matrix"), ("Table", "table")])),
+        ("StartupBehavior", enums(&[("none", "None"), ("load", "Load")])),
+        ("VisibilityMode", enums(&[("hidden", "Hidden"), ("taskpane", "Taskpane")])),
+        ("InitializationReason", enums(&[("Inserted", "inserted"), ("DocumentOpened", "documentOpened")])),
+        ("ValueFormat", enums(&[("Unformatted", "unformatted"), ("Formatted", "formatted")])),
+        ("FilterType", enums(&[("All", "all"), ("OnlyVisible", "onlyVisible")])),
+        ("SelectionMode", enums(&[("Default", "default"), ("Selected", "selected"), ("None", "none")])),
+        ("DocumentMode", enums(&[("ReadOnly", "readOnly"), ("ReadWrite", "readWrite")])),
+        ("ActiveView", enums(&[("Read", "read"), ("Edit", "edit")])),
+        ("FileType", enums(&[("Text", "text"), ("Compressed", "compressed"), ("Pdf", "pdf")])),
+        ("Table", enums(&[("All", "all"), ("Data", "data"), ("Headers", "headers")])),
+    ]
+}
+
+/// Calls the page's `Office.initialize` (later, as Office does).
+fn call_initialize() {
+    if let Some(f) = INITIALIZE.with(|i| i.borrow().clone()) {
+        spawn_local(async move {
+            let _ = f.call1(&JsValue::UNDEFINED, &"inserted".into());
+        });
+    }
+}
+
+/// `Office.initialize`: kept, and called once the library is ready, or at once if it already is.
+fn define_initialize(office: &Object) {
+    let get = Closure::<dyn Fn() -> JsValue>::new(|| INITIALIZE.with(|i| i.borrow().clone().map(JsValue::from).unwrap_or(JsValue::UNDEFINED)));
+    let set = Closure::<dyn Fn(JsValue)>::new(|v: JsValue| {
+        let f = v.dyn_into::<Function>().ok();
+        let call_now = f.is_some() && IS_READY.with(Cell::get);
+        INITIALIZE.with(|i| *i.borrow_mut() = f);
+        if call_now {
+            call_initialize();
+        }
+    });
+    let desc = obj(&[("get", get.into_js_value()), ("set", set.into_js_value()), ("configurable", false.into()), ("enumerable", true.into())]);
+    let _ = Reflect::define_property(office, &"initialize".into(), &desc);
+}
+
+/// Makes `o`'s properties read-only (a later script can't swap `Office.onReady` and the rest).
+fn lock(o: &Object) {
+    for key in Object::keys(o).iter() {
+        let desc = obj(&[("writable", false.into()), ("configurable", false.into())]);
+        let _ = Reflect::define_property(o, &key, &desc);
+    }
+}
+
 fn office() -> Object {
     let platform = platform();
     let info = obj(&[("host", "Excel".into()), ("platform", platform.as_str().into())]);
@@ -669,47 +1101,56 @@ fn office() -> Object {
     });
     let dialog = Closure::<dyn Fn(JsValue, JsValue, JsValue)>::new(|_url: JsValue, a: JsValue, b: JsValue| {
         let (options, cb) = options_and_callback(a, b);
-        finish(cb, options, Err(OfficeError::not_implemented("displayDialogAsync")));
+        finish_later(cb, options, Err(OfficeError::not_implemented("displayDialogAsync")));
     });
     let context = obj(&[
+        ("host", "Excel".into()),
         ("diagnostics", obj(&[("host", "Excel".into()), ("platform", platform.as_str().into()), ("version", "16.0 (GridCraft)".into())]).into()),
         ("requirements", obj(&[("isSetSupported", is_set.into_js_value())]).into()),
         ("document", document().into()),
-        ("ui", obj(&[("displayDialogAsync", dialog.into_js_value())]).into()),
+        (
+            "ui",
+            obj(&[("displayDialogAsync", dialog.into_js_value()), ("messageParent", Closure::<dyn Fn(JsValue)>::new(|_| {}).into_js_value())]).into(),
+        ),
         ("displayLanguage", "en-US".into()),
         ("contentLanguage", "en-US".into()),
         ("platform", platform.as_str().into()),
     ]);
-    let enums = |pairs: &[(&str, &str)]| -> JsValue {
-        let o = Object::new();
-        for (k, v) in pairs {
-            let _ = Reflect::set(&o, &(*k).into(), &(*v).into());
-        }
-        o.into()
-    };
-    obj(&[
+    let addin = obj(&[
+        ("showAsTaskpane", rejecting("Office.addin.showAsTaskpane")),
+        ("hide", rejecting("Office.addin.hide")),
+        ("getStartupBehavior", rejecting("Office.addin.getStartupBehavior")),
+        ("setStartupBehavior", rejecting("Office.addin.setStartupBehavior")),
+        ("onVisibilityModeChanged", rejecting("Office.addin.onVisibilityModeChanged")),
+    ]);
+    let ribbon = obj(&[
+        ("requestUpdate", rejecting("Office.ribbon.requestUpdate")),
+        ("requestCreateControls", rejecting("Office.ribbon.requestCreateControls")),
+    ]);
+    let mut members = vec![
         ("onReady", on_ready.into_js_value()),
         ("context", context.into()),
-        ("CoercionType", enums(&[("Text", "text"), ("Matrix", "matrix"), ("Table", "table"), ("Html", "html"), ("Ooxml", "ooxml")])),
-        ("AsyncResultStatus", enums(&[("Succeeded", "succeeded"), ("Failed", "failed")])),
-        ("HostType", enums(&[("Excel", "Excel"), ("Word", "Word"), ("PowerPoint", "PowerPoint"), ("Outlook", "Outlook")])),
-        ("PlatformType", enums(&[("PC", "PC"), ("Mac", "Mac"), ("OfficeOnline", "OfficeOnline"), ("iOS", "iOS"), ("Android", "Android")])),
-    ])
+        ("actions", actions().into()),
+        ("addin", addin.into()),
+        ("ribbon", ribbon.into()),
+    ];
+    members.extend(office_enums());
+    let o = obj(&members);
+    lock(&o);
+    define_initialize(&o);
+    o
 }
 
 fn excel() -> Object {
     let run = Closure::<dyn Fn(JsValue, JsValue) -> Promise>::new(excel_run);
-    let o = obj(&[("run", run.into_js_value())]);
-    let classes: [(&str, JsValue); 1] = [("ClearApplyTo", {
-        let e = Object::new();
-        for v in ["All", "Formats", "Contents"] {
-            let _ = Reflect::set(&e, &v.into(), &v.into());
-        }
-        e.into()
-    })];
-    for (k, v) in classes {
-        let _ = Reflect::set(&o, &k.into(), &v);
-    }
+    // `new Excel.RequestContext()`: the exported class, reached through an instance.
+    let request_context = Reflect::get(&JsValue::from(RequestContext::new()), &"constructor".into()).unwrap_or(JsValue::UNDEFINED);
+    let o = obj(&[
+        ("run", run.into_js_value()),
+        ("RequestContext", request_context),
+        ("ClearApplyTo", enums(&[("All", "All"), ("Formats", "Formats"), ("Contents", "Contents")])),
+    ]);
+    lock(&o);
     o
 }
 
@@ -720,34 +1161,51 @@ fn office_extension() -> Object {
     }
     // `OfficeExtension.Error` is `Error`: every error this library throws is one.
     let error = Reflect::get(&js_sys::global(), &"Error".into()).unwrap_or(JsValue::UNDEFINED);
-    obj(&[("Error", error), ("ErrorCodes", codes.into())])
+    let o = obj(&[("Error", error), ("ErrorCodes", codes.into())]);
+    lock(&o);
+    o
 }
 
+/// Defines a global the page uses. With the bootstrap (a task pane), its property nobody can
+/// replace takes the object; without (tests), a property that isn't writable.
 fn define(name: &str, value: &JsValue) {
-    let desc = obj(&[("value", value.clone()), ("writable", false.into()), ("configurable", false.into()), ("enumerable", true.into())]);
     let global: Object = js_sys::global();
+    if let Ok(adopt) = Reflect::get(&global, &"__craftOfficeAdopt".into()).and_then(|f| f.dyn_into::<Function>()) {
+        let _ = adopt.call2(&JsValue::UNDEFINED, &name.into(), value);
+        return;
+    }
+    let desc = obj(&[("value", value.clone()), ("writable", false.into()), ("configurable", false.into()), ("enumerable", true.into())]);
     let _ = Reflect::define_property(&global, &name.into(), &desc);
 }
 
-/// Defines `Office`, `Excel` and `OfficeExtension` (not writable: a later `office.js` can't
-/// replace them), listens for the host's answers, and loads the add-in's settings; `onReady`
-/// resolves after that. Called again, it only starts over the settings and `onReady`.
+/// Defines one of the library's entry points for the host (not enumerable, not replaceable).
+fn define_entry(name: &str, f: JsValue) {
+    let desc = obj(&[("value", f), ("writable", false.into()), ("configurable", false.into()), ("enumerable", false.into())]);
+    let _ = Reflect::define_property(&js_sys::global(), &name.into(), &desc);
+}
+
+/// Defines `Office`, `Excel`, `OfficeExtension` and `OfficeRuntime` (not replaceable: a later
+/// `office.js` can't take over), the host's entry points, and loads the add-in's settings;
+/// `onReady` resolves after that, `Office.initialize` is called and the host hears
+/// `{"event": "ready"}`. Called again, it only starts over the settings and `onReady`.
 fn install_globals() {
     if !INSTALLED.with(|i| i.replace(true)) {
         define("Office", &office().into());
         define("Excel", &excel().into());
         define("OfficeExtension", &office_extension().into());
-        let reply = Closure::<dyn Fn(String)>::new(reply);
-        let _ = Reflect::set(&js_sys::global(), &"__craftOfficeReply".into(), &reply.into_js_value());
+        define("OfficeRuntime", &Object::new().into());
+        define_entry("__craftOfficeReply", Closure::<dyn Fn(String)>::new(reply).into_js_value());
+        define_entry("__craftOfficeRunFunction", Closure::<dyn Fn(String)>::new(run_function).into_js_value());
+        define_entry("__craftOfficeEvent", Closure::<dyn Fn(String)>::new(host_event).into_js_value());
     }
     SETTINGS.with(|s| s.borrow_mut().clear());
+    IS_READY.with(|r| r.set(false));
     let ready = future_to_promise(async {
         load_settings().await;
+        IS_READY.with(|r| r.set(true));
         // A page that set `Office.initialize` gets it called, as Office does.
-        let office = Reflect::get(&js_sys::global(), &"Office".into()).unwrap_or(JsValue::UNDEFINED);
-        if let Ok(init) = Reflect::get(&office, &"initialize".into()).and_then(|f| f.dyn_into::<Function>()) {
-            let _ = init.call1(&JsValue::UNDEFINED, &"inserted".into());
-        }
+        call_initialize();
+        post_event(json!({"event": "ready"}));
         Ok(JsValue::UNDEFINED)
     });
     READY.with(|r| *r.borrow_mut() = Some(ready));

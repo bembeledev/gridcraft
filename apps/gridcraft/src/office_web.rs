@@ -68,7 +68,7 @@ struct View {
     webview: Option<WebView>,
     rect: egui::Rect,
     visible: bool,
-    /// Calls waiting for the page (`run_function`, answers).
+    /// Calls into the page's library waiting for the next flush (answers, function calls, events).
     scripts: Vec<String>,
     closed: bool,
 }
@@ -193,7 +193,7 @@ impl OfficeHost for Host {
             v.visible = false;
         }
     }
-    fn run_function(&mut self, key: &str, url: &str, function: &str) {
+    fn load_hidden(&mut self, key: &str, url: &str) {
         let mut inner = self.0.borrow_mut();
         let view = inner.views.entry(key.to_string()).or_insert_with(|| View {
             url: url.to_string(),
@@ -203,7 +203,12 @@ impl OfficeHost for Host {
             scripts: Vec::new(),
             closed: false,
         });
-        view.scripts.push(call("__craftOfficeRunFunction", function));
+        if view.url != url
+            && let Some(w) = &view.webview
+        {
+            let _ = w.load_url(url);
+        }
+        view.url = url.to_string();
     }
     fn take_messages(&mut self) -> Vec<(String, String)> {
         let inbox = self.0.borrow().inbox.clone();
@@ -214,8 +219,17 @@ impl OfficeHost for Host {
         std::mem::take(&mut *q)
     }
     fn reply(&mut self, key: &str, json: &str) {
-        if let Some(v) = self.0.borrow_mut().views.get_mut(key) {
-            v.scripts.push(call("__craftOfficeReply", json));
+        self.call(key, "__craftOfficeReply", json);
+    }
+    fn call(&mut self, key: &str, entry: &str, json: &str) {
+        // Only the library's entry points: the name is spliced into the script.
+        if !entry.starts_with("__craftOffice") || !entry.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return;
+        }
+        if let Some(v) = self.0.borrow_mut().views.get_mut(key)
+            && v.scripts.len() < 10_000
+        {
+            v.scripts.push(call(entry, json));
         }
     }
 }

@@ -170,3 +170,79 @@ fn office_commands_open_their_pane() {
     assert!(s.execute("office.sync", json!({"addin": "nope", "actions": []})).is_err());
     assert!(gridcraft_plugin::unload(&id));
 }
+
+#[test]
+fn colours_may_be_names_and_read_back_as_hex() {
+    let _g = serial();
+    let id = add_addin("aaaaaaaa-0000-4000-8000-000000000007", "ReadWriteDocument");
+    let mut s = session();
+    let fill = |a: &str| json!([{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["Sheet1"]}, {"m": "getRange", "a": [a]}, {"p": "format"}, {"p": "fill"}]);
+    let font = |a: &str| json!([{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["Sheet1"]}, {"m": "getRange", "a": [a]}, {"p": "format"}, {"p": "font"}]);
+    let out = sync(
+        &mut s,
+        &id,
+        json!([
+            {"op": "set", "path": fill("A1"), "prop": "color", "value": "yellow"},
+            {"op": "set", "path": font("A1"), "prop": "color", "value": "LightBlue"},
+            {"op": "set", "path": fill("B1"), "prop": "color", "value": "#0f8"},
+            {"op": "set", "path": font("B1"), "prop": "color", "value": "#a52a2a"},
+            {"op": "load", "path": fill("A1"), "props": ["color"]},
+            {"op": "load", "path": font("A1"), "props": ["color"]},
+            {"op": "load", "path": fill("B1"), "props": ["color"]},
+            {"op": "load", "path": font("B1"), "props": ["color"]},
+        ]),
+    );
+    let r = &out["results"];
+    assert_eq!(r[4]["color"], "#FFFF00", "{out}");
+    assert_eq!(r[5]["color"], "#ADD8E6");
+    assert_eq!(r[6]["color"], "#00FF88");
+    assert_eq!(r[7]["color"], "#A52A2A");
+    // Not a colour: the whole batch fails with InvalidArgument and names the action.
+    let out = sync(
+        &mut s,
+        &id,
+        json!([{"op": "set", "path": range("Sheet1", "C1"), "prop": "values", "value": 1}, {"op": "set", "path": fill("C1"), "prop": "color", "value": "bluish"}]),
+    );
+    assert_eq!(out["error"]["code"], "InvalidArgument", "{out}");
+    assert_eq!(out["error"]["action"], 1);
+    assert_eq!(s.execute("sheet.read", json!({"range": "C1"})).unwrap()["values"], json!([[null]]));
+    assert!(gridcraft_plugin::unload(&id));
+}
+
+#[test]
+fn worksheets_add_without_a_name_is_the_next_sheet_at_the_end() {
+    let _g = serial();
+    let id = add_addin("aaaaaaaa-0000-4000-8000-000000000008", "ReadWriteDocument");
+    let mut s = session();
+    let sheets = json!([{"p": "workbook"}, {"p": "worksheets"}]);
+    let added = json!([{"p": "workbook"}, {"p": "worksheets"}, {"m": "getAdded", "a": ["t1"]}]);
+    let out = sync(
+        &mut s,
+        &id,
+        json!([
+            {"op": "call", "path": sheets, "method": "add", "args": [null, {"token": "t1"}]},
+            {"op": "set", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getAdded", "a": ["t1"]}, {"m": "getRange", "a": ["A1"]}], "prop": "values", "value": "new"},
+            {"op": "load", "path": added, "props": ["name", "position"]},
+            {"op": "load", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getActiveWorksheet"}], "props": ["name"]},
+            {"op": "call", "path": sheets, "method": "add", "args": ["Named"]},
+            {"op": "set", "path": added, "prop": "name", "value": "Renamed"},
+            {"op": "load", "path": added, "props": ["name"]},
+            {"op": "load", "path": sheets, "props": ["items"]},
+        ]),
+    );
+    let r = &out["results"];
+    assert_eq!(r[0]["name"], "Sheet2", "{out}");
+    assert_eq!(r[2], json!({"name": "Sheet2", "position": 1}));
+    assert_eq!(r[3]["name"], "Sheet1", "adding leaves the active worksheet as it was");
+    assert_eq!(r[6]["name"], "Renamed", "the proxy follows a rename");
+    let names: Vec<&str> = r[7]["items"].as_array().unwrap().iter().filter_map(|i| i["name"].as_str()).collect();
+    assert_eq!(names, ["Sheet1", "Renamed", "Named"], "added at the end");
+    assert_eq!(s.execute("sheet.read", json!({"range": "Renamed!A1"})).unwrap()["values"], json!([["new"]]));
+    let gone = sync(
+        &mut s,
+        &id,
+        json!([{"op": "load", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getAdded", "a": ["nope"]}], "props": ["name"]}]),
+    );
+    assert_eq!(gone["error"]["code"], "ItemNotFound");
+    assert!(gridcraft_plugin::unload(&id));
+}

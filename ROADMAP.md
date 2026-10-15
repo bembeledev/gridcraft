@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (progress log: add-ins that require other add-ins; previously minor: progress log: co-editing, plugin protocol 2; previously minor: progress log: plugin protocol 1.2; previously minor: plugin host) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (progress log: Office.js and Microsoft's add-in samples; previously minor: progress log: add-ins that require other add-ins; previously minor: progress log: co-editing, plugin protocol 2; previously minor: progress log: plugin protocol 1.2; previously minor: plugin host) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-15 | Office add-ins written like Microsoft's samples work further: Microsoft's own `office.js` never runs in the task pane (GridCraft answers it with an empty script and keeps its `Office` object), colours by name (`"yellow"`), ribbon buttons that call a function of the add-in (ExecuteFunction, with `event.completed()`), selection-change events, the common API's enumerations and `new Excel.RequestContext()`; unsupported calls fail politely instead of breaking the page ([docs/officejs.md](docs/officejs.md)) |
 | 2026-10-15 | Add-ins that need other add-ins (plugin manifests 1.3, shared with WordCraft and DeckCraft): a manifest names the add-ins, app versions and protocol features it needs, with version ranges; GridCraft blocks an add-in whose needs aren't met and says why, starts required add-ins first, asks before turning off one others need, and installs what's missing from its newest GitHub release in range; Office add-ins needing more of Office.js than GridCraft has are blocked with the reason ([docs/plugins.md](docs/plugins.md#requirements-manifest-13)) |
 | 2026-10-15 | Co-editing (plugin protocol 2, shared with WordCraft and DeckCraft): several people edit one workbook live through a transport plugin (MQTT, a local relay…); GridCraft merges the edits itself (Yjs), shows the others' selections and edits in their colours, keeps a per-person undo, encrypts end to end with a room key, and recovers a session after a crash; Share and the people in the title bar ([docs/collab.md](docs/collab.md)) |
 | 2026-10-15 | Plugin protocol 1.2, shared with WordCraft and DeckCraft: plugins show dialogs GridCraft draws (lists, forms, messages, chained one step at a time), open local files, and hear when workbooks open, save and close (never holding them up); commands see the workbook's file (`context.document`) ([docs/plugins.md](docs/plugins.md#protocol-12-dialogs-opening-files-document-events)) |
@@ -197,6 +198,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Progress log: Office.js and Microsoft's add-in samples |
 | 2026-10-15 | trivial | Progress log: add-ins that require other add-ins (manifest 1.3) |
 | 2026-10-15 | trivial | Progress log: co-editing (plugin protocol 2) |
 | 2026-10-15 | trivial | Progress log: plugin protocol 1.2 |

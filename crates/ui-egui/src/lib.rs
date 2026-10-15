@@ -751,7 +751,7 @@ impl SheetApp {
                     }
                 }
                 UiRequest::OfficePane { plugin, title, url, pane } => office_pane::open(self, plugin, title, url, pane),
-                UiRequest::OfficeFunction { plugin, url, function } => office_pane::run_function(self, plugin, url, function),
+                UiRequest::OfficeFunction { plugin, url, function, control } => office_pane::run_function(self, plugin, url, function, control),
             }
         }
     }

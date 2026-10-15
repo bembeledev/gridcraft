@@ -256,11 +256,13 @@ pub enum UiRequest {
         url: String,
         pane: Option<String>,
     },
-    /// Call a function of an Office add-in's function file (a page with no pane).
+    /// Call a function of an Office add-in's function file (a page with no pane); `control` is
+    /// the manifest's control id (the function's `event.source.id`).
     OfficeFunction {
         plugin: String,
         url: String,
         function: String,
+        control: String,
     },
 }
 

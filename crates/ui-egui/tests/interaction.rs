@@ -1057,6 +1057,8 @@ struct FakeWeb {
     closed: Vec<String>,
     inbox: Vec<(String, String)>,
     replies: Vec<(String, String)>,
+    hidden_loads: Vec<(String, String)>,
+    calls: Vec<(String, String, String)>,
 }
 
 struct FakeHost(std::rc::Rc<std::cell::RefCell<FakeWeb>>);
@@ -1071,7 +1073,12 @@ impl gridcraft_ui_egui::office_pane::OfficeHost for FakeHost {
     fn close(&mut self, key: &str) {
         self.0.borrow_mut().closed.push(key.into());
     }
-    fn run_function(&mut self, _key: &str, _url: &str, _function: &str) {}
+    fn load_hidden(&mut self, key: &str, url: &str) {
+        self.0.borrow_mut().hidden_loads.push((key.into(), url.into()));
+    }
+    fn call(&mut self, key: &str, entry: &str, json: &str) {
+        self.0.borrow_mut().calls.push((key.into(), entry.into(), json.into()));
+    }
     fn take_messages(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.0.borrow_mut().inbox)
     }
@@ -1133,6 +1140,91 @@ fn office_add_ins_open_a_task_pane_and_sync_through_the_web_view() {
     h.run_steps(2);
     assert!(web.borrow().closed.contains(&key));
     assert!(h.state().office.open.is_empty());
+    gridcraft_engine::plugin::unload(&id);
+}
+
+#[test]
+fn office_function_commands_wait_for_the_page_and_its_completed_call() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let xml = r#"<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xsi:type="TaskPaneApp">
+      <Id>bbbbbbbb-0000-4000-8000-000000000002</Id><Version>1.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+      <DisplayName DefaultValue="Function Test"/><Hosts><Host Name="Workbook"/></Hosts>
+      <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+      <Permissions>ReadWriteDocument</Permissions>
+      <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+        <Hosts><Host xsi:type="Workbook"><DesktopFormFactor>
+          <FunctionFile resid="Fn.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface"><OfficeTab id="TabHome"><Group id="Tests.Group"><Label resid="G.Label"/>
+            <Control xsi:type="Button" id="Tests.WriteButton"><Label resid="B.Label"/>
+              <Action xsi:type="ExecuteFunction"><FunctionName>writeValue</FunctionName></Action></Control>
+          </Group></OfficeTab></ExtensionPoint>
+        </DesktopFormFactor></Host></Hosts>
+        <Resources><bt:Urls><bt:Url id="Fn.Url" DefaultValue="https://tests.example/functions.html"/></bt:Urls>
+          <bt:ShortStrings><bt:String id="G.Label" DefaultValue="Tests"/><bt:String id="B.Label" DefaultValue="Write"/></bt:ShortStrings></Resources>
+      </VersionOverrides></OfficeApp>"#;
+    let m = gridcraft_engine::plugin::office::parse_manifest(xml, "gridcraft").unwrap();
+    let id = m.id.clone();
+    let command = m
+        .office
+        .as_ref()
+        .unwrap()
+        .commands
+        .iter()
+        .find(|(_, c)| matches!(c, gridcraft_engine::plugin::office::OfficeCommand::ExecuteFunction { .. }))
+        .map(|(k, _)| k.clone())
+        .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let web = std::rc::Rc::new(std::cell::RefCell::new(FakeWeb::default()));
+    let services = gridcraft_ui_egui::Services { office: Some(Box::new(FakeHost(web.clone()))), ..Default::default() };
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(blank(), services),
+    );
+    h.run_steps(2);
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": command}));
+    h.run_steps(2);
+    let (key, url) = web.borrow().hidden_loads.last().cloned().unwrap();
+    assert_eq!(url, "https://tests.example/functions.html", "the function file loads hidden");
+    assert!(web.borrow().calls.is_empty(), "nothing is called before the page's library is ready");
+    // The library started in the page: the call goes in, with the manifest's control id.
+    web.borrow_mut().inbox.push((key.clone(), json!({"event": "ready"}).to_string()));
+    h.run_steps(2);
+    let (to, entry, call) = web.borrow().calls.last().cloned().unwrap();
+    assert_eq!((to.as_str(), entry.as_str()), (key.as_str(), "__craftOfficeRunFunction"));
+    let call: serde_json::Value = serde_json::from_str(&call).unwrap();
+    assert_eq!(call["name"], "writeValue");
+    assert_eq!(call["control"], "Tests.WriteButton");
+    assert!(web.borrow().replies.is_empty(), "events aren't answered");
+    assert_eq!(h.state().office.calls.len(), 1);
+    // The function's context.sync() is answered like a pane's, then event.completed() ends it.
+    web.borrow_mut().inbox.push((
+        key.clone(),
+        json!({"id": 1, "actions": [{"op": "set", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "prop": "values", "value": "done"}]})
+            .to_string(),
+    ));
+    web.borrow_mut().inbox.push((key.clone(), json!({"event": "functionDone", "call": call["call"]}).to_string()));
+    h.run_steps(2);
+    assert!(h.state().office.calls.is_empty(), "completed");
+    let a1 = h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    assert_eq!(a1, Value::Text("done".into()));
+    // A ready page hears about selection changes.
+    let before = web.borrow().calls.len();
+    h.state_mut().run_or_alert("selection.set", json!({"range": "C3"}));
+    h.run_steps(2);
+    assert!(web.borrow().calls[before..].iter().any(|(k, e, j)| *k == key && e == "__craftOfficeEvent" && j.contains("documentSelectionChanged")));
+    // A function that never calls completed() is given up on, and the user is told.
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": command}));
+    h.run_steps(2);
+    assert_eq!(h.state().office.calls.len(), 1);
+    let later = gridcraft_ui_egui::now_ms() + gridcraft_ui_egui::office_pane::FUNCTION_TIMEOUT_MS + 1000.0;
+    gridcraft_ui_egui::office_pane::expire_calls(h.state_mut(), later);
+    assert!(h.state().office.calls.is_empty());
+    let toast = h.state().toast.clone().map(|(t, _)| t).unwrap_or_default();
+    assert!(toast.contains("writeValue") && toast.contains("completed"), "{toast}");
     gridcraft_engine::plugin::unload(&id);
 }
 

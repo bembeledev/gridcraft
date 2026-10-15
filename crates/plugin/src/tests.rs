@@ -377,7 +377,11 @@ mod office {
         );
         assert_eq!(
             o.commands["Acme.Refresh"],
-            OfficeCommand::ExecuteFunction { function: "refreshAll".into(), url: "https://acme.example/commands.html".into() }
+            OfficeCommand::ExecuteFunction {
+                function: "refreshAll".into(),
+                url: "https://acme.example/commands.html".into(),
+                control: "Acme.Refresh".into()
+            }
         );
         assert_eq!(m.ui.ribbon.len(), 2);
         assert_eq!((m.ui.ribbon[0].tab.as_str(), m.ui.ribbon[0].group.as_str()), ("Home", "Acme"));

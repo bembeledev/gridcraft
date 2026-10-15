@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (§21: add-ins that require other add-ins, manifest 1.3; previously minor: §21: Share and the session's people in the title bar; previously minor: §21: co-editing, plugin protocol 2; previously minor: §21: plugin protocol 1.2: dialogs, opening files, document events; previously minor: §21: plugin functions in autocomplete and Insert Function; previously minor: §21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (§21: Office.js: what Microsoft's samples need (their office.js never runs, colour names, function commands, common-API enums); previously minor: §21: add-ins that require other add-ins, manifest 1.3; previously minor: §21: Share and the session's people in the title bar; previously minor: §21: co-editing, plugin protocol 2; previously minor: §21: plugin protocol 1.2: dialogs, opening files, document events; previously minor: §21: plugin functions in autocomplete and Insert Function; previously minor: §21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -155,8 +155,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   right-click menu items, Automate › Add-ins, turning plugins off and on in File › Options,
   installing from a GitHub repository;
   [plugins.md](plugins.md)). Office add-ins (Office.js) run on top: manifests as plugins, task panes
-  in the system web view on macOS and Windows, GridCraft's own Office.js, ExcelApi 1.1–1.4 subset
-  ([officejs.md](officejs.md)). VBA runs through a macro add-in (craft-vba, out of process) and
+  in the system web view on macOS and Windows, GridCraft's own Office.js (a subset of ExcelApi
+  1.1–1.4, AddinCommands 1.1 with function commands, DocumentEvents 1.1; Microsoft's own
+  `office.js` never runs in the pane; colour names; [officejs.md](officejs.md)). Missing for
+  Microsoft's samples: Excel tables, the dialog API, the shared runtime and `Office.addin`,
+  keyboard shortcuts, custom functions, the unified JSON manifest. VBA runs through a macro add-in (craft-vba, out of process) and
   the Developer tab: Visual Basic editor, Macros, Record Macro, Macro Security, ribbon buttons that
   run macros (saved as `customUI14.xml`, shown by Excel too) (protocol 1.1,
   [plugins.md](plugins.md#protocol-11-asking-the-host-and-macros)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
@@ -190,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | §21: Office.js compatibility with Microsoft's add-in samples: their `office.js` gets an empty script, colour names, function commands (ExecuteFunction), common-API enums and harmless unsupported calls |
 | 2026-10-15 | minor | §21: manifest 1.3: add-ins require other add-ins (version ranges, blocked add-ins with reasons, start order, Install Missing from the newest release in range); Office add-ins' requirement sets checked |
 | 2026-10-15 | minor | §21: Share and the live session's people in the title bar (Review › Share group removed) |
 | 2026-10-15 | minor | §21: co-editing (plugin protocol 2): the push channel, live sessions through transport plugins, schema 1, encryption, per-user undo, Review › Share ([collab.md](collab.md)) |

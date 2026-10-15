@@ -189,3 +189,31 @@ fn encrypted_packages_carry_a_valid_data_integrity_hmac() {
     assert_eq!(hmac_key, secrets.hmac_key);
     assert_eq!(field("encryptedHmacValue", &BLOCK_HMAC_VALUE), hmac_sha512(&hmac_key, &package));
 }
+
+#[test]
+fn agile_encryption_matches_msoffcrypto_byte_for_byte() {
+    // The expected values were produced by msoffcrypto-tool 5.4.2 encrypting the same payload
+    // with the same password, spin count, salts, package key, verifier and HMAC key (its random
+    // source replaced by fixed bytes). A swapped block key or a wrong HMAC range shows up here
+    // even though our own reader would accept it.
+    let secrets = Secrets {
+        key_data_salt: hex("303132333435363738393a3b3c3d3e3f").try_into().unwrap(),
+        password_salt: salt().try_into().unwrap(),
+        key: hex("202122232425262728292a2b2c2d2e2f36363636363636363636363636363636").try_into().unwrap(),
+        verifier: hex("101112131415161718191a1b1c1d1e1f").try_into().unwrap(),
+        hmac_key: (0x40u8..0x80).collect::<Vec<u8>>().try_into().unwrap(),
+    };
+    let (info, package) = encrypt_streams(&payload(10_000), PASSWORD, 1000, &secrets).unwrap();
+    let xml = std::str::from_utf8(&info[8..]).unwrap();
+    for (name, value) in [
+        ("encryptedVerifierHashInput", "ucd1B40nHl++cD1L6gE+Gg=="),
+        ("encryptedVerifierHashValue", "xlu4hLqser6fmkIsoAjn2X2fMQO2e99+c5ZmXcReDmGCv1F1WHFWaLOUbD9iB6MjtsW9n7h02z3P3F2BSxLGDA=="),
+        ("encryptedKeyValue", "YOnSX7hf2oEFlp68V/WkAx5r4aDjCh/G8N8Bhcu4s+g="),
+        ("encryptedHmacKey", "7b3gqsajD9UBzQttVnmw3OIx8TOxISKTj+W7SdRwISNC/ur9uU01m/u4bhpGAR4d/RLtlkV96VqoqntcNJ7Wew=="),
+        ("encryptedHmacValue", "JG5hyYKCtubUl8y5tnwz6LYDofmCHQXeiYm+BuAP6Adcls+/Cu6yVfaL42llhOtY/55Qstcao8IE7T0DzDeDRA=="),
+    ] {
+        assert!(xml.contains(&format!("{name}=\"{value}\"")), "{name} in {xml}");
+    }
+    assert_eq!(package.len(), 10_008);
+    assert_eq!(package[..40], hex("1027000000000000863d133807906d724db0118fb5e5cc7d99b1e847a7bc24748279369b0f9310da")[..]);
+}

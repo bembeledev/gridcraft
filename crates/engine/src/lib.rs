@@ -147,6 +147,16 @@ impl DocState {
             password_changed: false,
         }
     }
+    /// Another window on the same workbook (View › New Window): a copy that saves to the same
+    /// file, in the same format and with the same password.
+    pub fn linked_copy(&self, title: String) -> DocState {
+        let mut copy = DocState::new((*self.wb).clone(), self.path.clone(), title);
+        copy.selection = self.selection.clone();
+        copy.content_kind = self.content_kind;
+        copy.password = self.password.clone();
+        copy.password_changed = self.password_changed;
+        copy
+    }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved) || self.password_changed
     }

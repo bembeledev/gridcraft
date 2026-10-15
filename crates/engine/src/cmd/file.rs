@@ -139,12 +139,17 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     };
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
+    let mut r = json!({"path": path, "bytes": bytes.len()});
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
         d.password_changed = false;
+        // JSON can't hold a password: the document is now its unencrypted file.
+        if kind == Some(crate::io::FileKind::Json) && d.password.take().is_some() {
+            r["warnings"] = json!([SAVED_WITHOUT_PASSWORD]);
+        }
     }
-    Ok(json!({"path": path, "bytes": bytes.len()}))
+    Ok(r)
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -166,6 +171,9 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
+
+/// The warning when a password-protected workbook becomes a file that can't hold its password.
+pub const SAVED_WITHOUT_PASSWORD: &str = "JSON files can't be encrypted: this workbook was saved without its password.";
 
 /// File › Info › Protect Workbook › Encrypt with Password: sets the password to open the
 /// workbook, or removes it when empty. Like any edit, it takes effect when the workbook is saved.

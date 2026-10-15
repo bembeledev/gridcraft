@@ -172,3 +172,17 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn saving_as_json_says_the_password_is_dropped() {
+    let path = encrypted_file("json");
+    let mut h = harness(Services::default());
+    let p = path.to_string_lossy().to_string();
+    h.state_mut().run_or_alert("file.open", json!({"path": p, "password": PW}));
+    h.run_steps(2);
+    let json_path = path.with_extension("json").to_string_lossy().to_string();
+    h.state_mut().run_or_alert("file.saveAs", json!({"path": json_path}));
+    h.run_steps(2);
+    assert!(h.state().notice.as_ref().is_some_and(|n| n.text.contains("without its password")), "the info bar says so");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

@@ -3287,6 +3287,49 @@ fn encrypt_with_password_sets_and_removes_the_password_to_open() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_new_window_of_an_encrypted_workbook_saves_it_encrypted() {
+    const PW: &str = "synthetic-pw-5524";
+    let dir = temp_dir("encrypted-window");
+    let path = dir.join("Secret.xlsx");
+    std::fs::write(&path, encrypted_book(PW)).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path, "password": PW})).unwrap();
+    s.execute("view.newWindow", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "44"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&saved), gridcraft_xlsx::Format::Encrypted);
+    assert_eq!(a1_with_password(&saved, PW), Value::Number(44.0));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_an_encrypted_workbook_as_json_drops_its_password_and_says_so() {
+    const PW: &str = "synthetic-pw-5525";
+    let dir = temp_dir("encrypted-json");
+    let path = dir.join("Secret.xlsx");
+    std::fs::write(&path, encrypted_book(PW)).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path, "password": PW})).unwrap();
+    // JSON can't hold a password: once it is the document's file, the document has none.
+    let r = s.execute("file.saveAs", json!({"path": dir.join("Secret.json")})).unwrap();
+    assert!(r["warnings"][0].as_str().unwrap_or_default().contains("without its password"), "{r}");
+    assert_eq!(s.doc().unwrap().password, None);
+    assert!(!s.doc().unwrap().is_dirty());
+    // Saving as .xlsx again writes a plain workbook, as the document now is.
+    s.execute("file.saveAs", json!({"path": dir.join("Plain.xlsx")})).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&std::fs::read(dir.join("Plain.xlsx")).unwrap()), gridcraft_xlsx::Format::Xlsx);
+    // A CSV copy isn't the document's file: no warning, the password stays.
+    s.execute("file.encryptWithPassword", json!({"password": PW})).unwrap();
+    let r = s.execute("file.saveAs", json!({"path": dir.join("Copy.csv")})).unwrap();
+    assert!(r.get("warnings").is_none(), "{r}");
+    assert_eq!(s.doc().unwrap().password.as_deref(), Some(PW));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "file:///etc/passwd"})).unwrap();

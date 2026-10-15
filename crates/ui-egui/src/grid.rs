@@ -2723,7 +2723,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
-    painter.rect_stroke(erect.expand(0.75), 0.0, Stroke::new(1.5, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // While the text fits, the selection outline already draws the border on the cell edge,
+    // so the editor draws no border of its own: typing and focused look pixel-identical,
+    // like Excel. A grown (overflowing) box gets its own border to mark its extent.
+    if !fits {
+        painter.rect_stroke(erect.expand(0.75), 0.0, Stroke::new(1.5, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    }
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);

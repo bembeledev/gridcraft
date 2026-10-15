@@ -1636,7 +1636,7 @@ pub(crate) fn paint_selection(
         }
     }
     if cur_here {
-        for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
+        for side in outline_bands(outline.expand(0.25), 1.5, p.clip_rect()) {
             p.rect_filled(side, 0.0, t.sel_border);
         }
     }
@@ -1645,7 +1645,7 @@ pub(crate) fn paint_selection(
     }
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
-        let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
+        let h = Rect::from_center_size(outline.right_bottom(), vec2(5.0, 5.0));
         p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
         p.rect_filled(h, 0.0, t.sel_border);
     }
@@ -2720,7 +2720,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
-    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    painter.rect_stroke(erect.expand(0.75), 0.0, Stroke::new(1.5, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);

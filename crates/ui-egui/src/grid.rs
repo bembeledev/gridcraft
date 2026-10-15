@@ -2704,8 +2704,11 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    // Single-line text that fits stays exactly cell-sized, like Excel: the edit box only
+    // grows once the text overflows the cell (wider) or wraps to more lines (taller).
+    let fits = lines <= 1.0 && text_w + 14.0 <= rect.width();
+    let w = if fits { rect.width() } else { (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left()) };
+    let h = if fits { rect.height() } else { (size * 1.3 * lines + 4.0).max(rect.height()) };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {

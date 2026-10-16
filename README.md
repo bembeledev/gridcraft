@@ -114,7 +114,9 @@ Running from a checkout instead of a release? `cargo install --path apps/gridcra
 it fetches `origin/main`, fast-forwards the checkout when it is strictly behind (clean tree, `main`
 checked out, no local commits), and reinstalls both binaries. `--check` only reports, `--force`
 reinstalls even with nothing to pull, and `--launch [ARG...]` opens the installed app afterwards, so
-a shortcut can do "update, then open":
+In the app, Help ▸ About ▸ Check for Updates tells whether a newer release exists (and how far `main` is
+ahead of a build made from a checkout); it never downloads or installs anything, and checking at
+start-up is off until you turn it on there. A shortcut can do "update, then open":
 
 ```sh
 cargo xtask update --check                                     # what is new on origin/main

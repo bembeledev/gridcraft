@@ -86,8 +86,8 @@ pub fn b64_decode(text: &str) -> Result<Vec<u8>, CollabError> {
         .map_err(|e| CollabError::Corrupt(format!("base64: {e}")))
 }
 
-/// Fills `buf` with random bytes from the operating system. The browser build has no source
-/// here (and no transports): it fails there.
+/// Fills `buf` with random bytes from the operating system (in the browser, its
+/// `crypto.getRandomValues`).
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), CollabError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -95,8 +95,7 @@ pub fn random_bytes(buf: &mut [u8]) -> Result<(), CollabError> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = buf;
-        Err(CollabError::Other("live sessions need the desktop app".into()))
+        getrandom::fill(buf).map_err(|e| CollabError::Other(format!("no random numbers: {e}")))
     }
 }
 

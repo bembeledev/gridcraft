@@ -395,9 +395,13 @@ fn session_popover(app: &mut SheetApp, ui: &mut Ui, state: ShareState) {
     let Some(room) = app.session.active_room() else { return };
     let room_id = room.room.clone();
     let title = room.title().filter(|x| !x.is_empty()).or_else(|| app.session.active().map(|d| d.display_title())).unwrap_or_default();
-    let transport = gridcraft_engine::plugin::get(&room.plugin)
-        .map(|p| p.manifest.collab.as_ref().map(|c| c.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| p.manifest.name.clone()))
-        .unwrap_or_else(|| room.plugin.clone());
+    let host = app.host_session.clone();
+    let transport = match &host {
+        Some(h) if !h.label.is_empty() => h.label.clone(),
+        _ => gridcraft_engine::plugin::get(&room.plugin)
+            .map(|p| p.manifest.collab.as_ref().map(|c| c.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| p.manifest.name.clone()))
+            .unwrap_or_else(|| room.plugin.clone()),
+    };
     let encrypted = room.encrypted();
     let problem = room.refused.clone().or_else(|| room.message.clone());
     let joining = room.joining;
@@ -430,6 +434,9 @@ fn session_popover(app: &mut SheetApp, ui: &mut Ui, state: ShareState) {
     if let Some(m) = problem {
         ui.label(egui::RichText::new(m).font(theme::ui_font(11.5)).color(t.danger));
     }
+    for line in host.iter().flat_map(|h| h.lines.iter()) {
+        ui.label(egui::RichText::new(line).font(theme::ui_font(11.5)).color(t.text_dim));
+    }
     ui.separator();
     let everyone = people(app);
     ui.label(egui::RichText::new(format!("In this session ({})", everyone.len())).font(theme::ui_font(11.5)).color(t.text_dim));
@@ -459,7 +466,14 @@ fn session_popover(app: &mut SheetApp, ui: &mut Ui, state: ShareState) {
         ui.ctx().copy_text(link);
         app.status_message = Some(("Invitation copied".into(), crate::now_ms()));
     }
-    if ui.button(app.ui.language.tr("Leave")).on_hover_text("Leave the live session (the workbook stays open with every edit)").clicked() {
+    if host.is_some() {
+        // The hosting page owns the session: closing the document is how one leaves it.
+        if app.services.close.is_some()
+            && ui.button(app.ui.language.tr("Close")).on_hover_text("Close the document (changes are saved in Nextcloud)").clicked()
+        {
+            app.run_or_alert("file.close", json!({}));
+        }
+    } else if ui.button(app.ui.language.tr("Leave")).on_hover_text("Leave the live session (the workbook stays open with every edit)").clicked() {
         app.run_or_alert("collab.leave", json!({}));
     }
     if let Some(p) = clicked {

@@ -1,6 +1,6 @@
 # Live sessions (co-editing)
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (document chat, protocol 2.1; previously minor: selections on empty sheets and past the last row or column, clearer people circles, name tags; major: created: plugin protocol 2 in GridCraft, schema 1) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (the web build edits live in Nextcloud through craft-live; `collab/snapshot` writes the asked `format`; previously minor: document chat, protocol 2.1; previously minor: selections on empty sheets and past the last row or column, clearer people circles, name tags; major: created: plugin protocol 2 in GridCraft, schema 1) · **Target:** Microsoft Excel (Microsoft 365)
 
 Several people edit one workbook at the same time, each in their own GridCraft, and see each
 other's selections and edits as they happen. This is GridCraft's equivalent of Excel's
@@ -129,6 +129,73 @@ same object as `chat`. Microsoft Excel doesn't know the part and drops it when i
 | `chat.typing` | `{typing?}` (alias `on`) | Tells the session you're typing (nothing outside one) |
 | `view.chat` (interface) | `{on?}` | Shows or hides the Chat pane |
 
+## In Nextcloud (craft-live)
+
+[craft-live](https://github.com/sirmmo/craft-live) is a WOPI editor that Nextcloud Office uses in
+place of Collabora Online. It opens spreadsheets in GridCraft's **web build**, framed in its shell
+page at `index.html#craft-live=1&ws=…&room=…&token=…&user=…&role=…&seed=…&file=…&name=…&format=…&api=…&lang=…`.
+In that mode the web build speaks craft-live's embed contract (craft-live `docs/design.md` §9)
+natively, with no plugin: the WebSocket is the transport.
+
+**What the person sees.** The Nextcloud file opens as the only workbook, titled with its name
+(Nextcloud's language when the web build has it). The first person to open it loads it (a 0-byte
+file is a new, empty workbook); the others see "Joining…" (read-only) until the room has it, and
+so does the first person for the round trip in which the room takes it. Share in the title bar
+shows the session's state; its popover says "Room <id> · Nextcloud", the file, who you are and
+whether you can edit, whether everything is saved in Nextcloud ("All changes saved in Nextcloud",
+"Unsaved changes: Nextcloud gets them automatically", "Saving…"), the connection ("Offline:
+reconnecting in N s"), everyone in the room, and **Close** instead of Leave. The people's circles,
+others' selections and edits, and the Chat pane work as in any live session. Nextcloud shows no
+close button, so the title bar gets one (**Close**, at the right end), and File › Close and
+Cmd/Ctrl+W close the document in Nextcloud too: with unsaved changes the room saves first
+(waiting up to 10 s), then the editor closes. **Save** (Cmd/Ctrl+S, the title bar's Save, Save
+As .xlsx) asks the room to save now; exports (PDF, CSV, web page) still download. A viewer
+(`role=view`) reads along and chats, can't edit or save. When the session expires the workbook
+becomes read-only and a message says to open the file again from Nextcloud.
+
+**What the web build does** (`gridcraft_engine::live`, the browser I/O in
+`apps/gridcraft-web/src/live.rs`):
+
+- **Start.** Reads the fragment and posts `craft-live:hello` to the shell (same origin); a
+  `craft-live:config` answer is used when the fragment can't be. It signs notes, comments and
+  chat with the Nextcloud name.
+- **Seeding** (`seed=1`): `GET <file>` with `Authorization: Bearer <token>`, opened as File ›
+  Open does, then the room is seeded from it with `collab.share` semantics (origin `seed`).
+  **Joining** (`seed=0`): `collab.join` semantics, read-only until the room's sync step 2.
+- **The room.** `new WebSocket(<ws>?token=<token>)`, binary frames in y-websocket's lib0 framing
+  (protocol 2, Appendix B): `0/0` sync step 1, `0/1` sync step 2, `0/2` update, `1` awareness,
+  `2/0` permission denied, `3` query awareness (ignored), `100` craft-live control (JSON). It
+  sends control `hello {clientId, can: ["upload"], client}` first, then its sync step 1; answers
+  the room's sync step 1; sends one update per committed command and its awareness (selection,
+  user, typing) at most 20 times a second. The engine's room is served in memory (transport id
+  `craft-live`): exactly the protocol-2 core the desktop drives through `collab/*`.
+- **Control messages.** `welcome` (a seeder whose lease went asks `POST <api>/prepare` again; one
+  whose room already holds someone else's document joins it instead, so the content is never
+  seeded twice; a joiner the room hands the lease to loads the file and seeds), `peers`,
+  `modified`, `seeded` (the seeder can edit), `saved` / `saveFailed`, `notice` (status bar),
+  `reseed` (`POST <api>/prepare`; with `{seed: true}` load the file, seed and reconnect),
+  `expired` (read-only, a message). `save {id, mode: "upload", url, name, format}`: the workbook
+  as a file in `format` (`xlsx`, `xlsm`, `xltx`, `xltm` as asked; anything else, `.ods` included,
+  as an `.xlsx`, which craft-live keeps as a copy beside the file), `PUT <url>` with the bearer
+  token, `X-Craft-File-Name` (percent-encoded) and the bytes; a failed upload is reported with
+  `saveResult {id, ok: false, error}`. The token goes only to craft-live's own origin; `webdav`
+  mode is refused (`saveResult`). Save sends `saveNow`; closing sends `bye`.
+- **Close codes.** 4401 (expired) and 4403 (refused) end the session; anything else reconnects
+  after 1 s, doubling up to 30 s, and syncs again (edits made offline merge).
+- **To the shell:** `craft-live:loaded` (the document is shown), `modified`, `saved {success}`
+  (after a save the person or Nextcloud asked for), `peers` (the others and yourself with
+  `self: true`; also on `craft-live:getPeers`), `close`, `error` (it can't open the document).
+  From the shell: `craft-live:save` (progress), `craft-live:close` (save if needed, leave),
+  `craft-live:getPeers`; `craft-live:host` is ignored.
+
+**The desktop app** joins the same rooms through craft-live's nextcloud-live add-in (a protocol-2
+transport). craft-live asks it for the file with `collab/snapshot {room, file: true, format}`:
+GridCraft writes `format` when it can (`xlsx`, `xlsm`, `xltx`, `xltm`) and otherwise an `.xlsx`,
+and says which in the answer's `format`.
+
+Building the bundle craft-live serves: `packaging/web/package.sh` (the site in `dist/web/`),
+then point craft-live's `apps.gridcraft` at that folder ([packaging/web/README.md](../packaging/web/README.md#inside-nextcloud-craft-live)).
+
 ## Schema 1 (normative)
 
 `meta.app` is `"gridcraft"`, `meta.schema` is `1` (written as an integer). All binary encodings
@@ -253,7 +320,9 @@ and renews it every 15 s; a peer not heard from for 30 s is gone.
   `snapshot: true` and the answer to `collab/snapshot` use the method name `collab/snapshot`.
   After 10 messages that don't decrypt, the status bar asks "Wrong room key?".
 - **`collab/snapshot`** is answered with the whole state (encrypted when keyed) and, with
-  `file: true`, the workbook as `.xlsx` bytes, except in an encrypted room: there GridCraft
+  `file: true`, the workbook's file bytes with `name` and `format`: in `format` when the request
+  names one GridCraft writes (`xlsx`, `xlsm`, `xltx`, `xltm`), else the workbook's own Excel kind
+  or `.xlsx` (an `.ods` comes back as `.xlsx`, `format: "xlsx"`). In an encrypted room GridCraft
   answers `fileRefused` instead, so the plaintext never reaches the transport.
 - **Offline.** When the transport reports `offline` or exits, editing goes on; an exited
   transport is started again after 3 s (a crash counts as a plugin failure) and the room rejoins
@@ -296,6 +365,23 @@ new, empty sheet reach the other session), undo, leaving.
   Enter and Shift+Enter, the mention flash, Clear chat… asking, the button outside a session).
 - `crates/engine/tests/collab_loopback.rs`: two GridCraft processes through craft-collab's
   loopback transport (`CRAFT_COLLAB_LOOPBACK` = the built plugin).
+- craft-live: `crates/engine/src/live/tests.rs` runs the client against a fake craft-live room
+  (a plain Yjs document, as the server holds): framing round trips and damaged frames, the
+  fragment as craft-live writes it, seeding, a joiner waiting, converging both ways, one update
+  per command, Save reaching the room as a workbook GridCraft reads back, the seeder read-only
+  until the room has the seed, reseeding after the seeder left, a seeder whose lease was taken
+  joining instead (the room's document untouched), close codes, backoff and offline edits
+  merging, `expired`, saving in the file's format (`.xltx`, `.xlsm`; `.ods` as `.xlsx`), a refused
+  upload, a foreign upload address and WebDAV mode refused, viewers, closing after the save (or
+  10 s), File › Close, files that can't be had, hostile messages, and the desktop's
+  `collab/snapshot {format}`. `crates/engine/tests/live_wasm.rs` runs the client compiled to
+  wasm (wasm-bindgen-test-runner; random client ids from the browser's crypto, seeding, the
+  upload). `crates/ui-egui/tests/host_session.rs`: the title bar's Close, File › Close through
+  the host, the popover. `apps/gridcraft-web/e2e` (not a workspace member; needs a craft-live
+  checkout next to this one): the client against the real craft-live server and its fake
+  Nextcloud with proof keys: the editor page's fragment, seeding from the WOPI file, a second
+  person converging, Save reaching PutFile as a workbook GridCraft reads back, a viewer, closing
+  after the save, an `.ods` saved as an `.xlsx` copy beside it.
 
 ## Not yet
 
@@ -303,7 +389,12 @@ new, empty sheet reach the other session), undo, leaving.
   later input), not a Yjs text.
 - Tables, charts, conditional formats, validation, comments and other features are shared as
   whole JSON values per sheet: two people changing the same feature at once keep the later.
-- The web build has no plugins; it will speak the y-websocket binding natively.
+- The web build has no plugins; it speaks the y-websocket binding natively only inside
+  craft-live (no Share dialog to start or join other rooms from the browser).
+- craft-live mode, verified only against craft-live's fake Nextcloud and a native WebSocket so
+  far: a real browser (the `postMessage` handshake with the shell, `fetch` and the WebSocket from
+  the iframe, the Close button) and a real Nextcloud (craft-live `docs/design.md` §12) are still
+  to check.
 - yrs garbage collection is off (it crashed with the undo manager in the fuzzer): deleted
   content stays in the document's history.
 
@@ -311,6 +402,7 @@ new, empty sheet reach the other session), undo, leaving.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | In Nextcloud (craft-live): the web build speaks craft-live's embed contract (fragment and shell messages, seeding from the file or joining, y-websocket over `web_sys::WebSocket`, control messages, uploading the file in its own format, reconnecting, Close in the title bar, the session's popover); the desktop's `collab/snapshot {file, format}` writes the asked format; the web build's random numbers come from the browser's crypto |
 | 2026-10-16 | minor | Document chat (protocol 2.1, craft-collab `docs/chat.md`): the `chat`/`chatMeta` roots, the XLSX part `/craft/chat.json` and the native format's `chat`, the `chat.*` commands and `view.chat`, awareness `typing`, the Chat pane and the title bar's chat button with the unread count and the mention flash; replays the chat transcripts |
 | 2026-10-15 | minor | Selections on a sheet with no row or column ids, and past the last ones, travel as the block ids those rows and columns would get (no document write; schema 1 clarified in craft-collab); people circles slightly larger, with less overlap and clearer initials; name tags sit above the selection's top edge (in the column headers at the top of the view), fade after 3 s without movement and come back on hover over the outline |
 | 2026-10-15 | minor | Share and the session's people in the title bar (state dot, popover with people, Copy invitation and Leave; circles with "+N"; click to go to a person's selection); the Share dialog points at Automate › Add-ins when no transport is installed; a transport command's `collab.join` is now joined by the interface and its invitation kept; Review › Share group removed; status bar keeps only read-only reasons and problems |

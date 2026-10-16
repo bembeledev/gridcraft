@@ -1191,13 +1191,17 @@ fn snapshot(s: &mut Session, plugin: &str, params: &Json) -> std::result::Result
             if r.key.is_some() {
                 out["fileRefused"] = json!("the room is encrypted: the document stays with the people in it");
             } else if let Some(d) = s.docs.iter().find(|d| d.uid == r.doc) {
-                let name = {
-                    let t = d.display_title();
-                    if t.to_ascii_lowercase().ends_with(".xlsx") { t } else { format!("{t}.xlsx") }
-                };
-                let bytes = crate::io::save_bytes_as(&d.wb, &name, crate::io::FileKind::Xlsx).map_err(|e| err(e.to_string()))?;
+                // `format`: the file's own format (craft-live asks for it), written when GridCraft
+                // can; else an .xlsx, and `format` says so.
+                let title = d.display_title();
+                let asked = params.get("format").and_then(Json::as_str).map(str::to_string).unwrap_or_else(|| {
+                    let ext = std::path::Path::new(&title).extension().and_then(|e| e.to_str()).unwrap_or("xlsx").to_ascii_lowercase();
+                    if matches!(ext.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") { ext } else { "xlsx".into() }
+                });
+                let (name, format, bytes) = crate::io::live_file_bytes(&d.wb, &title, &asked).map_err(|e| err(e.to_string()))?;
                 out["file"] = json!(gridcraft_collab::b64_encode(&bytes));
                 out["name"] = json!(name);
+                out["format"] = json!(format);
             }
         }
         Ok(out)

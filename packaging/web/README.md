@@ -73,6 +73,26 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Inside Nextcloud (craft-live)
+
+[craft-live](https://github.com/sirmmo/craft-live) (a WOPI editor Nextcloud Office uses in place
+of Collabora) serves this same bundle and frames it with `index.html#craft-live=1&…`; the app
+then edits the Nextcloud file live with everyone who has it open
+([docs/collab.md](../../docs/collab.md#in-nextcloud-craft-live)). To build what craft-live serves:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk --locked
+packaging/web/package.sh           # the site in dist/web/, the zip in dist/
+```
+
+Then point craft-live at the folder holding `index.html`: `apps.gridcraft = "/srv/craft-live/apps/gridcraft"`
+in its TOML, or `CRAFT_LIVE_APP_GRIDCRAFT` (unzip `gridcraft-web-<version>.zip` there, or copy
+`dist/web/`). craft-live serves it at `/apps/gridcraft/` from its own origin, which the app's
+WebSocket and uploads need; nothing else is configured on GridCraft's side. `craft-live check`
+says whether it finds `index.html`. A build older than this support makes craft-live's page say
+that the build can't edit live yet.
+
 ## Renderer selection
 
 GridCraft's web build is the same egui app as the desktop one, compiled to wasm

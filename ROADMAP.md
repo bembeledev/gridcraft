@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (progress log: document chat; previously minor: progress log: Office.js and Microsoft's add-in samples; previously minor: progress log: add-ins that require other add-ins; previously minor: progress log: co-editing, plugin protocol 2; previously minor: progress log: plugin protocol 1.2; previously minor: plugin host) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (progress log: the web app in Nextcloud through craft-live; previously minor: progress log: document chat; previously minor: progress log: Office.js and Microsoft's add-in samples; previously minor: progress log: add-ins that require other add-ins; previously minor: progress log: co-editing, plugin protocol 2; previously minor: progress log: plugin protocol 1.2; previously minor: plugin host) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-16 | The web app edits live in Nextcloud: craft-live (a WOPI editor that replaces Collabora in Nextcloud Office) opens spreadsheets in GridCraft's web build, which loads the Nextcloud file, edits it with everyone who has it open (selections, chat, per-person undo), saves it back in its own format (`.xlsx`, `.xlsm`, `.xltx`; an `.ods` as an `.xlsx` copy) and closes from its own Close button; the desktop writes the format craft-live asks for ([docs/collab.md](docs/collab.md#in-nextcloud-craft-live)) |
 | 2026-10-16 | Document chat (protocol 2.1, shared with WordCraft and DeckCraft): the people working on a workbook talk in a Chat pane beside it, with replies, edits, mentions and links; the title bar's chat button shows unread messages and flashes when someone mentions you; the chat is shared live in a session (encrypted with the room), saved in the file (`/craft/chat.json`; Office drops it) and never undone ([docs/collab.md](docs/collab.md#document-chat)) |
 | 2026-10-15 | Office add-ins written like Microsoft's samples work further: Microsoft's own `office.js` never runs in the task pane (GridCraft answers it with an empty script and keeps its `Office` object), colours by name (`"yellow"`), ribbon buttons that call a function of the add-in (ExecuteFunction, with `event.completed()`), selection-change events, the common API's enumerations and `new Excel.RequestContext()`; unsupported calls fail politely instead of breaking the page ([docs/officejs.md](docs/officejs.md)) |
 | 2026-10-15 | Add-ins that need other add-ins (plugin manifests 1.3, shared with WordCraft and DeckCraft): a manifest names the add-ins, app versions and protocol features it needs, with version ranges; GridCraft blocks an add-in whose needs aren't met and says why, starts required add-ins first, asks before turning off one others need, and installs what's missing from its newest GitHub release in range; Office add-ins needing more of Office.js than GridCraft has are blocked with the reason ([docs/plugins.md](docs/plugins.md#requirements-manifest-13)) |
@@ -199,6 +200,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Progress log: the web app edits live in Nextcloud through craft-live |
 | 2026-10-15 | trivial | Progress log: Office.js and Microsoft's add-in samples |
 | 2026-10-15 | trivial | Progress log: add-ins that require other add-ins (manifest 1.3) |
 | 2026-10-15 | trivial | Progress log: co-editing (plugin protocol 2) |

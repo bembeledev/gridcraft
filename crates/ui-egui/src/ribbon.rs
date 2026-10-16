@@ -186,10 +186,21 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             // workbook has a chat.
             let chat = crate::chat_ui::button_visible(app);
             let chat_w = if chat { crate::chat_ui::BUTTON_W + gap } else { 0.0 };
-            let free = rect.right() - 8.0 - share_w - gap - chat_w - left_end - gap - title_min;
+            // The hosting page's Close (craft-live: Nextcloud shows no close button).
+            let host_close = app.services.close.is_some();
+            let close_w = if host_close { 28.0 + gap } else { 0.0 };
+            let free = rect.right() - 8.0 - close_w - share_w - gap - chat_w - left_end - gap - title_min;
             let plan = plan_title_right(free, gap, people);
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
+                if host_close {
+                    let close = icon_button(ui, Icon::Close, t.text_dim, "Close", vec2(28.0, ch));
+                    let label = app.ui.language.tr("Close").to_string();
+                    close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+                    if close.clicked() && app.commit_edit(0, 0, false, false) {
+                        app.run_or_alert("file.close", json!({}));
+                    }
+                }
                 crate::collab_ui::share_button(app, ui, ch);
                 if chat {
                     crate::chat_ui::title_button(app, ui, ch);

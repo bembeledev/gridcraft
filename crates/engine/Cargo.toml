@@ -28,8 +28,14 @@ sha2 = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+# The fake craft-live room in `live` tests holds a plain Yjs document, as the server does.
+yrs = "0.28"
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
+
+# `tests/live_wasm.rs`: the craft-live client compiled to wasm (wasm-bindgen-test-runner).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 # Runs without libtest: the test binary doubles as the plugin process it starts.
 [[test]]

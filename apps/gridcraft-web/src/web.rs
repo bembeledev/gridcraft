@@ -27,7 +27,10 @@ pub fn start() {
         }
         // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
         // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // `#craft-live=1&…`: the live editor of Nextcloud Office, framed by craft-live (`live`).
+        // It says hello to the shell at once, before the interface starts.
+        let live = crate::live::detect().map(crate::live::Live::new);
+        let bridge = if live.is_none() && query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -36,8 +39,9 @@ pub fn start() {
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
-                    // In host mode the parent sends the workbook to edit; no sample meanwhile.
-                    let q = if app_bridge.is_some() { String::new() } else { query() };
+                    // In host mode the parent sends the workbook to edit, and in craft-live mode
+                    // the room gives it; no sample meanwhile.
+                    let q = if app_bridge.is_some() || live.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
                     } else if q.contains("sample") {
@@ -46,6 +50,9 @@ pub fn start() {
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                    }
+                    if let Some(live) = &live {
+                        live.connect(&mut services, cc.egui_ctx.clone());
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
@@ -58,6 +65,10 @@ pub fn start() {
                     ) {
                         app.ui.language = browser;
                     }
+                    // Nextcloud's language wins in craft-live mode.
+                    if let Some(lang) = live.as_ref().and_then(crate::live::Live::language) {
+                        app.ui.language = lang;
+                    }
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     if let Some(bridge) = &app_bridge {
                         if let Some(author) = query_param("author") {
@@ -65,7 +76,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, live }))
                 }),
             )
             .await;
@@ -93,6 +104,7 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    live: Option<crate::live::Live>,
 }
 
 impl eframe::App for WebShell {
@@ -123,6 +135,9 @@ impl eframe::App for WebShell {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
+        }
+        if let Some(live) = &mut self.live {
+            live.frame(&mut self.app);
         }
     }
 }

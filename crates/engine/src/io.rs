@@ -231,6 +231,24 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
     }
 }
 
+/// The workbook as a file in `format` (an extension such as `xlsx` or `ods`) for a live room's
+/// file (`collab/snapshot {file, format}`, craft-live's `save`): `(name, format written, bytes)`.
+/// GridCraft writes the Excel package kinds (`xlsx`, `xlsm`, `xltx`, `xltm`) as asked; any other
+/// format is written as `.xlsx` and reported so, and `name` gets the written format's extension.
+pub fn live_file_bytes(wb: &Workbook, name: &str, format: &str) -> Result<(String, String, Vec<u8>)> {
+    let asked = format.trim().trim_start_matches('.').to_ascii_lowercase();
+    let written = if matches!(asked.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") { asked } else { "xlsx".to_string() };
+    let p = std::path::Path::new(name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).filter(|s| !s.trim().is_empty()).unwrap_or("Book");
+    let name = match p.extension().and_then(|e| e.to_str()) {
+        // The name's own spelling when it already says the format (BUDGET.XLSX).
+        Some(ext) if ext.eq_ignore_ascii_case(&written) => p.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string(),
+        _ => format!("{stem}.{written}"),
+    };
+    let bytes = save_bytes_as(wb, &name, FileKind::Xlsx)?;
+    Ok((name, written, bytes))
+}
+
 /// [`save_bytes`] for the file at `path`: relative paths to linked workbooks are rewritten for
 /// its folder, so they still name the same files.
 pub fn save_file_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {

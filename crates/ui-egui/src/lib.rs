@@ -203,6 +203,20 @@ pub struct Services {
     pub print: Option<Box<dyn Fn(&[u8])>>,
     /// Desktop: the web view Office add-ins' task panes show in.
     pub office: Option<Box<dyn office_pane::OfficeHost>>,
+    /// The page hosting GridCraft closes the document (craft-live inside Nextcloud, which shows
+    /// no close button of its own): the title bar gets a Close button, and File › Close calls
+    /// this instead of closing the workbook.
+    pub close: Option<Box<dyn Fn()>>,
+}
+
+/// A live session the hosting page runs (craft-live in Nextcloud): the session's popover shows
+/// its name for the transport and its lines, and has no Leave (the host owns the session).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HostSession {
+    /// In place of the transport's name ("Nextcloud").
+    pub label: String,
+    /// The file, the person, the saved state, the connection.
+    pub lines: Vec<String>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -257,6 +271,8 @@ pub struct SheetApp {
     pub collab_moved: HashMap<u64, collab_ui::Moved>,
     /// The document chat's pane and title-bar button (draft, unread counts, the mention flash).
     pub chat: chat_ui::ChatState,
+    /// The hosting page's live session, when it runs one (craft-live).
+    pub host_session: Option<HostSession>,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -325,6 +341,7 @@ impl SheetApp {
             collab_flash: None,
             collab_moved: HashMap::new(),
             chat: Default::default(),
+            host_session: None,
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -424,6 +441,13 @@ impl SheetApp {
         }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
+        }
+        // The hosting page closes the document (craft-live: Nextcloud's editor goes away).
+        if id == "file.close"
+            && let Some(close) = &self.services.close
+        {
+            close();
+            return Ok(json!({"closedBy": "host"}));
         }
         let r = self.session.run(id, params);
         self.after_engine();

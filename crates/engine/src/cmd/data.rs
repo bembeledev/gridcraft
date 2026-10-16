@@ -979,13 +979,18 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Literal validation choices can look like references (`A1,A2`), but are not formulas.
+pub(super) fn is_literal_list(f: &str) -> bool {
+    let f = f.trim();
+    f.starts_with('"')
+        || (!f.contains('!')
+            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+}
+
 /// List entries of a list validation (literal or from a range).
 pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     let f = dv.f1.trim();
-    if f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
-    {
+    if is_literal_list(f) {
         return f.trim_matches('"').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();

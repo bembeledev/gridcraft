@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorMode, CfRule, CfValueKind, Sheet, ValidationKind, Visibility};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -153,18 +153,11 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
         }
     }
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m)).filter(|m| !m.is_single()).collect();
-    for cf in sh.cond_formats.iter_mut() {
-        cf.ranges = cf.ranges.iter().filter_map(|r| map_range(*r)).collect();
-    }
+    shift_rule_features(sh, &e);
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r)).collect();
     }
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
-    sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
-    for dv in sh.validations.iter_mut() {
-        dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r)).collect();
-    }
-    sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
         if let Some(r) = map_range(t.range) {
             if axis == Axis::Cols {
@@ -219,6 +212,16 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
+        let fix_rule = |text: &str| adjust_rule_text(text, |expr| gridcraft_formula::adjust::adjust(expr, &host, target, e));
+        for cf in &mut sh.cond_formats {
+            rewrite_cf_formulas(&mut cf.rule, &fix_rule);
+        }
+        for dv in &mut sh.validations {
+            if dv.kind != ValidationKind::List || !super::data::is_literal_list(&dv.f1) {
+                dv.f1 = fix_rule(&dv.f1);
+            }
+            dv.f2 = dv.f2.as_deref().map(&fix_rule);
+        }
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {
                 Ok(expr) => gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e)),
@@ -236,6 +239,114 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
             sp.source = fix(&sp.source);
         }
     }
+}
+
+/// Keep unparseable or unchanged rule text intact, including a leading `=`.
+fn adjust_rule_text(text: &str, adjust: impl FnOnce(gridcraft_formula::Expr) -> gridcraft_formula::Expr) -> String {
+    let Ok(expr) = gridcraft_formula::parse(text) else { return text.to_string() };
+    let before = gridcraft_formula::print(&expr);
+    let after = gridcraft_formula::print(&adjust(expr));
+    if before == after {
+        text.to_string()
+    } else if text.trim_start().starts_with('=') {
+        format!("={after}")
+    } else {
+        after
+    }
+}
+
+fn rewrite_cf_formulas(rule: &mut CfRule, fix: &impl Fn(&str) -> String) {
+    let threshold = |value: &mut CfValueKind| {
+        if let CfValueKind::Formula(text) = value {
+            *text = fix(text);
+        }
+    };
+    match rule {
+        CfRule::Expression { formula, .. } => *formula = fix(formula),
+        CfRule::CellIs { a, b, .. } => {
+            *a = fix(a);
+            *b = b.as_deref().map(fix);
+        }
+        CfRule::ColorScale { stops } => {
+            for (value, _) in stops {
+                threshold(value);
+            }
+        }
+        CfRule::DataBar { min, max, .. } => {
+            threshold(min);
+            threshold(max);
+        }
+        CfRule::IconSet { thresholds, .. } => {
+            for value in thresholds {
+                threshold(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Map application ranges, returning the offset from their old base to the first surviving
+/// pre-edit cell. A deleted prefix (or first area) must not turn relative rules into #REF!.
+fn shift_rule_ranges(ranges: &mut Vec<RangeRef>, e: &Edit) -> (i64, i64) {
+    let old_base = ranges.first().map(|r| r.start);
+    let mut survivor = None;
+    ranges.retain_mut(|r| {
+        let Some(mapped) = map_range(*r, e) else { return false };
+        if survivor.is_none() {
+            let deletion = match *e {
+                Edit::Delete { axis, at, count } => Some((axis, at, count)),
+                Edit::DeleteCells { axis: Axis::Rows, range } if range.start.col <= r.start.col && r.end.col <= range.end.col => {
+                    Some((Axis::Rows, range.start.row, range.height()))
+                }
+                Edit::DeleteCells { axis: Axis::Cols, range } if range.start.row <= r.start.row && r.end.row <= range.end.row => {
+                    Some((Axis::Cols, range.start.col, range.width()))
+                }
+                _ => None,
+            };
+            let mut first = r.start;
+            if let Some((axis, at, count)) = deletion {
+                let line = if axis == Axis::Rows { &mut first.row } else { &mut first.col };
+                if *line >= at && *line < at.saturating_add(count) {
+                    *line = at.saturating_add(count);
+                }
+            }
+            survivor = Some(first);
+        }
+        *r = mapped;
+        true
+    });
+    match (old_base, survivor) {
+        (Some(old), Some(new)) => (new.row as i64 - old.row as i64, new.col as i64 - old.col as i64),
+        _ => (0, 0),
+    }
+}
+
+fn shift_rule_features(sh: &mut Sheet, e: &Edit) {
+    let rebase = |text: &str, dr, dc| adjust_rule_text(text, |expr| gridcraft_formula::adjust::shift_relative(expr, dr, dc));
+    for cf in &mut sh.cond_formats {
+        let (dr, dc) = shift_rule_ranges(&mut cf.ranges, e);
+        if (dr, dc) != (0, 0) {
+            // These rules are evaluated relative to the first application cell. Thresholds
+            // are evaluated directly, so only the later structural adjustment applies to them.
+            match &mut cf.rule {
+                CfRule::Expression { formula, .. } => *formula = rebase(formula, dr, dc),
+                CfRule::CellIs { a, b, .. } => {
+                    *a = rebase(a, dr, dc);
+                    *b = b.as_deref().map(|text| rebase(text, dr, dc));
+                }
+                _ => {}
+            }
+        }
+    }
+    sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
+    for dv in &mut sh.validations {
+        let (dr, dc) = shift_rule_ranges(&mut dv.ranges, e);
+        if (dr, dc) != (0, 0) && !matches!(dv.kind, ValidationKind::List | ValidationKind::Any) {
+            dv.f1 = rebase(&dv.f1, dr, dc);
+            dv.f2 = dv.f2.as_deref().map(|text| rebase(text, dr, dc));
+        }
+    }
+    sh.validations.retain(|dv| !dv.ranges.is_empty());
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -966,18 +1077,11 @@ pub(crate) fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
 fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     let map_cell = |c: CellRef| map_range(RangeRef::cell(c), e).map(|r| r.start);
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m, e)).filter(|m| !m.is_single()).collect();
-    for cf in sh.cond_formats.iter_mut() {
-        cf.ranges = cf.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
-    }
+    shift_rule_features(sh, e);
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
     }
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
-    sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
-    for dv in sh.validations.iter_mut() {
-        dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
-    }
-    sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
         // Cells inserted or deleted across a table's full height add or remove table columns.
         if let Edit::InsertCells { axis: Axis::Cols, range } | Edit::DeleteCells { axis: Axis::Cols, range } = *e

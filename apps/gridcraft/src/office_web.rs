@@ -18,6 +18,22 @@ use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::HasWindowHandle;
 use wry::{Rect, WebView, WebViewBuilder};
 
+/// Hosts that serve Microsoft's `office.js`, which an add-in page must never run in GridCraft:
+/// the Windows web view resolves them to nothing.
+#[cfg(target_os = "windows")]
+const BLOCKED_HOSTS: &[&str] = &["appsforoffice.microsoft.com", "officeapis.public.onecdn.static.microsoft"];
+
+/// WebView2's arguments: wry's defaults (which giving any replaces), and no address for
+/// [`BLOCKED_HOSTS`].
+#[cfg(target_os = "windows")]
+fn browser_args() -> String {
+    let rules: Vec<String> = BLOCKED_HOSTS.iter().map(|h| format!("MAP {h} ~NOTFOUND")).collect();
+    format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --host-resolver-rules=\"{}\"",
+        rules.join(", ")
+    )
+}
+
 /// The scripts that make a page an Office add-in host: the bootstrap, the generated
 /// `wasm-bindgen` glue and the library itself.
 struct Library {
@@ -133,6 +149,11 @@ impl Host {
                     });
                 if let Some(lib) = &library {
                     builder = builder.with_initialization_script(lib.script.clone());
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use wry::WebViewBuilderExtWindows;
+                    builder = builder.with_additional_browser_args(browser_args());
                 }
                 match builder.build_as_child(window) {
                     Ok(w) => view.webview = Some(w),
@@ -258,6 +279,14 @@ pub fn flush(window: &impl HasWindowHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn office_js_hosts_resolve_to_nothing_on_windows() {
+        let args = super::browser_args();
+        assert!(args.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
+        assert!(args.contains("MAP officeapis.public.onecdn.static.microsoft ~NOTFOUND"), "{args}");
+    }
+
     #[test]
     fn base64_matches_the_standard_alphabet() {
         assert_eq!(super::base64(b""), "");

@@ -2757,8 +2757,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let need = (text_w + 14.0).max(rect.width()).min(max_w);
     let end_col = geo.col_at(sh, rect.left() + need - 0.5).min(MAX_COLS - 1);
     let w = (geo.x(sh, end_col + 1) - rect.left()).max(rect.width()).min(max_w);
-    let single_h = (text_size.y + 2.0).max(rect.height());
-    let h = if multi { (size * 1.3 * lines + 4.0).max(rect.height()) } else { single_h };
+    // ... and like the width, the height ends on a row boundary: with overflow the indicator
+    // reads A1:A2 instead of ending mid-row.
+    let max_h = geo.cells.bottom() - rect.top();
+    let need_h = (if multi { size * 1.3 * lines + 4.0 } else { text_size.y + 2.0 }).max(rect.height()).min(max_h);
+    let end_row = geo.row_at(sh, rect.top() + need_h - 0.5).min(MAX_ROWS - 1);
+    let h = (geo.y(sh, end_row + 1) - rect.top()).max(rect.height()).min(max_h);
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {

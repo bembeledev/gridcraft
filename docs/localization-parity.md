@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (Japanese 和暦 date formats in `crates/numfmt`) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,8 +21,10 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
+- **en-US formulas and formats, plus Japanese 和暦 dates.** Function names, `,` argument separator,
+  `.` decimal separator, en-US number and date formats (`crates/numfmt`). A format section tagged
+  `[$-411]`, `[$-ja]` or `[$-ja-JP]` renders Japanese era dates (`g`/`gg`/`ggg`, era year `e`/`ee`,
+  gannen 元年 with `[$-ja-JP-x-gannen]`); every other locale tag is still ignored. Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
@@ -56,7 +58,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
+| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display; number/date formats render 和暦 (`[$-411]`, era tokens, gannen 元年) | no | menus only; 和暦 number/date formats | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
@@ -83,6 +85,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Japanese 和暦 date formats in `crates/numfmt`: `[$-411]`/`[$-ja]`/`[$-ja-JP]` mark a section, `g`/`gg`/`ggg` name the era (M/明/明治 … R/令/令和), `e`/`ee` are its year, and `[$-ja-JP-x-gannen]`/`[$-x-gannen411]` show 元年 for year 1; day-accurate era boundaries for both date systems. Other locale tags stay ignored |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
 | 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |

@@ -83,9 +83,13 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
 fn fit_imported_rows(wb: &mut Workbook) {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
-        let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
+        // CellStore is row-major: retain one index per row rather than per cell.
+        let mut rows = Vec::new();
+        for (c, _) in sh.cells.iter() {
+            if rows.last().copied() != Some(c.row) {
+                rows.push(c.row);
+            }
+        }
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::auto_row_height(wb, si, row);
@@ -140,7 +144,10 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, mut report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        if bytes.len() >= 20 * 1024 * 1024 && !report.cached_results_complete {
+            report.warnings.push("Saved formula results are incomplete; an initial recalculation is required.".into());
+        }
         return Ok((wb, report.warnings));
     }
     match kind {

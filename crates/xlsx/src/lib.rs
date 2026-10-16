@@ -67,6 +67,8 @@ pub enum IoError {
 /// What a lenient read skipped or repaired.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadReport {
+    /// True only when all imported formula results can be displayed without recalculation.
+    pub cached_results_complete: bool,
     pub warnings: Vec<String>,
 }
 

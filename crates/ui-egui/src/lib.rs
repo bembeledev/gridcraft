@@ -189,6 +189,8 @@ pub struct Services {
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Reports actual inbox import completion, separately from web engine readiness.
+    pub opened: Option<Box<dyn Fn(&Result<Json, String>)>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
@@ -1064,8 +1066,11 @@ impl SheetApp {
             .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
             .unwrap_or_default();
         for (name, bytes) in arrived {
-            let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            match self.run("file.open", json!({"name": &name, "base64": &b64})) {
+            let result = self.commit_text_box_edit().and_then(|()| self.session.open_bytes(&name, &bytes).map_err(|e| e.to_string()));
+            if let Some(opened) = &self.services.opened {
+                opened(&result);
+            }
+            match result {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {
                     self.backstage = None;
@@ -1073,7 +1078,7 @@ impl SheetApp {
                 }
                 Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => {
                     self.backstage = None;
-                    self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
+                    self.open_dialog("openPassword", json!({"name": name, "base64": gridcraft_engine::io::base64_encode(&bytes)}));
                 }
                 Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
             }

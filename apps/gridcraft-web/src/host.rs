@@ -55,6 +55,14 @@ impl Bridge {
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
+        let completion = self.clone();
+        services.opened = Some(Box::new(move |result| match result {
+            Ok(value) => {
+                let cached = value.get("cachedCalculation").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                completion.send(&[("type", "gridcraft:loaded".into()), ("cachedCalculation", cached.into())]);
+            }
+            Err(error) => completion.post_failed(error),
+        }));
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
@@ -72,7 +80,7 @@ impl Bridge {
     }
 
     pub fn post_ready(&self) {
-        self.send(&[("type", "gridcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into())]);
+        self.send(&[("type", "gridcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into()), ("loadedEvent", true.into())]);
     }
 
     pub fn post_failed(&self, error: &str) {

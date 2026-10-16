@@ -70,7 +70,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
-        report: ReadReport::default(),
+        report: ReadReport { cached_results_complete: true, ..ReadReport::default() },
         sst: vec![],
         xf_map: vec![],
         dxfs: vec![],

@@ -33,6 +33,7 @@ struct RowState {
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    defer_expressions: bool,
     dropped: u64,
     rows: u64,
 }
@@ -43,7 +44,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
-    let mut st = RowState::default();
+    let mut st = RowState { defer_expressions: bytes.len() >= 20 * 1024 * 1024, ..RowState::default() };
     let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
         read_row(cx, &mut sheet, &mut st, &row);
         Ok(())
@@ -57,6 +58,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     };
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
+    }
+    if !st.dynamic.is_empty() {
+        cx.report.cached_results_complete = false;
     }
     drop(bytes);
 
@@ -450,7 +454,17 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         return;
     }
     let dynamic = c.attr("cm").is_some();
-    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
+    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic)).map(|mut formula| {
+        // Keep text and saved values, parse expressions on demand for very large sheets.
+        // Shared formula anchors retain their expression separately for relative expansion.
+        if st.defer_expressions {
+            formula.expr = None;
+        }
+        formula
+    });
+    if formula.is_some() && c.child("v").is_none() {
+        cx.report.cached_results_complete = false;
+    }
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }

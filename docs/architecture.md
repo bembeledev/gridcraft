@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -69,3 +69,21 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
+
+
+## Large workbook imports (2026-10-16)
+
+The asynchronous file inbox calls `Session::open_bytes` directly, avoiding a base64/JSON
+round trip. It reports completed imports separately from the web engine's ready event.
+Row fitting collects one index per stored row, rather than one per cell.
+
+For XLSX inputs of at least 20 MiB and one million model cells, complete saved formula
+results can be displayed initially while the dependency graph is built. Automatic calculation
+settings are retained: edits still update dependents, and Calculate Now forces full evaluation.
+A visible import notice identifies this cached opening mode. Files with missing cached values
+or array/spill ranges that the reader must reconstruct retain the ordinary full recalculation.
+Large worksheet parts discard retained expression trees after expanding shared formulas;
+formula text and cached values remain, and expressions are parsed on demand.
+
+This does not move import or recalculation off the UI thread. Hosts may show transfer progress
+and import stages; smooth per-row progress still needs a yielding or worker-backed reader.

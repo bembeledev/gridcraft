@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (formula languages are data tables; previous: Polish ribbon catalog added) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (formulas in Polish; previous: formula languages are data tables) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -58,7 +58,8 @@ separators, number/date formats, machine translation with agent review, and scri
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Polish
-(pl), 381 labels (the full reference table), menus only, not yet reviewed by a second native speaker.
+(pl), 381 labels (the full reference table), menus only, not yet reviewed by a second native speaker;
+Polish formulas (429 local function names, separators, booleans, errors, table specifiers).
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
@@ -80,6 +81,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Formulas in Polish: `input/pl.rs` (429 names observed in Polish Excel for the web), `;` arguments, decimal comma, `\` array columns, `PRAWDA`/`FAŁSZ`, Polish errors and table specifiers |
 | 2026-10-15 | minor | Formula languages are data: names, booleans, errors, table specifiers and separators per language in one table read by the lexer, parser and printer; infrastructure item 2 partly done |
 | 2026-10-12 | minor | Polish (pl) ribbon table (`i18n/pl.rs`, 381 labels: every key of the reference table); `pl` locale tags (pl-PL, pl_PL.UTF-8) resolve to Polish; formulas and number formats stay en-US |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |

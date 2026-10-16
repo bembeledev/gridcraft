@@ -203,17 +203,20 @@ fn czech_interface_retains_its_canonical_formula_fallback() {
 }
 
 #[test]
-fn polish_interface_retains_its_canonical_formula_fallback() {
-    // The Polish table translates interface labels only: formulas keep canonical English names,
-    // `,` separators and `.` decimals until a Polish formula locale exists.
+fn polish_interface_enters_and_shows_polish_formulas() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"pl-PL"})).unwrap();
     assert_eq!(app.ui.language, Language::Pl);
     assert_eq!(app.ui.language.tr("Formulas"), "Formuły");
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=JEŻELI(PRAWDA;SUMA(1,5;2,25);#N/D)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),#N/A)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=JEŻELI(PRAWDA;SUMA(1,5;2,25);#N/D)");
+    app.cancel_edit();
+    // Lower-case Polish letters match too; English separators are not Polish syntax.
+    assert!(enter(&mut app, "=suma.jeżeli(A1:A3;\">1\")"));
+    assert_eq!(formula(&app), "SUMIF(A1:A3,\">1\")");
+    assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Pl);
 }

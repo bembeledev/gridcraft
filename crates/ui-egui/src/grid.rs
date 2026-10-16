@@ -2753,8 +2753,14 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_size = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size();
-    let text_w = text_size.x;
-    let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
+    // Sized from both the text being typed and the committed value it overrides: starting a
+    // short replacement over a long value keeps the old footprint (like Excel), and the box
+    // then grows along whichever gets longer.
+    let old = gridcraft_engine::display::edit_text(wb, sh, cell);
+    let old_size = ui.painter().layout_no_wrap(old.clone(), font.clone(), Color32::BLACK).size();
+    let count = |s: &str| s.lines().count().max(1) as f32 + if s.ends_with('\n') { 1.0 } else { 0.0 };
+    let text_w = text_size.x.max(old_size.x);
+    let lines = count(&ed.text).max(count(&old));
     // The box stretches over every cell the text spills into (like Excel): with overflow the
     // indicator reads A1:B1, ending on a cell boundary instead of mid-cell. Single-line height
     // stays exactly row height — unless the text itself is taller (short row, big font), when

@@ -7,6 +7,7 @@
 mod b64;
 pub mod cell;
 mod cellmap;
+pub mod chat;
 pub mod features;
 pub mod password;
 pub mod preserved;
@@ -17,6 +18,7 @@ pub mod style;
 pub mod workbook;
 
 pub use cell::{Cell, CellPicture, Formula};
+pub use chat::{Chat, ChatAuthor, ChatMessage};
 pub use features::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};

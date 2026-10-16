@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod chat_ui;
 pub mod collab_ui;
 pub mod control;
 pub mod credits;
@@ -254,6 +255,8 @@ pub struct SheetApp {
     /// When each person in the live session last moved their selection (awareness client id →
     /// where and when), so their name tag fades after a while.
     pub collab_moved: HashMap<u64, collab_ui::Moved>,
+    /// The document chat's pane and title-bar button (draft, unread counts, the mention flash).
+    pub chat: chat_ui::ChatState,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -321,6 +324,7 @@ impl SheetApp {
             collab_invites: Default::default(),
             collab_flash: None,
             collab_moved: HashMap::new(),
+            chat: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -628,6 +632,13 @@ impl SheetApp {
             "view.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
+            }
+            "view.chat" => {
+                if self.session.active().is_none() {
+                    return Some(Err("no workbook open".into()));
+                }
+                let on = chat_ui::toggle(self, p.get("on").and_then(Json::as_bool));
+                Ok(json!({"on": on}))
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };

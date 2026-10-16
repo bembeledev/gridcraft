@@ -608,6 +608,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    super::chat::keep_chat(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -627,6 +628,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    super::chat::keep_chat(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))

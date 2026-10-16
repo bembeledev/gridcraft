@@ -2,6 +2,7 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod chat;
 pub mod data;
 pub mod developer;
 pub mod draw;
@@ -134,6 +135,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     SPECS.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::specs());
+        v.extend(chat::specs());
         v.extend(edit::specs());
         v.extend(format::specs());
         v.extend(sheet::specs());

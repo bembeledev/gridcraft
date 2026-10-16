@@ -1,6 +1,6 @@
 # Live sessions (co-editing)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (selections on empty sheets and past the last row or column, clearer people circles, name tags above selections that fade; previously major: created: plugin protocol 2 in GridCraft, schema 1) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (document chat, protocol 2.1; previously minor: selections on empty sheets and past the last row or column, clearer people circles, name tags; major: created: plugin protocol 2 in GridCraft, schema 1) · **Target:** Microsoft Excel (Microsoft 365)
 
 Several people edit one workbook at the same time, each in their own GridCraft, and see each
 other's selections and edits as they happen. This is GridCraft's equivalent of Excel's
@@ -56,7 +56,6 @@ undo history. Saving works as usual: each person saves their own copy.
 
 | Command | Params | Does |
 |---|---|---|
-| 2026-10-15 | minor | Selections on a sheet with no row or column ids, and past the last ones, travel as the block ids those rows and columns would get (no document write; schema 1 clarified in craft-collab); people circles slightly larger, with less overlap and clearer initials; name tags sit above the selection's top edge (in the column headers at the top of the view), fade after 3 s without movement and come back on hover over the outline |
 | `collab.share` | `{plugin, room, user?, role?, key?, title?}` | Starts a session from the active workbook (no params: the Share dialog) |
 | `collab.join` | `{plugin, room, mode: share\|join, user?: {id, name, color}, role?: edit\|view, key?, path?, title?}` | Joins or starts a session (no params: the dialog). `share` seeds the room from the active workbook (or `path`); `join` opens a new workbook (or `path`, whose unshared parts are kept) filled from the room |
 | `collab.leave` | `{room?}` | Leaves (default: the active workbook's room) |
@@ -73,6 +72,62 @@ Rust API (for embedders, tests and a future web build): `Session::collab_poll(no
 sessions between frames; `Session::collab_serve_in_memory(id)` / `collab_join_in_memory`,
 `collab_take_outgoing` and `collab_poll_pushed` connect a session to a transport the caller
 implements; `collab_take_notices` gives the status-bar messages.
+
+## Document chat
+
+The people working on a workbook can talk in a chat beside it (craft-collab's
+[`docs/chat.md`](https://github.com/sirmmo/craft-collab/blob/main/docs/chat.md), protocol 2.1,
+the same in WordCraft and DeckCraft). The chat belongs to the workbook: it's shared live in a
+session, saved in the file, and stays until someone removes it. Outside a session it works too,
+as notes left in the file for whoever opens it next.
+
+**Where.** The title bar's chat button, between Share and the people's circles (shown in a
+session, or when the workbook has a chat), carries the number of unread messages from others; a
+message that mentions you (`@Your Name`) while the pane is closed flashes it. It opens the Chat
+pane, where the task panes show (also from View › Chat, or `view.chat`). Each message shows its
+author's circle in their colour, name and time (relative today: "just now", "5 min ago",
+"3 h ago"; else date and time), the text (selectable; links clickable; `@Name` highlighted when it
+names someone in the session), the message it replies to quoted, and "edited" or "Message
+deleted". Right-click a message: Reply, Copy Text, and for your own Edit and Delete. The box at the
+bottom sends with Enter (Shift+Enter: a new line); "Name is typing…" shows above it. The pane's
+menu: Export as Text, Export as JSON (copied to the clipboard), Clear chat… (asks "Remove the
+whole chat from the document for everyone?"), and the note "Kept in the file; Office drops it when
+it saves".
+
+**Rules.** Messages are 1–4,000 characters (UTF-16 units); at most 10,000 ("The chat is full:
+clear it to go on"; a deleted message still counts, Clear frees it). Only the author edits or
+deletes a message; a deleted one stays as "Message deleted" so replies still point somewhere.
+Chat changes are never undo steps and Undo/Redo keep the current chat, but they mark the
+workbook modified (the chat is kept only when the file is saved); others' messages do too. A
+viewer (`role: view`) can chat but not edit. While joining, the chat waits for the room.
+
+**In the shared document.** The root array `chat` (one map per message: `id`, `author` as JSON
+text `{id, name, color}`, `at`, `text`, `replyTo?`, `edited?`, `deleted?`) and the root map
+`chatMeta` (`clearedAt`), outside the undo scope. GridCraft writes the change between the synced
+workbook's chat and the new one in the command's transaction: new messages appended in order,
+changed keys of edited or deleted ones, and for a clear every entry removed and `clearedAt` set.
+Readers skip malformed entries and duplicate ids and keep the first 10,000. Sharing seeds the
+chat from the workbook; joining replaces the workbook's chat with the room's. In an encrypted
+room the chat is encrypted like every other update.
+
+**In the file.** XLSX (and `.xlsm` and the templates): the part `/craft/chat.json` (content type
+`application/vnd.craft.chat+json`, related from `_rels/.rels` with `urn:craft:relationships:chat`)
+holding `{"version": 1, "clearedAt"?, "messages": […]}`; an empty chat writes no part; a damaged
+part is skipped with a warning and the workbook opens without it. The native JSON format has the
+same object as `chat`. Microsoft Excel doesn't know the part and drops it when it saves.
+
+**Presence.** Your awareness state has `typing: true` while you're writing in the box.
+
+| Command | Params | Does |
+|---|---|---|
+| `chat.list` | `{since?, limit?}` | `{messages, clearedAt?, count}`: the messages after the one with id `since` (or, for a number, sent after that time in ms), the newest `limit` of them |
+| `chat.send` | `{text, replyTo?}` | `{id}` |
+| `chat.edit` | `{id, text}` | Your own message only |
+| `chat.delete` | `{id}` | Your own; it stays as "Message deleted" |
+| `chat.clear` | `{}` | `{removed}`; the interface asks first, programmatic calls don't |
+| `chat.export` | `{format?: text\|json, utcOffsetMinutes?}` | `{format, text}` (JSON also as `chat`) |
+| `chat.typing` | `{typing?}` (alias `on`) | Tells the session you're typing (nothing outside one) |
+| `view.chat` (interface) | `{on?}` | Shows or hides the Chat pane |
 
 ## Schema 1 (normative)
 
@@ -230,6 +285,15 @@ after the sheet grows. `GRIDCRAFT_COLLAB_SEEDS` soaks it.
   sessions through the push channel: joining from a plugin command's result, sync, edits both
   ways, `collab/snapshot` with the file, awareness (a selection below the last row and one on a
 new, empty sheet reach the other session), undo, leaving.
+- Chat: `crates/model/src/chat.rs` (the rules, limits, the file part's JSON),
+  `crates/xlsx/src/tests/chat_tests.rs` (the part's round trip, an empty chat writing none, a
+  damaged part skipped), `crates/collab/src/tests.rs` (three replicas chatting at once converge;
+  clear while someone sends; undo leaves the chat), `crates/engine/tests/chat.rs` (the commands
+  and their limits, undo, modified, XLSX and JSON; in sessions: two and three people converging,
+  clearing, a newcomer, an encrypted room, a viewer, typing), chat sends and clears in
+  `collab_convergence.rs`, craft-collab's `gridcraft-1-chat*` transcripts in
+  `collab_conformance.rs`, and `crates/ui-egui/tests/chat_pane.rs` (the unread count, the pane,
+  Enter and Shift+Enter, the mention flash, Clear chat… asking, the button outside a session).
 - `crates/engine/tests/collab_loopback.rs`: two GridCraft processes through craft-collab's
   loopback transport (`CRAFT_COLLAB_LOOPBACK` = the built plugin).
 
@@ -247,5 +311,7 @@ new, empty sheet reach the other session), undo, leaving.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Document chat (protocol 2.1, craft-collab `docs/chat.md`): the `chat`/`chatMeta` roots, the XLSX part `/craft/chat.json` and the native format's `chat`, the `chat.*` commands and `view.chat`, awareness `typing`, the Chat pane and the title bar's chat button with the unread count and the mention flash; replays the chat transcripts |
+| 2026-10-15 | minor | Selections on a sheet with no row or column ids, and past the last ones, travel as the block ids those rows and columns would get (no document write; schema 1 clarified in craft-collab); people circles slightly larger, with less overlap and clearer initials; name tags sit above the selection's top edge (in the column headers at the top of the view), fade after 3 s without movement and come back on hover over the outline |
 | 2026-10-15 | minor | Share and the session's people in the title bar (state dot, popover with people, Copy invitation and Leave; circles with "+N"; click to go to a person's selection); the Share dialog points at Automate › Add-ins when no transport is installed; a transport command's `collab.join` is now joined by the interface and its invitation kept; Review › Share group removed; status bar keeps only read-only reasons and problems |
 | 2026-10-15 | major | Created: plugin protocol 2 (2.0.1) in GridCraft: push channel, rooms, schema 1, encryption, per-user undo, awareness, recovery, Review › Share |

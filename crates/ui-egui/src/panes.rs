@@ -1,4 +1,4 @@
-//! Right-hand task panes: Comments, Watch Window, Selection Pane, Format Chart.
+//! Right-hand task panes: Comments, Watch Window, Selection Pane, Format Chart, Chat.
 
 use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
@@ -27,6 +27,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 "watch" => "Watch Window",
                 "selection" => "Selection",
                 "formatChart" => "Format Chart Area",
+                "chat" => "Chat",
                 _ => "",
             };
             ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
@@ -37,9 +38,16 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     app.grid.pane = None;
                 }
+                if pane == "chat" {
+                    crate::chat_ui::menu(app, ui);
+                }
             });
         });
         ui.separator();
+        if pane == "chat" {
+            crate::chat_ui::panel(app, ui);
+            return;
+        }
         egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
             "comments" => comments(app, ui),
             "watch" => watch(app, ui),

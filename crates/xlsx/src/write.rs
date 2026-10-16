@@ -443,6 +443,11 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         out.part(crate::custom_ui::PART_CUSTOM_UI14, None, crate::custom_ui::write(r).into_bytes());
         root.add_uri(crate::custom_ui::REL_CUSTOM_UI14, crate::custom_ui::PART_CUSTOM_UI14);
     }
+    // The document chat (craft-collab `docs/chat.md`); an empty chat writes no part.
+    if !wb.chat.is_empty() {
+        out.part(crate::CHAT_PART, Some(crate::CHAT_CONTENT_TYPE), wb.chat.to_part());
+        root.add_uri(crate::CHAT_REL, crate::CHAT_PART);
+    }
     crate::passthrough::write_package_rels(&mut root, &mut out);
     out.part("_rels/.rels", None, root.xml().into_bytes());
 

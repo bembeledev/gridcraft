@@ -76,6 +76,8 @@ pub enum Icon {
     Shapes,
     Link,
     Comment,
+    /// The document chat: two speech bubbles.
+    Chat,
     Note,
     TextBox,
     Symbol,
@@ -510,6 +512,10 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(6.0, 10.0), (10.0, 6.0)], c, 1.2);
             g.rect(2.0, 8.0, 6.0, 4.0, None, Some(c));
             g.rect(8.0, 4.0, 6.0, 4.0, None, Some(c));
+        }
+        Icon::Chat => {
+            g.line(&[(1.5, 2.0), (10.5, 2.0), (10.5, 8.5), (5.5, 8.5), (3.0, 11.0), (3.0, 8.5), (1.5, 8.5), (1.5, 2.0)], c, 1.1);
+            g.line(&[(12.0, 5.5), (14.5, 5.5), (14.5, 12.0), (13.0, 12.0), (13.0, 14.5), (10.5, 12.0), (6.5, 12.0), (6.5, 10.0)], c, 1.1);
         }
         Icon::Comment | Icon::Note => {
             g.poly(

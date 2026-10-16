@@ -367,11 +367,35 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     }
     read_ribbon(&mut cx, &root_rels, &mut wb, &mut kept)?;
+    read_chat(&mut cx, &root_rels, &mut wb)?;
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;
     Ok((wb, cx.report))
+}
+
+/// The document chat (`/craft/chat.json`, craft-collab `docs/chat.md`). A damaged part is
+/// skipped with a warning; it never stops the file from opening.
+fn read_chat(cx: &mut Ctx<'_>, root_rels: &[Rel], wb: &mut Workbook) -> Result<(), IoError> {
+    let Some(r) = root_rels.iter().find(|r| r.kind == crate::CHAT_REL && !r.external) else { return Ok(()) };
+    let bytes = match cx.pkg.read(&r.target) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            cx.warn("the document chat's part is missing; the workbook opened without it");
+            return Ok(());
+        }
+        Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("the document chat couldn't be read and was left out: {e}"));
+            return Ok(());
+        }
+    };
+    match gridcraft_model::Chat::from_part(&bytes) {
+        Ok(chat) => wb.chat = std::sync::Arc::new(chat),
+        Err(e) => cx.warn(format!("the document chat is damaged and was left out: {e}")),
+    }
+    Ok(())
 }
 
 pub(crate) fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {

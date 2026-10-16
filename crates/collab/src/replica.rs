@@ -79,6 +79,8 @@ pub struct Refreshed {
     pub changed: Vec<(usize, CellRef)>,
     /// Sheets, rows or columns changed: recalculate everything.
     pub structural: bool,
+    /// The document chat changed (others' messages, a clear).
+    pub chat: bool,
 }
 
 #[derive(Default, Debug)]
@@ -96,6 +98,8 @@ struct Changes {
     styles: bool,
     book: bool,
     meta: bool,
+    /// The document chat (`chat`, `chatMeta`).
+    chat: bool,
     sheets: HashMap<String, SheetChanges>,
 }
 
@@ -581,6 +585,19 @@ impl Replica {
                 lock(&ch).meta = true;
             }
         });
+        // The chat isn't in the undo scope: Undo never touches it.
+        let ch = changes.clone();
+        doc.get_or_insert_array(crate::chat::ROOT).observe_deep("gridcraft/chat", move |txn, _| {
+            if recorded(txn) {
+                lock(&ch).chat = true;
+            }
+        });
+        let ch = changes.clone();
+        doc.get_or_insert_map(crate::chat::META).observe("gridcraft/chatMeta", move |txn, _| {
+            if recorded(txn) {
+                lock(&ch).chat = true;
+            }
+        });
         let options = yrs::undo::Options {
             capture_timeout_millis: 0,
             tracked_origins: [Origin::from(LOCAL)].into_iter().collect(),
@@ -746,6 +763,7 @@ impl Replica {
                 sheets.push_back(&mut txn, ids.id.as_str());
                 proj.push(ids);
             }
+            crate::chat::seed(&mut txn, &wb.chat);
         }
         for ids in &proj {
             self.observe_sheet(&ids.id.clone());
@@ -1031,6 +1049,9 @@ impl Replica {
             }
             let book = txn.get_or_insert_map("book");
             self.write_book(&mut txn, &book, Some(&base), cur);
+            if !Arc::ptr_eq(&base.chat, &cur.chat) {
+                crate::chat::write_diff(&mut txn, &base.chat, &cur.chat);
+            }
             self.proj = new_proj;
         }
         for id in added_ids {
@@ -1039,6 +1060,29 @@ impl Replica {
         self.base = Some(cur.clone());
         self.undo.reset();
         self.take_outbox()
+    }
+
+    /// Shares only the chat's change (a viewer's messages: their other changes never leave).
+    /// The synced workbook takes `chat`. Returns the update to send.
+    pub fn commit_chat(&mut self, chat: &Arc<gridcraft_model::Chat>) -> Result<Option<Vec<u8>>, CollabError> {
+        let Some(base) = self.base.clone() else { return Err(CollabError::NotReady) };
+        if Arc::ptr_eq(&base.chat, chat) || *base.chat == **chat {
+            return Ok(None);
+        }
+        {
+            let doc = self.doc.clone();
+            let mut txn = doc.transact_mut_with(LOCAL);
+            crate::chat::write_diff(&mut txn, &base.chat, chat);
+        }
+        let mut wb = (*base).clone();
+        wb.chat = chat.clone();
+        self.base = Some(Arc::new(wb));
+        self.take_outbox()
+    }
+
+    /// The chat in the shared document.
+    pub fn chat(&self) -> gridcraft_model::Chat {
+        crate::chat::read(&self.doc.transact())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1307,7 +1351,7 @@ impl Replica {
     /// Whether remote changes (or an undo) are waiting for [`Replica::refresh`].
     pub fn has_changes(&self) -> bool {
         let ch = lock(&self.changes);
-        ch.list || ch.book || ch.meta || ch.styles || !ch.sheets.is_empty() || (self.base.is_none())
+        ch.list || ch.book || ch.meta || ch.styles || ch.chat || !ch.sheets.is_empty() || (self.base.is_none())
     }
 
     /// Brings remote changes into the model. `cur` is the engine's workbook, already committed
@@ -1322,7 +1366,7 @@ impl Replica {
             *lock(&self.changes) = Changes::default();
             let wb = self.build_all(cur);
             self.base = Some(Arc::new(wb.clone()));
-            return Ok(Some(Refreshed { wb, changed: vec![], structural: true }));
+            return Ok(Some(Refreshed { wb, changed: vec![], structural: true, chat: true }));
         }
         let mut ch = std::mem::take(&mut *lock(&self.changes));
         if ch.meta {
@@ -1333,7 +1377,7 @@ impl Replica {
                 ch.sheets.entry(id).or_default().full = true;
             }
         }
-        if !ch.list && !ch.book && ch.sheets.is_empty() {
+        if !ch.list && !ch.book && !ch.chat && ch.sheets.is_empty() {
             return Ok(None);
         }
         let doc = self.doc.clone();
@@ -1347,7 +1391,7 @@ impl Replica {
         if normal_changed {
             let wb = self.build_all(cur);
             self.base = Some(Arc::new(wb.clone()));
-            return Ok(Some(Refreshed { wb, changed: vec![], structural: true }));
+            return Ok(Some(Refreshed { wb, changed: vec![], structural: true, chat: ch.chat }));
         }
         let txn = doc.transact();
         let mut wb: Workbook = (**cur).clone();
@@ -1422,6 +1466,9 @@ impl Replica {
                 None => read_names(&txn, &mut wb),
             }
         }
+        if ch.chat {
+            wb.chat = Arc::new(crate::chat::read(&txn));
+        }
         drop(txn);
         // Unique names (concurrent adds can give two sheets one name): later ones get a suffix.
         let mut taken = HashSet::new();
@@ -1440,7 +1487,7 @@ impl Replica {
         }
         self.proj = proj;
         self.base = Some(Arc::new(wb.clone()));
-        Ok(Some(Refreshed { wb, changed, structural }))
+        Ok(Some(Refreshed { wb, changed, structural, chat: ch.chat }))
     }
 
     /// The room's sheet ids in order, without duplicates (never empty).
@@ -1473,6 +1520,8 @@ impl Replica {
             Some(book) => read_book(&txn, &book, &mut wb),
             None => read_names(&txn, &mut wb),
         }
+        // The room's chat replaces the workbook's.
+        wb.chat = Arc::new(crate::chat::read(&txn));
         let list = self.sheet_list(&txn);
         // Sheets of `cur` keep their unshared parts when they're in the room (same id), or, on
         // joining with a file, by position.
@@ -1874,6 +1923,7 @@ pub fn fingerprint(wb: &Workbook) -> String {
     let mut names: Vec<String> = wb.names.iter().map(|n| format!("{} {}", name_key(n), serde_json::to_string(n).unwrap_or_default())).collect();
     names.sort();
     out.push_str(&format!("names {names:?}\n"));
+    out.push_str(&format!("chat {}\n", wb.chat.to_json()));
     for sh in &wb.sheets {
         out.push_str(&format!("sheet {:?}\n", sh.name));
         for (pos, cell) in sh.cells.iter() {

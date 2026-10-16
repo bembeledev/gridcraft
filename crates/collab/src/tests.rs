@@ -515,3 +515,96 @@ fn selections_on_an_empty_sheet_and_past_the_end_travel() {
     let bad = serde_json::json!({"sheet": sel["sheet"], "ranges": [["~0.64", "~0.0", "~0.0", "~0.0"], ["~99999999999.1", "~0.0", "~0.0", "~0.0"], ["~x.1", "~0.0", "~0.0", "~0.0"]]});
     assert_eq!(peers[0].rep.selection_from_ids(&bad), Some((1, vec![])));
 }
+
+// ---------------------------------------------------------------- document chat
+
+fn say(p: &mut Peer, id: &str, who: &str, text: &str) -> Option<Vec<u8>> {
+    let author = gridcraft_model::ChatAuthor { id: format!("u-{who}"), name: who.into(), color: "#3B7DD8".into() };
+    p.edit(|wb| {
+        let mut c = (*wb.chat).clone();
+        c.send(gridcraft_model::ChatMessage { id: id.into(), author, at: 1_000, text: Some(text.into()), ..Default::default() }).expect("send");
+        wb.chat = Arc::new(c);
+        vec![]
+    })
+}
+
+fn chat_texts(p: &Peer) -> Vec<String> {
+    p.wb.chat.messages.iter().map(|m| m.text.clone().unwrap_or_default()).collect()
+}
+
+#[test]
+fn chat_seeds_joins_and_converges_on_three_peers() {
+    let mut wb = sample();
+    let mut c = gridcraft_model::Chat::default();
+    let ann = gridcraft_model::ChatAuthor { id: "u-ann".into(), name: "Ann".into(), color: "#3B7DD8".into() };
+    c.send(gridcraft_model::ChatMessage { id: "note0000".into(), author: ann, at: 5, text: Some("from the file".into()), ..Default::default() })
+        .expect("send");
+    wb.chat = Arc::new(c);
+    let mut first = Replica::new(41);
+    let wb = Arc::new(wb);
+    first.seed(wb.clone(), "Budget").expect("seed");
+    let state = first.full_state();
+    let mut peers = vec![Peer { rep: first, wb, inbox: vec![] }];
+    for i in 1..3 {
+        let mut p = Peer { rep: Replica::new(41 + i), wb: Arc::new(Workbook::new()), inbox: vec![] };
+        p.receive(&state);
+        assert_eq!(chat_texts(&p), ["from the file"], "joining brings the room's chat in");
+        peers.push(p);
+    }
+    // Everyone sends at once; updates arrive in different orders.
+    let mut ups = vec![];
+    for (i, p) in peers.iter_mut().enumerate() {
+        let id = format!("msg{i}0000");
+        ups.push((i, say(p, &id, &format!("p{i}"), &format!("hello from {i}")).expect("an update")));
+    }
+    for (to, p) in peers.iter_mut().enumerate() {
+        let mut mine: Vec<&(usize, Vec<u8>)> = ups.iter().filter(|(from, _)| *from != to).collect();
+        if to == 1 {
+            mine.reverse();
+        }
+        for (_, u) in mine {
+            p.receive(u);
+        }
+    }
+    let order = chat_texts(&peers[0]);
+    assert_eq!(order.len(), 4);
+    assert_eq!(chat_texts(&peers[1]), order);
+    assert_eq!(chat_texts(&peers[2]), order);
+    assert_eq!(fingerprint(&peers[1].wb), fingerprint(&peers[2].wb));
+    // The model reads what the document holds.
+    assert_eq!(*peers[2].wb.chat, peers[2].rep.chat());
+}
+
+#[test]
+fn chat_clear_and_undo() {
+    let mut peers = room(2, 3);
+    let u = say(&mut peers[0], "aaaaaaaa", "ann", "one").expect("update");
+    peers[1].receive(&u);
+    // An edit, then a message: undo reverts the edit only.
+    let u = peers[0].edit(|wb| {
+        Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(20, 0), Value::Number(1.0));
+        vec![]
+    });
+    peers[1].receive(&u.expect("update"));
+    let u = say(&mut peers[0], "bbbbbbbb", "ann", "two").expect("update");
+    peers[1].receive(&u);
+    let undo = peers[0].rep.undo().expect("undo").expect("an undo step");
+    peers[0].refresh();
+    peers[1].receive(&undo);
+    assert_eq!(chat_texts(&peers[0]), ["one", "two"], "undo never touches the chat");
+    assert_eq!(chat_texts(&peers[1]), ["one", "two"]);
+    assert!(peers[1].wb.sheets[0].cells.get(CellRef::new(20, 0)).is_none());
+    // Bob clears while Ann sends: Ann's new message stays everywhere.
+    let clear = peers[1].edit(|wb| {
+        let mut c = (*wb.chat).clone();
+        c.clear(9_000);
+        wb.chat = Arc::new(c);
+        vec![]
+    });
+    let sent = say(&mut peers[0], "cccccccc", "ann", "meanwhile").expect("update");
+    peers[0].receive(&clear.expect("update"));
+    peers[1].receive(&sent);
+    assert_eq!(chat_texts(&peers[0]), ["meanwhile"]);
+    assert_eq!(chat_texts(&peers[1]), ["meanwhile"]);
+    assert_eq!(peers[0].wb.chat.cleared_at, Some(9_000));
+}

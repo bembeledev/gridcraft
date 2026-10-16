@@ -182,11 +182,18 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let share_w = crate::collab_ui::share_button_width(app, ui);
             let people = crate::collab_ui::people(app).len();
             let title_min = if title.is_empty() { 0.0 } else { MIN_TITLE_W };
-            let free = rect.right() - 8.0 - share_w - gap - left_end - gap - title_min;
+            // The chat button sits between Share and the people, in a session or when the
+            // workbook has a chat.
+            let chat = crate::chat_ui::button_visible(app);
+            let chat_w = if chat { crate::chat_ui::BUTTON_W + gap } else { 0.0 };
+            let free = rect.right() - 8.0 - share_w - gap - chat_w - left_end - gap - title_min;
             let plan = plan_title_right(free, gap, people);
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 crate::collab_ui::share_button(app, ui, ch);
+                if chat {
+                    crate::chat_ui::title_button(app, ui, ch);
+                }
                 if plan.circle_slots > 0 {
                     crate::collab_ui::people_circles(app, ui, plan.circle_slots);
                 }
@@ -2246,6 +2253,13 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "view.headings", json!({"on": h}));
         }
     });
+    sep(ui);
+    // The document chat (craft-collab `docs/chat.md`), also on the title bar beside Share.
+    let __k = big_button(ui, Icon::Chat, "Chat", "Chat with the people working on this workbook", false);
+    control_keytip(app, ui, &__k, "view.chat");
+    if __k.clicked() {
+        act(app, "view.chat", json!({}));
+    }
     sep(ui);
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
     control_keytip(app, ui, &__k, "dialog:zoom");

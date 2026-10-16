@@ -2,7 +2,7 @@
 //! concurrently on one shared workbook, their updates delivered in random order and sometimes
 //! twice, and must end with identical workbooks — the same shared content (schema 1) and the
 //! same calculated values — equal to what a newcomer joining afterwards builds. Undo and Redo
-//! are per-user and part of the mix.
+//! are per-user and part of the mix, and so is the document chat (sends and clears).
 //!
 //! The sessions are connected in memory ([`collab::IN_MEMORY`]): the test is the transport.
 //!
@@ -72,7 +72,7 @@ fn sheet_of(rng: &mut Rng, s: &Session) -> Json {
 
 /// A random edit, as a person would make it.
 fn generate(rng: &mut Rng, s: &Session, tag: &str) -> (String, Json) {
-    let (id, p) = match rng.below(30) {
+    let (id, p) = match rng.below(33) {
         0..=9 => ("cell.set", json!({"cell": cell(rng), "input": input(rng, tag)})),
         10 => ("home.bold", json!({"range": range(rng)})),
         11 => ("home.fillColor", json!({"range": range(rng), "color": rng.pick(&["#FF0000", "#00B050", "none"])})),
@@ -91,6 +91,10 @@ fn generate(rng: &mut Rng, s: &Session, tag: &str) -> (String, Json) {
         26 => ("home.rowHeight", json!({"rows": format!("{0}:{0}", rng.below(16) + 1), "height": 10 + rng.below(30)})),
         27 => ("edit.undo", json!({})),
         28 => ("edit.redo", json!({})),
+        // Document chat: concurrent messages land in one order everywhere; a clear removes the
+        // messages its sender had, not the ones sent meanwhile.
+        29 | 30 => ("chat.send", json!({"text": format!("{tag} says {}", rng.below(100))})),
+        31 => ("chat.clear", json!({})),
         _ => ("selection.set", json!({"range": range(rng)})),
     };
     (id.to_string(), p)

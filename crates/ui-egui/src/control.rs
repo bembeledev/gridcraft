@@ -178,6 +178,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
+                ("view.chat", "Chat", "{on?: bool} (toggles without it) → {on}: the document chat's pane"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),

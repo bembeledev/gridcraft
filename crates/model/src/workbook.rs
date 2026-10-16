@@ -117,6 +117,10 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The document chat (craft-collab `docs/chat.md`): saved in the file, shared in a live
+    /// session, never part of undo.
+    #[serde(default, skip_serializing_if = "chat_is_empty")]
+    pub chat: Arc<crate::chat::Chat>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -124,6 +128,10 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+}
+
+fn chat_is_empty(c: &Arc<crate::chat::Chat>) -> bool {
+    c.is_empty()
 }
 
 impl Default for Workbook {
@@ -151,6 +159,7 @@ impl Workbook {
             vba_project: None,
             ribbon: None,
             csv_delimiter: None,
+            chat: Arc::default(),
             preserved: None,
             source_dir: None,
         }

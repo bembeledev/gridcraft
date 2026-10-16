@@ -137,6 +137,8 @@ pub struct Room {
     in_memory: bool,
     /// Status-bar messages not shown yet ([`Session::collab_take_notices`]).
     notices: Vec<String>,
+    /// This person is typing in the chat (awareness `typing`).
+    pub typing: bool,
 }
 
 impl Room {
@@ -167,6 +169,17 @@ impl Room {
                 Some(Peer { client_id: id, user, selection, cursor })
             })
             .collect()
+    }
+    /// The others typing in the chat (awareness `typing: true`), by name.
+    pub fn typing_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .awareness
+            .present()
+            .filter(|(_, st)| st.get("typing").and_then(Json::as_bool) == Some(true))
+            .filter_map(|(_, st)| User::parse(st.get("user")?).map(|u| u.name))
+            .collect();
+        names.sort();
+        names
     }
     fn info(&self, s: &Session) -> Json {
         let people: Vec<Json> = self.peers().iter().map(|p| json!({"clientId": p.client_id, "user": p.user})).collect();
@@ -244,7 +257,18 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn user_from_prefs(s: &mut Session) -> User {
+/// Who this person is in chat messages outside a live session (and, before one, in it): the
+/// name and colour of File › Options, without assigning an id if there isn't one yet.
+pub fn local_user(s: &Session) -> User {
+    let name: String = s.prefs.user_name.trim().chars().take(128).collect();
+    User {
+        id: if s.prefs.collab_user_id.is_empty() { "u-local".into() } else { s.prefs.collab_user_id.clone() },
+        name: if name.is_empty() { "GridCraft User".into() } else { name },
+        color: if valid_color(&s.prefs.collab_color) { s.prefs.collab_color.clone() } else { "#3B7DD8".into() },
+    }
+}
+
+pub(crate) fn user_from_prefs(s: &mut Session) -> User {
     if s.prefs.collab_user_id.is_empty() {
         let mut b = [0u8; 8];
         let v = if gridcraft_collab::random_bytes(&mut b).is_ok() { u64::from_le_bytes(b) } else { gridcraft_collab::new_client_id() };
@@ -397,6 +421,7 @@ fn join_with(s: &mut Session, p: &Json, in_memory: bool) -> Result<Json> {
         outbox: Default::default(),
         in_memory,
         notices: vec![],
+        typing: false,
     };
     // A room's undo is the person's own: the workbook's history starts here.
     if let Some(d) = s.docs.iter_mut().find(|d| d.uid == doc) {
@@ -636,7 +661,16 @@ fn flush(s: &mut Session, r: &mut Room) {
         return;
     }
     if r.view_only || r.joining {
-        // A viewer's edits never leave: back to the room's state.
+        // A viewer's messages go to the chat; their other edits never leave: back to the room's
+        // state (with the chat).
+        if r.view_only && !r.joining {
+            let chat = d.wb.chat.clone();
+            match r.replica.commit_chat(&chat) {
+                Ok(Some(update)) => send_update(r, "collab/update", &update),
+                Ok(None) => {}
+                Err(e) => log::warn!("collab {}: {e}", r.room),
+            }
+        }
         if let Some(b) = r.replica.base() {
             d.wb = b.clone();
             d.calc.rebuild(&d.wb);
@@ -696,7 +730,9 @@ fn apply_refreshed(s: &mut Session, uid: u64, out: gridcraft_collab::Refreshed, 
     let wb = Arc::new(wb);
     let dirty = d.is_dirty();
     d.wb = wb.clone();
-    if !dirty && out.changed.is_empty() && !out.structural {
+    // Others' changes make the workbook modified, their chat messages too (the chat is kept
+    // only when the file is saved).
+    if !dirty && out.changed.is_empty() && !out.structural && !out.chat {
         d.saved = wb.clone();
     }
     d.revision += 1;
@@ -899,6 +935,11 @@ fn remove_recovery(s: &Session, room: &str) {
     }
 }
 
+/// Sends this person's awareness now (after `typing` changed).
+pub(crate) fn awareness_changed(s: &mut Session) {
+    send_awareness(s, true);
+}
+
 /// This person's selection to the rooms (at most 20 a second, renewed every 15 s).
 fn send_awareness(s: &mut Session, force: bool) {
     let now = s.collab.now;
@@ -915,6 +956,9 @@ fn send_awareness(s: &mut Session, force: bool) {
             Some(json!({"sheet": c.get("sheet")?, "cell": [first.get(0)?, first.get(1)?]}))
         });
         let mut state = json!({"user": r.user});
+        if r.typing {
+            state["typing"] = json!(true);
+        }
         if let Some(sel) = selection {
             state["selection"] = sel;
         }

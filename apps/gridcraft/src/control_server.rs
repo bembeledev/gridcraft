@@ -40,9 +40,12 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
         }
         let msg: Json = match serde_json::from_str(&line) {
             Ok(v) => v,
+            // Close on a line that isn't JSON: an HTTP request (say, a web page's `fetch` to this
+            // port) starts with a request line that never parses, so it can't carry a command in
+            // its body. Matches WordCraft's and LightCraft's control servers.
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("invalid JSON: {e}")}));
-                continue;
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("invalid JSON: {e}; closing the connection")}));
+                break;
             }
         };
         let id = msg.get("id").cloned().unwrap_or(Json::Null);
@@ -63,5 +66,71 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
         if writeln!(out, "{reply}").is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    /// A listener on a free loopback port whose connections go to `serve`, plus the request queue.
+    fn boot() -> (u16, Receiver<ControlRequest>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let tx = tx.clone();
+                std::thread::spawn(move || serve(stream, tx, egui::Context::default()));
+            }
+        });
+        (port, rx)
+    }
+
+    fn connect(port: u16) -> TcpStream {
+        let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s
+    }
+
+    /// Everything the server sends until it closes the connection (or the read times out).
+    fn read_to_close(s: &mut TcpStream) -> (String, bool) {
+        let mut buf = Vec::new();
+        let closed = s.read_to_end(&mut buf).is_ok();
+        (String::from_utf8_lossy(&buf).into_owned(), closed)
+    }
+
+    #[test]
+    fn json_requests_reach_the_ui() {
+        let (port, rx) = boot();
+        let mut s = connect(port);
+        writeln!(s, r#"{{"id":1,"method":"ping","params":{{}}}}"#).unwrap();
+        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(req.method, "ping");
+    }
+
+    #[test]
+    fn bad_json_closes_the_connection() {
+        let (port, rx) = boot();
+        let mut s = connect(port);
+        writeln!(s, "not json").unwrap();
+        let (out, closed) = read_to_close(&mut s);
+        assert!(out.contains("closing the connection"), "{out}");
+        assert!(closed, "connection should be closed after a non-JSON line");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn http_request_cannot_smuggle_a_command() {
+        // What a web page's `fetch("http://127.0.0.1:<port>/", {method: "POST", body})` sends.
+        let (port, rx) = boot();
+        let body = "\n{\"id\":1,\"method\":\"file.save_as\",\"params\":{\"path\":\"/tmp/x.xlsx\"}}\n";
+        let req = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1:7979\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let mut s = connect(port);
+        s.write_all(req.as_bytes()).unwrap();
+        let (_, closed) = read_to_close(&mut s);
+        assert!(closed);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the JSON body line must not run");
     }
 }

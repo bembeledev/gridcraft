@@ -1683,7 +1683,7 @@ pub(crate) fn paint_selection(
     }
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
-        let h = Rect::from_center_size(snap_pos(outline.right_bottom(), p.ctx().pixels_per_point()), vec2(5.0, 5.0));
+        let h = Rect::from_center_size(snap_pos(outline.right_bottom(), p.ctx().pixels_per_point()), vec2(4.0, 4.0));
         p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
         p.rect_filled(h, 0.0, t.sel_border);
     }

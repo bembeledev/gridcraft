@@ -1753,13 +1753,14 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     let locale = app.ui.language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
+    let fold = |text: &str| text.to_lowercase().replace('ё', "е");
+    let q = fold(&d.search);
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
             q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+                || f["name"].as_str().is_some_and(|n| fold(locale.function_name(n)).contains(&q))
+                || f["description"].as_str().is_some_and(|n| fold(n).contains(&q))
         })
         .take(300)
         .collect();

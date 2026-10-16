@@ -13,6 +13,11 @@
 //! command's function calls `event.completed()` (or fails). The host calls into the page with
 //! `__craftOfficeRunFunction({"call", "name", "control"})` and `__craftOfficeEvent({"type"})`
 //! (`documentSelectionChanged`).
+//!
+//! Tests and agents look into the pages through the control channel: `office.panes` lists them
+//! ([`list`]) and `office.eval` runs a script in one ([`eval`]): the host runs [`eval_script`],
+//! which posts `{"craftEval": n, "ok", "json"|"error"}` back once the script's value (awaited if
+//! it is a Promise) is known; [`EvalRouter`] hands those answers to the waiting caller.
 
 use egui::{Ui, vec2};
 use serde_json::{Value as Json, json};
@@ -38,6 +43,134 @@ pub trait OfficeHost {
     /// Calls the library's `globalThis.<entry>(json)` in the page for `key`
     /// (`__craftOfficeRunFunction`, `__craftOfficeEvent`).
     fn call(&mut self, key: &str, entry: &str, json: &str);
+    /// Runs `script` in the page for `key` (wrapped by [`eval_script`]; [`EvalRouter`] does the
+    /// bookkeeping) and calls `reply` once, with the JSON text of its value or an error. A host
+    /// that can't run scripts answers an error.
+    fn eval(&mut self, key: &str, script: &str, reply: EvalReply) {
+        let _ = (key, script);
+        reply(Err("this host can't run scripts in add-in pages".into()));
+    }
+}
+
+/// Where an `office.eval` answer goes: called once with the value's JSON text, or an error.
+pub type EvalReply = Box<dyn FnOnce(Result<String, String>) + Send>;
+
+/// Longest JSON answer `office.eval` passes on.
+pub const MAX_EVAL_RESULT: usize = 1024 * 1024;
+/// Longest script `office.eval` runs.
+pub const MAX_EVAL_SCRIPT: usize = 256 * 1024;
+/// Most `office.eval` calls waiting at once (more are refused).
+const MAX_EVALS: usize = 256;
+
+/// The script a host runs for `office.eval` number `id`: evaluates `script` in the page's global
+/// scope as the web inspector's console does (the value of its last statement; a Promise is
+/// awaited) and posts `{"craftEval": id, "ok": true, "json": "<value as JSON>"}` or
+/// `{"craftEval": id, "ok": false, "error": "…"}` through the page's channel to the host. A page
+/// whose Content-Security-Policy forbids `eval` answers an error.
+pub fn eval_script(id: u64, script: &str) -> String {
+    let quoted = serde_json::to_string(script).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(function(){{var post=function(m){{var s=JSON.stringify(m);var c=globalThis.__craftOffice;\
+if(c&&c.post){{c.post(s);}}else if(window.ipc&&window.ipc.postMessage){{window.ipc.postMessage(s);}}}};\
+Promise.resolve().then(function(){{return (0,eval)({quoted});}}).then(function(v){{var t;\
+try{{t=JSON.stringify(v===undefined?null:v);}}catch(e){{throw new Error(\"the value isn't JSON: \"+e);}}\
+post({{craftEval:{id},ok:true,json:t===undefined?\"null\":t}});}}).catch(function(e){{\
+post({{craftEval:{id},ok:false,error:String(e&&e.stack?e.stack:e).slice(0,4000)}});}});}})();"
+    )
+}
+
+/// An answer [`eval_script`] posted: its id and the value's JSON text or the error.
+pub fn eval_answer(text: &str) -> Option<(u64, Result<String, String>)> {
+    if !text.contains("craftEval") {
+        return None;
+    }
+    let msg: Json = serde_json::from_str(text).ok()?;
+    let id = msg.get("craftEval")?.as_u64()?;
+    if msg.get("ok").and_then(Json::as_bool) == Some(true) {
+        let json = msg.get("json").and_then(Json::as_str).unwrap_or("null");
+        if json.len() > MAX_EVAL_RESULT {
+            return Some((id, Err(format!("the value is larger than {} KiB", MAX_EVAL_RESULT / 1024))));
+        }
+        Some((id, Ok(json.to_string())))
+    } else {
+        let e: String = msg.get("error").and_then(Json::as_str).unwrap_or("the script failed").chars().take(4000).collect();
+        Some((id, Err(e)))
+    }
+}
+
+/// A host's `office.eval` calls waiting for their page's answer.
+#[derive(Default)]
+pub struct EvalRouter {
+    next: u64,
+    waiting: Vec<(u64, String, EvalReply)>,
+}
+
+impl EvalRouter {
+    /// Registers a call to the page for `key`: the script to run there, or `None` (and `reply`
+    /// has its error) when too many are waiting.
+    pub fn start(&mut self, key: &str, script: &str, reply: EvalReply) -> Option<String> {
+        if self.waiting.len() >= MAX_EVALS {
+            reply(Err("too many scripts are waiting for add-in pages".into()));
+            return None;
+        }
+        self.next = self.next.wrapping_add(1);
+        self.waiting.push((self.next, key.to_string(), reply));
+        Some(eval_script(self.next, script))
+    }
+    /// Answers the calls whose answers are among `messages` (from the page they were sent to),
+    /// and returns the other messages.
+    pub fn route(&mut self, messages: Vec<(String, String)>) -> Vec<(String, String)> {
+        let mut rest = Vec::with_capacity(messages.len());
+        for (key, text) in messages {
+            match eval_answer(&text) {
+                Some((id, answer)) => {
+                    if let Some(i) = self.waiting.iter().position(|(n, k, _)| *n == id && *k == key) {
+                        let (_, _, reply) = self.waiting.remove(i);
+                        reply(answer);
+                    }
+                }
+                None => rest.push((key, text)),
+            }
+        }
+        rest
+    }
+    /// The page for `key` is gone: its calls fail with `why`.
+    pub fn fail(&mut self, key: &str, why: &str) {
+        let (gone, keep): (Vec<_>, Vec<_>) = self.waiting.drain(..).partition(|(_, k, _)| k == key);
+        self.waiting = keep;
+        for (_, _, reply) in gone {
+            reply(Err(why.to_string()));
+        }
+    }
+    /// Calls still waiting.
+    pub fn len(&self) -> usize {
+        self.waiting.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.waiting.is_empty()
+    }
+}
+
+/// An `office.eval` the control channel is waiting on.
+struct PendingEval {
+    token: u64,
+    reply: std::sync::mpsc::Sender<crate::control::ControlResponse>,
+    deadline_ms: f64,
+}
+
+/// The control channel's `office.eval` calls: their answers arrive from the host, maybe from
+/// another thread, into `done`; [`finish_evals`] passes them on, or gives up at the deadline.
+#[derive(Default)]
+pub struct Evals {
+    token: u64,
+    pending: Vec<PendingEval>,
+    done: std::sync::Arc<std::sync::Mutex<Vec<(u64, Result<String, String>)>>>,
+}
+
+impl Evals {
+    pub fn waiting(&self) -> bool {
+        !self.pending.is_empty()
+    }
 }
 
 /// How long a function command may run before GridCraft stops waiting for its
@@ -76,8 +209,8 @@ pub struct Panes {
     pub open: Vec<OfficePane>,
     /// Which of `open` shows.
     pub current: usize,
-    /// Pages running a function command (no pane): key → add-in.
-    pub function_pages: Vec<(String, String)>,
+    /// Pages running a function command (no pane): key, add-in, function file URL.
+    pub function_pages: Vec<(String, String, String)>,
     /// Function commands not finished yet.
     pub calls: Vec<FunctionCall>,
     next_call: u64,
@@ -87,6 +220,8 @@ pub struct Panes {
     selection: Option<(u64, usize, gridcraft_engine::Selection)>,
     /// Keys shown last frame, to hide them when they stop showing.
     shown: Option<String>,
+    /// `office.eval` calls waiting for their page.
+    pub evals: Evals,
 }
 
 /// Most function commands waiting at once (more are refused).
@@ -126,8 +261,8 @@ pub fn run_function(app: &mut SheetApp, plugin: String, url: String, function: S
         return;
     }
     host.load_hidden(&k, &url);
-    if !app.office.function_pages.iter().any(|(fk, _)| *fk == k) {
-        app.office.function_pages.push((k.clone(), plugin.clone()));
+    if !app.office.function_pages.iter().any(|(fk, ..)| *fk == k) {
+        app.office.function_pages.push((k.clone(), plugin.clone(), url.clone()));
     }
     app.office.next_call = app.office.next_call.wrapping_add(1);
     let id = app.office.next_call;
@@ -199,6 +334,106 @@ fn selection_events(app: &mut SheetApp) {
     }
 }
 
+/// The panes and function pages, for `office.panes`: `{key, plugin, url, title, kind: "pane" |
+/// "function", visible, ready, current}`.
+pub fn list(app: &SheetApp) -> Json {
+    let o = &app.office;
+    let panes = o.open.iter().enumerate().map(|(i, p)| {
+        json!({
+            "key": p.key, "plugin": p.plugin, "url": p.url, "title": p.title, "kind": "pane",
+            "visible": o.shown.as_deref() == Some(p.key.as_str()), "ready": o.ready.contains(&p.key), "current": i == o.current,
+        })
+    });
+    let functions = o.function_pages.iter().map(|(k, plugin, url)| {
+        json!({"key": k, "plugin": plugin, "url": url, "title": "", "kind": "function", "visible": false, "ready": o.ready.contains(k), "current": false})
+    });
+    Json::Array(panes.chain(functions).collect())
+}
+
+/// The page `pane` names: a key from [`list`], or an add-in (plugin id): its pane showing, else
+/// its first pane, else its function page.
+pub fn find_page(app: &SheetApp, pane: &str) -> Option<String> {
+    let o = &app.office;
+    if o.open.iter().any(|p| p.key == pane) || o.function_pages.iter().any(|(k, ..)| k == pane) {
+        return Some(pane.to_string());
+    }
+    let current = o.open.get(o.current).filter(|p| p.plugin == pane);
+    current
+        .or_else(|| o.open.iter().find(|p| p.plugin == pane))
+        .map(|p| p.key.clone())
+        .or_else(|| o.function_pages.iter().find(|(_, p, _)| p == pane).map(|(k, ..)| k.clone()))
+}
+
+/// Runs `script` in the page `key` for the control channel; `reply` gets
+/// `{"ok": true, "result": <value>}` or `{"ok": false, "error"}` from [`finish_evals`], at the
+/// latest `timeout_ms` from now.
+pub fn eval(app: &mut SheetApp, key: &str, script: &str, timeout_ms: f64, reply: std::sync::mpsc::Sender<crate::control::ControlResponse>) {
+    let Some(host) = app.services.office.as_mut() else {
+        let _ = reply.send(json!({"ok": false, "error": "Office add-ins need the GridCraft desktop app on macOS or Windows"}));
+        return;
+    };
+    if app.office.evals.pending.len() >= MAX_EVALS {
+        let _ = reply.send(json!({"ok": false, "error": "too many scripts are waiting for add-in pages"}));
+        return;
+    }
+    app.office.evals.token = app.office.evals.token.wrapping_add(1);
+    let token = app.office.evals.token;
+    app.office.evals.pending.push(PendingEval { token, reply, deadline_ms: crate::now_ms() + timeout_ms });
+    let done = app.office.evals.done.clone();
+    host.eval(
+        key,
+        script,
+        Box::new(move |answer| {
+            let mut q = done.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            q.push((token, answer));
+        }),
+    );
+}
+
+/// Passes on the `office.eval` answers that arrived, and fails the calls past their deadline.
+pub fn finish_evals(app: &mut SheetApp, now_ms: f64) {
+    let evals = &mut app.office.evals;
+    if evals.pending.is_empty() {
+        return;
+    }
+    let arrived = std::mem::take(&mut *evals.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    for (token, answer) in arrived {
+        let Some(i) = evals.pending.iter().position(|p| p.token == token) else { continue };
+        let p = evals.pending.remove(i);
+        let reply = match answer {
+            Ok(text) if text.len() > MAX_EVAL_RESULT => {
+                json!({"ok": false, "error": format!("the value is larger than {} KiB", MAX_EVAL_RESULT / 1024)})
+            }
+            Ok(text) => match serde_json::from_str::<Json>(&text) {
+                Ok(v) => json!({"ok": true, "result": v}),
+                Err(e) => json!({"ok": false, "error": format!("the page's answer isn't JSON: {e}")}),
+            },
+            Err(e) => json!({"ok": false, "error": e}),
+        };
+        let _ = p.reply.send(reply);
+    }
+    evals.pending.retain(|p| {
+        if now_ms < p.deadline_ms {
+            return true;
+        }
+        let _ = p.reply.send(
+            json!({"ok": false, "error": "the page didn't answer before the timeout (still loading, navigated away, or the script never settled)"}),
+        );
+        false
+    });
+}
+
+/// Closes the pane `key` (`office.close`): false if no pane has that key.
+pub fn close_key(app: &mut SheetApp, key: &str) -> bool {
+    match app.office.open.iter().position(|p| p.key == key) {
+        Some(i) => {
+            close(app, i);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Closes the pane at `i`.
 fn close(app: &mut SheetApp, i: usize) {
     if i >= app.office.open.len() {
@@ -232,7 +467,7 @@ pub fn pump(app: &mut SheetApp) {
             .iter()
             .find(|p| p.key == k)
             .map(|p| p.plugin.clone())
-            .or_else(|| app.office.function_pages.iter().find(|(fk, _)| *fk == k).map(|(_, p)| p.clone()));
+            .or_else(|| app.office.function_pages.iter().find(|(fk, ..)| *fk == k).map(|(_, p, _)| p.clone()));
         let answer = answer(app, plugin.as_deref(), &text);
         if let Some(host) = app.services.office.as_mut() {
             host.reply(&k, &answer.to_string());

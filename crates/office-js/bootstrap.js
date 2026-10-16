@@ -11,7 +11,11 @@
 //   hands over its objects, then the library's objects. A script that assigns its own `Office`
 //   anyway has the assignment ignored (an `initialize` function on it is kept);
 // - starts the library, then hands it what the page did meanwhile (`onReady` and `Excel.run`
-//   calls, `Office.initialize`, `Office.actions.associate`).
+//   calls, `Office.initialize`, `Office.actions.associate`);
+// - answers `__craftOfficeInfo` (read only, for tests): whether `Office` is the library's,
+//   which office.js script URLs got the empty script, and what went wrong in the page (uncaught
+//   errors and rejections, console errors and warnings, scripts that loaded or failed, the
+//   document's state, the library's `onReady` bookkeeping).
 //
 // The desktop app puts this, then wasm-bindgen's generated glue, then a call to
 // `__craftOfficeStart(wasm_bindgen, <the wasm, base64>)` before the page's own scripts.
@@ -23,16 +27,64 @@
     Object.defineProperty(g, name, { value: value, writable: false, configurable: false, enumerable: false });
   }
 
+  // ---------------------------------------------------------------- what went wrong (tests)
+
+  var problems = [];
+  var scripts = [];
+  function note(kind, text) {
+    if (problems.length < 100) problems.push(kind + ": " + String(text).slice(0, 1000));
+  }
+  function describe(a) {
+    if (a && a.stack) return String(a.stack);
+    if (a && typeof a === "object") { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+    return String(a);
+  }
+  if (typeof g.addEventListener === "function") {
+    g.addEventListener("error", function (e) {
+      var t = e && e.target;
+      if (t && t !== g && t.tagName) {
+        note("failed to load", t.tagName + " " + (t.src || t.href || ""));
+      } else {
+        note("uncaught", (e && e.error ? describe(e.error) : e && e.message) + " (" + (e && e.filename) + ":" + (e && e.lineno) + ")");
+      }
+    }, true);
+    g.addEventListener("unhandledrejection", function (e) { note("unhandled rejection", describe(e && e.reason)); });
+  }
+  if (typeof document === "object" && typeof document.addEventListener === "function") {
+    // `load` and `error` don't bubble, but they can be caught on the way down.
+    var track = function (state) {
+      return function (e) {
+        var t = e && e.target;
+        if (t && t.tagName === "SCRIPT" && scripts.length < 100) scripts.push({ src: String(t.src || "(inline)").slice(0, 500), state: state });
+      };
+    };
+    document.addEventListener("load", track("loaded"), true);
+    document.addEventListener("error", track("failed"), true);
+  }
+  if (g.console) {
+    ["error", "warn"].forEach(function (m) {
+      var original = g.console[m];
+      if (typeof original !== "function") return;
+      g.console[m] = function () {
+        try { note("console." + m, Array.prototype.map.call(arguments, describe).join(" ")); } catch (e) { /* never break the page */ }
+        return original.apply(this, arguments);
+      };
+    });
+  }
+
   // ---------------------------------------------------------------- Microsoft's office.js
 
   // Microsoft's CDNs (any script there) and npm copies of @microsoft/office-js.
   var CDN = /^https?:\/\/(appsforoffice\.microsoft\.com|officeapis\.public\.onecdn\.static\.microsoft|[a-z0-9.-]+\.officeapps\.live\.com)\//i;
   var NPM = /\/@microsoft\/office-js\/.*\.js([?#].*)?$/i;
   var EMPTY = "data:text/javascript,%2F*%20GridCraft%3A%20Office.js%20is%20built%20in%20*%2F";
+  var blocked = [];
   function isOfficeJs(url) {
     var u = String(url || "");
     try { u = new URL(u, g.document ? g.document.baseURI : undefined).href; } catch (e) { /* keep it as written */ }
-    return CDN.test(u) || NPM.test(u);
+    var hit = CDN.test(u) || NPM.test(u);
+    if (hit && blocked.length < 50) blocked.push(u.slice(0, 500));
+    return hit;
   }
   if (typeof document === "object" && typeof Element === "function" && typeof HTMLScriptElement === "function") {
     var setAttribute = Element.prototype.setAttribute;
@@ -74,6 +126,7 @@
   // ---------------------------------------------------------------- the globals
 
   var waiting = [];
+  var startError = null;
   var associations = [];
   function later(get) {
     return function () {
@@ -109,6 +162,26 @@
       enumerable: true
     });
   });
+  // What tests check (office.eval): a copy each time, so a page can't change what's reported.
+  Object.defineProperty(g, "__craftOfficeInfo", {
+    get: function () {
+      var state = null;
+      try { state = g.__craftOfficeState ? JSON.parse(g.__craftOfficeState()) : null; } catch (e) { state = String(e); }
+      return {
+        bootstrap: true,
+        library: !!real.Office,
+        officeIsCraft: !!real.Office && g.Office === real.Office,
+        blockedScripts: blocked.slice(),
+        problems: problems.slice(),
+        scripts: scripts.map(function (s) { return { src: s.src, state: s.state }; }),
+        readyState: typeof document === "object" ? document.readyState : null,
+        libraryState: state,
+        startError: startError
+      };
+    },
+    configurable: false,
+    enumerable: false
+  });
   // The library hands over its objects here, once each.
   hidden("__craftOfficeAdopt", function (name, value) {
     if (Object.prototype.hasOwnProperty.call(standIn, name) && !real[name]) real[name] = value;
@@ -132,6 +205,7 @@
       });
       waiting.splice(0).forEach(function (call) { call(); });
     }).catch(function (e) {
+      startError = describe(e);
       console.error("GridCraft Office.js failed to start", e);
     });
   });

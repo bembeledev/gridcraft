@@ -37,6 +37,10 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `office.panes` | | Office add-ins' pages: `[{key, plugin, url, title, kind: "pane"\|"function", visible, ready, current}]`, task panes first, then the hidden pages of function commands. `ready`: the page's Office.js has started (`Office.onReady` has resolved) |
+| `office.open` | `{plugin, command?}` | Opens an add-in's task pane: runs its command (`plugins.run`); without `command`, its default pane (`taskpane`) or else its first ShowTaskpane button. Answers `plugins.run`'s result plus `pane` (the key) |
+| `office.close` | `{pane}` | Closes a task pane (a key, or the add-in's id) |
+| `office.eval` | `{pane, script, timeoutMs?}` | Runs JavaScript in an add-in's page and answers its value as JSON ([below](#office-add-ins-pages)) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -62,6 +66,32 @@ workbook (Agile or Standard encryption). Without `password` it returns an error 
 password returns "The password is incorrect." The password is left out of the journal and never
 quoted in an error. The opened workbook has no save path, so Save asks where to save it, without
 the password, and never replaces the encrypted original.
+
+### Office add-ins' pages
+
+`office.eval` evaluates `script` in the page's global scope as the web inspector's console does:
+the answer is the value of its last statement, and a Promise is awaited
+(`{"pane": "office.<id>", "script": "Office.context.host"}` → `{"ok": true, "result": "Excel"}`).
+`pane` is a key from `office.panes` or an add-in's id (its pane showing, else its first pane, else
+its function page). The value must be JSON (`undefined` answers `null`); one larger than 1 MiB,
+a script that throws or rejects, and a page that doesn't answer within `timeoutMs` (default
+10 000, at most 55 000; the page may still be loading or have navigated away) answer errors.
+Scripts are at most 256 KiB. Pages whose Content-Security-Policy forbids `eval` can't run them.
+The answer comes back through the page's message channel, so only the desktop app on macOS and
+Windows answers (the web app and other hosts answer an error). The page's Office.js also answers
+`__craftOfficeInfo`: `{bootstrap, library, officeIsCraft, blockedScripts}`, whether `Office` is
+GridCraft's and which of Microsoft's `office.js` scripts got an empty script instead.
+
+```json
+{"id": 1, "method": "plugins.load", "params": {"path": "/samples/Samples/hello-world/excel-hello-world/manifest.xml"}}
+{"id": 2, "method": "office.open", "params": {"plugin": "office.<id>"}}
+{"id": 3, "method": "office.panes"}
+{"id": 4, "method": "office.eval", "params": {"pane": "office.<id>", "script": "document.getElementById('helloButton').click(); true"}}
+{"id": 5, "method": "cell.get", "params": {"cell": "A1"}}
+```
+
+`cargo xtask office-samples` drives Microsoft's add-in samples this way
+([officejs.md](officejs.md#testing-with-microsofts-samples)).
 
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

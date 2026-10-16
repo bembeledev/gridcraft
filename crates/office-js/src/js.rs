@@ -31,6 +31,11 @@ thread_local! {
     static SELECTION_HANDLERS: RefCell<Vec<Function>> = const { RefCell::new(Vec::new()) };
     /// Worksheets added without a name so far (their tokens).
     static ADDED: Cell<u64> = const { Cell::new(0) };
+    /// `Office.onReady` calls, and how many of their callbacks have run (`__craftOfficeState`).
+    static ON_READY_CALLS: Cell<u32> = const { Cell::new(0) };
+    static ON_READY_DONE: Cell<u32> = const { Cell::new(0) };
+    /// The last error an `onReady` callback threw.
+    static ON_READY_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Most actions and handlers kept.
@@ -845,6 +850,39 @@ fn post_event(event: Json) {
     }
 }
 
+/// Resolves once the page's HTML has been parsed (`DOMContentLoaded`): Office calls
+/// `Office.onReady` and `Office.initialize` only then, and pages whose scripts run in `<head>`
+/// look up their buttons in the callback.
+async fn dom_ready() {
+    let global = js_sys::global();
+    let doc = Reflect::get(&global, &"document".into()).unwrap_or(JsValue::UNDEFINED);
+    if !doc.is_object() || Reflect::get(&doc, &"readyState".into()).ok().and_then(|s| s.as_string()).as_deref() != Some("loading") {
+        return;
+    }
+    let parsed = Promise::new(&mut |resolve, _| match Reflect::get(&doc, &"addEventListener".into()).and_then(|f| f.dyn_into::<Function>()) {
+        Ok(add) => {
+            let _ = add.call2(&doc, &"DOMContentLoaded".into(), &resolve);
+        }
+        Err(_) => {
+            let _ = resolve.call0(&JsValue::UNDEFINED);
+        }
+    });
+    let _ = JsFuture::from(parsed).await;
+}
+
+/// `__craftOfficeState()`: what tests ask when a page misbehaves (JSON text).
+fn state() -> String {
+    json!({
+        "ready": IS_READY.with(Cell::get),
+        "onReadyCalls": ON_READY_CALLS.with(Cell::get),
+        "onReadyDone": ON_READY_DONE.with(Cell::get),
+        "onReadyError": ON_READY_ERROR.with(|e| e.borrow().clone()),
+        "initialize": INITIALIZE.with(|i| i.borrow().is_some()),
+        "actions": ACTIONS.with(|a| a.borrow().keys().cloned().collect::<Vec<_>>()),
+    })
+    .to_string()
+}
+
 /// Resolves once the page has loaded (its scripts have run, so their functions are associated).
 async fn page_loaded() {
     let global = js_sys::global();
@@ -1086,11 +1124,21 @@ fn office() -> Object {
         Closure::<dyn Fn(JsValue) -> Promise>::new(move |cb: JsValue| {
             let ready = READY.with(|r| r.borrow().clone()).unwrap_or_else(|| Promise::resolve(&JsValue::UNDEFINED));
             let info = info.clone();
+            ON_READY_CALLS.with(|c| c.set(c.get().saturating_add(1)));
             future_to_promise(async move {
                 let _ = JsFuture::from(ready).await;
-                if let Ok(f) = cb.dyn_into::<Function>() {
-                    let _ = f.call1(&JsValue::UNDEFINED, &info);
+                if let Ok(f) = cb.dyn_into::<Function>()
+                    && let Err(e) = f.call1(&JsValue::UNDEFINED, &info)
+                {
+                    let text = error_text(&e);
+                    ON_READY_ERROR.with(|x| *x.borrow_mut() = Some(text.chars().take(500).collect()));
+                    // As a browser reports an exception nobody caught (window `error`).
+                    let console = Reflect::get(&js_sys::global(), &"console".into()).unwrap_or(JsValue::UNDEFINED);
+                    if let Ok(err) = Reflect::get(&console, &"error".into()).and_then(|f| f.dyn_into::<Function>()) {
+                        let _ = err.call1(&console, &e);
+                    }
                 }
+                ON_READY_DONE.with(|c| c.set(c.get().saturating_add(1)));
                 Ok(info.into())
             })
         })
@@ -1197,11 +1245,13 @@ fn install_globals() {
         define_entry("__craftOfficeReply", Closure::<dyn Fn(String)>::new(reply).into_js_value());
         define_entry("__craftOfficeRunFunction", Closure::<dyn Fn(String)>::new(run_function).into_js_value());
         define_entry("__craftOfficeEvent", Closure::<dyn Fn(String)>::new(host_event).into_js_value());
+        define_entry("__craftOfficeState", Closure::<dyn Fn() -> String>::new(state).into_js_value());
     }
     SETTINGS.with(|s| s.borrow_mut().clear());
     IS_READY.with(|r| r.set(false));
     let ready = future_to_promise(async {
         load_settings().await;
+        dom_ready().await;
         IS_READY.with(|r| r.set(true));
         // A page that set `Office.initialize` gets it called, as Office does.
         call_initialize();

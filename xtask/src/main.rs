@@ -9,6 +9,7 @@ mod assets;
 mod ico;
 mod keytips;
 mod layers;
+mod office_samples;
 #[cfg_attr(not(feature = "engine"), allow(dead_code))]
 mod parity;
 mod stats;
@@ -36,6 +37,9 @@ commands:
   office-js       build Office add-ins' library (crates/office-js) for task panes into
                   <target>/office-js: wasm32 release build, `wasm-bindgen --target no-modules`,
                   and the bootstrap; the desktop app and packages pick it up from there
+  office-samples --app <gridcraft> --samples <dir> --out <dir> [--office-js <dir>] [--only ids] [--dry-run] [--list]
+                  drive Microsoft's Office add-in samples (hosted pages) in the real app's task
+                  pane through the control channel; results.json + summary.md (docs/officejs.md)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -53,6 +57,11 @@ fn main() -> ExitCode {
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("office-js") => cmd_office_js(),
+        Some("office-samples") => match office_samples::run(&rest) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("office-samples: a scenario failed (see summary.md)".into()),
+            Err(e) => Err(e),
+        },
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");

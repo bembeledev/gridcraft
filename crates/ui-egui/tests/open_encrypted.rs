@@ -157,7 +157,7 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     let ctx = h.ctx.clone();
     let reply = |o: Outcome| match o {
         Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => json!(null),
+        _ => json!(null),
     };
     let r = reply(handle(h.state_mut(), &ctx, "app.open", &json!({"path": p})));
     assert_eq!(r["ok"], json!(false), "{r}");

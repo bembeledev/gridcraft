@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use gridcraft_ui_egui::office_pane::OfficeHost;
+use gridcraft_ui_egui::office_pane::{EvalReply, EvalRouter, OfficeHost};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::HasWindowHandle;
 use wry::{Rect, WebView, WebViewBuilder};
@@ -95,6 +95,8 @@ struct Inner {
     inbox: Arc<Mutex<Vec<(String, String)>>>,
     library: Option<Rc<Library>>,
     missing_library_logged: bool,
+    /// `office.eval` calls waiting for their page's answer (it comes through the IPC channel).
+    evals: EvalRouter,
 }
 
 /// The web view host: one handle goes into [`gridcraft_ui_egui::Services::office`], the other
@@ -118,7 +120,12 @@ impl Host {
             log::warn!("Office add-ins: no office-js library next to the app (build it with `cargo xtask office-js`)");
             inner.missing_library_logged = true;
         }
+        let closed: Vec<String> = inner.views.iter().filter(|(_, v)| v.closed).map(|(k, _)| k.clone()).collect();
+        for k in &closed {
+            inner.evals.fail(k, "the add-in's page was closed");
+        }
         inner.views.retain(|_, v| !v.closed);
+        let mut failed = Vec::new();
         for (key, view) in inner.views.iter_mut() {
             let bounds = Rect {
                 position: LogicalPosition::new(f64::from(view.rect.min.x), f64::from(view.rect.min.y)).into(),
@@ -160,6 +167,7 @@ impl Host {
                     Err(e) => {
                         log::warn!("Office add-in pane {key}: {e}");
                         view.closed = true;
+                        failed.push(key.clone());
                         continue;
                     }
                 }
@@ -173,6 +181,9 @@ impl Host {
                     }
                 }
             }
+        }
+        for k in failed {
+            inner.evals.fail(&k, "the add-in's web view couldn't be created");
         }
     }
 }
@@ -233,11 +244,28 @@ impl OfficeHost for Host {
     }
     fn take_messages(&mut self) -> Vec<(String, String)> {
         let inbox = self.0.borrow().inbox.clone();
-        let mut q = match inbox.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
+        let messages = {
+            let mut q = match inbox.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            std::mem::take(&mut *q)
         };
-        std::mem::take(&mut *q)
+        // `office.eval` answers go to their callers; the rest to the pane.
+        self.0.borrow_mut().evals.route(messages)
+    }
+    fn eval(&mut self, key: &str, script: &str, reply: EvalReply) {
+        let mut inner = self.0.borrow_mut();
+        if !inner.views.get(key).is_some_and(|v| !v.closed) {
+            reply(Err(format!("no add-in page {key}")));
+            return;
+        }
+        let Some(wrapped) = inner.evals.start(key, script, reply) else { return };
+        if let Some(v) = inner.views.get_mut(key)
+            && v.scripts.len() < 10_000
+        {
+            v.scripts.push(wrapped);
+        }
     }
     fn reply(&mut self, key: &str, json: &str) {
         self.call(key, "__craftOfficeReply", json);

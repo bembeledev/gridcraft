@@ -2789,7 +2789,10 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     );
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect_filled(erect, 0.0, fill);
+    // Only the active cell itself gets an opaque backdrop (hiding neighbours' spill into it);
+    // the overflow stays transparent like Excel, so gridlines and neighbours show through
+    // instead of being whited out. The border below still marks the grown box.
+    painter.rect_filled(geo.mirror_rect(rect), 0.0, fill);
     // The editor owns the active-cell border while it is open (the selection outline yields,
     // see `paint_selection`), drawn exactly like the outline bands: typing and focused look
     // pixel-identical, like Excel.

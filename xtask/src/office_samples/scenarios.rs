@@ -152,6 +152,9 @@ const CUSTOM_FUNCTION_CHECKS: &[CheckDef] = &[
 
 // ---------------------------------------------------------------- the scripts
 
+/// Everything the page's bootstrap knows when something didn't happen (`run.diagnose`).
+pub const DIAGNOSE: &str = "({info: globalThis.__craftOfficeInfo || null, readyState: document.readyState, url: location.href, scripts: Array.prototype.map.call(document.scripts, function (s) { return s.src || '(inline)'; }), body: document.body ? document.body.innerText.slice(0, 300) : null})";
+
 /// What the page says about its `Office`.
 pub const INFO: &str = "({host: Office.context.host, osf: typeof OSF, info: globalThis.__craftOfficeInfo || null})";
 
@@ -305,7 +308,11 @@ fn wait_true(run: &mut Run, pane: &str, script: &str, ms: u64) -> Result<Result<
             }
         })
     })?;
-    Ok(done.ok_or_else(|| format!("`{script}` wasn't true after {} s (last: {})", ms / 1000, clip(&last))))
+    if done.is_some() {
+        return Ok(Ok(()));
+    }
+    let why = run.diagnose(pane)?;
+    Ok(Err(format!("`{script}` wasn't true after {} s (last: {}); page: {why}", ms / 1000, clip(&last))))
 }
 
 /// Runs `script` and records `check` as broken if it fails: whether it ran.
@@ -331,8 +338,34 @@ fn wait_cell(run: &mut Run, cell: &str, ms: u64, ok: impl Fn(&Json) -> bool) -> 
     Ok(if done.is_some() { Ok(last) } else { Err(last) })
 }
 
+/// A cell's solid fill as `RRGGBB` (`cell.get` writes the colour as `"#RRGGBB"` or
+/// `{"Rgb": <0xRRGGBB>}`); `None` without one.
+pub fn fill_rgb(cell: &Json) -> Option<String> {
+    let fill = cell.pointer("/style/fill")?;
+    if fill.get("pattern").and_then(Json::as_str).is_some_and(|p| p.eq_ignore_ascii_case("none")) {
+        return None;
+    }
+    let fg = fill.get("fg")?;
+    if let Some(s) = fg.as_str() {
+        let hex = s.trim_start_matches('#');
+        return (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit())).then(|| hex.to_ascii_uppercase());
+    }
+    let n = fg.get("Rgb").or_else(|| fg.get("rgb")).and_then(Json::as_u64)?;
+    Some(format!("{:06X}", n & 0xFF_FFFF))
+}
+
 fn fill_has(cell: &Json, colour: &str) -> bool {
-    cell.pointer("/style/fill").is_some_and(|f| f.to_string().to_ascii_uppercase().contains(colour))
+    fill_rgb(cell).as_deref() == Some(colour)
+}
+
+/// The colour RunAction sets after `current` (a cell without a fill reads `#FFFFFF`, as in
+/// Excel): the next in its cycle, or the first if `current` isn't in it.
+pub fn next_action_colour(current: Option<&str>) -> &'static str {
+    let current = current.unwrap_or("FFFFFF");
+    match ACTION_COLOURS.iter().position(|c| *c == current) {
+        Some(i) => ACTION_COLOURS.get(i + 1).copied().unwrap_or("FFFFFF"),
+        None => "FFFFFF",
+    }
 }
 
 fn clip(s: &str) -> String {
@@ -521,13 +554,22 @@ fn keyboard_shortcuts(run: &mut Run) -> Result<(), Abort> {
         );
     }
     let _ = run.call("selection.set", json!({"range": "B2"}))?;
+    let before = run.call("cell.get", json!({"cell": "B2"}))?.ok().and_then(|c| fill_rgb(&c));
+    let want = next_action_colour(before.as_deref());
     if click(run, &pane, SHORTCUTS_RUN_ACTION, "action-run-action")? {
-        let got = wait_cell(run, "B2", EFFECT_MS, |c| ACTION_COLOURS.iter().any(|col| fill_has(c, col)))?;
+        let got = wait_cell(run, "B2", EFFECT_MS, |c| fill_has(c, want))?;
         run.record(
             "action-run-action",
             match got {
-                Ok(c) => Observed::Works(format!("B2's fill is {}", c.pointer("/style/fill").cloned().unwrap_or(Json::Null))),
-                Err(c) => Observed::Broken(format!("B2's fill is {}", c.pointer("/style/fill").cloned().unwrap_or(Json::Null))),
+                Ok(_) => Observed::Works(format!(
+                    "B2 went from #{} to #{want}, the next colour in the cycle",
+                    before.as_deref().unwrap_or("FFFFFF (no fill)")
+                )),
+                Err(c) => Observed::Broken(format!(
+                    "B2 should be #{want} after #{}; its fill is {}",
+                    before.as_deref().unwrap_or("FFFFFF (no fill)"),
+                    c.pointer("/style/fill").cloned().unwrap_or(Json::Null)
+                )),
             },
         );
     }

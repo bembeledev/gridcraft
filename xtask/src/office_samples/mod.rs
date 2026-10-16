@@ -132,6 +132,53 @@ pub struct Run<'a> {
     checks: Vec<CheckResult>,
     screenshots: Vec<String>,
     skipped: Option<String>,
+    diagnostics: usize,
+}
+
+/// The gist of a page's diagnostics: its state, the library's `onReady` bookkeeping, what failed.
+pub fn short_diagnosis(v: &Json, file: &str) -> String {
+    let info = v.get("info").unwrap_or(&Json::Null);
+    let lib = info.get("libraryState").unwrap_or(&Json::Null);
+    let mut parts = vec![format!("readyState {}", v.get("readyState").and_then(Json::as_str).unwrap_or("?"))];
+    if info.is_null() {
+        parts.push("no GridCraft bootstrap in the page".into());
+    } else {
+        parts.push(format!("library {}", if info.get("library") == Some(&json!(true)) { "started" } else { "not started" }));
+        if let Some(e) = info.get("startError").and_then(Json::as_str) {
+            parts.push(format!("start error {e}"));
+        }
+        parts.push(format!(
+            "onReady {}/{} done{}",
+            lib.get("onReadyDone").and_then(Json::as_u64).unwrap_or(0),
+            lib.get("onReadyCalls").and_then(Json::as_u64).unwrap_or(0),
+            lib.get("onReadyError").and_then(Json::as_str).map(|e| format!(" (callback threw: {e})")).unwrap_or_default()
+        ));
+        let failed: Vec<&str> = info
+            .get("scripts")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|s| s.get("state") == Some(&json!("failed")))
+            .filter_map(|s| s.get("src").and_then(Json::as_str))
+            .collect();
+        if !failed.is_empty() {
+            parts.push(format!("scripts failed: {}", failed.join(", ")));
+        }
+        let problems: Vec<String> = info
+            .get("problems")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .take(3)
+            .map(|p| p.chars().take(200).collect())
+            .collect();
+        if !problems.is_empty() {
+            parts.push(format!("problems: {}", problems.join(" | ")));
+        }
+    }
+    parts.push(format!("details in diagnostics/{file}"));
+    parts.join("; ")
 }
 
 /// Polls happen every 250 ms of real time; a timeout is that many polls.
@@ -194,6 +241,23 @@ impl Run<'_> {
         self.skipped = Some(why.to_string());
     }
 
+    /// What the page `pane` says when something didn't happen: the whole answer goes to
+    /// `diagnostics/<scenario>-<n>.json`, a short version is returned for the report.
+    pub fn diagnose(&mut self, pane: &str) -> Result<String, Abort> {
+        let v = match self.eval(pane, scenarios::DIAGNOSE)? {
+            Ok(v) => v,
+            Err(e) => return Ok(format!("no diagnostics ({e})")),
+        };
+        let dir = self.out.join("diagnostics");
+        let n = self.diagnostics;
+        self.diagnostics += 1;
+        let file = format!("{}-{n}.json", self.scenario.id);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(dir.join(&file), serde_json::to_string_pretty(&v).unwrap_or_default());
+        }
+        Ok(short_diagnosis(&v, &file))
+    }
+
     /// A screenshot into `--out`; a failure is only noted.
     pub fn screenshot(&mut self, name: &str) -> Result<(), Abort> {
         let file = format!("{}-{name}.png", self.scenario.id);
@@ -209,7 +273,7 @@ impl Run<'_> {
 /// Runs one scenario on `app`: its result, and whether the app is still usable.
 pub fn run_scenario(app: &mut dyn App, scenario: &'static Scenario, samples: Option<&Path>, out: &Path, poll_ms: u64) -> ScenarioResult {
     let started = std::time::Instant::now();
-    let mut run = Run { app, scenario, samples, out, poll_ms, checks: Vec::new(), screenshots: Vec::new(), skipped: None };
+    let mut run = Run { app, scenario, samples, out, poll_ms, checks: Vec::new(), screenshots: Vec::new(), skipped: None, diagnostics: 0 };
     let mut crashed = None;
     if scenario.manifest.is_none() {
         run.skip_rest(scenario.about);

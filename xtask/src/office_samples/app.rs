@@ -259,6 +259,11 @@ impl FakeApp {
             return Ok(json!({"host": "Excel", "osf": "undefined",
                 "info": {"bootstrap": true, "library": true, "officeIsCraft": true, "blockedScripts": ["https://officeapis.public.onecdn.static.microsoft/1/office.js"]}}));
         }
+        if script == s::DIAGNOSE {
+            return Ok(json!({"readyState": "complete", "url": "https://fake.example/pane.html", "scripts": [],
+                "info": {"library": true, "problems": ["uncaught: TypeError: x is null (taskpane.js:9)"], "scripts": [],
+                    "libraryState": {"ready": true, "onReadyCalls": 1, "onReadyDone": 1, "onReadyError": "x is null"}}}));
+        }
         if self.broken {
             return Ok(json!(false));
         }

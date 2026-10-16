@@ -124,6 +124,9 @@ fn failures_say_what_was_seen() {
     let c = r.checks.iter().find(|c| c.id == "writes-a1").unwrap();
     assert_eq!(c.status, Status::Fail);
     assert!(c.detail.contains("wasn't true"), "{}", c.detail);
+    // What the page knew goes into the report and a file.
+    assert!(c.detail.contains("onReady 1/1 done (callback threw: x is null)") && c.detail.contains("TypeError"), "{}", c.detail);
+    assert!(out.join("diagnostics/excel-hello-world-0.json").is_file());
     assert_eq!(r.checks.iter().find(|c| c.id == "pane").unwrap().status, Status::Pass);
     let _ = std::fs::remove_dir_all(&out);
 }
@@ -180,4 +183,21 @@ fn the_command_writes_results_and_summary() {
     assert!(json["platform"].as_str().unwrap().ends_with("(dry run)"));
     assert!(std::fs::read_to_string(out.join("summary.md")).unwrap().contains("excel-hello-world"));
     let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn fills_read_in_both_representations() {
+    use scenarios::{fill_rgb, next_action_colour};
+    // As the Windows run reported it: 16776960 is #FFFF00.
+    let yellow = json!({"style": {"fill": {"bg": "Auto", "fg": {"Rgb": 16776960}, "pattern": "Solid"}}});
+    assert_eq!(fill_rgb(&yellow).as_deref(), Some("FFFF00"));
+    assert_eq!(fill_rgb(&json!({"style": {"fill": {"fg": "#c7cc7a", "pattern": "Solid"}}})).as_deref(), Some("C7CC7A"));
+    assert_eq!(fill_rgb(&json!({"style": {"fill": {"fg": {"Rgb": 1}, "pattern": "None"}}})), None);
+    assert_eq!(fill_rgb(&json!({"style": {}})), None);
+    // RunAction's cycle: a blank cell reads #FFFFFF, so the next is #C7CC7A (13094010).
+    assert_eq!(next_action_colour(None), "C7CC7A");
+    assert_eq!(format!("{:06X}", 13094010), "C7CC7A");
+    assert_eq!(next_action_colour(Some("C7CC7A")), "7560BA");
+    assert_eq!(next_action_colour(Some("E26D5C")), "FFFFFF");
+    assert_eq!(next_action_colour(Some("123456")), "FFFFFF");
 }

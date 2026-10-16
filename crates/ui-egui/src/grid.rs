@@ -724,7 +724,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     } else {
-        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t, cell_editor_here(app, &wb))
+        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t, cell_editor_cell(app, &wb))
     };
     // Objects above cells.
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
@@ -782,7 +782,7 @@ fn paint_panes(
     outline: Rect,
     cf: &mut CfCache,
     t: &Tokens,
-    editor_here: bool,
+    editor: Option<CellRef>,
 ) -> Vec<((u32, u32), (u32, u32), Rect)> {
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
@@ -805,8 +805,8 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
-        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols, editor_here);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, editor);
+        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols, editor);
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -1031,6 +1031,7 @@ pub(crate) fn paint_quadrant(
     cols: (u32, u32),
     cf: &mut CfCache,
     t: &Tokens,
+    ed_cell: Option<CellRef>,
 ) {
     let z = geo.z;
     let (r0, r1) = rows;
@@ -1147,6 +1148,11 @@ pub(crate) fn paint_quadrant(
             continue;
         }
         if cfl.as_ref().is_some_and(|l| l.hide_value) || v.is_empty() {
+            continue;
+        }
+        // The in-cell editor shows the text being typed; hide the committed value (and its
+        // spill into neighbours) while it is open, like Excel.
+        if ed_cell == Some(c) {
             continue;
         }
         // Align and clip header text inside the content area, away from the dropdown.
@@ -1625,15 +1631,16 @@ fn paint_active_border(p: &Painter, rect: Rect, clip: Rect, color: Color32, ppp:
     }
 }
 
-/// True while the in-cell editor paints over `wb`'s active sheet (mirroring `in_cell_editor`'s
-/// own guard): the editor then owns the active-cell border and the selection outline yields.
-pub(crate) fn cell_editor_here(app: &SheetApp, wb: &Workbook) -> bool {
-    app.editor.as_ref().is_some_and(|e| !e.from_formula_bar && e.sheet == wb.active_sheet)
+/// The cell being edited in place, if the in-cell editor paints over `wb`'s active sheet
+/// (mirroring `in_cell_editor`'s own guard). While it is open it owns the active-cell border
+/// (the selection outline yields) and its committed text stays hidden (the editor shows it).
+pub(crate) fn cell_editor_cell(app: &SheetApp, wb: &Workbook) -> Option<CellRef> {
+    app.editor.as_ref().filter(|e| !e.from_formula_bar && e.sheet == wb.active_sheet).map(|e| e.cell)
 }
 
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
-/// `editor_here` is true while the in-cell editor paints over this sheet: it draws this same
-/// border itself, so the outline stays out and there is exactly one border.
+/// `editor` is the cell being edited in place: it draws this same border itself, so the
+/// outline stays out and there is exactly one border.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_selection(
     p: &Painter,
@@ -1645,7 +1652,7 @@ pub(crate) fn paint_selection(
     app: &SheetApp,
     rows: (u32, u32),
     cols: (u32, u32),
-    editor_here: bool,
+    editor: Option<CellRef>,
 ) {
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
@@ -1675,7 +1682,7 @@ pub(crate) fn paint_selection(
             }
         }
     }
-    if cur_here && !editor_here {
+    if cur_here && editor.is_none() {
         paint_active_border(p, outline, p.clip_rect(), t.sel_border, p.ctx().pixels_per_point());
     }
     if active_here && sel.ranges.len() > 1 {

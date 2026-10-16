@@ -1681,9 +1681,14 @@ pub(crate) fn paint_selection(
     if active_here && sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
-    // Fill handle (bottom-right of the current area).
+    // Fill handle (bottom-right of the current area), centred on the gridline crossing —
+    // what the eye reads as the corner — rounded like the gridlines themselves, then snapped
+    // so the mark stays crisp. Centring on the fractional cell corner instead can sit a full
+    // pixel off, leaning into the next cell.
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
-        let h = Rect::from_center_size(snap_pos(outline.right_bottom(), p.ctx().pixels_per_point()), vec2(4.0, 4.0));
+        let corner = outline.right_bottom();
+        let cross = pos2(corner.x.round() - 0.5, corner.y.round() - 0.5);
+        let h = Rect::from_center_size(snap_pos(cross, p.ctx().pixels_per_point()), vec2(4.0, 4.0));
         p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
         p.rect_filled(h, 0.0, t.sel_border);
     }

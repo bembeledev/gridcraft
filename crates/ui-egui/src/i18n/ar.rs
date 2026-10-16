@@ -1009,6 +1009,48 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nSheet" => "حماية\nالورقة",
         "Watch\nWindow" => "نافذة\nالمراقبة",
         "Workbook\nStatistics" => "إحصاءات\nالمصنف",
+        // ─── Print dialog ───
+        "Printer" => "الطابعة",
+        "Select a printer" => "اختيار طابعة",
+        "Refresh printers" => "تحديث الطابعات",
+        "Copies" => "عدد النسخ",
+        "Two-sided printing" => "طباعة على الوجهين",
+        "Printer default" => "الإعداد الافتراضي للطابعة",
+        "One-sided" => "على وجه واحد",
+        "Two-sided: long edge" => "على الوجهين: الحافة الطويلة",
+        "Two-sided: short edge" => "على الوجهين: الحافة القصيرة",
+        "Grayscale" => "تدرج رمادي",
+        "Finding printers…" => "جارٍ البحث عن الطابعات…",
+        "No printers found. Configure a system printer or export a PDF." => "لم يتم العثور على طابعات. قم بإعداد طابعة نظام أو صدّر ملف PDF.",
+        "Printer discovery failed." => "فشل اكتشاف الطابعة.",
+        "Print failed: {error}" => "فشلت الطباعة: {error}",
+        "Print failed: the printing worker stopped." => "فشلت الطباعة: توقف عامل الطباعة.",
+        "Print job submitted." => "تم إرسال مهمة الطباعة.",
+        "Print job submitted: {receipt}" => "تم إرسال مهمة الطباعة: {receipt}",
+        "Submitting print job…" => "جارٍ إرسال مهمة الطباعة…",
+
+        // ─── Strings not present in any other locale yet ───
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "جدول بيانات مفتوح المصدر، أصلي بلغة Rust، بغرفة نظيفة. جزء من ArtCraft."
+        }
+        "Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed." => {
+            "الأتمتة في هذا المصنف. يشغّل GridCraft نصوصه البرمجية الخاصة؛ ويُحتفظ بمشروع VBA الخاص بالملف دون تنفيذه."
+        }
+        "Can't Undo" => "لا يمكن التراجع",
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "يمكن للوكلاء التحكم في GridCraft بالكامل. كل عنصر قائمة وزر وإيماءة هو أمر:"
+        }
+        "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
+            "قفل الخلايا أو إخفاء الصيغ ليس له تأثير حتى تحمي ورقة العمل (مراجعة › حماية الورقة)."
+        }
+        "No Color" => "بلا لون",
+        "No contributor data was built into this copy." => "لم يتم تضمين بيانات المساهمين في هذه النسخة.",
+        "No model credits were built into this copy." => "لم يتم تضمين اعتمادات النماذج في هذه النسخة.",
+        "Preview" => "معاينة",
+        "Reports:" => "التقارير:",
+        "Show" => "إظهار",
+        "The chart no longer exists." => "لم يعد المخطط موجودًا.",
+        "AutoSave: save after every change (workbooks saved to a file)" => "حفظ تلقائي: الحفظ بعد كل تغيير (المصنفات المحفوظة في ملف)",
 
         _ => return None,
     })

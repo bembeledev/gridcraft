@@ -109,6 +109,19 @@ cargo run --release -p gridcraft -- --sample sales --control 7979   # + JSON con
 cargo xtask ci                                                 # fmt, clippy, tests, assets, layering, wasm
 ```
 
+Running from a checkout instead of a release? `cargo install --path apps/gridcraft --locked` (and
+`--path apps/gridcraft-cli`) puts the app on your PATH, and `cargo xtask update` keeps it current:
+it fetches `origin/main`, fast-forwards the checkout when it is strictly behind (clean tree, `main`
+checked out, no local commits), and reinstalls both binaries. `--check` only reports, `--force`
+reinstalls even with nothing to pull, and `--launch [ARG...]` opens the installed app afterwards, so
+a shortcut can do "update, then open":
+
+```sh
+cargo xtask update --check                                     # what is new on origin/main
+cargo xtask update                                             # pull and reinstall
+cargo run -p xtask --manifest-path /path/to/gridcraft/Cargo.toml -- update --launch book.xlsx
+```
+
 Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.
 

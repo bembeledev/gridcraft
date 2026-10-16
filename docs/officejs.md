@@ -81,7 +81,7 @@ and a test keeps the library's copy equal to it.
 
 | Object | Properties and methods |
 |---|---|
-| `Office` | `onReady` (waits for the library), `initialize` (called once the library is ready, also when assigned later), `actions.associate`, `context.host`, `context.diagnostics`, `context.requirements.isSetSupported`, `context.document.getSelectedDataAsync` / `setSelectedDataAsync` (text, matrix), `context.document.addHandlerAsync` / `removeHandlerAsync` (`DocumentSelectionChanged`), `context.document.settings` (`get`, `set`, `remove`, `saveAsync`); the enumerations `AsyncResultStatus`, `CoercionType`, `EventType`, `HostType`, `PlatformType`, `Index`, `GoToType`, `BindingType`, `StartupBehavior`, `VisibilityMode`, `InitializationReason`, `ValueFormat`, `FilterType`, `SelectionMode`, `DocumentMode`, `ActiveView`, `FileType`, `Table` |
+| `Office` | `onReady` (waits for the library and for the page's HTML to be parsed, `DOMContentLoaded`, as Office does: pages whose scripts run in `<head>` look up their buttons in the callback), `initialize` (called once the library is ready, also when assigned later), `actions.associate`, `context.host`, `context.diagnostics`, `context.requirements.isSetSupported`, `context.document.getSelectedDataAsync` / `setSelectedDataAsync` (text, matrix), `context.document.addHandlerAsync` / `removeHandlerAsync` (`DocumentSelectionChanged`), `context.document.settings` (`get`, `set`, `remove`, `saveAsync`); the enumerations `AsyncResultStatus`, `CoercionType`, `EventType`, `HostType`, `PlatformType`, `Index`, `GoToType`, `BindingType`, `StartupBehavior`, `VisibilityMode`, `InitializationReason`, `ValueFormat`, `FilterType`, `SelectionMode`, `DocumentMode`, `ActiveView`, `FileType`, `Table` |
 | `Excel.run`, `new Excel.RequestContext()` | `workbook`, `sync()` (one undo step; a failure takes the whole batch back), `trackedObjects` |
 | `Workbook` | `worksheets`, `getSelectedRange()`, `getActiveCell()`, `name` |
 | `WorksheetCollection` | `getActiveWorksheet()`, `getItem(name)`, `add(name?)` (at the end, the active worksheet stays; without a name the next "SheetN"), `items` |
@@ -213,6 +213,13 @@ via `HOME`/`APPDATA`/`XDG_CONFIG_HOME`, `GRIDCRAFT_NO_PREFS`, a blank workbook),
    (`cell.get`, `document.inspect`);
 4. takes screenshots (`ui.screenshot`).
 
+When something a check waits for doesn't happen, the driver asks the page for
+`__craftOfficeInfo` and writes it to `diagnostics/<scenario>-<n>.json`; the report gets the gist.
+The bootstrap keeps it from the start: uncaught errors and unhandled rejections, console errors
+and warnings (still printed), each script that loaded or failed, the document's `readyState`,
+the library's start error, and its `onReady` bookkeeping (`__craftOfficeState()`: calls, callbacks
+run, the last error a callback threw, associated actions).
+
 It writes `results.json`, `summary.md` (a table for `$GITHUB_STEP_SUMMARY`), the screenshots and the
 app's logs into `--out`, and exits with 1 if a scenario failed. A failing scenario never stops the
 others; an app that crashes or hangs is reported and the next scenario gets a fresh one.
@@ -261,6 +268,7 @@ the runner has no GPU).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | `Office.onReady` and `Office.initialize` wait for `DOMContentLoaded` (on macOS the library could start before a `<head>` script's page had its buttons); the bootstrap records what went wrong in the page for the samples driver's diagnostics |
 | 2026-10-16 | minor | Testing with Microsoft's samples: `cargo xtask office-samples` drives the hosted samples in the real app's task pane (scenario table with must-pass and expected-unsupported checks, results.json and a summary table); the control channel's `office.panes`, `office.open`, `office.close`, `office.eval`; the bootstrap's read-only `__craftOfficeInfo` |
 | 2026-10-15 | minor | Microsoft's samples: their `office.js` gets an empty script and can't replace the globals; colour names; function commands (ExecuteFunction) end to end; `context.host`, `new Excel.RequestContext()`, the common API's enumerations, `set({...})`, `worksheets.add()` without a name, `Office.initialize` assigned late, `DocumentSelectionChanged`, unsupported `*Async` methods answer `NotSupported`; AddinCommands 1.1 and DocumentEvents 1.1 reported; ExcelApi 1.4 described as the subset it is |
 | 2026-10-15 | minor | `<Requirements>` (`Sets` with `MinVersion`/`DefaultMinVersion`, `Methods`) checked against the supported sets and methods: an unmet one blocks the add-in with the reason |

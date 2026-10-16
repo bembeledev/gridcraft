@@ -61,6 +61,8 @@ impl Default for FakeScript {
 }
 
 thread_local! {
+    /// `DOMContentLoaded` listeners on the stand-in document.
+    static PARSED: RefCell<Vec<Function>> = const { RefCell::new(Vec::new()) };
     static OBSERVERS: RefCell<Vec<Function>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -124,7 +126,14 @@ async fn the_bootstrap_keeps_microsofts_office_js_out_and_hands_the_page_to_the_
     let observer_class = class_of(FakeObserver::new(Closure::<dyn Fn()>::new(|| {}).into_js_value().unchecked_into()).into());
     let document = Object::new();
     Reflect::set(&document, &"baseURI".into(), &"https://addin.example/pane.html".into()).unwrap();
-    Reflect::set(&document, &"readyState".into(), &"complete".into()).unwrap();
+    // The HTML is still being parsed when the bootstrap runs (scripts in <head>).
+    Reflect::set(&document, &"readyState".into(), &"loading".into()).unwrap();
+    let listen = Closure::<dyn Fn(String, Function)>::new(|event: String, f: Function| {
+        if event == "DOMContentLoaded" {
+            PARSED.with(|p| p.borrow_mut().push(f));
+        }
+    });
+    Reflect::set(&document, &"addEventListener".into(), &listen.into_js_value()).unwrap();
     for (name, value) in
         [("Element", &script_class), ("HTMLScriptElement", &script_class), ("MutationObserver", &observer_class), ("document", &document.into())]
     {
@@ -195,6 +204,24 @@ async fn the_bootstrap_keeps_microsofts_office_js_out_and_hands_the_page_to_the_
         Promise::resolve(&JsValue::UNDEFINED)
     });
     call(&global().into(), "__craftOfficeStart", &[start.into_js_value(), "".into()]);
+    // Office calls onReady once the HTML is parsed, not before: a page's <head> script looks up
+    // its buttons in the callback.
+    let resolved = Rc::new(std::cell::Cell::new(false));
+    let flag = resolved.clone();
+    let _ = ready.then(&Closure::<dyn FnMut(JsValue)>::new(move |_| flag.set(true)));
+    for _ in 0..20 {
+        JsFuture::from(Promise::resolve(&JsValue::UNDEFINED)).await.unwrap();
+    }
+    assert!(!resolved.get(), "onReady waits for DOMContentLoaded");
+    let state: serde_json::Value = serde_json::from_str(&call(&global().into(), "__craftOfficeState", &[]).as_string().unwrap()).unwrap();
+    assert_eq!((state["ready"].as_bool(), state["onReadyDone"].as_u64()), (Some(false), Some(0)), "{state}");
+    let document = g(&global().into(), "document");
+    Reflect::set(&document, &"readyState".into(), &"interactive".into()).unwrap();
+    let listeners = PARSED.with(|p| p.borrow().clone());
+    assert!(!listeners.is_empty(), "the library listens for DOMContentLoaded");
+    for f in listeners {
+        f.call0(&JsValue::UNDEFINED).unwrap();
+    }
     let info = JsFuture::from(ready).await.unwrap();
     assert_eq!(g(&info, "host").as_string().as_deref(), Some("Excel"), "onReady registered early answers");
     assert_eq!(JsFuture::from(init_called).await.unwrap().as_string().as_deref(), Some("inserted"), "the foreign object's initialize is called");
@@ -202,6 +229,14 @@ async fn the_bootstrap_keeps_microsofts_office_js_out_and_hands_the_page_to_the_
     assert_eq!(g(&g(&office, "context"), "host").as_string().as_deref(), Some("Excel"), "the library's Office");
     let info = g(&global().into(), "__craftOfficeInfo");
     assert_eq!((g(&info, "library"), g(&info, "officeIsCraft")), (JsValue::TRUE, JsValue::TRUE), "tests can tell the Office is GridCraft's");
+    let state = g(&info, "libraryState");
+    assert_eq!(g(&state, "ready"), JsValue::TRUE);
+    assert!(g(&state, "onReadyDone").as_f64().unwrap_or(0.0) >= 1.0, "the early onReady's callback ran");
+    assert_eq!(g(&info, "readyState").as_string().as_deref(), Some("interactive"));
+    // Console errors are kept for the report (and still printed).
+    call(&g(&global().into(), "console"), "error", &["boom from the page".into()]);
+    let problems = Array::from(&g(&g(&global().into(), "__craftOfficeInfo"), "problems"));
+    assert!(problems.iter().any(|p| p.as_string().unwrap_or_default().contains("console.error: boom from the page")));
     call(&global().into(), "__craftOfficeRunFunction", &[r#"{"call": 1, "name": "early", "control": "Tests.Early"}"#.into()]);
     let event = JsFuture::from(early_called).await.unwrap();
     assert_eq!(g(&g(&event, "source"), "id").as_string().as_deref(), Some("Tests.Early"), "associated before the wasm started");

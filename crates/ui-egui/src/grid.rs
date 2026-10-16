@@ -1613,13 +1613,13 @@ fn snap_rect(r: Rect, ppp: f32) -> Rect {
 }
 
 /// The active-cell border, painted the same for a focused cell and an open editor (so the two
-/// look pixel-identical). One device pixel outside the snapped edge, up to two inside — every
-/// edge on a whole device pixel, so the gridline stays covered and no faint spill lands on the
-/// neighbour. At integer scales this is the familiar thin 1.5-wide band; at fractional scales
-/// the width rounds to whole device pixels instead of smearing.
+/// look pixel-identical). Every edge sits on a whole device pixel: at integer scales the
+/// familiar thin 1.5-wide band; at fractional scales a 2-device-pixel ring tucked fully inside
+/// the edge, so nothing spills onto the neighbour in any column (a straddling ring would leave
+/// a phase-dependent excess every few columns).
 fn paint_active_border(p: &Painter, rect: Rect, clip: Rect, color: Color32, ppp: f32) {
     let ppp = device_ppp(ppp);
-    let (w, x) = if (ppp - ppp.round()).abs() < 1e-6 { (1.5, 0.25) } else { (3.0 / ppp, -0.5 / ppp) };
+    let (w, x) = if (ppp - ppp.round()).abs() < 1e-6 { (1.5, 0.25) } else { (2.0 / ppp, -1.0 / ppp) };
     for side in outline_bands(snap_rect(rect, ppp).expand(x), w, clip) {
         p.rect_filled(side, 0.0, color);
     }

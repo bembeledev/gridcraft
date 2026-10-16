@@ -159,7 +159,24 @@ fn initialize_announces_features_and_language(_dir: &std::path::Path) {
     let r = run(&mut s, PLUGIN, "hello", json!({})).unwrap();
     let host = &r["result"]["init"]["host"];
     assert_eq!(host["id"], "gridcraft");
-    assert_eq!(host["features"], json!(["dialogs", "open", "events", "document", "push", "collab"]));
+    assert_eq!(
+        host["features"],
+        json!([
+            "dialogs",
+            "open",
+            "events",
+            "document",
+            "push",
+            "collab",
+            "functionDocument",
+            "openedBeforeCalc",
+            "multiline",
+            "emptyResult",
+            "literalValues",
+            "invalidate"
+        ])
+    );
+    assert_eq!(host["protocol"], "2.2");
     assert_eq!(host["collab"], json!({"formats": ["yjs-v1"], "app": "gridcraft", "schema": 1, "encryption": ["aes-256-gcm"]}));
     assert_eq!(host["language"], "it");
     assert_eq!(r["result"]["init"]["protocolVersion"], 1, "the protocol version stays 1");
@@ -168,12 +185,18 @@ fn initialize_announces_features_and_language(_dir: &std::path::Path) {
 fn commands_see_the_document(dir: &std::path::Path) {
     let mut s = session();
     let doc = |s: &mut Session| run(s, QUIET, "hello", json!({})).unwrap()["result"]["document"].clone();
-    assert_eq!(doc(&mut s), json!({"path": null, "name": "Book1", "dirty": false}));
+    let id = s.active().unwrap().session_id();
+    assert!(id.starts_with("doc-"));
+    assert_eq!(doc(&mut s), json!({"path": null, "name": "Book1", "dirty": false, "id": id}));
     s.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
     assert_eq!(doc(&mut s)["dirty"], true);
     let path = dir.join("Document.xlsx");
     s.run("file.save", json!({"path": path.display().to_string()})).unwrap();
-    assert_eq!(doc(&mut s), json!({"path": path.display().to_string(), "name": "Document.xlsx", "dirty": false}));
+    assert_eq!(
+        doc(&mut s),
+        json!({"path": path.display().to_string(), "name": "Document.xlsx", "dirty": false, "id": id}),
+        "the id stays when it's saved"
+    );
     settle();
 }
 

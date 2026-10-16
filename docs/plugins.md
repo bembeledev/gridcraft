@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel and co-editing transports; previously minor: protocol 1.2: host-drawn dialogs, opening files, document events, `context.document`; previously minor: commands see the workbook's sheets and names; previously minor: commands see the selection's formulas; previously minor: plugin functions in autocomplete and Insert Function; previously minor: ribbon buttons that run macros; previously minor: protocol 1.1: host requests, macros and the Developer tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (protocol 2.2: functions know their workbook, `documentOpened` before the opening calculation, multi-line form fields, blank results, literal text, invalidation; previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel and co-editing transports; previously minor: protocol 1.2: host-drawn dialogs, opening files, document events, `context.document`; previously minor: commands see the workbook's sheets and names; previously minor: commands see the selection's formulas; previously minor: plugin functions in autocomplete and Insert Function; previously minor: ribbon buttons that run macros; previously minor: protocol 1.1: host requests, macros and the Developer tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -23,7 +23,9 @@ only; functions are GridCraft's. A test plugin written in Python that works in b
 commands open their task pane in a web view; see [officejs.md](officejs.md).
 
 **Co-editing** (protocol 2): transport plugins carry live sessions between people; see
-[Protocol 2](#protocol-2-the-push-channel-and-co-editing) and [collab.md](collab.md). Live data
+[Protocol 2](#protocol-2-the-push-channel-and-co-editing) and [collab.md](collab.md).
+**Protocol 2.2** adds what add-ins that run code from workbooks need (R, Python): see
+[Protocol 2.2](#protocol-22-functions-that-know-their-workbook). Live data
 from sources and streams comes later; see [gaps.md](gaps.md) #16 and #21.
 
 ## Installing a plugin
@@ -155,8 +157,8 @@ Install plugins only from people you trust. GridCraft doesn't sandbox them.
 | `events` | The document events the plugin wants (protocol 1.2): `documentOpened`, `documentSaved`, `documentClosed`. Other names are ignored |
 | `ui.menus[]` | A right-click menu item: `menu` (`cell`, the default; `row` or `column` for the headers; `sheetTab`), `command`, `label`, `params`. Items go at the end of the menu, after a separator. A `sheetTab` item also gets `sheet` (the tab's index) in its params |
 | `requires.apps` | Manifest 1.3. Per app id, the app versions the plugin works with (`{"gridcraft": ">=0.7.0"}`); an app missing from the map isn't constrained. See [Requirements](#requirements-manifest-13) |
-| `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.0"`) |
-| `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`) that must all be present |
+| `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.2"`) |
+| `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`; protocol 2.2: `functionDocument`, `openedBeforeCalc`, `multiline`, `emptyResult`, `literalValues`, `invalidate`) that must all be present |
 | `requires.addins[]` | Other plugins it needs: `id`, `version` (a range; default `*`), `github` (`owner/repo` to install it from), `optional` (default false), `why` (shown to the person, at most 200 characters). At most 32 |
 
 Icons are named from GridCraft's own icon set: `script` (the default), `refresh`, `calc`, `sum`,
@@ -186,7 +188,7 @@ Sent once, after the process starts. Answer within 10 s with any result, for exa
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"host":{"id":"gridcraft","name":"GridCraft","version":"0.6.1"},"plugin":{"id":"org.example.finance","dir":"/home/me/plugins/finance"}}}
 ```
 
-Since manifest 1.3, `host.protocol` is the protocol version as text (`"2.0"`, what
+Since manifest 1.3, `host.protocol` is the protocol version as text (`"2.2"`, what
 `requires.protocol` is checked against), and `addins` lists every installed plugin as
 `{id, version, enabled}` (`enabled`: turned on, not blocked and not failed), so a plugin can adapt
 to the optional ones it found.
@@ -194,15 +196,19 @@ to the optional ones it found.
 ### `functions/call`
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"functions/call","params":{"name":"FIN.PRICE","args":["ACME",[[1,2],[3,null]]]}}
+{"jsonrpc":"2.0","id":2,"method":"functions/call","params":{"name":"FIN.PRICE","args":["ACME",[[1,2],[3,null]]],
+  "document":{"path":"/home/me/Prices.xlsx","name":"Prices.xlsx","id":"doc-1"}}}
 {"jsonrpc":"2.0","id":2,"result":{"value":42.5}}
 ```
+
+`document` (protocol 2.2) is the workbook whose formula calls the function; see
+[Protocol 2.2](#protocol-22-functions-that-know-their-workbook).
 
 Arguments arrive evaluated. A reference arrives as the array of its values. Values on the wire:
 
 | Cell value | JSON |
 |---|---|
-| empty | `null` |
+| empty | `null`. As a result, it shows as 0, as Excel shows a VBA function that returns `Empty`; `{"empty": true}` (protocol 2.2) shows blank |
 | number | number |
 | text | string (up to 32,767 characters) |
 | logical | `true` / `false` |
@@ -350,7 +356,7 @@ blocking the app, open a local file in GridCraft, and hear when workbooks open, 
 **`context.document`.** `commands/run` and `macros/run` get the workbook's file in `context`:
 
 ```json
-"document": {"path": "/home/me/Book1.xlsx", "name": "Book1.xlsx", "dirty": false}
+"document": {"path": "/home/me/Book1.xlsx", "name": "Book1.xlsx", "dirty": false, "id": "doc-1"}
 ```
 
 `path` is the local file it was opened from or last saved to (absolute), or `null` for a new
@@ -404,7 +410,7 @@ that comes with a dialog shows in the status bar, so it doesn't cover the dialog
 | `kind` | Shows | OK runs `command` with `params` plus |
 |---|---|---|
 | `list` | `items` (at most 10,000; `id` up to 4,096 characters, `label` and `detail` up to 256) with their icon (the ribbon's icon names; others get a page), label and detail. A filter box (by label) above more than 20 items. `"multi": true` allows several | `"id"` (double-click also runs it), or `"ids": [...]` with `multi` |
-| `form` | `fields` (at most 16): `{id, label, value?, kind?}` with `kind` `text` (the default), `secret` (a password box), `number`, `checkbox` (`value` true or false) or `choice` (`options: [{id, label}]`, `value` an option id) | `"fields": {"<id>": value, …}` (a number field that isn't a number gives `null`) |
+| `form` | `fields` (at most 16): `{id, label, value?, kind?}` with `kind` `text` (the default), `secret` (a password box), `number`, `checkbox` (`value` true or false) or `choice` (`options: [{id, label}]`, `value` an option id). Protocol 2.2: a `text` field with `multiline: true` is a multi-line editor (`code: true` for code: monospace) | `"fields": {"<id>": value, …}` (a number field that isn't a number gives `null`) |
 | `message` | `prompt` (several lines, at most 4,000 characters) | nothing; without `command`, OK just closes |
 
 Every kind has `title` (at most 200 characters), `prompt` (text above the content), `okLabel`
@@ -423,17 +429,18 @@ happened, from a background thread:
 
 | Request | Params | When |
 |---|---|---|
-| `events/documentOpened` | `{path, name}` | A workbook was opened from a local file (File › Open, Recent, drag and drop, a plugin's `open`, `file.open {path}`) |
-| `events/documentSaved` | `{path, name, format}` | Save or Save As to a local file succeeded (`format`: the extension, lower case). Not AutoSave (`file.save {autosave: true}`), and not Save as PDF |
-| `events/documentClosed` | `{path, name}` | A workbook that has a file was closed, or GridCraft quits with it open |
+| `events/documentOpened` | `{path, name, id}` | A workbook was opened from a local file (File › Open, Recent, drag and drop, a plugin's `open`, `file.open {path}`). Since protocol 2.2 it comes **before** the workbook's first calculation (see [Protocol 2.2](#protocol-22-functions-that-know-their-workbook)) |
+| `events/documentSaved` | `{path, name, format, id}` | Save or Save As to a local file succeeded (`format`: the extension, lower case). Not AutoSave (`file.save {autosave: true}`), and not Save as PDF |
+| `events/documentClosed` | `{path, name, id}` | A workbook that has a file was closed, or GridCraft quits with it open |
 
 Paths are absolute. The answer is `{}` or `{"message": "Uploaded to Nextcloud"}`, shown in the
 status bar for 10 seconds; an error answer shows in the info bar. `documentOpened` and
 `documentSaved` time out after 30 s, `documentClosed` after 5 s; on quitting GridCraft waits at most
 5 s for them (and the CLI waits for events still on their way before it exits). An event is never
-part of an undo step, and a slow or failing plugin never stops the save, the open or the close;
-timeouts count as failures as usual. During an event a plugin may send `host/log` and
-`host/message` (shown in a message box), but `host/sync` and `host/vbaProject/*` are refused with
+part of an undo step, and a slow or failing plugin never stops the save, the open or the close
+(since protocol 2.2 the opening calculation waits for `documentOpened`, at most 10 s per plugin);
+timeouts count as failures as usual. During an event a plugin may send `host/log`,
+`host/message` (shown in a message box) and `host/functions/invalidate`, but `host/sync` and `host/vbaProject/*` are refused with
 an error whose `data.code` is `AccessDenied`: events are notifications, not edits.
 
 The web app has no plugins, so none of this applies there. The dialog isn't a web view and can't
@@ -462,6 +469,100 @@ hold HTML.
 GridCraft's shared document (schema 1), commands and behaviour: [collab.md](collab.md). A test
 transport that relays between two rooms is `crates/engine/tests/collab_push.rs`; craft-collab
 has MQTT and loopback transports.
+
+## Protocol 2.2: functions that know their workbook
+
+Protocol 2.2 adds to 2.0 and 2.1 (the document chat, [collab.md](collab.md#document-chat)) and changes nothing that exists. It closes the gaps an add-in that runs
+code from workbooks (R, Python) runs into: it can decide per workbook what its functions may do
+(trust), and show code, blanks and text as people expect. Each addition has its name in
+`host.features`; check for it, and keep working without it on older hosts. `host.protocol` is
+`"2.2"` (manifests write `"requires": {"protocol": ">=2.2"}` or name the features).
+
+| Feature | Adds |
+|---|---|
+| `functionDocument` | `functions/call` carries `document`: the calling workbook |
+| `openedBeforeCalc` | `events/documentOpened` arrives before an opened workbook's first calculation |
+| `multiline` | Multi-line text fields in form dialogs, for code too |
+| `emptyResult` | `{"empty": true}`, a function result that shows blank |
+| `literalValues` | `range.setValues {literal: true}`: text written as text, never read as a number, date or formula |
+| `invalidate` | `host/functions/invalidate`: the plugin's kept results are forgotten and the formulas that call them recalculated |
+
+### The calling workbook: `document`
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"functions/call","params":{"name":"R.EVAL","args":["x*2",3],
+  "document":{"path":"/home/me/Model.xlsx","name":"Model.xlsx","id":"doc-3"}}}
+```
+
+`path` is the local file the workbook was opened from or last saved to (absolute), `null` for a
+workbook without one (a new Book1, an imported `.ods`, a sample); `name` is what the title bar
+shows; `id` is an opaque text that stays the same for the workbook while GridCraft runs, saved or
+not, and is never reused for another workbook in that run. So a plugin can key trust on `path`,
+or on `id` for a workbook with no file. The same `id` is in `context.document` (`commands/run`,
+`macros/run`) and in the document events, so a command (Trust This Workbook) and the formulas agree
+on which workbook is meant. `document` is `null` in the rare evaluations that belong to no
+workbook. A kept (non-volatile) result is kept per workbook and per file: the same arguments in
+another workbook, or after Save As, call the plugin again.
+
+### `documentOpened` before the first calculation
+
+When a workbook is opened from a local file, GridCraft reads it, sends `events/documentOpened
+{path, name, id}` to the plugins that declared it, **waits for each one's answer (at most 10 s)**,
+and only then calculates the workbook. Guaranteed: no formula of a workbook opened from a file
+calls a plugin function before every plugin that declared `documentOpened` answered that event or
+timed out, and those calls carry the event's `id` (and `path`, unless the file was imported).
+Events queued before it are delivered first. Not covered: a plugin whose own command opened the file
+(`file.open` among its reply's commands) is busy, so it gets the event afterwards, as before; a
+plugin that takes longer than 10 s (or fails) doesn't hold the workbook up, its timeout counts as a
+failure, and the calculation goes ahead; and workbooks that aren't opened from a file (new, samples,
+`file.open {base64}`) get no event. The plugin must not wait for the user while it answers.
+
+### Multi-line fields
+
+```json
+{"id": "code", "label": "R code", "kind": "text", "value": "m <- lm(y ~ x)\nsummary(m)", "multiline": true, "code": true, "rows": 10}
+```
+
+`multiline: true` on a `text` field draws a multi-line editor (Enter starts a new line; it
+scrolls past its height); `code: true` makes it monospace with Tab indenting, and implies
+`multiline`. `rows` is its height in lines (2–30, default 8). Its value may hold up to 200,000
+characters (a one-line field 32,767); the dialog gets wider for it. On other field kinds both are
+ignored. Hosts without the feature ignore the keys and show a one-line field.
+
+### Blank results: `{"empty": true}`
+
+A function result `null` is an empty value, which the cell shows as **0**: that's what Excel does
+with a VBA function that returns `Empty` (and with a reference to an empty cell), so it stays the
+default. `{"empty": true}`, as the result or as values in an array result, shows **blank** when
+the formula is the call itself (`=R.EVAL(…)`, not `=IFERROR(R.EVAL(…), 0)`). Other formulas read the
+cell as empty (0 in arithmetic, `""` in text). In an array result that holds `{"empty": true}`,
+the `null`s still show 0. Wrapped in another function, the blank is an empty value again (0).
+
+### Literal text: `range.setValues {literal: true}`
+
+```json
+{"command": "range.setValues", "params": {"range": "B2", "values": [["00123", "=not a formula", "1/2"]], "literal": true}}
+```
+
+With `literal`, every string is stored as text exactly as given (cut at 32,767 characters): never
+read as a number, a date, a percentage, a logical or a formula, and a leading `'` stays part of
+the text. An empty string clears the cell. Numbers, logicals and `null` are written as without it.
+This replaces the leading-apostrophe trick, which leaves the apostrophe in other hosts.
+
+### Invalidation: `host/functions/invalidate`
+
+```json
+{"jsonrpc":"2.0","id":"p1","method":"host/functions/invalidate","params":{"names":["R.EVAL","R.CALL"]}}
+{"jsonrpc":"2.0","id":"p1","result":{"functions":["R.EVAL","R.CALL"]}}
+```
+
+GridCraft forgets the kept results of the named functions (all of the plugin's functions without
+`names`; names that aren't the plugin's are ignored, at most 1,000) and recalculates the open
+workbooks whose formulas call them. A plugin may send it any time: on the push channel (answered in
+the main loop), while it runs a command, a macro or an event. The recalculation never happens while
+the plugin is busy answering: after the command's step (outside its undo step), or in the app's
+next turn. A workbook without unsaved changes stays so. The answer lists the names invalidated.
+Typical use: an add-in's trust changed, a data source refreshed, a cache in the plugin expired.
 
 ## Requirements (manifest 1.3)
 
@@ -580,6 +681,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Protocol 2.2: `functions/call` carries `document {path, name, id}` (results kept per workbook), `id` in `context.document` and the document events, `documentOpened` before an opened workbook's first calculation (at most 10 s per plugin), multi-line and code form fields, `{"empty": true}` blank results (`null` stays 0, as in Excel), `range.setValues {literal: true}`, `host/functions/invalidate`; `host.features` `functionDocument`, `openedBeforeCalc`, `multiline`, `emptyResult`, `literalValues`, `invalidate` |
 | 2026-10-15 | minor | Manifest 1.3: `requires` (apps, protocol, features, other add-ins with Cargo-style version ranges), blocked add-ins (`state`, `blockedBy`, `requiredBy`), start order, `host.protocol` and `addins` in `initialize`, `plugins.requirements`, `plugins.installMissing`, `plugins.install` `withRequirements`/`force`/`version` (newest release in range), Install Missing, asking before turning off a needed add-in or updating out of range; Office add-ins' requirement sets |
 | 2026-10-15 | minor | Protocol 2: the push channel (plugins speak any time; `host.features` `push`, `collab`; `host.collab`), manifest `collab` (transports), `collab.join` in command results; co-editing in [collab.md](collab.md) |
 | 2026-10-15 | minor | Protocol 1.2: `host.features` and `host.language`, `context.document`, command results that open a file (`open`) or show a host-drawn dialog (`dialog`: list, form, message; chained), manifest `events` and `events/documentOpened`, `documentSaved`, `documentClosed` |

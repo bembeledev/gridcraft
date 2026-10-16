@@ -38,12 +38,28 @@ pub use process::{Connection, HostError, HostHandler, Notifier, RequestError};
 /// The protocol version this host speaks (sent in `initialize`).
 pub const PROTOCOL_VERSION: u32 = 1;
 /// The plugin protocol this host speaks, as manifests' `requires.protocol` is checked against
-/// (`initialize`'s `host.protocol`): protocol 2 (the push channel), with manifests 1.3.
-pub const PROTOCOL: &str = "2.0";
+/// (`initialize`'s `host.protocol`): protocol 2 (the push channel), with manifests 1.3, and the
+/// additions of 2.2.
+pub const PROTOCOL: &str = "2.2";
 /// What this host does beyond protocol 1.1 (`initialize`'s `host.features`): host drawn dialogs
 /// and opening files from a command's result, document events, and `context.document`
-/// (protocol 1.2); the push channel and co-editing (protocol 2).
-pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document", "push", "collab"];
+/// (protocol 1.2); the push channel and co-editing (protocol 2); the calling workbook in
+/// `functions/call`, `documentOpened` before the opening recalculation, multi-line form fields,
+/// blank results, literal text in `range.setValues` and `host/functions/invalidate` (2.2).
+pub const FEATURES: &[&str] = &[
+    "dialogs",
+    "open",
+    "events",
+    "document",
+    "push",
+    "collab",
+    "functionDocument",
+    "openedBeforeCalc",
+    "multiline",
+    "emptyResult",
+    "literalValues",
+    "invalidate",
+];
 /// This app's id in a manifest's `apps` and `uiFor`, and in `initialize`'s `host.id`. The
 /// manifest and protocol are shared with the other craft apps (WordCraft), so one plugin can
 /// serve several.
@@ -417,7 +433,9 @@ pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
     state: Mutex<(State, u32)>,
-    cache: Mutex<HashMap<String, Value>>,
+    /// Results of non-volatile functions by name, arguments and calling workbook: the value, and
+    /// whether it holds explicit blanks.
+    cache: Mutex<HashMap<String, (Value, bool)>>,
     /// Off: listed, but its functions, commands and ribbon and menu items are gone.
     enabled: std::sync::atomic::AtomicBool,
     /// Where it was installed from (`.craft-source.json`), for plugins installed from GitHub.
@@ -746,22 +764,32 @@ impl Plugin {
             return Value::Error(CellError::Value);
         }
         let args_json: Vec<Json> = args.iter().map(values::to_json).collect();
-        let key = (!decl.volatile).then(|| format!("{}\u{0}{}", decl.name, Json::Array(args_json.clone())));
+        // Protocol 2.2: the workbook whose formula calls it. A result is kept per workbook (and
+        // per file: saving under a new name asks again), since it may depend on which one it is.
+        let document = gridcraft_calc::external::document().map(|d| json!({"path": d.path, "name": d.name, "id": d.id})).unwrap_or(Json::Null);
+        let key =
+            (!decl.volatile).then(|| format!("{}\u{0}{}\u{0}{}\u{0}{}", decl.name, document["id"], document["path"], Json::Array(args_json.clone())));
         if let Some(k) = &key
-            && let Some(v) = lock(&self.cache).get(k)
+            && let Some((v, blanks)) = lock(&self.cache).get(k)
         {
+            if *blanks {
+                gridcraft_calc::external::note_blanks();
+            }
             return v.clone();
         }
         let timeout = Duration::from_millis(decl.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).clamp(1, MAX_TIMEOUT_MS));
-        match self.request("functions/call", json!({"name": decl.name, "args": args_json}), timeout) {
+        match self.request("functions/call", json!({"name": decl.name, "args": args_json, "document": document}), timeout) {
             Ok(result) => {
-                let v = values::from_json(result.get("value").unwrap_or(&Json::Null));
+                let (v, blanks) = values::from_json_result(result.get("value").unwrap_or(&Json::Null));
+                if blanks {
+                    gridcraft_calc::external::note_blanks();
+                }
                 if let Some(k) = key {
                     let mut cache = lock(&self.cache);
                     if cache.len() >= CACHE_LIMIT {
                         cache.clear();
                     }
-                    cache.insert(k, v.clone());
+                    cache.insert(k, (v.clone(), blanks));
                 }
                 v
             }
@@ -1235,6 +1263,79 @@ pub fn autoload(extra: &[PathBuf]) -> Vec<(PathBuf, Result<String, String>)> {
             (dir, r)
         })
         .collect()
+}
+
+// ---------------------------------------------------------------- invalidation (protocol 2.2)
+
+fn invalidated() -> &'static Mutex<Vec<String>> {
+    static PENDING: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// Most function names one `host/functions/invalidate` may name.
+pub const MAX_INVALIDATE_NAMES: usize = 1_000;
+
+/// `host/functions/invalidate {names?}`: forgets the kept results of the plugin's functions
+/// `names` (all of them when `None`; names that aren't the plugin's are ignored) and asks the app
+/// to recalculate the formulas that call them ([`take_invalidated`]). Returns the names
+/// invalidated. Safe from any thread: the recalculation happens in the app's own time.
+pub fn invalidate(plugin_id: &str, names: Option<&[String]>) -> Result<Vec<String>, String> {
+    let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
+    let all = || plugin.manifest.functions.iter().map(|f| f.name.clone());
+    let names: Vec<String> = match names {
+        None => all().collect(),
+        Some(list) => {
+            if list.len() > MAX_INVALIDATE_NAMES {
+                return Err(format!("at most {MAX_INVALIDATE_NAMES} names"));
+            }
+            let want: Vec<String> = list.iter().map(|n| n.trim().to_ascii_uppercase()).collect();
+            all().filter(|n| want.contains(n)).collect()
+        }
+    };
+    if names.is_empty() {
+        return Ok(names);
+    }
+    {
+        let mut cache = lock(&plugin.cache);
+        let prefixes: Vec<String> = names.iter().map(|n| format!("{n}\u{0}")).collect();
+        cache.retain(|k, _| !prefixes.iter().any(|p| k.starts_with(p.as_str())));
+    }
+    let mut pending = lock(invalidated());
+    for n in &names {
+        if !pending.contains(n) && pending.len() < 100_000 {
+            pending.push(n.clone());
+        }
+    }
+    log::info!("plugin {plugin_id}: invalidated {}", names.join(", "));
+    Ok(names)
+}
+
+/// The function names invalidated since the last call, for the app to recalculate the formulas
+/// that call them.
+pub fn take_invalidated() -> Vec<String> {
+    std::mem::take(&mut *lock(invalidated()))
+}
+
+/// Whether invalidated functions wait for a recalculation.
+pub fn invalidation_pending() -> bool {
+    !lock(invalidated()).is_empty()
+}
+
+/// Reads `host/functions/invalidate`'s params and invalidates: `{"functions": [names]}`.
+pub fn invalidate_request(plugin_id: &str, params: &Json) -> Result<Json, HostError> {
+    let fail = |message: String| HostError { code: -32602, message, data: Json::Null };
+    let names: Option<Vec<String>> = match params.get("names") {
+        None | Some(Json::Null) => None,
+        Some(Json::Array(a)) => Some(
+            a.iter()
+                .take(MAX_INVALIDATE_NAMES + 1)
+                .map(|n| n.as_str().map(str::to_string).ok_or_else(|| fail("`names` must be function names".into())))
+                .collect::<Result<_, _>>()?,
+        ),
+        Some(_) => return Err(fail("`names` must be an array of function names".into())),
+    };
+    let done = invalidate(plugin_id, names.as_deref()).map_err(|e| HostError { code: -32000, message: e, data: Json::Null })?;
+    Ok(json!({"functions": done}))
 }
 
 // ---------------------------------------------------------------- commands

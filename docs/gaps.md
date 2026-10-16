@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (§16, §21: the web build edits live in Nextcloud through craft-live; previously minor: §21: document chat, protocol 2.1; previously minor: §21: Office.js: what Microsoft's samples need (their office.js never runs, colour names, function commands, common-API enums); previously minor: §21: add-ins that require other add-ins, manifest 1.3; previously minor: §21: Share and the session's people in the title bar; previously minor: §21: co-editing, plugin protocol 2; previously minor: §21: plugin protocol 1.2: dialogs, opening files, document events; previously minor: §21: plugin functions in autocomplete and Insert Function; previously minor: §21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (§21: plugin protocol 2.2: functions know their workbook, opening waits for plugins, multi-line fields, blanks, literal text, invalidation; previously minor: §16, §21: the web build edits live in Nextcloud through craft-live; previously minor: §21: document chat, protocol 2.1; previously minor: §21: Office.js: what Microsoft's samples need (their office.js never runs, colour names, function commands, common-API enums); previously minor: §21: add-ins that require other add-ins, manifest 1.3; previously minor: §21: Share and the session's people in the title bar; previously minor: §21: co-editing, plugin protocol 2; previously minor: §21: plugin protocol 1.2: dialogs, opening files, document events; previously minor: §21: plugin functions in autocomplete and Insert Function; previously minor: §21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -182,7 +182,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   other add-ins with Cargo-style version ranges, app versions, protocol and features; unmet ones
   are blocked with the reason, installing the missing ones from their newest GitHub release in
   range (Install Missing); Office add-ins' requirement sets are checked
-  ([plugins.md](plugins.md#requirements-manifest-13)). Missing: updating installed add-ins (no
+  ([plugins.md](plugins.md#requirements-manifest-13)). Protocol 2.2 (gaps found by the R add-in,
+  gridcraft-r): plugin functions are told the calling workbook (`document {path, name, id}`, results
+  kept per workbook), `documentOpened` arrives before an opened workbook's first calculation,
+  multi-line and code form fields, `{"empty": true}` blank results, `range.setValues {literal}`,
+  and `host/functions/invalidate` ([plugins.md](plugins.md#protocol-22-functions-that-know-their-workbook)).
+  Missing: updating installed add-ins (no
   update check), more than one page (100) of a repository's releases.
   **Estimate:** 15–25 h.
 
@@ -201,6 +206,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | §21: plugin protocol 2.2: `functions/call` carries the calling workbook, `documentOpened` before the opening calculation, multi-line form fields, blank results, literal text in `range.setValues`, `host/functions/invalidate` |
 | 2026-10-16 | minor | §16, §21: the web build edits live in Nextcloud Office through craft-live (embed contract, seeding, saving in the file's format, Close); §16 no longer says there's no co-authoring |
 | 2026-10-16 | minor | §21: document chat (protocol 2.1): `chat.*` commands, the Chat pane and title-bar button, the XLSX part `/craft/chat.json`, shared in live sessions ([collab.md](collab.md#document-chat)) |
 | 2026-10-15 | minor | §21: Office.js compatibility with Microsoft's add-in samples: their `office.js` gets an empty script, colour names, function commands (ExecuteFunction), common-API enums and harmless unsupported calls |

@@ -353,6 +353,16 @@ pub fn apply_prefs(prefs: &crate::Prefs) {
 /// Recalculates the open workbooks with formulas that call one of `names`, so their cells pick
 /// up a plugin that just arrived (or show `#NAME?` for one that left).
 fn recalc_users(s: &mut Session, names: &[String]) {
+    recalc_users_with(s, names, false);
+}
+
+/// [`recalc_users`] for functions a plugin invalidated (protocol 2.2): a workbook without unsaved
+/// changes stays so (its formulas' results changed, not what the person wrote).
+pub(crate) fn recalc_users_keeping_saved(s: &mut Session, names: &[String]) {
+    recalc_users_with(s, names, true);
+}
+
+fn recalc_users_with(s: &mut Session, names: &[String], keep_saved: bool) {
     if names.is_empty() {
         return;
     }
@@ -362,8 +372,13 @@ fn recalc_users(s: &mut Session, names: &[String]) {
             sh.cells.iter().any(|(_, cell)| cell.formula.as_ref().is_some_and(|f| calls.iter().any(|c| f.text.to_ascii_uppercase().contains(c))))
         });
         if uses {
-            let wb = Arc::make_mut(&mut d.wb);
-            d.calc.recalc_all(wb);
+            let clean = keep_saved && !d.is_dirty();
+            let doc = d.calling_document();
+            let (calc, wb) = (&mut d.calc, Arc::make_mut(&mut d.wb));
+            gridcraft_calc::external::with_document(Some(doc), || calc.recalc_all(wb));
+            if clean {
+                d.saved = d.wb.clone();
+            }
         }
     }
 }
@@ -376,7 +391,7 @@ pub fn absolute_path(path: &str) -> String {
 /// `context.document` (protocol 1.2): the local file the workbook was opened from or last saved
 /// to (`null` for a new, never-saved one), its name, and whether it has unsaved changes.
 pub fn document_json(d: &crate::DocState) -> Json {
-    json!({"path": d.path.as_deref().map(absolute_path), "name": d.display_title(), "dirty": d.is_dirty()})
+    json!({"path": d.path.as_deref().map(absolute_path), "name": d.display_title(), "dirty": d.is_dirty(), "id": d.session_id()})
 }
 
 /// The context every plugin request about the workbook gets: its title, active sheet, active
@@ -396,14 +411,31 @@ pub fn brief_context(s: &Session) -> Json {
 
 /// Sends a document event (protocol 1.2) to the plugins that declared it, after it happened. It
 /// never waits for them: they answer on the events thread, and the interface shows what they say.
-pub fn emit(event: &str, path: &str, format: Option<&str>) {
+pub fn emit(event: &str, path: &str, format: Option<&str>, id: Option<&str>) {
+    gridcraft_plugin::events::dispatch(event, event_params(path, format, id));
+}
+
+/// An event's params: the file's absolute path and name, the format saved, and the document's
+/// session id (protocol 2.2, as in `context.document` and `functions/call`).
+fn event_params(path: &str, format: Option<&str>, id: Option<&str>) -> Json {
     let path = absolute_path(path);
     let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
     let mut params = json!({"path": path, "name": name});
     if let Some(f) = format {
         params["format"] = json!(f.to_ascii_lowercase());
     }
-    gridcraft_plugin::events::dispatch(event, params);
+    if let Some(id) = id {
+        params["id"] = json!(id);
+    }
+    params
+}
+
+/// Protocol 2.2: `documentOpened` for a workbook just read from `path`, before its formulas are
+/// calculated. Waits for each plugin that declared it (at most 10 s each), so a plugin that
+/// decides what its functions may do per workbook knows of it before the first call.
+pub fn emit_opened_before_calc(path: &str, id: &str) {
+    let wait = gridcraft_plugin::events::OPENED_BEFORE_CALC_TIMEOUT;
+    gridcraft_plugin::events::deliver_now(gridcraft_plugin::events::DOCUMENT_OPENED, event_params(path, None, Some(id)), wait);
 }
 
 /// The app is quitting: `documentClosed` for every open workbook that has a file, waiting at most
@@ -411,7 +443,7 @@ pub fn emit(event: &str, path: &str, format: Option<&str>) {
 pub fn quitting(s: &Session) {
     for d in s.documents() {
         if let Some(p) = &d.path {
-            emit(gridcraft_plugin::events::DOCUMENT_CLOSED, p, None);
+            emit(gridcraft_plugin::events::DOCUMENT_CLOSED, p, None, Some(&d.session_id()));
         }
     }
     gridcraft_plugin::events::wait_idle(gridcraft_plugin::events::timeout(gridcraft_plugin::events::DOCUMENT_CLOSED));

@@ -725,7 +725,7 @@ mod requirements {
         let why = messages("t.req.future");
         assert_eq!(why.len(), 3, "{why:?}");
         assert!(why[0].starts_with("Needs GridCraft 99.0 or later (this is "), "{why:?}");
-        assert_eq!(why[1], "Needs plugin protocol 9.0 or later (this GridCraft has 2.0)");
+        assert_eq!(why[1], "Needs plugin protocol 9.0 or later (this GridCraft has 2.2)");
         assert_eq!(why[2], "Needs `telepathy`, which this GridCraft doesn't have");
         add(
             "t.req.today",
@@ -746,4 +746,45 @@ mod requirements {
         assert_eq!(messages("t.req.cyc-a"), ["Needs t.req.cyc-b, which isn't installed"]);
         assert!(crate::unload("t.req.cyc-a"));
     }
+}
+
+#[test]
+fn explicit_blanks_in_results() {
+    use crate::values::from_json_result;
+    // `null` is an empty value (the cell shows 0), with no explicit blanks.
+    assert_eq!(from_json_result(&json!(null)), (Value::Empty, false));
+    assert_eq!(from_json_result(&json!(3)), (Value::Number(3.0), false));
+    // `{"empty": true}` is a blank; `{"empty": false}` and other objects are #VALUE!.
+    assert_eq!(from_json_result(&json!({"empty": true})), (Value::Empty, true));
+    assert_eq!(from_json(&json!({"empty": false})), Value::Error(CellError::Value));
+    assert_eq!(from_json(&json!({"empty": true, "error": "#N/A"})), Value::Error(CellError::NA));
+    // With explicit blanks, the nulls of the same result become 0; ragged rows still pad with #N/A.
+    let (v, blanks) = from_json_result(&json!([[{"empty": true}, null], [1]]));
+    assert!(blanks);
+    let Value::Array(a) = v else { panic!("an array") };
+    assert_eq!(a.data, vec![Value::Empty, Value::Number(0.0), Value::Number(1.0), Value::Error(CellError::NA)]);
+    let (v, _) = from_json_result(&json!([null, {"empty": true}]));
+    let Value::Array(a) = v else { panic!("an array") };
+    assert_eq!(a.data, vec![Value::Number(0.0), Value::Empty]);
+}
+
+#[test]
+fn multiline_fields_are_bounded() {
+    use crate::dialog::{Content, Dialog, MAX_FIELD_TEXT, MAX_MULTILINE_TEXT};
+    let long = "x".repeat(MAX_MULTILINE_TEXT + 10);
+    let d = Dialog::parse(&json!({"kind": "form", "command": "go", "fields": [
+        {"id": "code", "code": true, "value": long, "rows": 1},
+        {"id": "one", "value": long},
+        {"id": "secret", "kind": "secret", "multiline": true},
+    ]}))
+    .unwrap();
+    let Content::Form { fields } = &d.content else { panic!("a form") };
+    assert!(fields[0].multiline && fields[0].code, "code implies multi-line");
+    assert_eq!(fields[0].rows, 2);
+    assert_eq!(fields[0].value.as_str().unwrap().chars().count(), MAX_MULTILINE_TEXT);
+    assert!(!fields[1].multiline);
+    assert_eq!(fields[1].value.as_str().unwrap().chars().count(), MAX_FIELD_TEXT);
+    assert!(!fields[2].multiline, "a password box stays on one line");
+    assert!(Dialog::parse(&json!({"kind": "form", "command": "go", "fields": [{"id": "a", "multiline": "yes"}]})).is_err());
+    assert!(Dialog::parse(&json!({"kind": "form", "command": "go", "fields": [{"id": "a", "rows": "many"}]})).is_err());
 }

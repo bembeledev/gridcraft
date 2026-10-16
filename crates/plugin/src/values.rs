@@ -11,6 +11,10 @@
 //!
 //! A plugin's result may also be a flat list, read as one row. Ragged rows are padded with
 //! `#N/A`, as Excel pads arrays.
+//!
+//! In a result, `null` is an empty value, which a cell shows as 0 (as Excel shows a VBA function
+//! that returns `Empty`); `{"empty": true}` (protocol 2.2) is a blank the cell shows blank, when
+//! the formula is the call itself ([`from_json_result`]).
 
 use std::sync::Arc;
 
@@ -44,6 +48,62 @@ pub fn from_json(j: &Json) -> Value {
     }
 }
 
+/// A function's result, and whether it holds explicit blanks (`{"empty": true}`, protocol 2.2).
+/// Explicit blanks are empty values; with them, the result's `null`s become 0, as the cell would
+/// have shown them, so the host can keep every empty value of this result blank.
+pub fn from_json_result(j: &Json) -> (Value, bool) {
+    let blanks = match j {
+        Json::Array(rows) => rows.iter().any(|r| match r {
+            Json::Array(cells) => cells.iter().any(is_blank),
+            other => is_blank(other),
+        }),
+        other => is_blank(other),
+    };
+    if !blanks {
+        return (from_json(j), false);
+    }
+    let v = match from_json(j) {
+        Value::Array(a) if a.data.iter().any(|x| matches!(x, Value::Empty)) => {
+            // Which empty values were nulls: those turn into 0.
+            let flat: Vec<&Json> = match j {
+                Json::Array(rows) if rows.iter().any(Json::is_array) => {
+                    let width = a.cols;
+                    let mut out = Vec::with_capacity(a.data.len());
+                    for r in rows {
+                        let row: Vec<&Json> = match r {
+                            Json::Array(cells) => cells.iter().collect(),
+                            single => vec![single],
+                        };
+                        let n = row.len();
+                        out.extend(row);
+                        out.extend(std::iter::repeat_n(&Json::Bool(false), width.saturating_sub(n)));
+                    }
+                    out
+                }
+                Json::Array(rows) => rows.iter().collect(),
+                _ => Vec::new(),
+            };
+            let data = a
+                .data
+                .iter()
+                .enumerate()
+                .map(|(i, x)| match (x, flat.get(i)) {
+                    (Value::Empty, Some(Json::Null)) => Value::Number(0.0),
+                    (x, _) => x.clone(),
+                })
+                .collect();
+            Array::new(a.rows, a.cols, data).map_or(Value::Array(a), Value::from)
+        }
+        v => v,
+    };
+    (v, true)
+}
+
+/// `{"empty": true}`.
+fn is_blank(j: &Json) -> bool {
+    j.as_object().is_some_and(|o| o.get("empty") == Some(&Json::Bool(true)) && !o.contains_key("error"))
+}
+
 fn scalar(j: &Json) -> Value {
     match j {
         Json::Null => Value::Empty,
@@ -52,6 +112,7 @@ fn scalar(j: &Json) -> Value {
         Json::String(s) => Value::Text(Arc::from(truncate(s))),
         Json::Object(o) => match o.get("error").and_then(Json::as_str) {
             Some(e) => Value::Error(CellError::parse(e).unwrap_or(CellError::Value)),
+            None if is_blank(j) => Value::Empty,
             None => Value::Error(CellError::Value),
         },
         Json::Array(_) => Value::Error(CellError::Value),

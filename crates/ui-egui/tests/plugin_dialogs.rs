@@ -90,3 +90,39 @@ fn a_plugin_dialog_shows_and_its_ok_runs_the_next_command() {
     h.run_steps(2);
     assert!(h.state().plugin_dialog.is_none());
 }
+
+#[test]
+fn a_multiline_code_field_keeps_its_lines() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut app = SheetApp::new(s, Default::default());
+    let dialog = gridcraft_engine::plugin::dialog::Dialog::parse(&json!({
+        "kind": "form", "title": "Run R", "command": "next",
+        "fields": [{"id": "code", "label": "R code", "value": "x <- 1", "multiline": true, "code": true, "rows": 6}]
+    }))
+    .unwrap();
+    app.plugin_dialog = Some(gridcraft_ui_egui::plugin_ui::DialogState::new("org.gridcraft.test-dialogs", dialog));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    // The field is a multi-line editor: Enter adds a line instead of pressing OK.
+    // The field is drawn as a multi-line text box.
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "R code").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "R code").type_text("\ny <- 2");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "R code").type_text("x + y");
+    h.run_steps(3);
+    let st = h.state().plugin_dialog.as_ref().expect("the dialog is still up");
+    assert_eq!(st.fields()["code"], json!("x <- 1\ny <- 2\nx + y"));
+    // OK sends the lines as they are.
+    assert_eq!(st.ok_run().unwrap()["params"]["fields"]["code"], json!("x <- 1\ny <- 2\nx + y"));
+}

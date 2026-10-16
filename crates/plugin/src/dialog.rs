@@ -28,6 +28,12 @@ pub const MAX_BUTTON_LABEL: usize = 64;
 pub const MAX_OPTIONS: usize = 1_000;
 /// Longest text field value (a cell's text limit).
 pub const MAX_FIELD_TEXT: usize = 32_767;
+/// Longest multi-line text field value (protocol 2.2): a script of a few thousand lines.
+pub const MAX_MULTILINE_TEXT: usize = 200_000;
+/// A multi-line field's height in lines: the default, the fewest and the most.
+pub const DEFAULT_ROWS: u8 = 8;
+pub const MIN_ROWS: u8 = 2;
+pub const MAX_ROWS: u8 = 30;
 /// A list shows a filter box when it has more items than this.
 pub const FILTER_AFTER: usize = 20;
 
@@ -61,6 +67,13 @@ pub struct Field {
     pub value: Json,
     /// A choice field's options: `(id, label)`.
     pub options: Vec<(String, String)>,
+    /// A text field edited on several lines (protocol 2.2: `"multiline": true`); Enter starts a
+    /// new line.
+    pub multiline: bool,
+    /// A multi-line field holding code (`"code": true`): a monospace font, Tab indents.
+    pub code: bool,
+    /// A multi-line field's height in lines (`rows`, 2–30, default 8).
+    pub rows: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +256,11 @@ impl Dialog {
                     .iter()
                     .map(|f| {
                         let mut j = json!({"id": f.id, "label": f.label, "kind": f.kind.name(), "value": f.value});
+                        if f.multiline {
+                            j["multiline"] = json!(true);
+                            j["code"] = json!(f.code);
+                            j["rows"] = json!(f.rows);
+                        }
                         if f.kind == FieldKind::Choice {
                             j["options"] = f.options.iter().map(|(id, label)| json!({"id": id, "label": label})).collect();
                         }
@@ -308,6 +326,22 @@ impl Field {
             "choice" => FieldKind::Choice,
             other => return Err(format!("{what}: unknown kind `{}` (text, secret, number, checkbox or choice)", cut(other, 32))),
         };
+        let flag = |key: &str| match f.get(key) {
+            None | Some(Json::Null) => Ok(false),
+            Some(Json::Bool(b)) => Ok(*b),
+            Some(_) => Err(format!("{what}: `{key}` must be true or false")),
+        };
+        // Multi-line and code apply to text fields; others ignore them.
+        let multiline = kind == FieldKind::Text && (flag("multiline")? || flag("code")?);
+        let code = multiline && flag("code")?;
+        let rows = match f.get("rows") {
+            None | Some(Json::Null) => DEFAULT_ROWS,
+            Some(Json::Number(n)) => {
+                n.as_f64().filter(|x| x.is_finite()).map_or(DEFAULT_ROWS, |x| x.round().clamp(MIN_ROWS as f64, MAX_ROWS as f64) as u8)
+            }
+            Some(_) => return Err(format!("{what}: `rows` must be a number")),
+        };
+        let max_text = if multiline { MAX_MULTILINE_TEXT } else { MAX_FIELD_TEXT };
         let raw = f.get("value").cloned().unwrap_or(Json::Null);
         let mut options = Vec::new();
         if kind == FieldKind::Choice {
@@ -328,7 +362,7 @@ impl Field {
         }
         let value = match kind {
             FieldKind::Text | FieldKind::Secret => match raw {
-                Json::String(s) => Json::String(cut(&s, MAX_FIELD_TEXT)),
+                Json::String(s) => Json::String(cut(&s, max_text)),
                 Json::Null => json!(""),
                 Json::Number(n) => json!(n.to_string()),
                 Json::Bool(b) => json!(b.to_string()),
@@ -357,7 +391,7 @@ impl Field {
                 }
             }
         };
-        Ok(Field { id, label, kind, value, options })
+        Ok(Field { id, label, kind, value, options, multiline, code, rows })
     }
 }
 

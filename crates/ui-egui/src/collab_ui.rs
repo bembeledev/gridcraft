@@ -40,7 +40,7 @@ fn color(hex: &str) -> Color32 {
 
 /// Runs the engine's co-editing between frames.
 pub fn pump(app: &mut SheetApp, ctx: &egui::Context) {
-    if app.session.collab.rooms.is_empty() && !gridcraft_engine::plugin::push::pending() {
+    if app.session.collab.rooms.is_empty() && !gridcraft_engine::plugin::push::pending() && !gridcraft_engine::plugin::invalidation_pending() {
         return;
     }
     let now = crate::now_ms();

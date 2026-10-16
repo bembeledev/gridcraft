@@ -59,6 +59,8 @@ pub(crate) fn host_during_event(plugin: &str, event: &str, method: &str, params:
             push_outcome(Outcome { plugin: plugin.to_string(), event: event.to_string(), kind: OutcomeKind::HostMessage, text });
             Ok(json!({"result": 1}))
         }
+        // Protocol 2.2: forgetting kept results is no edit (the app recalculates in its own time).
+        "host/functions/invalidate" => crate::invalidate_request(plugin, params),
         "host/sync" | "host/vbaProject/get" | "host/vbaProject/set" => {
             let message = format!("{method} isn't available during {event}: events are notifications, not edits");
             Err(HostError { code: -32000, message: message.clone(), data: json!({"code": "AccessDenied", "message": message, "action": Json::Null}) })
@@ -67,11 +69,15 @@ pub(crate) fn host_during_event(plugin: &str, event: &str, method: &str, params:
     }
 }
 
+/// How long the app waits for each plugin's answer to a `documentOpened` that comes before the
+/// opening recalculation (protocol 2.2): the recalculation goes ahead after it.
+pub const OPENED_BEFORE_CALC_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Sends `event` to one plugin and records what came of it.
-fn deliver(plugin: &crate::Plugin, event: &str, params: &Json) {
+fn deliver(plugin: &crate::Plugin, event: &str, params: &Json, wait: Duration) {
     let id = plugin.manifest.id.clone();
     let method = format!("events/{event}");
-    let r = plugin.request_with(&method, params.clone(), timeout(event), &mut |m, p| host_during_event(&id, event, m, p));
+    let r = plugin.request_with(&method, params.clone(), wait, &mut |m, p| host_during_event(&id, event, m, p));
     match r {
         Ok(answer) => {
             if let Some(text) = answer.get("message").and_then(Json::as_str).map(str::trim).filter(|t| !t.is_empty()) {
@@ -109,10 +115,10 @@ pub fn take_outcomes() -> Vec<Outcome> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{dispatch, pending, wait_idle};
+pub use native::{deliver_now, dispatch, pending, wait_idle};
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{dispatch, pending, wait_idle};
+pub use web::{deliver_now, dispatch, pending, wait_idle};
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -120,6 +126,7 @@ mod web {
 
     /// The web app has no plugins: nothing to send.
     pub fn dispatch(_event: &str, _params: Json) {}
+    pub fn deliver_now(_event: &str, _params: Json, _wait: Duration) {}
     pub fn pending() -> usize {
         0
     }
@@ -138,7 +145,8 @@ mod native {
     use super::*;
 
     struct Queue {
-        jobs: VecDeque<(String, Json)>,
+        /// Event, params, and the plugins it's for (`None`: every subscriber).
+        jobs: VecDeque<(String, Json, Option<Vec<String>>)>,
         /// Events queued or being delivered.
         pending: usize,
         worker: bool,
@@ -155,6 +163,10 @@ mod native {
         if subscribers(event).is_empty() {
             return;
         }
+        enqueue(event, params, None);
+    }
+
+    fn enqueue(event: &str, params: Json, only: Option<Vec<String>>) {
         let (lock, cv) = queue();
         let mut q = crate::lock(lock);
         if !q.worker {
@@ -165,7 +177,7 @@ mod native {
             }
             q.worker = true;
         }
-        q.jobs.push_back((event.to_string(), params));
+        q.jobs.push_back((event.to_string(), params, only));
         q.pending += 1;
         cv.notify_all();
     }
@@ -185,10 +197,13 @@ mod native {
                     };
                 }
             };
-            let (event, params) = job;
+            let (event, params, only) = job;
             for plugin in subscribers(&event) {
+                if only.as_ref().is_some_and(|o| !o.contains(&plugin.manifest.id)) {
+                    continue;
+                }
                 // A plugin's misbehaviour must not end the thread (the next events still go out).
-                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(&plugin, &event, &params)));
+                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(&plugin, &event, &params, timeout(&event))));
                 if ok.is_err() {
                     log::warn!("plugin {}: events/{event} failed unexpectedly", plugin.manifest.id);
                 }
@@ -197,6 +212,40 @@ mod native {
             q.pending = q.pending.saturating_sub(1);
             cv.notify_all();
         }
+    }
+
+    /// Sends `event` to every plugin that declared it and waits for their answers, each at most
+    /// `wait` (protocol 2.2: `documentOpened` before the opening recalculation). Events queued
+    /// before it are delivered first (waiting at most `wait` for them), so the order holds. A
+    /// plugin busy on this thread (one whose command opened the file) gets it on the events
+    /// thread instead, after the fact.
+    pub fn deliver_now(event: &str, params: Json, wait: Duration) {
+        let subs = subscribers(event);
+        if subs.is_empty() {
+            return;
+        }
+        wait_idle(wait);
+        let mut later = false;
+        for plugin in subs {
+            if crate::BUSY.with(|b| b.borrow().contains(&plugin.manifest.id)) {
+                later = true;
+                continue;
+            }
+            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| deliver(&plugin, event, &params, wait)));
+            if ok.is_err() {
+                log::warn!("plugin {}: events/{event} failed unexpectedly", plugin.manifest.id);
+            }
+        }
+        if later {
+            dispatch_busy(event, params);
+        }
+    }
+
+    /// The events thread's delivery of `event` to the plugins busy on the caller's thread (the
+    /// others already had it).
+    fn dispatch_busy(event: &str, params: Json) {
+        let busy: Vec<String> = crate::BUSY.with(|b| b.borrow().clone());
+        enqueue(event, params, Some(busy));
     }
 
     /// Events queued or being delivered.

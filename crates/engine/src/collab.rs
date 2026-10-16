@@ -722,11 +722,15 @@ pub(crate) fn after_command(s: &mut Session) {
 fn apply_refreshed(s: &mut Session, uid: u64, out: gridcraft_collab::Refreshed, room: Option<&mut Room>) {
     let Some(d) = s.docs.iter_mut().find(|d| d.uid == uid) else { return };
     let mut wb = out.wb;
-    if out.structural {
-        d.calc.recalc_all(&mut wb);
-    } else if !out.changed.is_empty() {
-        d.calc.cells_changed(&mut wb, &out.changed);
-    }
+    let doc = d.calling_document();
+    let calc = &mut d.calc;
+    gridcraft_calc::external::with_document(Some(doc), || {
+        if out.structural {
+            calc.recalc_all(&mut wb);
+        } else if !out.changed.is_empty() {
+            calc.cells_changed(&mut wb, &out.changed);
+        }
+    });
     let wb = Arc::new(wb);
     let dirty = d.is_dirty();
     d.wb = wb.clone();
@@ -853,7 +857,9 @@ impl Session {
         }
         let pruned = self.collab.rooms.iter_mut().fold(false, |acc, r| r.awareness.prune(now) | acc);
         send_awareness(self, false);
-        changed | pruned
+        // Plugin functions invalidated by a plugin (protocol 2.2), from any channel.
+        let recalculated = self.recalc_invalidated();
+        changed | pruned | recalculated
     }
 
     /// Serves transport `id` in memory: rooms joined through it (`collab.join` with `plugin: id`)
@@ -1033,6 +1039,8 @@ fn handle(s: &mut Session, p: Pushed) -> bool {
                 Ok(json!({}))
             }
             "collab/snapshot" => snapshot(s, &p.plugin, &params),
+            // Protocol 2.2: recalculated at the end of this poll.
+            "host/functions/invalidate" => gridcraft_plugin::invalidate_request(&p.plugin, &params),
             m if m.starts_with("host/") => Err(gridcraft_plugin::HostError {
                 code: -32000,
                 message: format!("{m} is only available while the plugin runs a command"),

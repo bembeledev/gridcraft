@@ -57,6 +57,11 @@ harness = false
 name = "plugin_protocol"
 harness = false
 
+# Runs without libtest: the test binary doubles as the protocol 2.2 plugin it starts.
+[[test]]
+name = "plugin_protocol_22"
+harness = false
+
 # Runs without libtest: the test binary doubles as the co-editing transport it starts.
 [[test]]
 name = "collab_push"

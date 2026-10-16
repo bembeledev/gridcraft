@@ -168,6 +168,9 @@ pub fn host_call(s: &mut Session, plugin: &str, method: &str, params: &Json) -> 
             log::info!("plugin {plugin}: {text}");
             Ok(json!({}))
         }
+        // Protocol 2.2: the formulas calling them are recalculated after the step, when the
+        // plugin is free to answer.
+        "host/functions/invalidate" => gridcraft_plugin::invalidate_request(plugin, params),
         _ => Err(HostError::unknown()),
     }
 }

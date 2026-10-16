@@ -278,8 +278,10 @@ pub fn dialog_window(app: &mut SheetApp, ctx: &egui::Context) {
     let lang = app.ui.language;
     let t = crate::theme::Tokens::get(ctx);
     let mut action = DialogAction::Keep;
+    // A form with a multi-line field (code, say) gets room for its lines.
+    let wide = matches!(&st.dialog.content, plugin::dialog::Content::Form { fields } if fields.iter().any(|f| f.multiline));
     egui::Modal::new(egui::Id::new("plugin_dialog")).show(ctx, |ui| {
-        ui.set_width(460.0);
+        ui.set_width(if wide { 640.0 } else { 460.0 });
         if !st.dialog.title.is_empty() {
             ui.label(egui::RichText::new(&st.dialog.title).strong().size(15.0).color(t.text));
             ui.add_space(4.0);
@@ -362,9 +364,30 @@ pub fn dialog_window(app: &mut SheetApp, ctx: &egui::Context) {
                     for (i, f) in fields.iter().enumerate() {
                         ui.label(egui::RichText::new(&f.label).color(t.text));
                         match st.values.get_mut(i) {
+                            Some(FieldValue::Text(text)) if f.multiline => {
+                                // Protocol 2.2: several lines (Enter is a new line), monospace for code,
+                                // scrolling past its height; bounded like the plugin's value.
+                                let mut edit = egui::TextEdit::multiline(text)
+                                    .desired_width(460.0)
+                                    .desired_rows(usize::from(f.rows))
+                                    .char_limit(plugin::dialog::MAX_MULTILINE_TEXT);
+                                if f.code {
+                                    edit = edit.code_editor();
+                                }
+                                let label = f.label.clone();
+                                let line_h = ui.text_style_height(&if f.code { egui::TextStyle::Monospace } else { egui::TextStyle::Body });
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("plugin_dialog_multiline", i))
+                                    .max_height(line_h * f32::from(f.rows) + 12.0)
+                                    .show(ui, |ui| {
+                                        ui.add(edit).widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &label));
+                                    });
+                            }
                             Some(FieldValue::Text(text)) => {
-                                let edit =
-                                    egui::TextEdit::singleline(text).desired_width(280.0).password(f.kind == plugin::dialog::FieldKind::Secret);
+                                let edit = egui::TextEdit::singleline(text)
+                                    .desired_width(280.0)
+                                    .char_limit(plugin::dialog::MAX_FIELD_TEXT)
+                                    .password(f.kind == plugin::dialog::FieldKind::Secret);
                                 let label = f.label.clone();
                                 ui.add(edit).widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &label));
                             }
@@ -434,7 +457,7 @@ pub fn poll_events(app: &mut SheetApp, ctx: &egui::Context) {
             plugin::events::OutcomeKind::HostMessage => app.message = Some((name, o.text)),
         }
     }
-    if plugin::events::pending() > 0 {
+    if plugin::events::pending() > 0 || plugin::invalidation_pending() {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
     // Plugins started from now on are told the interface's language.

@@ -76,11 +76,19 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let mut doc = DocState::new(wb, path, title);
+    // Its formulas are calculated after plugins heard of it (protocol 2.2, below).
+    let mut doc = DocState::unsettled(wb, path, title);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
+    // Protocol 1.2/2.2: plugins hear of a file opened, and answer, before its first calculation,
+    // so one that decides per workbook what its functions may do (trust) knows of it first.
+    if let Some(path) = str_param(p, "path") {
+        let id = s.doc()?.session_id();
+        super::plugins::emit_opened_before_calc(path, &id);
+    }
+    s.doc_mut()?.settle();
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
     if !shown.is_empty() {
@@ -89,10 +97,6 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
             message.push_str(&format!("\n\n{} additional import warnings.", shown.len() - 5));
         }
         s.ui_requests.push(crate::UiRequest::Message(message));
-    }
-    // Protocol 1.2: plugins hear of it (after the fact; they never hold the open up).
-    if let Some(path) = str_param(p, "path") {
-        super::plugins::emit(gridcraft_plugin::events::DOCUMENT_OPENED, path, None);
     }
     let d = s.doc()?;
     Ok(
@@ -144,7 +148,8 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     // Protocol 1.2: plugins hear of a save the user (or a caller) made, not of an automatic one.
     if !bool_param(p, "autosave").unwrap_or(false) {
         let format = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
-        super::plugins::emit(gridcraft_plugin::events::DOCUMENT_SAVED, &path, Some(&format));
+        let id = s.doc()?.session_id();
+        super::plugins::emit(gridcraft_plugin::events::DOCUMENT_SAVED, &path, Some(&format), Some(&id));
     }
     Ok(json!({"path": path, "bytes": bytes.len(), "renamedFrom": renamed}))
 }
@@ -179,9 +184,10 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let i = s.active_index();
     let path = d.path.clone();
+    let id = d.session_id();
     s.close_document(i);
     if let Some(path) = path {
-        super::plugins::emit(gridcraft_plugin::events::DOCUMENT_CLOSED, &path, None);
+        super::plugins::emit(gridcraft_plugin::events::DOCUMENT_CLOSED, &path, None, Some(&id));
     }
     Ok(json!({"closed": true}))
 }

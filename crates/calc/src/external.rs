@@ -74,3 +74,58 @@ pub fn names() -> Vec<String> {
     v.sort();
     v
 }
+
+// ---------------------------------------------------------------- the calling workbook
+
+/// The workbook whose formulas are being calculated, as add-in functions are told
+/// (`functions/call`'s `document`, plugin protocol 2.2).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CallingDocument {
+    /// The local file it was opened from or last saved to (absolute); `None` for a workbook that
+    /// has no file.
+    pub path: Option<String>,
+    /// Its name as the title bar shows it.
+    pub name: String,
+    /// An id that stays the same for the workbook while the app runs, saved or not.
+    pub id: String,
+}
+
+thread_local! {
+    static DOCUMENT: std::cell::RefCell<Option<Arc<CallingDocument>>> = const { std::cell::RefCell::new(None) };
+    /// An add-in function returned explicit blanks during the formula being evaluated.
+    static BLANKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Puts the previous calling document back, also when the calculation unwinds.
+struct Restore(Option<Arc<CallingDocument>>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        DOCUMENT.with(|d| *d.borrow_mut() = prev);
+    }
+}
+
+/// Runs `f` with `doc` as the calling workbook of the add-in functions it calculates (on this
+/// thread), then puts the previous one back. Nests.
+pub fn with_document<R>(doc: Option<CallingDocument>, f: impl FnOnce() -> R) -> R {
+    let prev = DOCUMENT.with(|d| std::mem::replace(&mut *d.borrow_mut(), doc.map(Arc::new)));
+    let _restore = Restore(prev);
+    f()
+}
+
+/// The workbook being calculated on this thread, when the app said which ([`with_document`]).
+pub fn document() -> Option<Arc<CallingDocument>> {
+    DOCUMENT.with(|d| d.borrow().clone())
+}
+
+/// Called by an add-in function whose result holds explicit blanks: a formula that is the call
+/// itself shows them blank instead of 0.
+pub fn note_blanks() {
+    BLANKS.with(|b| b.set(true));
+}
+
+/// Sets the explicit-blanks flag, returning what it was (the recalculation keeps one per formula).
+pub(crate) fn swap_blanks(v: bool) -> bool {
+    BLANKS.with(|b| b.replace(v))
+}

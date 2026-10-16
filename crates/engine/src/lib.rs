@@ -128,15 +128,21 @@ static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 const UNDO_LIMIT: usize = 100;
 
 impl DocState {
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
-        let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+    pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
+        let mut d = DocState::unsettled(wb, path, title);
+        d.settle();
+        d
+    }
+
+    /// A document whose formulas aren't calculated yet: [`DocState::settle`] calculates them.
+    /// Opening a file sends `documentOpened` in between (plugin protocol 2.2).
+    pub fn unsettled(wb: Workbook, path: Option<String>, title: String) -> DocState {
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
             saved: wb.clone(),
             wb,
-            calc,
+            calc: Calc::new(),
             selection: sel,
             undo: vec![],
             redo: vec![],
@@ -151,6 +157,42 @@ impl DocState {
             struct_log: vec![],
         }
     }
+    /// The first full calculation of a new or opened document; it stays unmodified.
+    pub fn settle(&mut self) {
+        let dirty = self.is_dirty();
+        let doc = self.calling_document();
+        // Calculated in place: the saved copy, the same workbook until now, isn't kept meanwhile.
+        let saved = std::mem::replace(&mut self.saved, Arc::new(Workbook::new()));
+        let saved = if dirty {
+            Some(saved)
+        } else {
+            drop(saved);
+            None
+        };
+        let (calc, wb) = (&mut self.calc, Arc::make_mut(&mut self.wb));
+        gridcraft_calc::external::with_document(Some(doc), || calc.recalc_all(wb));
+        self.saved = saved.unwrap_or_else(|| self.wb.clone());
+    }
+
+    /// The document as plugin functions are told (protocol 2.2): its file, name and session id.
+    pub fn calling_document(&self) -> gridcraft_calc::external::CallingDocument {
+        gridcraft_calc::external::CallingDocument {
+            path: self.path.as_deref().map(cmd::plugins::absolute_path),
+            name: self.display_title(),
+            id: self.session_id(),
+        }
+    }
+
+    /// An id for the document that stays the same while the app runs, saved or not (`doc-3`).
+    pub fn session_id(&self) -> String {
+        format!("doc-{}", self.uid)
+    }
+
+    /// Runs `f` with this document as the workbook plugin functions are calculated for.
+    pub fn with_calling<R>(&self, f: impl FnOnce() -> R) -> R {
+        gridcraft_calc::external::with_document(Some(self.calling_document()), f)
+    }
+
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
@@ -381,8 +423,21 @@ impl Session {
         self.depth = self.depth.saturating_sub(1);
         if self.depth == 0 {
             collab::after_command(self);
+            self.recalc_invalidated();
         }
         r
+    }
+
+    /// Recalculates the workbooks whose formulas call plugin functions invalidated since the last
+    /// time (`host/functions/invalidate`, protocol 2.2). Runs after each command and between
+    /// frames; a workbook that had no unsaved changes still has none. True when there were any.
+    pub fn recalc_invalidated(&mut self) -> bool {
+        let names = gridcraft_plugin::take_invalidated();
+        if names.is_empty() {
+            return false;
+        }
+        cmd::plugins::recalc_users_keeping_saved(self, &names);
+        true
     }
 
     fn execute_inner(&mut self, id: &str, params: Json) -> Result<Json> {
@@ -392,7 +447,11 @@ impl Session {
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        // Plugin functions calculated by the command are told which workbook calls them: the
+        // active one (commands that calculate another document say so themselves).
+        let calling = self.active().map(DocState::calling_document);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gridcraft_calc::external::with_document(calling, || (spec.run)(self, &params))));
         let result = match result {
             Ok(r) => r,
             Err(p) => {

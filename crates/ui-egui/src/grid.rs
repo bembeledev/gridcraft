@@ -2747,11 +2747,14 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    // The box only ever grows wider for overflowing text or taller for explicit newlines: a
-    // single line stays exactly row height, so the active-cell border never moves while typing,
-    // like Excel.
+    // The box stretches over every cell the text spills into (like Excel): with overflow the
+    // indicator reads A1:B1, ending on a cell boundary instead of mid-cell. Single-line height
+    // stays exactly row height, so the border never moves vertically while typing.
     let multi = lines > 1.0;
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
+    let max_w = geo.cells.right() - rect.left();
+    let need = (text_w + 14.0).max(rect.width()).min(max_w);
+    let end_col = geo.col_at(sh, rect.left() + need - 0.5).min(MAX_COLS - 1);
+    let w = (geo.x(sh, end_col + 1) - rect.left()).max(rect.width()).min(max_w);
     let h = if multi { (size * 1.3 * lines + 4.0).max(rect.height()) } else { rect.height() };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));

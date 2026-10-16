@@ -11,7 +11,9 @@
 //   hands over its objects, then the library's objects. A script that assigns its own `Office`
 //   anyway has the assignment ignored (an `initialize` function on it is kept);
 // - starts the library, then hands it what the page did meanwhile (`onReady` and `Excel.run`
-//   calls, `Office.initialize`, `Office.actions.associate`).
+//   calls, `Office.initialize`, `Office.actions.associate`);
+// - answers `__craftOfficeInfo` (read only, for tests): whether `Office` is the library's and
+//   which office.js script URLs got the empty script.
 //
 // The desktop app puts this, then wasm-bindgen's generated glue, then a call to
 // `__craftOfficeStart(wasm_bindgen, <the wasm, base64>)` before the page's own scripts.
@@ -29,10 +31,13 @@
   var CDN = /^https?:\/\/(appsforoffice\.microsoft\.com|officeapis\.public\.onecdn\.static\.microsoft|[a-z0-9.-]+\.officeapps\.live\.com)\//i;
   var NPM = /\/@microsoft\/office-js\/.*\.js([?#].*)?$/i;
   var EMPTY = "data:text/javascript,%2F*%20GridCraft%3A%20Office.js%20is%20built%20in%20*%2F";
+  var blocked = [];
   function isOfficeJs(url) {
     var u = String(url || "");
     try { u = new URL(u, g.document ? g.document.baseURI : undefined).href; } catch (e) { /* keep it as written */ }
-    return CDN.test(u) || NPM.test(u);
+    var hit = CDN.test(u) || NPM.test(u);
+    if (hit && blocked.length < 50) blocked.push(u.slice(0, 500));
+    return hit;
   }
   if (typeof document === "object" && typeof Element === "function" && typeof HTMLScriptElement === "function") {
     var setAttribute = Element.prototype.setAttribute;
@@ -108,6 +113,14 @@
       configurable: false,
       enumerable: true
     });
+  });
+  // What tests check (office.eval): a copy each time, so a page can't change what's reported.
+  Object.defineProperty(g, "__craftOfficeInfo", {
+    get: function () {
+      return { bootstrap: true, library: !!real.Office, officeIsCraft: !!real.Office && g.Office === real.Office, blockedScripts: blocked.slice() };
+    },
+    configurable: false,
+    enumerable: false
   });
   // The library hands over its objects here, once each.
   hidden("__craftOfficeAdopt", function (name, value) {

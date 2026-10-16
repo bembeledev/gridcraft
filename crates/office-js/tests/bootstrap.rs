@@ -163,6 +163,14 @@ async fn the_bootstrap_keeps_microsofts_office_js_out_and_hands_the_page_to_the_
     callback.call1(&JsValue::UNDEFINED, &Array::of1(&record)).unwrap();
     assert!(src(&parsed).starts_with(EMPTY_PREFIX), "{}", src(&parsed));
     assert_eq!(src(&own), "taskpane.js");
+    // Tests read what was blocked (a copy: changing it changes nothing).
+    let info = g(&global().into(), "__craftOfficeInfo");
+    let blocked: Array = g(&info, "blockedScripts").dyn_into().unwrap();
+    assert_eq!(blocked.length(), 5, "four made by code, one in the HTML");
+    assert_eq!(blocked.get(4).as_string().as_deref(), Some("https://officeapis.public.onecdn.static.microsoft/1/office.js"));
+    assert_eq!(g(&info, "library"), JsValue::FALSE, "the library hasn't started yet");
+    call(&blocked.into(), "push", &["https://forged.example/".into()]);
+    assert_eq!(Array::from(&g(&g(&global().into(), "__craftOfficeInfo"), "blockedScripts")).length(), 5);
 
     // Before the wasm starts: the page registers onReady, associates a function, and another
     // script assigns its own `Office` (with an `initialize`), which is ignored.
@@ -192,6 +200,8 @@ async fn the_bootstrap_keeps_microsofts_office_js_out_and_hands_the_page_to_the_
     assert_eq!(JsFuture::from(init_called).await.unwrap().as_string().as_deref(), Some("inserted"), "the foreign object's initialize is called");
     let office = g(&global().into(), "Office");
     assert_eq!(g(&g(&office, "context"), "host").as_string().as_deref(), Some("Excel"), "the library's Office");
+    let info = g(&global().into(), "__craftOfficeInfo");
+    assert_eq!((g(&info, "library"), g(&info, "officeIsCraft")), (JsValue::TRUE, JsValue::TRUE), "tests can tell the Office is GridCraft's");
     call(&global().into(), "__craftOfficeRunFunction", &[r#"{"call": 1, "name": "early", "control": "Tests.Early"}"#.into()]);
     let event = JsFuture::from(early_called).await.unwrap();
     assert_eq!(g(&g(&event, "source"), "id").as_string().as_deref(), Some("Tests.Early"), "associated before the wasm started");

@@ -1,6 +1,6 @@
 # Office add-ins (Office.js)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (what Microsoft's samples need: their `office.js` never runs, colour names, function commands, events and the common API's enums; previously minor: an add-in whose `<Requirements>` this Office.js doesn't meet is blocked, with the reason; previously major: first version: Office add-in manifests as plugins, the `office.sync` bridge, task panes, GridCraft's own Office.js) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (testing with Microsoft's samples in the real app: `cargo xtask office-samples`, the control channel's `office.*` methods, `__craftOfficeInfo`; previously minor: what Microsoft's samples need: their `office.js` never runs, colour names, function commands, events and the common API's enums; previously minor: an add-in whose `<Requirements>` this Office.js doesn't meet is blocked, with the reason; previously major: first version: Office add-in manifests as plugins, the `office.sync` bridge, task panes, GridCraft's own Office.js) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft runs **Office add-ins**, the web add-ins built with the Office JavaScript API
 (`Office.js`), on top of its own add-ins ([plugins.md](plugins.md)). An Office add-in is
@@ -182,6 +182,61 @@ web-extension parts of the XLSX package, [MS-OWEXML]) comes next.
   API is GridCraft's. A page that references Microsoft's `office.js` may still make the web view
   download it (above); it never runs.
 
+## Testing with Microsoft's samples
+
+`cargo xtask office-samples` runs Microsoft's official add-in samples
+([OfficeDev/Office-Add-in-samples](https://github.com/OfficeDev/Office-Add-in-samples), MIT) in the
+real desktop app: its task pane is the real web view (WKWebView, WebView2), and the pages load from
+where Microsoft hosts them (`https://officedev.github.io/Office-Add-in-samples/…`). Nothing of the
+samples is in GridCraft's repository: the manifests are read from a checkout made at test time (CI
+clones it at a pinned commit), and the pages from GitHub Pages.
+
+```sh
+cargo build --release -p gridcraft && cargo xtask office-js
+git clone --depth 1 https://github.com/OfficeDev/Office-Add-in-samples /tmp/office-samples
+cargo xtask office-samples --app target/release/gridcraft --office-js target/office-js \
+    --samples /tmp/office-samples --out /tmp/office-samples-out
+```
+
+For each scenario the driver starts a fresh app (`--control <port>`, a settings folder of its own
+via `HOME`/`APPDATA`/`XDG_CONFIG_HOME`, `GRIDCRAFT_NO_PREFS`, a blank workbook), then through the
+[control channel](control-protocol.md#office-add-ins-pages):
+
+1. loads the sample's hosted manifest (`plugins.load`), opens its pane (`office.open`) and waits
+   until its Office.js is ready (`office.panes`);
+2. checks in the page (`office.eval`) that `Office.context.host` is `"Excel"`, that `Office` is
+   GridCraft's (`__craftOfficeInfo.officeIsCraft`, set by the bootstrap) and that Microsoft's
+   `office.js` never ran (`typeof OSF` is `"undefined"`; `__craftOfficeInfo.blockedScripts` lists
+   the script URLs that got the empty script);
+3. clicks the sample's buttons (`document.getElementById('run').click()`), runs its ribbon
+   commands as the ribbon does (`plugins.run`, for ExecuteFunction), and checks the workbook
+   (`cell.get`, `document.inspect`);
+4. takes screenshots (`ui.screenshot`).
+
+It writes `results.json`, `summary.md` (a table for `$GITHUB_STEP_SUMMARY`), the screenshots and the
+app's logs into `--out`, and exits with 1 if a scenario failed. A failing scenario never stops the
+others; an app that crashes or hangs is reported and the next scenario gets a fresh one.
+`--only id,id` runs some, `--list` prints the table, `--dry-run` drives a fake app (no web view,
+no network; the tests run it). The expectations are one table
+(`xtask/src/office_samples/scenarios.rs`): a check either **must pass**, or is **expected
+unsupported**, in which case it has to fail cleanly (an error the page can handle, or the add-in
+blocked with the reason) and is reported as "works (expected unsupported)" if it starts working.
+
+| Scenario | Sample | Must pass | Expected unsupported |
+|---|---|---|---|
+| excel-hello-world | `hello-world/excel-hello-world` | pane, GridCraft's Office, the button writes "Hello world!" into A1 | |
+| excel-add-in-commands | `office-add-in-commands/excel` | the ribbon button's pane; Highlight fills the selection yellow; the menu's ExecuteFunction item writes its button id into the selection | |
+| save-custom-settings | `office-add-in-save-custom-settings` | Save (`settings.saveAsync`); the value reads back in a reopened pane | |
+| keyboard-shortcuts | `office-keyboard-shortcuts` | pane; the page starts; its AddNew and RunAction actions (run as a shortcut would) add a sheet and colour the selection | the shortcuts themselves (`replaceShortcuts`, ExtendedOverrides); `Office.addin.showAsTaskpane` |
+| custom-functions-azure, -batching, -storage, -web-worker | `Excel-custom-functions/*` | (their pane, once they load) | loading: their manifests require SharedRuntime / CustomFunctionsRuntime, so they are blocked; custom functions |
+| first-run-experience-tutorial | `tutorials/first-run-experience-tutorial` | | skipped: not hosted (`https://localhost:3000`) |
+
+On GitHub, a fork-only workflow builds the app and the library on `macos-15` and
+`windows-latest`, clones the samples at a pinned commit, runs the driver and uploads the
+screenshots and results as an artifact, with the table in the job summary. Both runners have an
+interactive desktop session, so the window and its web view are real (Windows renders with WARP,
+the runner has no GPU).
+
 ## Limits and next steps
 
 - **Platforms:** the desktop app on macOS and Windows. Linux and FreeBSD need WebKitGTK 4.1 in the
@@ -190,9 +245,10 @@ web-extension parts of the XLSX package, [MS-OWEXML]) comes next.
   size can't start synchronously in WebView2, so a short JavaScript file (`crates/office-js/bootstrap.js`)
   holds the first calls until the library is ready and keeps Microsoft's `office.js` from running
   ([above](#microsofts-officejs)). It is the one hand-written script in GridCraft.
-- **Checked by hand only:** the parser-timing part of the `office.js` blocking and the function
-  commands' hidden web view run in the real WKWebView and WebView2; the tests run the bootstrap and
-  the library in Node with a stand-in DOM.
+- **Checked in the real web views by `cargo xtask office-samples` only** (macOS and Windows runners,
+  [above](#testing-with-microsofts-samples)): the parser-timing part of the `office.js` blocking and
+  the function commands' hidden web view; the workspace's tests run the bootstrap and the library
+  in Node with a stand-in DOM.
 - Not yet: Excel's object events (`onChanged`, `onSelectionChanged` on worksheets and tables;
   the document's `DocumentSelectionChanged` works), the dialog API, the shared runtime and
   `Office.addin`, keyboard shortcuts (`ExtendedOverrides`), `Office.ribbon`, custom functions (they need
@@ -205,6 +261,7 @@ web-extension parts of the XLSX package, [MS-OWEXML]) comes next.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Testing with Microsoft's samples: `cargo xtask office-samples` drives the hosted samples in the real app's task pane (scenario table with must-pass and expected-unsupported checks, results.json and a summary table); the control channel's `office.panes`, `office.open`, `office.close`, `office.eval`; the bootstrap's read-only `__craftOfficeInfo` |
 | 2026-10-15 | minor | Microsoft's samples: their `office.js` gets an empty script and can't replace the globals; colour names; function commands (ExecuteFunction) end to end; `context.host`, `new Excel.RequestContext()`, the common API's enumerations, `set({...})`, `worksheets.add()` without a name, `Office.initialize` assigned late, `DocumentSelectionChanged`, unsupported `*Async` methods answer `NotSupported`; AddinCommands 1.1 and DocumentEvents 1.1 reported; ExcelApi 1.4 described as the subset it is |
 | 2026-10-15 | minor | `<Requirements>` (`Sets` with `MinVersion`/`DefaultMinVersion`, `Methods`) checked against the supported sets and methods: an unmet one blocks the add-in with the reason |
 | 2026-10-14 | major | Created: Office add-in manifests as plugins, task panes in the system web view, GridCraft's Office.js, the `office.sync` bridge (ExcelApi 1.1–1.4 subset, common API selection and settings) |

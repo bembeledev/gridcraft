@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (XLSX: Excel 2010 conditional formats with cross-sheet references) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (XLSX: Excel 2010 conditional formats with cross-sheet references; previously trivial: formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -85,6 +85,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-13 | minor | XLSX: Excel 2010 conditional formats (`x14:conditionalFormattings`) are read (`cellIs`, `expression`, blanks, errors, duplicate/unique, top 10, above average and time period rules with inline `x14:dxf`, priorities merged with the main section; data bars beyond a main-section bar's solid fill, icon sets, colour scales and the four text rules are still skipped with a warning) and cell-value and formula rules referring to another sheet (not a 3-D span) are written back in that extension, following a LibreOffice-saved file (Excel's placement unverified; colour scale, data bar and icon set cfvo formulas stay in the main section); they were skipped with a warning |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |

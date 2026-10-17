@@ -8,8 +8,8 @@ use gridcraft_ui_egui::{ImportTask, Services, SheetApp};
 use std::{cell::RefCell, rc::Rc};
 
 #[test]
-fn loading_background_and_sheet_label_follow_the_current_theme() {
-    for dark in [false, true] {
+fn loading_retains_workspace_and_sheet_label_in_both_themes() {
+    for (dark, open_at_start) in [(false, false), (true, false), (false, true), (true, true)] {
         let senders = Rc::new(RefCell::new(Vec::new()));
         let keep = senders.clone();
         let services = Services {
@@ -24,8 +24,12 @@ fn loading_background_and_sheet_label_follow_the_current_theme() {
         };
         let mut session = Session::new();
         session.new_workbook();
+        session.run("cell.set", serde_json::json!({"cell":"A1","input":"Keep this workspace"})).unwrap();
         let mut app = SheetApp::new(session, services);
         app.ui.dark = dark;
+        if open_at_start {
+            app.open_path("synthetic.xlsx");
+        }
         let capture = std::env::var_os("GRIDCRAFT_IMPORT_SCREENSHOTS");
         let builder = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_theme(if dark {
             egui::Theme::Dark
@@ -41,22 +45,22 @@ fn loading_background_and_sheet_label_follow_the_current_theme() {
             app,
         );
         h.run_steps(4);
-        h.state_mut().open_path("synthetic.xlsx");
+        let workspace_text = |shapes: &[egui::epaint::ClippedShape]| {
+            shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Keep this workspace"))
+        };
+        assert!(workspace_text(&h.output().shapes), "fixture cell must be visible before opening");
+        let revision = h.state().session.active().unwrap().revision;
+        if !open_at_start {
+            h.state_mut().open_path("synthetic.xlsx");
+        }
         h.run_steps(4);
         assert!(h.state().is_importing());
         h.get_by_label("Sheet 2 / 3: Premium");
-        let expected = egui::Context::default();
-        expected.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
-        let fill = gridcraft_ui_egui::theme::Tokens::get(&expected).grid_bg;
-        assert!(
-            h.output()
-                .shapes
-                .iter()
-                .any(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.rect.contains(egui::pos2(20.0,20.0)) && rect.fill==fill))
-        );
-        if let Some(dir) = capture {
+        assert!(workspace_text(&h.output().shapes), "the existing grid must remain visible behind progress");
+        // A replayed workspace is paint only, so existing cells cannot be edited during import.
+        assert_eq!(h.state().session.active().unwrap().revision, revision);
+        if let Some(dir) = capture.filter(|_| !open_at_start) {
             let image = h.render().unwrap();
-            assert_eq!(image.get_pixel(20, 20).0, [fill.r(), fill.g(), fill.b(), 255]);
             image.save(std::path::PathBuf::from(dir).join(if dark { "import-dark.png" } else { "import-light.png" })).unwrap();
         }
     }

@@ -247,6 +247,8 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pending_import: Option<PendingImport>,
+    /// Last workspace paint only: imports replay it without running widgets or commands.
+    import_background: Option<egui::layers::PaintList>,
     queued_imports: std::collections::VecDeque<(String, Option<std::sync::Arc<Vec<u8>>>, Json)>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
@@ -305,6 +307,7 @@ impl SheetApp {
             notice: None,
             services,
             pending_import: None,
+            import_background: None,
             queued_imports: std::collections::VecDeque::new(),
             printing: Default::default(),
             print_feedback_seen: None,
@@ -1089,10 +1092,6 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.poll_import(ctx);
-        if self.is_importing() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(32));
-            return;
-        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
@@ -1158,6 +1157,10 @@ impl SheetApp {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
+        if self.is_importing() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(32));
+            return;
+        }
         control::poll(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
@@ -1202,10 +1205,32 @@ impl SheetApp {
 
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.is_importing() && (!self.fonts_ready || self.fonts_rebind) {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::Tokens::get(ui.ctx()).grid_bg)).show(ui, |_| {});
+            ui.ctx().request_repaint();
+            return;
+        }
+        if self.is_importing() && self.import_background.is_none() && self.fonts_ready && !self.fonts_rebind {
+            // Command-line opens can start before the first frame. Prepare the ordinary blank
+            // workspace once; all later frames replay paint only.
+            let events = ui.ctx().input_mut(|input| std::mem::take(&mut input.events));
+            ui.scope(|ui| {
+                ui.disable();
+                self.paint_workspace(ui);
+            });
+            ui.ctx().input_mut(|input| input.events = events);
+            self.import_background = ui.ctx().graphics(|graphics| graphics.get(ui.layer_id()).cloned());
+        }
         if let Some(pending) = &self.pending_import {
             let progress = pending.task.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
             let background = theme::Tokens::get(ui.ctx()).grid_bg;
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |_| {});
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |ui| {
+                if let Some(scene) = &self.import_background {
+                    for entry in scene.all_entries() {
+                        ui.painter().with_clip_rect(entry.clip_rect.intersect(ui.clip_rect())).add(entry.shape.clone());
+                    }
+                }
+            });
             egui::Window::new("Opening workbook").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(
                 ui.ctx(),
                 |ui| {
@@ -1235,32 +1260,10 @@ impl SheetApp {
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
-        let t = theme::Tokens::get(&ctx);
-        if self.backstage.is_none() {
-            self.ribbon_keys(&ctx);
-        }
-        ribbon::title_bar(self, ui);
-        if self.backstage.is_some() {
-            // File tab: the Backstage view replaces everything below the title bar.
-            backstage::show(self, ui);
-        } else {
-            ribbon::show(self, ui);
-            widgets::notice_bar(self, ui);
-            if self.session.prefs.formula_bar {
-                formula_bar::show(self, ui);
-            }
-            if self.ui.status_bar {
-                tabs::status_bar(self, ui);
-            }
-            tabs::sheet_tabs(self, ui);
-            pivot_pane::show(self, ui);
-            panes::show(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
-                let g0 = now_ms();
-                grid::show(self, ui);
-                self.perf.grid_ms = now_ms() - g0;
-            });
-        }
+        self.paint_workspace(ui);
+        // Cache only the workspace layer, before dialogs/toasts. Replaying paint during import
+        // preserves the last screen without layout, formula evaluation, or background input.
+        self.import_background = ctx.graphics(|graphics| graphics.get(ui.layer_id()).cloned());
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
@@ -1296,6 +1299,36 @@ impl SheetApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);
             }
+        }
+    }
+
+    fn paint_workspace(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let t = theme::Tokens::get(&ctx);
+        if self.backstage.is_none() && !self.is_importing() {
+            self.ribbon_keys(&ctx);
+        }
+        ribbon::title_bar(self, ui);
+        if self.backstage.is_some() {
+            // File tab: the Backstage view replaces everything below the title bar.
+            backstage::show(self, ui);
+        } else {
+            ribbon::show(self, ui);
+            widgets::notice_bar(self, ui);
+            if self.session.prefs.formula_bar {
+                formula_bar::show(self, ui);
+            }
+            if self.ui.status_bar {
+                tabs::status_bar(self, ui);
+            }
+            tabs::sheet_tabs(self, ui);
+            pivot_pane::show(self, ui);
+            panes::show(self, ui);
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
+                let g0 = now_ms();
+                grid::show(self, ui);
+                self.perf.grid_ms = now_ms() - g0;
+            });
         }
     }
 

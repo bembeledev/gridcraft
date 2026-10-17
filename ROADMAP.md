@@ -229,3 +229,5 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
   browser saving and individual formula evaluation remain synchronous.
 
 - 2026-10-17: import progress keeps the normal background and identifies the sheet being read.
+
+- 2026-10-18: keep the last ribbon, cells and sheet tabs visible beneath import progress instead of replacing the workspace with a solid fill.

@@ -115,6 +115,7 @@ background execution system. Memory limits and saved-result eligibility remain u
 Progress scopes carry a shared sheet name alongside the sheet ordinal/count. Decompression,
 worksheet parsing and row fitting identify the current sheet in both the native progress window
 and same-origin host messages (`sheetName`). Shared ownership avoids copying the name at every
-checkpoint. The loading window explicitly paints the ordinary theme grid background instead of
-leaving the viewport clear colour exposed. Generated light/dark UI checks cover background and
+checkpoint. The loading window replays the last workspace paint (ribbon, grid and tabs) beneath progress,
+without running background widgets, commands, or formula evaluation. Command-line opens prepare
+a blank workspace once after font initialization if no prior frame exists. Generated light/dark UI checks cover background and
 sheet-label rendering; parser tests verify names stay attached to scoped progress.

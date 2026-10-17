@@ -185,3 +185,5 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 
 - 2026-10-17: import progress paints the usual theme background and displays the current sheet name and ordinal with its percentage.
+
+- 2026-10-18: keep the last ribbon, cells and sheet tabs visible beneath import progress instead of replacing the workspace with a solid fill.

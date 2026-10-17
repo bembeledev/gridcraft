@@ -76,7 +76,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -780,6 +780,12 @@ impl Dialog {
                 app.run_or_alert("review.showComments", json!({"on": true}));
                 return None;
             }
+            // Data › Workbook Links: the task pane; File › Info › Edit Links and its dialogs.
+            "workbookLinks" => {
+                app.grid.pane = Some("workbookLinks".into());
+                return None;
+            }
+            "editLinks" | "changeLinkSource" | "linkStartupPrompt" | "breakLinks" => return crate::workbook_links::open(app, name, &params),
             "watch" | "selectionPane" | "formatChart" => {
                 app.grid.pane = Some(
                     match name {
@@ -1037,6 +1043,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "editLinks" => 560.0,
+        "linkStartupPrompt" | "breakLinks" | "changeLinkSource" => 440.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1086,6 +1094,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => macros(ui, &mut d),
+                "editLinks" | "changeLinkSource" | "linkStartupPrompt" | "breakLinks" => crate::workbook_links::dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))

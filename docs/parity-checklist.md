@@ -4,17 +4,17 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 274 / 290 commands implemented (94.5%).**
+**Overall: 276 / 292 commands implemented (94.5%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
-| File | 11 | 11 | 100% |
+| File | 12 | 12 | 100% |
 | Home | 94 | 94 | 100% |
 | Insert | 17 | 25 | 68% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 24 | 29 | 83% |
 | Review | 15 | 18 | 83% |
 | View | 20 | 20 | 100% |
 | Automate | 3 | 3 | 100% |
@@ -24,7 +24,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | PivotTable Analyze | 13 | 13 | 100% |
 | PivotTable Design | 4 | 4 | 100% |
 
-## File (11 / 11, 100%)
+## File (12 / 12, 100%)
 
 Implemented:
 
@@ -38,6 +38,7 @@ Implemented:
 - `file.exportCsv` CSV (Export)
 - `file.exportHtml` Web Page (Export)
 - `file.properties` Properties (Info)
+- `data.editLinks` Edit Links to Files (Info)
 - `file.options` Options (Options)
 
 ## Home (94 / 94, 100%)
@@ -237,7 +238,7 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (24 / 29, 83%)
 
 Implemented:
 
@@ -246,6 +247,7 @@ Implemented:
 - `data.fromTableRange` From Table/Range (Get & Transform Data)
 - `data.refreshAll` Refresh All (Queries & Connections)
 - `data.queriesConnections` Queries & Connections (Queries & Connections)
+- `data.workbookLinks` Workbook Links (Queries & Connections)
 - `data.advancedFilter` Advanced (Sort & Filter)
 - `data.textToColumns` Text to Columns (Data Tools)
 - `data.flashFill` Flash Fill (Data Tools)

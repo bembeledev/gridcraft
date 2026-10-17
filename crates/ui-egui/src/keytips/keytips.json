@@ -1854,9 +1854,9 @@
   {
    "seq": "AK",
    "kind": "command",
-   "target": "data.queriesConnections",
-   "excel": "Edit Links",
-   "note": "Edit Links (Queries & Connections);"
+   "target": "data.workbookLinks",
+   "excel": "Workbook Links",
+   "note": "Workbook Links (Queries & Connections), formerly Edit Links"
   },
   {
    "seq": "AM",

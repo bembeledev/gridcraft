@@ -273,3 +273,194 @@ fn commands_expose_stable_destination_ids_after_document_indices_shift() {
     assert_eq!(result["workbook"].as_u64(), Some(destination));
     assert_eq!(s.active().unwrap().wb.sheets.len(), 2);
 }
+
+// Paths identify synthetic workbooks; transfers must not read or write these files.
+fn saved_books(s: &mut Session) {
+    let root = std::env::temp_dir();
+    s.set_active(0);
+    s.active_mut().unwrap().path = Some(root.join("transfer-source.xlsx").to_string_lossy().into_owned());
+    s.set_active(1);
+    s.active_mut().unwrap().path = Some(root.join("transfer-destination.xlsx").to_string_lossy().into_owned());
+    s.set_active(0);
+}
+
+fn assert_roundtrip_value(wb: &gridcraft_model::Workbook, sheet: usize, cell: &str, value: f64) {
+    let bytes = gridcraft_engine::io::save_bytes(wb, "Transferred.xlsx").unwrap();
+    let (mut reopened, _) = gridcraft_engine::io::open_bytes("Transferred.xlsx", &bytes).unwrap();
+    gridcraft_calc::Calc::new().recalc_all(&mut reopened);
+    assert_eq!(reopened.sheet(sheet).unwrap().value(CellRef::parse(cell).unwrap()), Value::Number(value));
+}
+
+#[test]
+fn copying_a_linked_sheet_reads_source_snapshot_not_destination_namesakes() {
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    s.execute("cell.set", json!({"cell":"Keep!A1","input":"7"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"=Keep!A1*2"})).unwrap();
+    s.set_active(1);
+    s.execute("sheet.rename", json!({"name":"Keep"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1","input":"999"})).unwrap();
+    s.set_active(0);
+    let source = s.active().unwrap().wb.clone();
+    s.execute("sheet.move", json!({"sheet":"Source","to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    assert!(Arc::ptr_eq(&source, &s.documents()[0].wb));
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(wb.external_books.len(), 1);
+    assert!(wb.external_books[0].path.ends_with("transfer-source.xlsx"));
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(14.0));
+    assert_roundtrip_value(wb, 0, "B1", 14.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().wb.external_books.is_empty());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_roundtrip_value(&s.active().unwrap().wb, 0, "B1", 14.0);
+}
+
+#[test]
+fn moving_links_both_directions_and_undo_restores_original_formulas() {
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    s.execute("cell.set", json!({"cell":"Keep!A1","input":"7"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"=Keep!A1*2"})).unwrap();
+    s.execute("cell.set", json!({"cell":"Keep!B1","input":"=Source!B1+1"})).unwrap();
+    let original: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+    s.execute("sheet.move", json!({"sheet":"Source","to":0,"targetWorkbook":destination})).unwrap();
+    assert_roundtrip_value(&s.documents()[0].wb, 0, "B1", 15.0);
+    assert_roundtrip_value(&s.documents()[1].wb, 0, "B1", 14.0);
+    assert!(s.documents()[0].wb.external_books[0].path.ends_with("transfer-destination.xlsx"));
+    s.execute("edit.undo", json!({})).unwrap();
+    for (d, wb) in s.documents().iter().zip(original) {
+        assert!(Arc::ptr_eq(&d.wb, &wb));
+    }
+}
+
+#[test]
+fn external_link_indices_are_remapped_and_relative_paths_keep_their_base() {
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let (mut s, _, destination) = books();
+    saved_books(&mut s);
+    let base = std::env::temp_dir().join("original-folder");
+    let wb = Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.source_dir = Some(base.clone());
+    wb.external_books = Arc::new(vec![ExternalBook {
+        path: "Rates.xlsx".into(),
+        kept: Some(0),
+        sheets: vec![ExternalSheet { name: "Rates".into(), cells: vec![(CellRef::new(0, 0), Value::Number(3.0))], refresh_error: false }],
+        ..Default::default()
+    }]);
+    s.execute("cell.set", json!({"cell":"B1","input":"=[1]Rates!A1*2"})).unwrap();
+    s.set_active(1);
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).external_books =
+        Arc::new(vec![ExternalBook { path: "Unrelated.xlsx".into(), ..Default::default() }]);
+    s.set_active(0);
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    assert_eq!(wb.external_books.len(), 2);
+    assert_eq!(std::path::PathBuf::from(&wb.external_books[1].path), base.join("Rates.xlsx"));
+    assert_eq!(wb.external_books[1].kept, None);
+    assert_eq!(wb.sheet(0).unwrap().cell(CellRef::new(0, 1)).unwrap().formula.as_ref().unwrap().text, "[2]Rates!A1*2");
+    assert_roundtrip_value(wb, 0, "B1", 6.0);
+}
+
+#[test]
+fn external_validation_is_refused_even_with_saved_paths_without_partial_changes() {
+    use gridcraft_model::{Validation, ValidationKind};
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().validations.push(Validation {
+        kind: ValidationKind::List,
+        f1: "Keep!A1:A2".into(),
+        ..Default::default()
+    });
+    let original: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+    assert!(s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).is_err());
+    for (d, wb) in s.documents().iter().zip(original) {
+        assert!(Arc::ptr_eq(&d.wb, &wb));
+    }
+}
+
+#[test]
+fn imported_names_follow_links_and_validation_cannot_hide_one_behind_a_name() {
+    use gridcraft_model::{DefinedName, Validation, ValidationKind};
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    s.execute("cell.set", json!({"cell":"Keep!A1","input":"8"})).unwrap();
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).names.push(DefinedName {
+        name: "Rate".into(),
+        formula: "Keep!$A$1".into(),
+        scope: None,
+        comment: String::new(),
+        hidden: false,
+    });
+    s.execute("cell.set", json!({"cell":"B1","input":"=Rate*2"})).unwrap();
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    assert_roundtrip_value(&s.active().unwrap().wb, 0, "B1", 16.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    s.set_active(0);
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().validations.push(Validation {
+        kind: ValidationKind::List,
+        f1: "Rate".into(),
+        ..Default::default()
+    });
+    let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+    assert!(s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).is_err());
+    for (d, wb) in s.documents().iter().zip(before) {
+        assert!(Arc::ptr_eq(&d.wb, &wb));
+    }
+}
+
+#[test]
+fn moving_a_sheet_preserves_qualified_local_names_and_global_name_dependents() {
+    use gridcraft_model::DefinedName;
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    let wb = Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.names.push(DefinedName { name: "Local".into(), formula: "Source!A1".into(), scope: Some(0), comment: String::new(), hidden: false });
+    wb.names.push(DefinedName { name: "Global".into(), formula: "Source!A1*2".into(), scope: None, comment: String::new(), hidden: false });
+    s.execute("cell.set", json!({"cell":"Keep!A1","input":"=Source!Local+Global"})).unwrap();
+    s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
+    assert_roundtrip_value(&s.documents()[0].wb, 0, "A1", 126.0);
+}
+
+#[test]
+fn linked_transfers_refuse_ambiguous_paths_before_changing_either_workbook() {
+    for same_path in [false, true] {
+        let (mut s, _, destination) = movable_books();
+        saved_books(&mut s);
+        let path = if same_path { s.documents()[1].path.clone() } else { Some("relative.xlsx".into()) };
+        s.active_mut().unwrap().path = path;
+        s.execute("cell.set", json!({"cell":"B1","input":"=Keep!A1"})).unwrap();
+        let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+        assert!(s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).is_err());
+        for (d, wb) in s.documents().iter().zip(before) {
+            assert!(Arc::ptr_eq(&d.wb, &wb));
+        }
+    }
+}
+
+#[test]
+fn transfer_uses_no_file_access_and_explicit_refresh_uses_existing_link_controls() {
+    use gridcraft_engine::cmd::workbook_links::LinkFiles;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (mut s, _, destination) = movable_books();
+    saved_books(&mut s);
+    s.execute("cell.set", json!({"cell":"Keep!A1","input":"7"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"=Keep!A1*2"})).unwrap();
+    let mut later = s.active().unwrap().wb.as_ref().clone();
+    later.sheet_mut(1).unwrap().set_value(CellRef::new(0, 0), Value::Number(11.0));
+    let bytes = gridcraft_engine::io::save_bytes(&later, "transfer-source.xlsx").unwrap();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counter = reads.clone();
+    s.link_files = LinkFiles(Some(Arc::new(move |path| {
+        assert!(path.ends_with("transfer-source.xlsx"));
+        counter.fetch_add(1, Ordering::SeqCst);
+        Ok(bytes.clone())
+    })));
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(14.0));
+    s.execute("data.refreshLinks", json!({})).unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(22.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(14.0));
+}

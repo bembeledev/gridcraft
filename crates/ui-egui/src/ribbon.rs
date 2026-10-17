@@ -1885,12 +1885,65 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Data › Queries & Connections, as in Excel 365: the Refresh All split button (Refresh All,
+/// Refresh, Refresh Status, Cancel Refresh, Connection Properties…), then Queries & Connections,
+/// Properties and Workbook Links stacked. Workbook Links is off while the workbook links to no
+/// other workbook, as in Excel.
+fn queries_connections(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    // Labels carry the `Queries & Connections|` context: the group's own translations.
+    let ra = big_button(ui, Icon::Redo, "Queries & Connections|Refresh\nAll", "Queries & Connections|Refresh All (Ctrl+Alt+F5)", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["data.refreshAll", "pivot.refresh"]) {
+        keytip(app, ui, sequence, ra.rect.center_bottom());
+    }
+    // A split button: the icon refreshes everything, the label opens the menu.
+    let on_icon = ra.interact_pointer_pos().is_some_and(|p| p.y < ra.rect.top() + 40.0);
+    if ra.clicked() && on_icon {
+        act(app, "data.refreshAll", json!({}));
+    }
+    let forced = invoke(app, "data.refreshAll");
+    egui::Popup::menu(&ra).open_memory(popup_command(forced, ra.clicked() && !on_icon)).show(|ui| {
+        menu_items(
+            app,
+            ui,
+            &[("Queries & Connections|Refresh All", "data.refreshAll", json!({})), ("Queries & Connections|Refresh", "pivot.refresh", json!({}))],
+        );
+        for label in ["Queries & Connections|Refresh Status", "Queries & Connections|Cancel Refresh", "Queries & Connections|Connection Properties…"]
+        {
+            ui.add_enabled(false, egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(220.0, 22.0)))
+                .on_disabled_hover_text(lang.tr("Queries & Connections|GridCraft has no data connections to refresh yet."));
+        }
+    });
+    ui.vertical(|ui| {
+        let q =
+            small_button(ui, Icon::SheetList, "Queries & Connections|Queries & Connections", "Queries & Connections|Queries & Connections", false);
+        control_keytip(app, ui, &q, "data.queriesConnections");
+        if q.clicked() {
+            act(app, "data.queriesConnections", json!({}));
+        }
+        ui.add_enabled_ui(false, |ui| small_button(ui, Icon::Settings, "Properties", "Properties", false))
+            .inner
+            .on_disabled_hover_text(lang.tr("Queries & Connections|Select a cell in an external data range to see its properties."));
+        let why = gridcraft_engine::find_command("data.workbookLinks").and_then(|c| (c.enabled)(&app.session).err());
+        let wl = ui.add_enabled_ui(why.is_none(), |ui| small_button(ui, Icon::Link, "Workbook Links", "Workbook Links", false)).inner;
+        control_keytip(app, ui, &wl, "data.workbookLinks");
+        if wl.clicked() {
+            act(app, "data.workbookLinks", json!({}));
+        }
+        if let Some(why) = why {
+            wl.on_disabled_hover_text(why);
+        }
+    });
+}
+
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    sep(ui);
+    queries_connections(app, ui);
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

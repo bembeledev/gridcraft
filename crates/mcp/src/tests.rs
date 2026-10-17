@@ -546,3 +546,21 @@ fn invalid_sort_keys_are_invalid_params() {
     }
     ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
 }
+
+/// Data › Workbook Links over MCP: list a workbook's links, set its startup prompt, break the link.
+#[test]
+fn workbook_links_commands_run_over_mcp() {
+    let mut s = server();
+    let set = |s: &mut Server, cell: &str, input: &str| {
+        ok(s, "execute_command", json!({"command": "cell.set", "params": {"cell": cell, "input": input}}));
+    };
+    set(&mut s, "A1", "=[Source.xlsx]Sheet1!A1");
+    let r = ok(&mut s, "execute_command", json!({"command": "data.workbookLinks", "params": {"check": false}}));
+    let link = r.get("links").and_then(|l| l.get(0)).cloned().unwrap_or(Value::Null);
+    assert_eq!((link["name"].as_str(), link["formulas"].as_u64()), (Some("Source.xlsx"), Some(1)), "{r}");
+    let r = ok(&mut s, "execute_command", json!({"command": "data.linkStartupPrompt", "params": {"mode": "never"}}));
+    assert_eq!(r["mode"], "never", "{r}");
+    let r = ok(&mut s, "execute_command", json!({"command": "data.breakLink", "params": {"link": 1}}));
+    assert_eq!(r["removed"], json!([1]), "{r}");
+    assert!(cmd_fails(&mut s, "data.workbookLinks", json!({})).contains("no links"));
+}

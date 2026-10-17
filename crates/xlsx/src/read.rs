@@ -169,10 +169,12 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     // Workbook properties.
-    if let Some(p) = wb_xml.child("workbookPr")
-        && p.flag("date1904", false)
-    {
-        cx.date_system = DateSystem::D1904;
+    if let Some(p) = wb_xml.child("workbookPr") {
+        if p.flag("date1904", false) {
+            cx.date_system = DateSystem::D1904;
+        }
+        // The startup prompt for links; an unknown value is the default, as in Excel.
+        wb.update_links = p.attr("updateLinks").and_then(gridcraft_model::UpdateLinks::parse).unwrap_or_default();
     }
     wb.date_system = cx.date_system;
     if let Some(c) = wb_xml.child("calcPr") {
@@ -246,6 +248,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
+
+    wb.external_books = Arc::new(crate::external::read(&mut cx, &wb_xml, &wb_rels)?);
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

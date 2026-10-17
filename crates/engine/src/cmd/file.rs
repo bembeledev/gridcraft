@@ -77,6 +77,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     let mut doc = DocState::new(wb, path, title);
+    // Like Excel, opening never reads linked workbooks: their automatic update is disabled until
+    // the user enables it (the security warning's Enable Content) or updates them.
+    doc.links.updates_disabled = super::workbook_links::blocked_on_open(&doc.wb);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }

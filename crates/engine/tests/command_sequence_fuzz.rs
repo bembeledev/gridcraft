@@ -62,6 +62,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("view.newWindow", "opens another document"),
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
+    ("data.refreshLinks", "reads linked workbooks' files"),
+    ("data.checkLinkStatus", "reads linked workbooks' files"),
+    ("data.changeLinkSource", "reads linked workbooks' files"),
+    ("data.enableLinkUpdates", "reads linked workbooks' files"),
+    ("data.openLinkSource", "opens another document"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
 ];
 

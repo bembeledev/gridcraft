@@ -33,7 +33,8 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
     format_value(v, &parsed(code), wb.date_system)
 }
 
-/// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
+/// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that
+/// references into linked workbooks name the linked file (`Workbook::shown_formula`) and a
 /// constant number in a date or time format is shown as a date (as the grid shows it), not as its
 /// serial. When the formatted text would not read back as the same date (for example
 /// `dddd, mmmm d`), an ISO `yyyy-mm-dd` (with `hh:mm:ss` for a time of day; just `hh:mm:ss`
@@ -41,6 +42,11 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
+    if let Some(f) = &cell.formula
+        && !raw.is_empty()
+    {
+        return format!("={}", wb.shown_formula(&f.text));
+    }
     let Value::Number(n) = &cell.value else { return raw };
     let code = wb.styles.get(cell.style).num_fmt.as_str();
     if cell.formula.is_some() || !parsed(code).is_date() {
@@ -86,7 +92,7 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
-        return format!("={}", f.text);
+        return format!("={}", wb.shown_formula(&f.text));
     }
     value_text(wb, sheet, c)
 }

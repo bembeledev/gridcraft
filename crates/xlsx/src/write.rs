@@ -315,13 +315,19 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     w.push_str(&crate::passthrough::workbook_elements(wb, "fileVersion"));
-    w.push_str(if wb.date_system == gridcraft_core::DateSystem::D1904 { "<workbookPr date1904=\"1\"/>" } else { "<workbookPr/>" });
+    // `updateLinks`: the startup prompt for the workbook's links (Data › Workbook Links).
+    let update_links = match wb.update_links {
+        gridcraft_model::UpdateLinks::UserSet => String::new(),
+        other => format!(" updateLinks=\"{}\"", other.as_str()),
+    };
+    let date1904 = if wb.date_system == gridcraft_core::DateSystem::D1904 { " date1904=\"1\"" } else { "" };
+    let _ = write!(w, "<workbookPr{date1904}{update_links}/>");
     if wb.protected_structure {
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
         let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
     }
     let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"/></bookViews><sheets>{sheets_xml}</sheets>", kept.file_index(active));
-    w.push_str(&kept.elements);
+    w.push_str(&crate::external::write(wb, &kept.links, &mut wb_rels, &mut out));
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");
     }

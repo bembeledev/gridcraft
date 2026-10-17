@@ -6,7 +6,8 @@ Choose the destination under **To book**, select the sheet to insert before (or
 **(new book)** creates an unsaved workbook containing the transferred sheet.
 A conflicting sheet name receives a suffix such as `Report (2)`.
 
-This first implementation transfers self-contained sheets. It keeps cell values,
+Transfers support self-contained sheets and checked workbook links built on the
+Workbook Links implementation (#1200, #829 and #464). It keeps cell values,
 formulas and array ranges; cell, row and column styles; row/column geometry; notes,
 hyperlinks, merges, views, print settings, ordinary tables, charts, pictures, shapes,
 sparklines, conditional formats and data validation. Sheet-local names and the
@@ -19,10 +20,23 @@ Table identifiers are allocated in the destination workbook.
 The command reports an error without changing either workbook when it cannot
 preserve a transfer safely. In particular:
 
-- References to sheets or tables left behind need workbook links, which are not
-  implemented here. This includes references in names, charts and validation rules.
-- A move is refused if remaining source formulas or names depend on the moved sheet.
-  A copy can still work because the original remains available.
+- Ordinary cell formulas and defined names referring to sheets left behind become
+  external workbook references. When moving, references from remaining cells and
+  names to the moved sheet are redirected to the destination, including a renamed
+  destination sheet. Copies leave all source references unchanged.
+- A workbook that becomes a link target must already have a distinct absolute XLSX
+  file path. Save unsaved workbooks first; a move to a new unsaved book is refused
+  when remaining formulas would need to link to it.
+- Existing external references receive destination link numbers and absolute paths
+  resolved against their original folder; package-part indices are not reused.
+- New links cache only referenced cells from the open workbook snapshot, subject to
+  the Workbook Links cell limit. No files are read or saved by the transfer. Further
+  updates use the existing explicit Workbook Links refresh/security controls; open
+  workbooks do not update each other live. Save both workbooks before refreshing
+  moved-sheet links from disk.
+- Cross-workbook table references, multi-sheet spans, and references in worksheet
+  objects (charts, validation, conditional formats and hyperlinks) remain refused.
+  This includes external references hidden behind defined names.
 - INDIRECT references cannot be checked and are refused.
 - Conflicting workbook names or table names require resolving the conflict first.
 - The workbooks must use the same theme and date system. A new workbook inherits
@@ -65,5 +79,6 @@ https://support.microsoft.com/en-gb/excel/get-started/move-or-copy-worksheets-or
 
 Synthetic regression tests cover destination selection, stale destinations, local
 formula rewriting, names, styles and implicit formatting, new workbooks, refusals,
-and linked undo/redo. UI tests exercise the destination picker in light and dark
-mode and cancellation. Broader cross-workbook linking is a separate feature.
+linked undo/redo, link-number remapping, cached link round trips and atomic refusal of
+unsupported linked rules. UI tests exercise the destination picker in light and dark
+mode and cancellation. Live cross-workbook recalculation remains a separate feature.

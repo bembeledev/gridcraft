@@ -173,7 +173,7 @@ fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
 }
 
-fn rels_part_name(part: &str) -> String {
+pub(crate) fn rels_part_name(part: &str) -> String {
     let (dir, file) = package::split_dir(part);
     if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }
@@ -427,8 +427,9 @@ impl KeptReader {
                         let _ = write!(x, "<externalReference r:id=\"{}\"/>", esc_attr(id));
                     }
                     x.push_str("</externalReferences>");
+                    // No open warning: links are a feature (Data › Workbook Links), and the app says
+                    // that their automatic update is disabled on open, as Excel does.
                     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: x });
-                    cx.warn("links to external workbooks were kept; they are not followed or refreshed");
                 }
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }
@@ -844,7 +845,7 @@ pub struct KeptOut {
 impl KeptOut {
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
-    fn claim(&mut self, original: &str) -> String {
+    pub(crate) fn claim(&mut self, original: &str) -> String {
         let lower = original.to_ascii_lowercase();
         let own = OWN_DIRS.iter().any(|d| lower.starts_with(d));
         if own && self.used.insert(lower) {
@@ -938,8 +939,9 @@ pub struct KeptSheet {
 /// The workbook's kept content as written.
 #[derive(Default)]
 pub struct WorkbookKept {
-    /// Workbook XML elements that go right after `<sheets>` (`<externalReferences>`).
-    pub elements: String,
+    /// The new relationship id of each kept link part, in the file's `<externalReferences>`
+    /// order (`ExternalBook::kept`); `None` for one that wasn't written.
+    pub links: Vec<Option<String>>,
     sheets: Vec<KeptSheet>,
 }
 
@@ -1055,15 +1057,26 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool 
     formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
 }
 
+/// The relationship ids of the kept link parts, in `<externalReferences>` order.
+fn kept_link_ids(p: &Preserved) -> Vec<String> {
+    let Some(e) = p.elements.iter().find(|e| e.slot == "externalReferences") else { return vec![] };
+    let Ok(x) = xml::parse(e.xml.as_bytes()) else { return vec![] };
+    x.kids("externalReference").filter_map(|r| r.attr("id")).map(str::to_string).collect()
+}
+
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
-/// (see [`chart_sheet_usable`]) are left out with the parts only they reach.
+/// (see [`chart_sheet_usable`]) are left out with the parts only they reach, and so are link parts
+/// no link of the model holds unchanged any more (a broken link, or one whose part is written from
+/// the model: values refreshed, source changed).
 pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> WorkbookKept {
     let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s));
-    let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
-    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
-    // Parts reached only by dropped chart sheets go with them.
-    let mut gone: HashSet<String> = dropped.iter().filter_map(|s| root_of(s)).flat_map(|r| reachable(p, r)).collect();
+    let link_ids = kept_link_ids(p);
+    let unused_links: Vec<&str> =
+        link_ids.iter().enumerate().filter(|(k, _)| !wb.external_books.iter().any(|b| b.kept == Some(*k))).map(|(_, id)| id.as_str()).collect();
+    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).chain(unused_links.iter().copied()).collect();
+    // Parts reached only by dropped chart sheets and unused links go with them.
+    let mut gone: HashSet<String> = p.rels.iter().filter(|r| dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r)).collect();
     if !gone.is_empty() {
         let others = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r));
         for n in others {
@@ -1080,7 +1093,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
         }
     }
     WorkbookKept {
-        elements: p.elements.iter().filter(|e| e.slot == "externalReferences").filter_map(|e| remap(&e.xml, &ids)).collect(),
+        links: link_ids.iter().map(|id| ids.get(id).cloned()).collect(),
         sheets: live
             .iter()
             .filter_map(|s| Some(KeptSheet { before: s.before, name: s.name.clone(), visibility: s.visibility, rid: ids.get(&s.rel_id)?.clone() }))
@@ -1168,32 +1181,57 @@ impl<'a> SheetKept<'a> {
 
 /// `wb` as it is saved into the folder `to` (absolute): the relative paths of its linked
 /// workbooks, relative to the folder it was read from, are rewritten relative to `to`, as Excel
-/// does on Save As, or made absolute when no relative path exists (another drive). `None` when
-/// nothing changes.
+/// does on Save As, or made absolute when no relative path exists (another drive). That is the
+/// kept link parts' targets and the paths of links whose parts are written from the model. `None`
+/// when nothing changes.
 pub fn rebase_links(wb: &Workbook, to: &Path) -> Option<Workbook> {
-    let p = wb.preserved.as_deref()?;
     let from = Folder::of(wb.source_dir.as_deref()?)?;
     let to = Folder::of(to)?;
     if from == to {
         return None;
     }
-    let mut parts = p.parts.clone();
-    let mut changed = false;
-    for r in parts.iter_mut().flat_map(|part| part.rels.iter_mut()) {
-        if r.external
-            && is_kind(r, &["externalLinkPath"])
-            && let Some(target) = rebase(&r.target, &from, &to)
-        {
-            r.target = target;
-            changed = true;
+    let mut out: Option<Workbook> = None;
+    if let Some(p) = wb.preserved.as_deref() {
+        let mut parts = p.parts.clone();
+        let mut changed = false;
+        for r in parts.iter_mut().flat_map(|part| part.rels.iter_mut()) {
+            if r.external
+                && is_kind(r, &["externalLinkPath"])
+                && let Some(target) = rebase(&r.target, &from, &to)
+            {
+                r.target = target;
+                changed = true;
+            }
+        }
+        if changed {
+            let mut w = wb.clone();
+            w.preserved = Some(Arc::new(Preserved { parts, ..p.clone() }));
+            out = Some(w);
         }
     }
-    if !changed {
-        return None;
+    // A model path is a file path, not a URI: its names are written as they are.
+    let moved: Vec<(usize, String)> = wb
+        .external_books
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.kept.is_none() && is_relative_path(&b.path.replace('\\', "/")))
+        .filter_map(|(i, b)| Some((i, decode_name(&rebase(&encode_path(&b.path), &from, &to)?))))
+        .collect();
+    if !moved.is_empty() {
+        let w = out.get_or_insert_with(|| wb.clone());
+        let books = Arc::make_mut(&mut w.external_books);
+        for (i, path) in moved {
+            if let Some(b) = books.get_mut(i) {
+                b.path = path.strip_prefix("file:///").map(str::to_string).unwrap_or(path);
+            }
+        }
     }
-    let mut out = wb.clone();
-    out.preserved = Some(Arc::new(Preserved { parts, ..p.clone() }));
-    Some(out)
+    out
+}
+
+/// A file path as a relative URI target, for [`rebase`]: each name percent-encoded.
+fn encode_path(path: &str) -> String {
+    path.split(['/', '\\']).map(encode_name).collect::<Vec<_>>().join("/")
 }
 
 /// An absolute folder, lexically normalized.

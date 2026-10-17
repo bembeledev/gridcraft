@@ -1203,11 +1203,16 @@ impl SheetApp {
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         if let Some(pending) = &self.pending_import {
-            let progress = *pending.task.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let progress = pending.task.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+            let background = theme::Tokens::get(ui.ctx()).grid_bg;
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |_| {});
             egui::Window::new("Opening workbook").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(
                 ui.ctx(),
                 |ui| {
                     ui.label(format!("{:?}", progress.stage));
+                    if let Some(name) = &progress.sheet_name {
+                        ui.label(format!("Sheet {} / {}: {name}", progress.part, progress.parts));
+                    }
                     if progress.total > 0 {
                         ui.add(egui::ProgressBar::new((progress.completed as f64 / progress.total as f64).clamp(0.0, 1.0) as f32).show_percentage());
                     } else {

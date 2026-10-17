@@ -105,6 +105,7 @@ impl Bridge {
             ("total", (progress.total as f64).into()),
             ("part", progress.part.into()),
             ("parts", progress.parts.into()),
+            ("sheetName", progress.sheet_name.as_deref().unwrap_or("").into()),
         ]);
     }
 

@@ -227,3 +227,5 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 - 2026-10-17: cooperative XLSX import checkpoints, desktop background preparation, web phase
   progress/cancel, and atomic document publication. Regression coverage uses generated workbooks;
   browser saving and individual formula evaluation remain synchronous.
+
+- 2026-10-17: import progress keeps the normal background and identifies the sheet being read.

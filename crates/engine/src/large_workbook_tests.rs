@@ -98,10 +98,16 @@ fn large_sheet_defers_expression_retention_without_losing_formula_or_saved_value
 struct YieldingWork {
     stages: Vec<gridcraft_core::work::WorkStage>,
     cancel_at: Option<gridcraft_core::work::WorkStage>,
+    named_stages: Vec<gridcraft_core::work::WorkStage>,
 }
 impl gridcraft_core::work::WorkControl for YieldingWork {
     async fn checkpoint(&mut self, progress: gridcraft_core::work::WorkProgress) -> std::result::Result<(), gridcraft_core::work::WorkCancelled> {
         self.stages.push(progress.stage);
+        if let Some(name) = &progress.sheet_name {
+            assert_eq!(name.as_ref(), "Sheet1");
+            assert_eq!((progress.part, progress.parts), (1, 1));
+            self.named_stages.push(progress.stage);
+        }
         let mut yielded = false;
         std::future::poll_fn(|cx| {
             if yielded {
@@ -146,9 +152,11 @@ fn cooperative_import_yields_and_publishes_only_a_complete_document() {
     target.new_workbook();
     target.execute("cell.set", json!({"cell":"A1","input":"91"})).unwrap();
     let uid = target.doc().unwrap().uid;
-    let mut control = YieldingWork { stages: vec![], cancel_at: None };
+    let mut control = YieldingWork { stages: vec![], cancel_at: None, named_stages: vec![] };
     let (prepared, turns) = drive(cmd::file::prepare_open("synthetic.xlsx", &bytes, &json!({}), &mut control));
     assert!(turns > 10);
+    assert!(control.named_stages.contains(&WorkStage::Worksheet));
+    assert!(control.named_stages.contains(&WorkStage::RowHeights));
     for stage in [WorkStage::Archive, WorkStage::Worksheet, WorkStage::RowHeights, WorkStage::Dependencies, WorkStage::Calculation] {
         assert!(control.stages.contains(&stage));
     }
@@ -171,7 +179,7 @@ fn cancellation_is_an_error_at_every_import_phase_and_keeps_existing_work() {
     target.execute("cell.set", json!({"cell":"A1","input":"91"})).unwrap();
     let uid = target.doc().unwrap().uid;
     for stage in [WorkStage::Archive, WorkStage::Worksheet, WorkStage::RowHeights, WorkStage::Dependencies, WorkStage::Calculation] {
-        let mut control = YieldingWork { stages: vec![], cancel_at: Some(stage) };
+        let mut control = YieldingWork { stages: vec![], cancel_at: Some(stage), named_stages: vec![] };
         let (result, _) = drive(cmd::file::prepare_open("synthetic.xlsx", &bytes, &json!({}), &mut control));
         assert!(matches!(result, Err(EngineError::Cancelled(_))), "{stage:?}");
         assert_eq!(target.documents().len(), 1);

@@ -105,14 +105,16 @@ fn fit_imported_rows(wb: &mut Workbook) {
     let _ = gridcraft_core::work::run_ready(fit_imported_rows_cooperative(wb, &mut gridcraft_core::work::Uninterrupted));
 }
 async fn fit_imported_rows_cooperative(wb: &mut Workbook, control: &mut impl gridcraft_core::work::WorkControl) -> Result<()> {
-    use gridcraft_core::work::{WorkProgress, WorkStage};
+    use gridcraft_core::work::{WorkControl as _, WorkProgress, WorkStage};
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
+        let sheet_name: std::sync::Arc<str> = std::sync::Arc::from(sh.name.as_str());
+        let mut scope = gridcraft_core::work::ProgressScope { control, part: si as u32 + 1, parts: wb.sheets.len() as u32, sheet_name };
         // CellStore is row-major: retain one index per row rather than per cell.
         let mut rows = Vec::new();
         for (i, (c, _)) in sh.cells.iter().enumerate() {
             if i.is_multiple_of(8192) {
-                control.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, sh.cells.len() as u64)).await?;
+                scope.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, sh.cells.len() as u64)).await?;
             }
             if rows.last().copied() != Some(c.row) {
                 rows.push(c.row);
@@ -121,15 +123,7 @@ async fn fit_imported_rows_cooperative(wb: &mut Workbook, control: &mut impl gri
         let row_count = rows.len();
         for (i, row) in rows.into_iter().enumerate() {
             if i.is_multiple_of(128) {
-                control
-                    .checkpoint(WorkProgress {
-                        stage: WorkStage::RowHeights,
-                        completed: i as u64,
-                        total: row_count as u64,
-                        part: si as u32 + 1,
-                        parts: wb.sheets.len() as u32,
-                    })
-                    .await?;
+                scope.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, row_count as u64)).await?;
             }
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::auto_row_height(wb, si, row);

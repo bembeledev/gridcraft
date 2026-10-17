@@ -459,7 +459,7 @@ impl gridcraft_core::work::WorkControl for BrowserWork {
         }
         let now = js_sys::Date::now();
         if now - self.last_yield >= 8.0 {
-            *self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = progress;
+            *self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = progress.clone();
             if let Some(bridge) = &self.bridge {
                 bridge.post_progress(progress);
             }

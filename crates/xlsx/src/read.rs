@@ -235,7 +235,12 @@ pub async fn read_xlsx_cooperative(bytes: &[u8], control: &mut impl gridcraft_co
             continue;
         }
         let name = unique_name(&wb, &name, i);
-        let mut scope = gridcraft_core::work::ProgressScope { control, part: (i + 1) as u32, parts: sheet_els.len() as u32 };
+        let mut scope = gridcraft_core::work::ProgressScope {
+            control,
+            part: (i + 1) as u32,
+            parts: sheet_els.len() as u32,
+            sheet_name: Arc::from(name.as_str()),
+        };
         let mut sheet = match crate::sheet_read::read_sheet_cooperative(&mut cx, &rel.target, &name, &mut scope).await {
             Err(IoError::Cancelled(error)) => return Err(IoError::Cancelled(error)),
             Ok(s) => s,

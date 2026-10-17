@@ -86,7 +86,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-17 | minor | Flat Parquet values open through file commands and export through Save As / Export / CLI; bounded decoding and typed synthetic tests (#1703) |
+| 2026-10-17 | minor | Flat Parquet values open through file commands and export through Save As / Export / CLI; bounded decoding, owned-buffer import without a second full-file copy, and typed synthetic tests (#1703) |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |

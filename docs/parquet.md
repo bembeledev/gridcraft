@@ -40,9 +40,17 @@ budgets, not a blanket small-file-size limit. Unsupported/oversized files fail
 with a message rather than being silently truncated. A smaller source table can
 be prepared in a separate file; opening never modifies the source.
 
-Import currently receives an in-memory input file and makes a shared decoder
-buffer copy. It is not a streaming dataset browser. Large tables may exceed
+Normal file opens transfer their owned input allocation to the decoder without a
+second full-file copy, on native and web. The lower-level borrowed `read` /
+`open_bytes` APIs still copy because their callers retain ownership. Both routes
+use the same preflight limits, decoder and value conversions. Input files still
+reside in memory; this is not a streaming dataset browser. Large tables may exceed
 worksheet limits or practical memory before their compressed size looks large.
+
+For native profiling without printing cell contents, run
+`cargo run -p gridcraft-parquet --example inspect -- file.parquet --owned`.
+Omit `--owned` to compare the borrowed-input path. The timer measures import after
+reading the file; process peak memory includes the input and resulting worksheet.
 
 ## Verification
 

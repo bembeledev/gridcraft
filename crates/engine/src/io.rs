@@ -54,6 +54,17 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     open_bytes_with_password(name, bytes, None)
 }
 
+/// Opens an owned input buffer. Parquet transfers the allocation directly to its decoder;
+/// other formats retain the same parsing, password and row-fitting behavior as borrowed input.
+pub fn open_owned_bytes_with_password(name: &str, bytes: Vec<u8>, password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
+    if gridcraft_parquet::is_parquet(&bytes) {
+        let (mut wb, report) = gridcraft_parquet::read_owned(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+        rename_first_sheet(&mut wb, name);
+        return Ok((wb, report.warnings));
+    }
+    open_bytes_with_password(name, &bytes, password)
+}
+
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {

@@ -55,9 +55,35 @@ fn export_selected_sheet_and_save_as_do_not_change_document_or_dirty_state() {
     s.execute("file.exportParquet", json!({"path":file,"sheet":0})).unwrap();
     let bytes = std::fs::read(&file).unwrap();
     assert!(io::open_bytes("table.parquet", &bytes).is_ok());
+    let mut opened = Session::new();
+    opened.execute("file.open", json!({"path":file})).unwrap();
+    assert_eq!(opened.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 1)), Value::Number(10.0));
+    assert!(opened.active().unwrap().path.is_none());
     s.execute("file.saveAs", json!({"path":file})).unwrap();
     assert_eq!(s.active().unwrap().is_dirty(), dirty);
     assert!(s.active().unwrap().path.is_none());
     std::fs::remove_file(file).unwrap();
     std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn owned_input_preserves_borrowed_format_detection_values_and_warnings() {
+    let s = table();
+    let wb = &s.active().unwrap().wb;
+    for (name, bytes) in [
+        ("table.parquet", io::save_bytes(wb, "table.parquet").unwrap()),
+        ("misnamed.csv", io::save_bytes(wb, "table.parquet").unwrap()),
+        ("table.xlsx", io::save_bytes(wb, "table.xlsx").unwrap()),
+        ("table.csv", io::save_bytes(wb, "table.csv").unwrap()),
+        ("really-xlsx.parquet", io::save_bytes(wb, "table.xlsx").unwrap()),
+    ] {
+        let borrowed = io::open_bytes(name, &bytes).unwrap();
+        let owned = io::open_owned_bytes_with_password(name, bytes, None).unwrap();
+        assert_eq!(borrowed, owned, "{name}");
+    }
+    for bytes in [b"PAR1broken".to_vec(), b"not parquet".to_vec()] {
+        let borrowed = io::open_bytes("bad.parquet", &bytes).unwrap_err().to_string();
+        let owned = io::open_owned_bytes_with_password("bad.parquet", bytes, None).unwrap_err().to_string();
+        assert_eq!(borrowed, owned);
+    }
 }

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -87,3 +87,24 @@ formula text and cached values remain, and expressions are parsed on demand.
 
 This does not move import or recalculation off the UI thread. Hosts may show transfer progress
 and import stages; smooth per-row progress still needs a yielding or worker-backed reader.
+
+
+## Cooperative workbook opening (2026-10-17)
+
+`core::work::WorkControl` supplies scheduling-neutral progress and cancellation checkpoints.
+The XLSX reader yields between bounded decompression chunks and XML events, followed by row
+height preparation, dependency construction and initial calculation. Preserved worksheet
+fragments reuse the existing decompressed bytes. Synchronous engine/CLI callers poll the same
+import implementation with an uninterrupted control; there is no second parser.
+
+`file::prepare_open` owns the candidate document until completion; `Session::finish_import`
+publishes it atomically. Cancelled or failed imports leave existing workbooks intact. The desktop
+shell prepares on a worker thread; the browser shell yields through MessageChannel tasks on a
+short time budget, keeping rendering and cancel messages serviceable without serializing a second
+workbook model. The import UI disables document commands until publication. Same-origin hosts
+can consume `gridcraft:progress` and send `gridcraft:cancel`; cancellation produces
+`gridcraft:cancelled` rather than a startup failure.
+
+This applies to ordinary XLSX/XLSM imports. Legacy readers, password decryption, individual
+formula evaluations, and saving remain synchronous on the browser thread; this is not a general
+background execution system. Memory limits and saved-result eligibility remain unchanged.

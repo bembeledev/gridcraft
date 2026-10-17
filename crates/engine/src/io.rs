@@ -76,21 +76,61 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
     Ok((wb, warnings))
 }
 
+/// Cooperatively open ordinary XLSX packages; native callers can also run legacy readers on a worker.
+pub async fn open_bytes_cooperative(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    control: &mut impl gridcraft_core::work::WorkControl,
+) -> Result<(Workbook, Vec<String>)> {
+    if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Xlsx {
+        return open_bytes_with_password(name, bytes, password);
+    }
+    let (mut wb, mut report) = gridcraft_xlsx::read_xlsx_cooperative(bytes, control).await.map_err(|error| match error {
+        gridcraft_xlsx::IoError::Cancelled(cancelled) => EngineError::Cancelled(cancelled),
+        other => EngineError::Other(format!("We can't open '{name}': {other}")),
+    })?;
+    if bytes.len() >= 20 * 1024 * 1024 && !report.cached_results_complete {
+        report.warnings.push("Saved formula results are incomplete; an initial recalculation is required.".into());
+    }
+    fit_imported_rows_cooperative(&mut wb, control).await?;
+    Ok((wb, report.warnings))
+}
+
 /// Excel auto-fits rows to their tallest font when opening a file: rows without a user-set
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    let _ = gridcraft_core::work::run_ready(fit_imported_rows_cooperative(wb, &mut gridcraft_core::work::Uninterrupted));
+}
+async fn fit_imported_rows_cooperative(wb: &mut Workbook, control: &mut impl gridcraft_core::work::WorkControl) -> Result<()> {
+    use gridcraft_core::work::{WorkProgress, WorkStage};
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         // CellStore is row-major: retain one index per row rather than per cell.
         let mut rows = Vec::new();
-        for (c, _) in sh.cells.iter() {
+        for (i, (c, _)) in sh.cells.iter().enumerate() {
+            if i.is_multiple_of(8192) {
+                control.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, sh.cells.len() as u64)).await?;
+            }
             if rows.last().copied() != Some(c.row) {
                 rows.push(c.row);
             }
         }
-        for row in rows {
+        let row_count = rows.len();
+        for (i, row) in rows.into_iter().enumerate() {
+            if i.is_multiple_of(128) {
+                control
+                    .checkpoint(WorkProgress {
+                        stage: WorkStage::RowHeights,
+                        completed: i as u64,
+                        total: row_count as u64,
+                        part: si as u32 + 1,
+                        parts: wb.sheets.len() as u32,
+                    })
+                    .await?;
+            }
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::auto_row_height(wb, si, row);
             let Some(before) = before else { continue };
@@ -102,6 +142,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
             }
         }
     }
+    Ok(())
 }
 
 /// What to tell the user when an encrypted workbook can't be decrypted. Never quotes the password.

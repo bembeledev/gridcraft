@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -222,3 +222,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 - 2026-10-16: Large XLSX imports can show complete saved results before a full recalculation;
   binary inbox delivery and lazy expression retention reduce peak memory. Import still runs
   on the UI thread; incremental loading/progress remains follow-up work.
+
+
+- 2026-10-17: cooperative XLSX import checkpoints, desktop background preparation, web phase
+  progress/cancel, and atomic document publication. Regression coverage uses generated workbooks;
+  browser saving and individual formula evaluation remain synchronous.

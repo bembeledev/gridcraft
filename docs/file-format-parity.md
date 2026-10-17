@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -112,3 +112,13 @@ formula text and shared-formula expansion are preserved. Missing caches and arra
 reconstruction require the existing recalculation path. Loading does not switch the document
 to manual calculation. Binary inbox import avoids encoding another copy of the archive.
 See [architecture](architecture.md#large-workbook-imports-2026-10-16) for thresholds and limits.
+
+
+### Cooperative XLSX opening — 2026-10-17
+
+Web XLSX/XLSM imports expose phase progress and cancellation while parsing and preparing the
+workbook. Desktop imports run on a worker. Failed/cancelled imports never publish partial data;
+synthetic regression tests cover cancellation at decompression, worksheet parsing, row fitting,
+dependency construction and calculation, plus successful save/reopen equivalence. Large-workbook
+memory and formula-cache policy is unchanged. Browser save and explicit full recalculation still
+run synchronously; no blanket responsiveness guarantee is made for arbitrary formula evaluation.

@@ -93,3 +93,89 @@ fn large_sheet_defers_expression_retention_without_losing_formula_or_saved_value
     assert!(formula.expr.is_none());
     assert!(formula.expr_arc().is_some());
 }
+
+/// Force every checkpoint to cross an event-loop turn, without browser timing dependencies.
+struct YieldingWork {
+    stages: Vec<gridcraft_core::work::WorkStage>,
+    cancel_at: Option<gridcraft_core::work::WorkStage>,
+}
+impl gridcraft_core::work::WorkControl for YieldingWork {
+    async fn checkpoint(&mut self, progress: gridcraft_core::work::WorkProgress) -> std::result::Result<(), gridcraft_core::work::WorkCancelled> {
+        self.stages.push(progress.stage);
+        let mut yielded = false;
+        std::future::poll_fn(|cx| {
+            if yielded {
+                std::task::Poll::Ready(())
+            } else {
+                yielded = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+        if self.cancel_at == Some(progress.stage) { Err(gridcraft_core::work::WorkCancelled) } else { Ok(()) }
+    }
+}
+fn drive<T>(future: impl std::future::Future<Output = T>) -> (T, usize) {
+    let mut future = std::pin::pin!(future);
+    let mut turns = 0;
+    loop {
+        match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+            std::task::Poll::Ready(value) => return (value, turns),
+            std::task::Poll::Pending => {
+                turns += 1;
+                assert!(turns < 100_000);
+            }
+        }
+    }
+}
+fn cooperative_fixture() -> Vec<u8> {
+    let mut rows = String::new();
+    for row in 1..=2048 {
+        rows.push_str(&format!(r#"<row r="{row}"><c r="A{row}"><v>2</v></c><c r="B{row}"><f>A{row}*3</f><v>6</v></c></row>"#));
+    }
+    workbook_with_sheet(&format!(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{rows}</sheetData></worksheet>"#
+    ))
+}
+#[test]
+fn cooperative_import_yields_and_publishes_only_a_complete_document() {
+    use gridcraft_core::work::WorkStage;
+    let bytes = cooperative_fixture();
+    let mut target = Session::new();
+    target.new_workbook();
+    target.execute("cell.set", json!({"cell":"A1","input":"91"})).unwrap();
+    let uid = target.doc().unwrap().uid;
+    let mut control = YieldingWork { stages: vec![], cancel_at: None };
+    let (prepared, turns) = drive(cmd::file::prepare_open("synthetic.xlsx", &bytes, &json!({}), &mut control));
+    assert!(turns > 10);
+    for stage in [WorkStage::Archive, WorkStage::Worksheet, WorkStage::RowHeights, WorkStage::Dependencies, WorkStage::Calculation] {
+        assert!(control.stages.contains(&stage));
+    }
+    assert_eq!(target.doc().unwrap().uid, uid);
+    assert_eq!(target.doc().unwrap().wb.sheet(0).unwrap().value(cell(0, 0)), Value::Number(91.0));
+    target.finish_import(prepared.unwrap()).unwrap();
+    assert_eq!(target.documents().len(), 2);
+    assert_eq!(target.doc().unwrap().wb.sheet(0).unwrap().value(cell(2047, 1)), Value::Number(6.0));
+    let encoded = target.execute("file.saveBytes", json!({})).unwrap();
+    let saved = io::base64_decode(encoded["base64"].as_str().unwrap()).unwrap();
+    let (roundtrip, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    assert_eq!(roundtrip.sheet(0).unwrap().value(cell(2047, 1)), Value::Number(6.0));
+}
+#[test]
+fn cancellation_is_an_error_at_every_import_phase_and_keeps_existing_work() {
+    use gridcraft_core::work::WorkStage;
+    let bytes = cooperative_fixture();
+    let mut target = Session::new();
+    target.new_workbook();
+    target.execute("cell.set", json!({"cell":"A1","input":"91"})).unwrap();
+    let uid = target.doc().unwrap().uid;
+    for stage in [WorkStage::Archive, WorkStage::Worksheet, WorkStage::RowHeights, WorkStage::Dependencies, WorkStage::Calculation] {
+        let mut control = YieldingWork { stages: vec![], cancel_at: Some(stage) };
+        let (result, _) = drive(cmd::file::prepare_open("synthetic.xlsx", &bytes, &json!({}), &mut control));
+        assert!(matches!(result, Err(EngineError::Cancelled(_))), "{stage:?}");
+        assert_eq!(target.documents().len(), 1);
+        assert_eq!(target.doc().unwrap().uid, uid);
+        assert_eq!(target.doc().unwrap().wb.sheet(0).unwrap().value(cell(0, 0)), Value::Number(91.0));
+    }
+}

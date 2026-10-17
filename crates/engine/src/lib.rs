@@ -30,6 +30,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+pub use cmd::file::PreparedImport;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
@@ -40,6 +41,8 @@ pub use selection::Selection;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    #[error(transparent)]
+    Cancelled(#[from] gridcraft_core::work::WorkCancelled),
     #[error("unknown command `{0}`")]
     UnknownCommand(String),
     #[error("command `{0}` is not available right now: {1}")]
@@ -130,6 +133,24 @@ impl DocState {
         } else {
             calc.recalc_all(&mut wb);
         }
+        Self::from_calculated(wb, path, title, calc)
+    }
+    pub async fn with_calculation_cooperative(
+        mut wb: Workbook,
+        path: Option<String>,
+        title: String,
+        cached: bool,
+        control: &mut impl gridcraft_core::work::WorkControl,
+    ) -> Result<DocState> {
+        let mut calc = Calc::new();
+        if cached {
+            calc.rebuild_cooperative(&wb, control).await?;
+        } else {
+            calc.recalc_all_cooperative(&mut wb, control).await?;
+        }
+        Ok(Self::from_calculated(wb, path, title, calc))
+    }
+    fn from_calculated(wb: Workbook, path: Option<String>, title: String, calc: Calc) -> DocState {
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
@@ -376,6 +397,11 @@ impl Session {
             Ok(result) => result,
             Err(_) => Err(EngineError::Internal("file.open".into(), "Workbook import failed".into())),
         }
+    }
+
+    /// Publish a fully prepared import in one synchronous, non-yielding step.
+    pub fn finish_import(&mut self, prepared: PreparedImport) -> Result<Json> {
+        cmd::file::finish_open(self, prepared)
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

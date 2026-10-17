@@ -12,8 +12,8 @@ use yore::CodePage;
 
 use crate::{IoError, ReadReport};
 
-const MAX_CELLS: u64 = 5_000_000;
-const MAX_TEXT: usize = 64 << 20;
+pub(crate) const MAX_CELLS: u64 = 5_000_000;
+pub(crate) const MAX_TEXT: usize = 64 << 20;
 
 struct Field {
     name: String,
@@ -160,8 +160,7 @@ fn value(raw: &[u8], kind: u8, codepage: u8, report: &mut ReadReport) -> Result<
         b'N' | b'F' => {
             let number = text.parse::<f64>().ok().filter(|n| n.is_finite()).ok_or_else(|| invalid("invalid numeric value"))?;
             // Preserve high-precision identifiers/decimals rather than silently rounding them.
-            let significant = text.trim_start_matches(['+', '-', '0', '.']).chars().filter(char::is_ascii_digit).count();
-            if significant <= 15 {
+            if !numeric_as_text(text) {
                 return Ok((Value::Number(number), false));
             }
             report.warn("DBF numbers with more than 15 significant digits were preserved as text to avoid precision loss.");
@@ -190,6 +189,10 @@ fn value(raw: &[u8], kind: u8, codepage: u8, report: &mut ReadReport) -> Result<
         _ => return Err(invalid("unsupported field type")),
     }
     Ok((Value::Text(Arc::from(text)), false))
+}
+
+pub(crate) fn numeric_as_text(text: &str) -> bool {
+    text.trim_start_matches(['+', '-', '0', '.']).chars().filter(char::is_ascii_digit).count() > 15
 }
 
 #[cfg(test)]

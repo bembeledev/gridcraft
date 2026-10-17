@@ -28,7 +28,8 @@ fn dbf_opens_as_typed_sheet_and_exports_to_xlsx() {
     assert_eq!(sheet.value(CellRef::new(1, 0)), Value::Text("Ada".into()));
     let (reopened, _) = io::open_bytes("People.xlsx", &io::save_bytes(&wb, "People.xlsx").unwrap()).unwrap();
     assert_eq!(reopened.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::Text("Ada".into()));
-    assert!(io::save_bytes(&wb, "People.dbf").unwrap_err().to_string().contains("import only"));
+    let (exported, _) = io::open_bytes("People.dbf", &io::save_bytes(&wb, "People.dbf").unwrap()).unwrap();
+    assert_eq!(exported.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::Text("Ada".into()));
 }
 
 #[test]

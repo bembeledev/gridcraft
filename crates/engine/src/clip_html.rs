@@ -4,8 +4,8 @@
 //! what each cell *shows* ("Rp10,000.00"), which en-US input parsing can't always turn back into a
 //! number. The HTML of the common sources also carries the underlying number as a cell attribute:
 //! `x:num="10000"` (Excel, Excel for the web) and `sdval="10000"` (LibreOffice Calc). Paste uses
-//! it to keep such cells numeric (#257). Only the table structure, the cell text and these two
-//! attributes are read; everything else in the markup is ignored.
+//! it to keep such cells numeric (#257). The markup is read by `gridcraft_xlsx::table_rows`; only
+//! the table structure, the cell text and these two attributes are used here.
 
 /// Largest clipboard HTML we look at; past this the paste uses the plain text alone.
 const MAX_HTML: usize = 16 * 1024 * 1024;
@@ -22,213 +22,22 @@ pub(crate) struct HtmlCell {
 /// The cells of the first table in `html`, row by row; a cell spanning columns is followed by
 /// empty cells so positions line up with the tab-separated text. Empty when there is no table.
 pub(crate) fn table_cells(html: &str) -> Vec<Vec<HtmlCell>> {
-    let mut rows: Vec<Vec<HtmlCell>> = Vec::new();
     if html.len() > MAX_HTML {
-        return rows;
+        return Vec::new();
     }
-    let mut cell: Option<(HtmlCell, usize)> = None;
-    let mut in_table = false;
-    let mut rest = html;
-    while !rest.is_empty() {
-        let Some(lt) = rest.find('<') else {
-            if let Some((c, _)) = cell.as_mut() {
-                c.text.push_str(rest);
+    gridcraft_xlsx::table_rows(html, true)
+        .into_iter()
+        .map(|row| {
+            let mut cells = Vec::with_capacity(row.cells.len());
+            for c in row.cells {
+                let span = c.colspan as usize;
+                cells.push(HtmlCell { text: c.text, num: c.num });
+                let room = MAX_SPAN.saturating_sub(cells.len());
+                cells.extend(std::iter::repeat_n(HtmlCell::default(), span.saturating_sub(1).min(room)));
             }
-            break;
-        };
-        if let Some((c, _)) = cell.as_mut() {
-            c.text.push_str(rest.get(..lt).unwrap_or_default());
-        }
-        rest = rest.get(lt..).unwrap_or_default();
-        if let Some(after) = rest.strip_prefix("<!--") {
-            rest = after.find("-->").and_then(|e| after.get(e + 3..)).unwrap_or_default();
-            continue;
-        }
-        let Some(gt) = tag_end(rest) else { break };
-        let tag = rest.get(1..gt).unwrap_or_default();
-        rest = rest.get(gt + 1..).unwrap_or_default();
-        let closing = tag.starts_with('/');
-        let body = tag.trim_start_matches('/');
-        let name_end = body.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(body.len());
-        let name = body.get(..name_end).unwrap_or_default().to_ascii_lowercase();
-        let attrs = body.get(name_end..).unwrap_or_default();
-        match (name.as_str(), closing) {
-            ("style" | "script", false) => {
-                // Raw text: skip to the closing tag.
-                let end = format!("</{name}");
-                rest = find_ci(rest, &end).and_then(|i| rest.get(i..)).unwrap_or_default();
-            }
-            ("table", false) => {
-                if in_table {
-                    break; // a nested table: the outer one is the clipboard grid, stop here
-                }
-                in_table = true;
-            }
-            ("table", true) => {
-                finish(&mut rows, &mut cell);
-                if !rows.is_empty() {
-                    break;
-                }
-                in_table = false;
-            }
-            ("tr", false) if in_table => {
-                finish(&mut rows, &mut cell);
-                rows.push(Vec::new());
-            }
-            ("td" | "th", false) if in_table => {
-                finish(&mut rows, &mut cell);
-                if rows.is_empty() {
-                    rows.push(Vec::new());
-                }
-                let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
-                let span = attr(attrs, "colspan").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_SPAN);
-                cell = Some((HtmlCell { text: String::new(), num }, span));
-            }
-            ("td" | "th", true) | ("tr", true) => finish(&mut rows, &mut cell),
-            ("br", _) => {
-                if let Some((c, _)) = cell.as_mut() {
-                    c.text.push(' ');
-                }
-            }
-            _ => {}
-        }
-    }
-    finish(&mut rows, &mut cell);
-    rows
-}
-
-/// Closes the open cell (if any) into the last row, decoding its text.
-fn finish(rows: &mut Vec<Vec<HtmlCell>>, cell: &mut Option<(HtmlCell, usize)>) {
-    let Some((mut c, span)) = cell.take() else { return };
-    c.text = decode(&c.text);
-    if rows.is_empty() {
-        rows.push(Vec::new());
-    }
-    if let Some(row) = rows.last_mut() {
-        row.push(c);
-        let room = MAX_SPAN.saturating_sub(row.len());
-        row.extend(std::iter::repeat_n(HtmlCell::default(), span.saturating_sub(1).min(room)));
-    }
-}
-
-/// Byte index of the `>` that closes the tag `rest` starts with; a `>` inside a quoted attribute
-/// value (an inline `mso-number-format` condition such as `[>=1000]`) doesn't end it.
-fn tag_end(rest: &str) -> Option<usize> {
-    let mut quote: Option<char> = None;
-    for (i, c) in rest.char_indices() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '>') => return Some(i),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Case-insensitive ASCII search.
-fn find_ci(hay: &str, needle: &str) -> Option<usize> {
-    let (h, n) = (hay.as_bytes(), needle.as_bytes());
-    if n.is_empty() || h.len() < n.len() {
-        return None;
-    }
-    (0..=h.len() - n.len()).find(|&i| h.get(i..i + n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n)))
-}
-
-/// The value of attribute `name` in a tag's attribute text (quoted or bare). A bare attribute
-/// without `=` has no value.
-fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
-    let mut s = attrs;
-    loop {
-        s = s.trim_start_matches(|c: char| c.is_whitespace() || c == '/');
-        if s.is_empty() {
-            return None;
-        }
-        let key_end = s.find(|c: char| c.is_whitespace() || c == '=' || c == '/').unwrap_or(s.len());
-        let key = s.get(..key_end).unwrap_or_default();
-        s = s.get(key_end..).unwrap_or_default().trim_start();
-        let mut value = None;
-        if let Some(after) = s.strip_prefix('=') {
-            let after = after.trim_start();
-            let (v, next) = match after.chars().next() {
-                Some(q @ ('"' | '\'')) => {
-                    let inner = after.get(1..).unwrap_or_default();
-                    let end = inner.find(q).unwrap_or(inner.len());
-                    (inner.get(..end).unwrap_or_default(), inner.get(end + 1..).unwrap_or_default())
-                }
-                _ => {
-                    let end = after.find(char::is_whitespace).unwrap_or(after.len());
-                    (after.get(..end).unwrap_or_default(), after.get(end..).unwrap_or_default())
-                }
-            };
-            value = Some(v);
-            s = next;
-        }
-        if key.eq_ignore_ascii_case(name) {
-            return value;
-        }
-        if key.is_empty() && value.is_none() {
-            // Stray character (e.g. a lone '='): skip it so the loop always advances.
-            let mut chars = s.chars();
-            chars.next();
-            s = chars.as_str();
-        }
-    }
-}
-
-/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
-/// space, trimmed. The text only serves to match a cell with the tab-separated text.
-fn decode(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(rest.get(..amp).unwrap_or_default());
-        rest = rest.get(amp..).unwrap_or_default();
-        let semi = rest.get(..12).unwrap_or(rest).find(';');
-        let entity = semi.and_then(|e| rest.get(1..e));
-        let ch = entity.and_then(|e| match e {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            _ => {
-                let n = e
-                    .strip_prefix("#x")
-                    .or_else(|| e.strip_prefix("#X"))
-                    .map(|h| u32::from_str_radix(h, 16))
-                    .or_else(|| e.strip_prefix('#').map(str::parse::<u32>));
-                n.and_then(Result::ok).and_then(char::from_u32)
-            }
-        });
-        match (ch, semi) {
-            (Some(c), Some(e)) => {
-                out.push(c);
-                rest = rest.get(e + 1..).unwrap_or_default();
-            }
-            _ => {
-                out.push('&');
-                rest = rest.get(1..).unwrap_or_default();
-            }
-        }
-    }
-    out.push_str(rest);
-    let mut text = String::with_capacity(out.len());
-    let mut space = false;
-    for c in out.chars() {
-        if c.is_whitespace() && c != '\u{a0}' {
-            space = true;
-            continue;
-        }
-        if space && !text.is_empty() {
-            text.push(' ');
-        }
-        space = false;
-        text.push(c);
-    }
-    text
+            cells
+        })
+        .collect()
 }
 
 /// Same-looking text: non-breaking spaces as spaces, whitespace runs collapsed, trimmed.

@@ -1,4 +1,4 @@
-//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML import and export.
 
 use std::fmt::Write as _;
 
@@ -143,6 +143,19 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
     }
+    // An HTML page named `.htm`/`.html`, or `.xls`/`.xlt`: banks and web apps save their "Excel"
+    // exports as HTML named `.xls`, and Excel opens them. Other text files (`.csv`, `.txt`) are
+    // read as text whatever they hold.
+    if matches!(kind, Some(FileKind::Xls | FileKind::Html)) && gridcraft_xlsx::is_html(bytes) {
+        let (mut wb, mut warnings) = gridcraft_xlsx::read_html(bytes)
+            .map(|(wb, r)| (wb, r.warnings))
+            .map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        if kind == Some(FileKind::Xls) {
+            warnings.insert(0, format!("'{name}' is a web page (HTML), not an Excel workbook: its tables were opened as a sheet."));
+        }
+        rename_first_sheet(&mut wb, name);
+        return Ok((wb, warnings));
+    }
     match kind {
         Some(FileKind::Json) => {
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
@@ -169,7 +182,7 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     }
 }
 
-/// A CSV opens as a sheet named after the file (like Excel).
+/// A CSV or HTML file opens as a sheet named after the file (like Excel).
 fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Sheet1");
     let clean: String = stem.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
@@ -723,6 +736,31 @@ mod tests {
             ),
             "{types}"
         );
+    }
+
+    #[test]
+    fn html_saved_as_xls_opens_as_a_table() {
+        let page = b"<!DOCTYPE html><html><body><table><tr><td>Importe</td></tr><tr><td>-17,35</td></tr></table></body></html>";
+        for name in ["Movimientos.xls", "Movimientos.html", "Movimientos.htm", "Movimientos.xlt"] {
+            let (wb, warnings) = open_bytes(name, page).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let sh = wb.sheet(0).unwrap();
+            assert_eq!(sh.name, "Movimientos", "{name}");
+            assert_eq!(sh.value(CellRef::new(0, 0)), gridcraft_core::Value::text("Importe"), "{name}");
+            assert_eq!(sh.value(CellRef::new(1, 0)), gridcraft_core::Value::Number(-17.35), "{name}");
+            assert_eq!(
+                warnings.iter().any(|w| w.contains("is a web page")),
+                !name.ends_with("htm") && !name.ends_with("html"),
+                "{name}: {warnings:?}"
+            );
+        }
+        // Text files are read as text, whatever they hold.
+        for name in ["Movimientos.csv", "Movimientos.txt"] {
+            let (wb, _) = open_bytes(name, page).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let first = wb.sheet(0).unwrap().value(CellRef::new(0, 0));
+            assert!(matches!(&first, gridcraft_core::Value::Text(t) if t.starts_with("<!DOCTYPE")), "{name}: {first:?}");
+        }
+        let err = open_bytes("empty.xls", b"<html><body>nothing</body></html>").unwrap_err().to_string();
+        assert!(err.contains("no table"), "{err}");
     }
 
     #[test]

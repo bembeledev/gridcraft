@@ -35,9 +35,55 @@ const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
+/// The left padding: room for the traffic lights on macOS, except in full screen, where AppKit
+/// hides them.
+pub fn title_left_pad(fullscreen: bool) -> f32 {
+    if MAC && !fullscreen { MAC_CONTENT_LEFT } else { 8.0 }
+}
+
+/// Below this width the title bar drops the AutoSave label (the switch stays).
+const NARROW_TITLE_BAR: f32 = 820.0;
+/// The document title keeps at least this much room before the optional right-hand controls go.
+const MIN_TITLE_W: f32 = 90.0;
+
+/// What fits at the right of the title bar besides Share, in the order they give way: the
+/// people's circles (slots for circles and "+N"), then Search, Comments and the theme switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TitleRight {
+    pub circle_slots: usize,
+    pub search: bool,
+    pub comments: bool,
+    pub theme: bool,
+}
+
+/// Plans the right of the title bar for `free` points (after Share and the title's minimum),
+/// `gap` between controls and `people` in the live session (0: none).
+pub fn plan_title_right(mut free: f32, gap: f32, people: usize) -> TitleRight {
+    use crate::collab_ui::{CIRCLE, CIRCLE_STEP, MAX_CIRCLES};
+    let wanted = if people == 0 { 0 } else { people.min(MAX_CIRCLES) + usize::from(people > MAX_CIRCLES) };
+    let mut slots = 0;
+    if wanted > 0 && free >= CIRCLE + gap {
+        let extra = ((free - CIRCLE - gap) / CIRCLE_STEP).floor().max(0.0) as usize;
+        slots = (1 + extra).min(wanted);
+        free -= CIRCLE + gap + CIRCLE_STEP * (slots - 1) as f32;
+    }
+    let mut take = |w: f32| {
+        let ok = free >= w + gap;
+        if ok {
+            free -= w + gap;
+        }
+        ok
+    };
+    let search = take(28.0);
+    let comments = take(28.0);
+    let theme = take(28.0);
+    TitleRight { circle_slots: slots, search, comments, theme }
+}
+
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
+    let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
@@ -50,9 +96,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
         ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
+            ui.add_space(title_left_pad(fullscreen));
             // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
+            if rect.width() >= NARROW_TITLE_BAR {
+                ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
+            }
             let on = app.grid.autosave();
             let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
             ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
@@ -111,55 +159,103 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if ui.button("Print…").clicked() {
                     app.print_now(json!({}));
                 }
+                // Sending a copy (the title bar's Share is for live sessions).
+                ui.separator();
+                if ui.button("Export as PDF…").clicked() {
+                    app.run_or_alert("file.exportPdf", json!({}));
+                }
+                for (label, fmt) in
+                    [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
+                {
+                    if ui.button(label).clicked() {
+                        app.open_dialog("saveCopy", json!({"format": fmt}));
+                    }
+                }
             });
-            // Centered title.
+            let left_end = ui.min_rect().right();
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let title = format!("{title}{}", if dirty { " •" } else { "" });
+            // What fits at the right: Share always; then, as room allows, the people, Search,
+            // Comments and the theme switch, keeping the title some room.
+            let gap = ui.spacing().item_spacing.x;
+            let share_w = crate::collab_ui::share_button_width(app, ui);
+            let people = crate::collab_ui::people(app).len();
+            let title_min = if title.is_empty() { 0.0 } else { MIN_TITLE_W };
+            // The chat button sits between Share and the people, in a session or when the
+            // workbook has a chat.
+            let chat = crate::chat_ui::button_visible(app);
+            let chat_w = if chat { crate::chat_ui::BUTTON_W + gap } else { 0.0 };
+            // The hosting page's Close (craft-live: Nextcloud shows no close button).
+            let host_close = app.services.close.is_some();
+            let close_w = if host_close { 28.0 + gap } else { 0.0 };
+            let free = rect.right() - 8.0 - close_w - share_w - gap - chat_w - left_end - gap - title_min;
+            let plan = plan_title_right(free, gap, people);
+            let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
-                control_keytip(app, ui, &__k, "commandSearch");
-                if __k.clicked() {
-                    app.open_dialog("commandSearch", json!({}));
-                }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
-                egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
-                        app.run_or_alert("file.exportPdf", json!({}));
+                if host_close {
+                    let close = icon_button(ui, Icon::Close, t.text_dim, "Close", vec2(28.0, ch));
+                    let label = app.ui.language.tr("Close").to_string();
+                    close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+                    if close.clicked() && app.commit_edit(0, 0, false, false) {
+                        app.run_or_alert("file.close", json!({}));
                     }
-                    for (label, fmt) in
-                        [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
-                    {
-                        if ui.button(label).clicked() {
-                            app.open_dialog("saveCopy", json!({"format": fmt}));
-                        }
+                }
+                crate::collab_ui::share_button(app, ui, ch);
+                if chat {
+                    crate::chat_ui::title_button(app, ui, ch);
+                }
+                if plan.circle_slots > 0 {
+                    crate::collab_ui::people_circles(app, ui, plan.circle_slots);
+                }
+                if plan.search {
+                    let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
+                    control_keytip(app, ui, &__k, "commandSearch");
+                    if __k.clicked() {
+                        app.open_dialog("commandSearch", json!({}));
                     }
-                });
-                let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
-                control_keytip(app, ui, &__k, "comments");
-                if __k.clicked() {
-                    app.open_dialog("comments", json!({}));
                 }
-                // Quick light/dark switch (#194); right-click offers System as well. The same
-                // choice lives in File › Display theme and the View tab.
-                let lang = app.ui.language;
-                let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, 26.0));
-                let dark = ui.ctx().theme() == egui::Theme::Dark;
-                theme.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, dark, lang.tr("Dark Mode")));
-                if theme.clicked() {
-                    act(app, "view.darkMode", json!({}));
+                if plan.comments {
+                    let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
+                    control_keytip(app, ui, &__k, "comments");
+                    if __k.clicked() {
+                        app.open_dialog("comments", json!({}));
+                    }
                 }
-                theme.context_menu(|ui| theme_choices(app, ui));
+                if plan.theme {
+                    // Quick light/dark switch (#194); right-click offers System as well. The same
+                    // choice lives in File › Display theme and the View tab.
+                    let lang = app.ui.language;
+                    let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, ch));
+                    let dark = ui.ctx().theme() == egui::Theme::Dark;
+                    theme.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, dark, lang.tr("Dark Mode")));
+                    if theme.clicked() {
+                        act(app, "view.darkMode", json!({}));
+                    }
+                    theme.context_menu(|ui| theme_choices(app, ui));
+                }
             });
+            // The title: centred on the window when it fits between the controls, else centred
+            // between them, cut short with "…" when it doesn't fit at all.
+            let span = (left_end + 12.0, right.response.rect.left() - 12.0);
+            title_text(ui, rect, span, &title, &t);
         });
     });
+}
+
+/// Paints the document title in the title bar between `span` (left and right x), truncated.
+fn title_text(ui: &Ui, rect: Rect, span: (f32, f32), title: &str, t: &Tokens) {
+    let avail = span.1 - span.0;
+    if title.is_empty() || avail < 24.0 {
+        return;
+    }
+    let mut job = egui::text::LayoutJob::single_section(title.to_string(), egui::TextFormat::simple(theme::ui_bold(13.0), t.text));
+    job.wrap = egui::text::TextWrapping { max_width: avail, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let galley = ui.painter().layout_job(job);
+    let w = galley.size().x;
+    let centre = rect.center().x.clamp(span.0 + w / 2.0, (span.1 - w / 2.0).max(span.0 + w / 2.0));
+    let pos = pos2(centre - w / 2.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(pos, galley, t.text);
 }
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
@@ -178,6 +274,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(8.0);
                     file_menu(app, ui);
                     let mut tabs: Vec<&str> = TABS.to_vec();
+                    // Developer, once an add-in that runs macros (VBA) is loaded.
+                    if crate::developer_ui::visible() {
+                        tabs.push("Developer");
+                    }
+                    let plugin_tabs = crate::plugin_ui::extra_tabs();
+                    tabs.extend(plugin_tabs.iter().map(String::as_str));
+                    // The workbook's own tabs (its ribbon buttons that run macros).
+                    let book_tabs = crate::developer_ui::book_tabs(app, &tabs);
+                    tabs.extend(book_tabs.iter().map(String::as_str));
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
                     for tab in tabs {
@@ -233,7 +338,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
+                        let tab = app.ui.ribbon_tab.clone();
+                        match tab.as_str() {
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
                             "Draw" => draw(app, ui),
@@ -243,11 +349,21 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
                             "Automate" => automate(app, ui),
+                            "Developer" if crate::developer_ui::visible() => crate::developer_ui::ribbon(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
+                            // A tab a plugin added (or one whose plugin was just unloaded).
+                            other if !crate::plugin_ui::groups(other).is_empty() => {}
+                            other if crate::developer_ui::has_book_groups(app, other) => {}
                             _ => home(app, ui),
                         }
+                        // Plugin groups: at the end of a built-in tab, or the whole of a plugin's own tab.
+                        let built_in = TABS.contains(&tab.as_str()) || tab == "Developer";
+                        crate::plugin_ui::ribbon_groups(app, ui, &tab, built_in);
+                        // Then the workbook's own buttons.
+                        let after = built_in || !crate::plugin_ui::groups(&tab).is_empty();
+                        crate::developer_ui::book_ribbon_groups(app, ui, &tab, after);
                     });
                 });
             });
@@ -295,7 +411,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     v
 }
 
-fn sep(ui: &mut Ui) {
+pub(crate) fn sep(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
@@ -2149,6 +2265,13 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
+    // The document chat (craft-collab `docs/chat.md`), also on the title bar beside Share.
+    let __k = big_button(ui, Icon::Chat, "Chat", "Chat with the people working on this workbook", false);
+    control_keytip(app, ui, &__k, "view.chat");
+    if __k.clicked() {
+        act(app, "view.chat", json!({}));
+    }
+    sep(ui);
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
     control_keytip(app, ui, &__k, "dialog:zoom");
     if __k.clicked() {
@@ -2242,6 +2365,9 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
 fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Script, "Macros", "Macros and scripts in this workbook (Alt+F8)", false).clicked() {
         app.open_dialog("macros", json!({}));
+    }
+    if big_button(ui, Icon::Script, "Add-ins", "Plugins: their functions and commands", false).clicked() {
+        app.open_dialog("addIns", json!({}));
     }
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
     control_keytip(app, ui, &__k, "commandSearch");
@@ -2497,6 +2623,31 @@ mod title_bar_tests {
         let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
         let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
         assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+    }
+
+    #[test]
+    fn full_screen_drops_the_traffic_light_gap() {
+        assert_eq!(title_left_pad(true), 8.0);
+        assert_eq!(title_left_pad(false), if MAC { MAC_CONTENT_LEFT } else { 8.0 });
+    }
+
+    #[test]
+    fn the_right_side_gives_way_in_order() {
+        use crate::collab_ui::{CIRCLE, CIRCLE_STEP};
+        let all = |slots| TitleRight { circle_slots: slots, search: true, comments: true, theme: true };
+        // Plenty of room: four circles and "+N" for six people, and every control.
+        assert_eq!(plan_title_right(1000.0, 8.0, 6), all(5));
+        // No session: no circles.
+        assert_eq!(plan_title_right(1000.0, 8.0, 0), all(0));
+        // Two people need two slots, never more.
+        assert_eq!(plan_title_right(1000.0, 8.0, 2), all(2));
+        // Tight: the theme switch, then Comments, then Search go before the circles shrink.
+        let circles3 = CIRCLE + 8.0 + 2.0 * CIRCLE_STEP;
+        assert_eq!(plan_title_right(circles3 + 36.0, 8.0, 3), TitleRight { circle_slots: 3, search: true, comments: false, theme: false });
+        assert_eq!(plan_title_right(circles3, 8.0, 3), TitleRight { circle_slots: 3, search: false, comments: false, theme: false });
+        assert_eq!(plan_title_right(CIRCLE + 8.0, 8.0, 3).circle_slots, 1);
+        assert_eq!(plan_title_right(0.0, 8.0, 3), TitleRight { circle_slots: 0, search: false, comments: false, theme: false });
+        assert_eq!(plan_title_right(-50.0, 8.0, 3).circle_slots, 0);
     }
 }
 

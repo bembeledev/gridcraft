@@ -50,6 +50,9 @@ pub struct Tokens {
     pub notice_warn_border: Color32,
     pub notice_info_bg: Color32,
     pub notice_info_border: Color32,
+    /// A live session's state in the title bar: online, and connecting or joining.
+    pub presence_online: Color32,
+    pub presence_connecting: Color32,
 }
 
 impl Tokens {
@@ -92,6 +95,8 @@ impl Tokens {
             notice_warn_border: Color32::from_rgb(0xF0, 0xC3, 0x6E),
             notice_info_bg: Color32::from_rgb(0xEA, 0xF2, 0xFB),
             notice_info_border: Color32::from_rgb(0xB9, 0xD2, 0xEC),
+            presence_online: Color32::from_rgb(0x1E, 0x8E, 0x4A),
+            presence_connecting: Color32::from_rgb(0xC9, 0x8A, 0x00),
         }
     }
 
@@ -134,6 +139,8 @@ impl Tokens {
             notice_warn_border: Color32::from_rgb(0x7A, 0x67, 0x30),
             notice_info_bg: Color32::from_rgb(0x24, 0x33, 0x44),
             notice_info_border: Color32::from_rgb(0x3B, 0x55, 0x72),
+            presence_online: Color32::from_rgb(0x5C, 0xC5, 0x87),
+            presence_connecting: Color32::from_rgb(0xE8, 0xB3, 0x41),
         }
     }
 

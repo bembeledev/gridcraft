@@ -66,6 +66,33 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
+/// The workbook's ribbon part, when the model holds all of it (tabs, groups, macro buttons):
+/// it then leaves the kept content. The Office 2010 part wins over the Office 2007 one.
+fn read_ribbon(cx: &mut Ctx<'_>, root_rels: &[Rel], wb: &mut Workbook, kept: &mut crate::passthrough::KeptReader) -> Result<(), IoError> {
+    let mut parts = Vec::new();
+    for r in root_rels.iter().filter(|r| r.kind == "extensibility" && !r.external) {
+        match cx.pkg.read(&r.target) {
+            Ok(Some(data)) => parts.push((r.id.clone(), r.target.clone(), data)),
+            Ok(None) => {}
+            Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+            Err(_) => return Ok(()),
+        }
+    }
+    let Some((_, target, data)) = parts.iter().find(|(_, _, d)| crate::custom_ui::is_v14(d)).or(parts.first()) else { return Ok(()) };
+    // Pictures of its own (a relationship part) mean it isn't only tabs, groups and buttons.
+    if cx.pkg.has(&crate::passthrough::rels_part_name(target)) {
+        return Ok(());
+    }
+    if let Some(ribbon) = crate::custom_ui::parse_exact(data) {
+        wb.ribbon = Some(ribbon);
+        kept.modelled_roots.extend(parts.iter().map(|(id, _, _)| id.clone()));
+        if parts.len() > 1 {
+            cx.warn("the ribbon's Office 2007 copy is replaced by its Office 2010 one on save");
+        }
+    }
+    Ok(())
+}
+
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
@@ -339,11 +366,36 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Err(e) => cx.warn(format!("macros (VBA project) could not be read and were dropped: {e}")),
         }
     }
+    read_ribbon(&mut cx, &root_rels, &mut wb, &mut kept)?;
+    read_chat(&mut cx, &root_rels, &mut wb)?;
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;
     Ok((wb, cx.report))
+}
+
+/// The document chat (`/craft/chat.json`, craft-collab `docs/chat.md`). A damaged part is
+/// skipped with a warning; it never stops the file from opening.
+fn read_chat(cx: &mut Ctx<'_>, root_rels: &[Rel], wb: &mut Workbook) -> Result<(), IoError> {
+    let Some(r) = root_rels.iter().find(|r| r.kind == crate::CHAT_REL && !r.external) else { return Ok(()) };
+    let bytes = match cx.pkg.read(&r.target) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            cx.warn("the document chat's part is missing; the workbook opened without it");
+            return Ok(());
+        }
+        Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("the document chat couldn't be read and was left out: {e}"));
+            return Ok(());
+        }
+    };
+    match gridcraft_model::Chat::from_part(&bytes) {
+        Ok(chat) => wb.chat = std::sync::Arc::new(chat),
+        Err(e) => cx.warn(format!("the document chat is damaged and was left out: {e}")),
+    }
+    Ok(())
 }
 
 pub(crate) fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {

@@ -1,0 +1,23 @@
+# GridCraft's craft-live client (`gridcraft_engine::live`, what the web build runs) end to end
+# against a real craft-live server and its fake Nextcloud. Not a workspace member: it needs a
+# craft-live checkout next to this repository (../../../../craft-live). Run it with
+#   cargo test --manifest-path apps/gridcraft-web/e2e/Cargo.toml
+[package]
+name = "gridcraft-web-e2e"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+
+[dev-dependencies]
+gridcraft-engine = { path = "../../../crates/engine" }
+craft-live = { path = "../../../../craft-live/crates/server" }
+craft-live-testkit = { path = "../../../../craft-live/crates/testkit" }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
+serde_json = "1"

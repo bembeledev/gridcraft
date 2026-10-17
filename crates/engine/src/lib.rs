@@ -10,10 +10,12 @@ pub mod catalog;
 pub mod cf;
 mod clip_html;
 pub mod cmd;
+pub mod collab;
 pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod live;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
@@ -32,10 +34,12 @@ use serde_json::Value as Json;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
+pub use gridcraft_collab as collab_core;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use gridcraft_plugin as plugin;
 pub use selection::Selection;
 
 #[derive(Debug, thiserror::Error)]
@@ -112,21 +116,33 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The user enabled this workbook's macros (the message bar's Enable Content, or Macro
+    /// Security set to enable all).
+    pub macros_enabled: bool,
+    /// Row and column inserts and deletes of the command running now, for a live session (the
+    /// ids of the lines move with them). Cleared after every command.
+    pub struct_log: Vec<gridcraft_collab::StructOp>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const UNDO_LIMIT: usize = 100;
 
 impl DocState {
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
-        let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+    pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
+        let mut d = DocState::unsettled(wb, path, title);
+        d.settle();
+        d
+    }
+
+    /// A document whose formulas aren't calculated yet: [`DocState::settle`] calculates them.
+    /// Opening a file sends `documentOpened` in between (plugin protocol 2.2).
+    pub fn unsettled(wb: Workbook, path: Option<String>, title: String) -> DocState {
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
             saved: wb.clone(),
             wb,
-            calc,
+            calc: Calc::new(),
             selection: sel,
             undo: vec![],
             redo: vec![],
@@ -137,8 +153,46 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            macros_enabled: false,
+            struct_log: vec![],
         }
     }
+    /// The first full calculation of a new or opened document; it stays unmodified.
+    pub fn settle(&mut self) {
+        let dirty = self.is_dirty();
+        let doc = self.calling_document();
+        // Calculated in place: the saved copy, the same workbook until now, isn't kept meanwhile.
+        let saved = std::mem::replace(&mut self.saved, Arc::new(Workbook::new()));
+        let saved = if dirty {
+            Some(saved)
+        } else {
+            drop(saved);
+            None
+        };
+        let (calc, wb) = (&mut self.calc, Arc::make_mut(&mut self.wb));
+        gridcraft_calc::external::with_document(Some(doc), || calc.recalc_all(wb));
+        self.saved = saved.unwrap_or_else(|| self.wb.clone());
+    }
+
+    /// The document as plugin functions are told (protocol 2.2): its file, name and session id.
+    pub fn calling_document(&self) -> gridcraft_calc::external::CallingDocument {
+        gridcraft_calc::external::CallingDocument {
+            path: self.path.as_deref().map(cmd::plugins::absolute_path),
+            name: self.display_title(),
+            id: self.session_id(),
+        }
+    }
+
+    /// An id for the document that stays the same while the app runs, saved or not (`doc-3`).
+    pub fn session_id(&self) -> String {
+        format!("doc-{}", self.uid)
+    }
+
+    /// Runs `f` with this document as the workbook plugin functions are calculated for.
+    pub fn with_calling<R>(&self, f: impl FnOnce() -> R) -> R {
+        gridcraft_calc::external::with_document(Some(self.calling_document()), f)
+    }
+
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
@@ -199,6 +253,14 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// Ids of the plugins turned off in File › Options › Add-ins.
+    pub disabled_plugins: Vec<String>,
+    /// Developer › Macro Security: `disable` (no macros run), `prompt` (a workbook's macros run
+    /// once the user enables them for it; the default) or `enable` (all run).
+    pub macro_security: String,
+    /// Live sessions: this person's stable id (made on first use) and colour (`#RRGGBB`).
+    pub collab_user_id: String,
+    pub collab_color: String,
 }
 
 impl Default for Prefs {
@@ -213,6 +275,10 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            disabled_plugins: vec![],
+            macro_security: "prompt".into(),
+            collab_user_id: String::new(),
+            collab_color: String::new(),
         }
     }
 }
@@ -225,6 +291,22 @@ pub enum UiRequest {
     /// Start editing the active cell (F2) with optional initial text.
     EditCell(Option<String>),
     OpenUrl(String),
+    /// Open an Office add-in's task pane (its `plugin` id, the pane's title and page). Panes with
+    /// the same `pane` id are one pane.
+    OfficePane {
+        plugin: String,
+        title: String,
+        url: String,
+        pane: Option<String>,
+    },
+    /// Call a function of an Office add-in's function file (a page with no pane); `control` is
+    /// the manifest's control id (the function's `event.source.id`).
+    OfficeFunction {
+        plugin: String,
+        url: String,
+        function: String,
+        control: String,
+    },
 }
 
 #[derive(Default)]
@@ -256,6 +338,11 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Live sessions (plugin protocol 2).
+    pub collab: collab::Collab,
+    /// Commands running inside commands (a plugin command's steps): a live session shares the
+    /// outermost one's effect as one change.
+    depth: u32,
 }
 
 impl Session {
@@ -314,15 +401,57 @@ impl Session {
     }
 
     /// Runs a command by id. Undoable commands record a history step when the workbook changed.
-    /// Panics inside commands are caught and reported; the workbook is restored.
+    /// Panics inside commands are caught and reported; the workbook is restored. In a live
+    /// session, the outermost command's change is shared as one update, and Undo and Redo are
+    /// the person's own.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        if self.depth == 0
+            && !self.collab.rooms.is_empty()
+            && let Some(r) = collab::intercept(self, id, &params)
+        {
+            return r;
+        }
+        if !self.collab.rooms.is_empty()
+            && let Some(spec) = find_command(id)
+            && spec.undoable
+            && let Some(why) = collab::read_only(self)
+        {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        self.depth += 1;
+        let r = self.execute_inner(id, params);
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth == 0 {
+            collab::after_command(self);
+            self.recalc_invalidated();
+        }
+        r
+    }
+
+    /// Recalculates the workbooks whose formulas call plugin functions invalidated since the last
+    /// time (`host/functions/invalidate`, protocol 2.2). Runs after each command and between
+    /// frames; a workbook that had no unsaved changes still has none. True when there were any.
+    pub fn recalc_invalidated(&mut self) -> bool {
+        let names = gridcraft_plugin::take_invalidated();
+        if names.is_empty() {
+            return false;
+        }
+        cmd::plugins::recalc_users_keeping_saved(self, &names);
+        true
+    }
+
+    fn execute_inner(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        // Plugin functions calculated by the command are told which workbook calls them: the
+        // active one (commands that calculate another document say so themselves).
+        let calling = self.active().map(DocState::calling_document);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gridcraft_calc::external::with_document(calling, || (spec.run)(self, &params))));
         let result = match result {
             Ok(r) => r,
             Err(p) => {

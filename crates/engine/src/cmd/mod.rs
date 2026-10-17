@@ -2,7 +2,9 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod chat;
 pub mod data;
+pub mod developer;
 pub mod draw;
 pub mod edit;
 pub mod extra;
@@ -12,7 +14,9 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod office;
 pub mod pivot;
+pub mod plugins;
 pub mod print;
 pub mod review;
 pub mod sheet;
@@ -96,10 +100,16 @@ pub fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 pub fn can_undo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    if let Some(can) = crate::collab::room_undo(s, false) {
+        return if can { Ok(()) } else { Err("nothing to undo".into()) };
+    }
     if s.active().is_some_and(|d| !d.undo.is_empty()) { Ok(()) } else { Err("nothing to undo".into()) }
 }
 pub fn can_redo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    if let Some(can) = crate::collab::room_undo(s, true) {
+        return if can { Ok(()) } else { Err("nothing to redo".into()) };
+    }
     if s.active().is_some_and(|d| !d.redo.is_empty()) { Ok(()) } else { Err("nothing to redo".into()) }
 }
 pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
@@ -125,6 +135,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     SPECS.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::specs());
+        v.extend(chat::specs());
         v.extend(edit::specs());
         v.extend(format::specs());
         v.extend(sheet::specs());
@@ -134,6 +145,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(review::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
+        v.extend(crate::collab::specs());
         v.extend(extra::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
@@ -144,6 +156,9 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(forecast::specs());
         v.extend(analysis::specs());
         v.extend(print::specs());
+        v.extend(plugins::specs());
+        v.extend(office::specs());
+        v.extend(developer::specs());
         v
     })
 }

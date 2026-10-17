@@ -522,6 +522,12 @@ impl Dialog {
                 ],
                 json!({"groupBy": "A", "function": "sum"}),
             ),
+            "collabShare" => {
+                // Drawn by `collab_ui::share_dialog`; OK (Room name and key) runs `collab.join`.
+                let mode = params.get("mode").and_then(Json::as_str).unwrap_or("share").to_string();
+                let defaults = crate::collab_ui::share_defaults(app, &mode);
+                Dialog::form("collabShare", if mode == "join" { "Join Live Session" } else { "Share" }, "collab.join", vec![], defaults)
+            }
             "zoom" => Dialog::form(
                 "zoom",
                 "Zoom",
@@ -720,6 +726,11 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "addIns" => {
+                let mut d = Dialog::custom("addIns", "Add-ins", json!({"path": ""}));
+                d.result = app.session.run("plugins.list", json!({})).ok();
+                d
+            }
             "macros" => {
                 let mut d = Dialog::custom("macros", "Macros", json!({}));
                 d.result = app.session.run("view.macros", json!({})).ok();
@@ -983,6 +994,25 @@ fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "collabShare" => {
+            let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").trim().to_string();
+            let mut key = get("key");
+            if key.is_empty()
+                && d.values.get("encrypt").and_then(Json::as_bool) == Some(true)
+                && let Ok(k) = gridcraft_engine::collab_core::crypto::Key::generate()
+            {
+                key = k.to_base64();
+            }
+            v = json!({
+                "plugin": get("plugin"),
+                "room": get("room"),
+                "mode": get("mode"),
+                "user": {"id": get("userId"), "name": get("name"), "color": get("color")},
+            });
+            if !key.is_empty() {
+                v["key"] = json!(key);
+            }
+        }
         "zoom" => {
             if let Some(p) = d.values.get("preset").and_then(Json::as_str)
                 && d.values.get("percent").is_none()
@@ -1030,6 +1060,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "addIns" => 760.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1078,6 +1109,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => macros(ui, &mut d),
+                "addIns" => add_ins(app, ui, &mut d),
+                "collabShare" => crate::collab_ui::share_dialog(app, ui, &mut d, &mut confirm, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -1517,6 +1550,51 @@ fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.weak(format!("— {steps} step{}", if steps == 1 { "" } else { "s" }));
                 }
             });
+        }
+    });
+}
+
+/// Home › Add-ins: the loaded plugins, their functions and commands; load and unload.
+fn add_ins(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    ui.label("Plugins are programs that add functions and commands. Each runs in its own process.");
+    ui.add_space(6.0);
+    let plugins = gridcraft_engine::plugin::list();
+    if plugins.is_empty() {
+        ui.weak("No plugins are loaded. Install one from GitHub, put a plugin folder in the plugins folder of the settings, or load one below.");
+    }
+    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+        for p in &plugins {
+            crate::plugin_ui::plugin_card(app, ui, p, true);
+            let on = p.enabled();
+            ui.indent(("addin", &p.manifest.id), |ui| {
+                for f in &p.manifest.functions {
+                    let sig = if f.signature.is_empty() { &f.name } else { &f.signature };
+                    ui.horizontal(|ui| {
+                        ui.monospace(sig);
+                        ui.weak(&f.description);
+                    });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for c in &p.manifest.commands {
+                        if ui.add_enabled(on, egui::Button::new(&c.label)).on_hover_text(&c.description).clicked() {
+                            app.run_or_alert("plugins.run", json!({"plugin": p.manifest.id, "command": c.id}));
+                        }
+                    }
+                });
+            });
+            ui.add_space(6.0);
+        }
+    });
+    ui.separator();
+    crate::plugin_ui::install_row(app, ui);
+    ui.horizontal(|ui| {
+        ui.label("Plugin folder:");
+        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.add(egui::TextEdit::singleline(&mut path).desired_width(340.0)).changed() {
+            d.values.insert("path".into(), json!(path));
+        }
+        if ui.add_enabled(!path.trim().is_empty(), egui::Button::new("Load")).clicked() {
+            app.run_or_alert("plugins.load", json!({"path": path.trim()}));
         }
     });
 }

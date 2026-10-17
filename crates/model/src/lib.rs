@@ -7,18 +7,22 @@
 mod b64;
 pub mod cell;
 mod cellmap;
+pub mod chat;
 pub mod features;
 pub mod password;
 pub mod preserved;
+pub mod ribbon;
 pub mod sheet;
 pub mod store;
 pub mod style;
 pub mod workbook;
 
 pub use cell::{Cell, CellPicture, Formula};
+pub use chat::{Chat, ChatAuthor, ChatMessage};
 pub use features::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
+pub use ribbon::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{

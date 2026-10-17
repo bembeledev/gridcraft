@@ -15,6 +15,8 @@
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//! - `office.panes`, `office.open {plugin, command?}`, `office.close {pane}`,
+//!   `office.eval {pane, script, timeoutMs?}` — Office add-ins' pages (`office_pane`)
 
 use std::sync::mpsc::Sender;
 
@@ -40,8 +42,20 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Json),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// `office.eval`: answered when the page does (or at the timeout).
+    OfficeEval {
+        pane: String,
+        script: String,
+        timeout_ms: f64,
+    },
 }
+
+/// `office.eval`'s timeout when none is given, and the longest (the control server waits 60 s).
+const EVAL_TIMEOUT_MS: f64 = 10_000.0;
+const MAX_EVAL_TIMEOUT_MS: f64 = 55_000.0;
 
 #[derive(Default)]
 pub struct Shots {
@@ -153,6 +167,17 @@ fn push_drag(app: &mut SheetApp, a: egui::Pos2, b: egui::Pos2, steps: usize, m: 
     app.synthetic.push_back(vec![egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m }]);
 }
 
+/// An add-in's command that opens a task pane: `taskpane` (its default pane), else its first
+/// ShowTaskpane button.
+fn first_taskpane_command(plugin: &str) -> Option<String> {
+    let p = gridcraft_engine::plugin::get(plugin)?;
+    let office = p.manifest.office.as_ref()?;
+    if office.commands.contains_key("taskpane") {
+        return Some("taskpane".into());
+    }
+    office.commands.iter().find(|(_, c)| matches!(c, gridcraft_engine::plugin::office::OfficeCommand::ShowTaskpane { .. })).map(|(id, _)| id.clone())
+}
+
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
 fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     let Some(q) = search.map(str::to_ascii_lowercase) else { return commands };
@@ -178,6 +203,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
+                ("view.chat", "Chat", "{on?: bool} (toggles without it) → {on}: the document chat's pane"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
@@ -376,6 +402,43 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             }
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
+        "office.panes" => ok(crate::office_pane::list(app)),
+        "office.open" => {
+            let Some(plugin) = s("plugin") else { return err("missing `plugin`") };
+            let command = match s("command") {
+                Some(c) => c.to_string(),
+                None => match first_taskpane_command(plugin) {
+                    Some(c) => c,
+                    None => return err(format!("{plugin} has no task pane command")),
+                },
+            };
+            match app.run("plugins.run", json!({"plugin": plugin, "command": command})) {
+                Ok(mut r) => {
+                    if let Some(o) = r.as_object_mut() {
+                        let pane = crate::office_pane::find_page(app, plugin);
+                        o.insert("pane".into(), json!(pane));
+                    }
+                    ok(r)
+                }
+                Err(e) => err(e),
+            }
+        }
+        "office.close" => {
+            let Some(pane) = s("pane").and_then(|p| crate::office_pane::find_page(app, p)) else { return err("no such pane") };
+            if crate::office_pane::close_key(app, &pane) { ok(json!({"closed": pane})) } else { err("that page is a function page, not a pane") }
+        }
+        "office.eval" => {
+            let Some(script) = s("script") else { return err("missing `script`") };
+            if script.len() > crate::office_pane::MAX_EVAL_SCRIPT {
+                return err("script too large");
+            }
+            let Some(pane) = s("pane").or(s("plugin")).and_then(|p| crate::office_pane::find_page(app, p)) else {
+                return err("no such pane (see `office.panes`)");
+            };
+            let timeout_ms = p.get("timeoutMs").and_then(Json::as_f64).unwrap_or(EVAL_TIMEOUT_MS);
+            let timeout_ms = if timeout_ms.is_finite() { timeout_ms.clamp(100.0, MAX_EVAL_TIMEOUT_MS) } else { EVAL_TIMEOUT_MS };
+            return Outcome::OfficeEval { pane, script: script.to_string(), timeout_ms };
+        }
         "app.quit" => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Json::Null)
@@ -402,9 +465,15 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
                 app.shots.queued.push((token, crate::now_ms() + 100.0, 0));
                 app.shots.pending.push((token, path, req.reply, crate::now_ms() + 8000.0));
             }
+            Outcome::OfficeEval { pane, script, timeout_ms } => crate::office_pane::eval(app, &pane, &script, timeout_ms, req.reply),
         }
     }
     app.control_rx = Some(rx);
+    crate::office_pane::finish_evals(app, crate::now_ms());
+    if app.office.evals.waiting() {
+        // The page answers from outside egui's input: keep frames coming until it does.
+        ctx.request_repaint_after(std::time::Duration::from_millis(20));
+    }
     if !app.synthetic.is_empty() {
         ctx.request_repaint();
     }

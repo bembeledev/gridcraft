@@ -16,6 +16,8 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod office_web;
 mod print;
 
 use std::cell::RefCell;
@@ -54,12 +56,19 @@ impl eframe::App for App {
             }
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // Office add-ins' task panes: their web views follow the panes drawn this frame.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office_web::flush(frame);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let _ = frame;
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         save_prefs(&self.0);
+        // Plugins that asked hear that the open workbooks close (best effort, at most 5 s).
+        gridcraft_engine::cmd::plugins::quitting(&self.0.session);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -195,6 +204,8 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office: Some(office_web::service()),
         ..Default::default()
     }
 }
@@ -258,12 +269,19 @@ fn main() -> eframe::Result<()> {
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
+    let mut plugin_dirs: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--control" => {
                 i += 1;
                 control_port = args.get(i).and_then(|p| p.parse().ok());
+            }
+            "--plugin" => {
+                i += 1;
+                if let Some(d) = args.get(i) {
+                    plugin_dirs.push(d.into());
+                }
             }
             "--sample" => {
                 i += 1;
@@ -288,7 +306,22 @@ fn main() -> eframe::Result<()> {
             None => logger.no_file(),
         }
     }
+    // Plugins: GRIDCRAFT_PLUGIN_PATH, `--plugin DIR`, then `plugins` in the settings folder. Each
+    // process starts when one of its functions or commands is first used.
+    if let Some(dir) = config_dir().filter(|_| prefs_enabled()) {
+        plugin_dirs.push(dir.join("plugins"));
+        // Where File › Options › Add-ins installs plugins from GitHub.
+        gridcraft_engine::plugin::install::set_install_dir(Some(dir.join("plugins")));
+    }
+    for (dir, r) in gridcraft_engine::plugin::autoload(&plugin_dirs) {
+        match r {
+            Ok(id) => log::info!("plugin {id} from {}", dir.display()),
+            Err(e) => log::warn!("plugin {}: {e}", dir.display()),
+        }
+    }
     let mut session = Session::new();
+    // Live sessions keep their room's state here, so a crash and rejoin merges.
+    session.collab.recovery_dir = config_dir().filter(|_| prefs_enabled()).map(|d| d.join("recovery"));
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
@@ -302,6 +335,7 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    gridcraft_engine::cmd::plugins::apply_prefs(&app.session.prefs);
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.

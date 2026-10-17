@@ -756,6 +756,8 @@ fn macro_workbook_bytes() -> Vec<u8> {
 
 #[test]
 fn opening_a_macro_workbook_shows_a_notice() {
+    // A macro add-in loaded by another test would add its own bar (Developer › macros disabled).
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     // The reader's "macros kept but not executed" warning must reach a dismissible info bar,
     // not be silently dropped (issue #6 follow-up: Excel-style message bar).
     let mut h = harness(blank());
@@ -891,4 +893,481 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         // Upright text never spills into the neighbouring columns: the clip is the cell itself.
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
+}
+
+/// Plugins are process-wide: the tests that load them run one at a time.
+static PLUGINS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn plugins_add_ribbon_tabs_groups_and_menu_items() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-ribbon", "name": "Ribbon Test Plugin", "run": {"command": "./not-started"},
+            "commands": [{"id": "go", "label": "Go Go"}, {"id": "other", "label": "Other Thing"}],
+            "ui": {"ribbon": [{"tab": "Widgets", "group": "Main", "buttons": [{"command": "go", "icon": "chart"}]},
+                              {"tab": "Data", "group": "Extra", "buttons": [{"command": "other", "size": "small", "label": "Data Extra"}]}],
+                   "menus": [{"command": "go", "label": "Plugin Menu Item"}]}}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    assert!(gridcraft_ui_egui::plugin_ui::extra_tabs().contains(&"Widgets".to_string()));
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Widgets".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("Go Go").is_some(), "the plugin's own tab shows its button");
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("Data Extra").is_some(), "a group added to a built-in tab");
+    assert!(h.query_by_label("Go Go").is_none());
+    let items = gridcraft_ui_egui::plugin_ui::menu_items(gridcraft_engine::plugin::MenuKind::Cell);
+    assert!(items.iter().any(|i| i.label == "Plugin Menu Item" && i.plugin == "t.ui-ribbon"));
+    assert_eq!(gridcraft_ui_egui::plugin_ui::icon_named("Chart-Bar"), Some(gridcraft_ui_egui::icons::Icon::ChartBar));
+    gridcraft_engine::plugin::unload("t.ui-ribbon");
+    assert!(!gridcraft_ui_egui::plugin_ui::extra_tabs().contains(&"Widgets".to_string()), "the tab goes with the plugin");
+    h.state_mut().ui.ribbon_tab = "Widgets".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("Go Go").is_none());
+}
+
+#[test]
+fn options_lists_add_ins_and_turns_them_off_and_on() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-options", "name": "Options Test Plugin", "version": "2.0", "author": "Someone",
+            "homepage": "https://example.org/plugin", "run": {"command": "./not-started"},
+            "commands": [{"id": "go", "label": "Go"}],
+            "ui": {"ribbon": [{"tab": "Data", "group": "G", "buttons": [{"command": "go", "label": "Options Plugin Button"}]}]}}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Options);
+    h.run_steps(2);
+    assert!(h.query_by_label("Options Test Plugin 2.0").is_some());
+    assert!(h.query_by_label("Documentation").is_some());
+    h.get_by_label("Deactivate").click();
+    h.run_steps(2);
+    assert!(!gridcraft_engine::plugin::get("t.ui-options").unwrap().enabled());
+    assert_eq!(h.state().session.prefs.disabled_plugins, vec!["t.ui-options".to_string()]);
+    assert!(gridcraft_ui_egui::plugin_ui::groups("Data").is_empty(), "an inactive plugin's ribbon group goes");
+    h.get_by_label("Activate").click();
+    h.run_steps(2);
+    assert!(gridcraft_engine::plugin::get("t.ui-options").unwrap().enabled());
+    assert!(h.state().session.prefs.disabled_plugins.is_empty());
+    assert_eq!(gridcraft_ui_egui::plugin_ui::groups("Data").len(), 1);
+    gridcraft_engine::plugin::unload("t.ui-options");
+
+    // Install from GitHub: a bad address is refused at once; a good one asks first.
+    h.state_mut().plugin_install.url = "https://gitlab.com/acme/fin".into();
+    h.run_steps(1);
+    h.get_by_label("Install").click();
+    h.run_steps(2);
+    assert!(matches!(&h.state().plugin_install.outcome, Some(Err(e)) if e.contains("GitHub")));
+    h.state_mut().plugin_install.url = "https://github.com/acme/fin".into();
+    h.run_steps(1);
+    h.get_by_label("Install").click();
+    h.run_steps(2);
+    assert_eq!(h.state().plugin_install.confirming.as_deref(), Some("acme/fin"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().plugin_install.confirming.is_none() && !h.state().plugin_install.busy());
+}
+
+#[test]
+fn blocked_add_ins_say_why_and_offer_to_install_what_they_need() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-reports", "name": "Reports", "version": "1.4.0", "run": {"command": "./not-started"},
+            "commands": [{"id": "go", "label": "Go"}],
+            "ui": {"ribbon": [{"tab": "Data", "group": "R", "buttons": [{"command": "go", "label": "Reports Button"}]}]},
+            "requires": {"addins": [
+                {"id": "t.ui-vba", "version": "^0.1.4", "github": "sirmmo/craft-vba", "why": "Runs the report macros"},
+                {"id": "t.ui-mqtt", "version": "*", "github": "sirmmo/craft-collab", "optional": true}]}}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    assert!(gridcraft_ui_egui::plugin_ui::groups("Data").is_empty(), "a blocked add-in's ribbon group is absent");
+    let mut h = harness(blank());
+    h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Options);
+    h.run_steps(2);
+    assert!(h.query_by_label("Blocked · t.ui-reports").is_some());
+    assert!(h.query_by_label("Needs craft-vba, which isn't installed").is_some());
+    h.get_by_label("Install Missing").click();
+    h.run_steps(2);
+    let offer = h.state().plugin_install.offer.as_ref().expect("Install Missing offers the missing add-ins");
+    assert_eq!(offer.plugin, "t.ui-reports");
+    let ticked: Vec<(&str, bool)> = offer.items.iter().map(|(m, on)| (m.id.as_str(), *on)).collect();
+    assert_eq!(ticked, [("t.ui-vba", true), ("t.ui-mqtt", false)], "optional add-ins are offered unticked");
+    assert!(h.query_by_label("Reports needs craft-vba ^0.1.4 (Runs the report macros). Install it too?").is_some());
+    assert!(h.query_by_label("Reports can use craft-collab *. Install it too?").is_some());
+    h.get_by_label("Not Now").click();
+    h.run_steps(2);
+    assert!(h.state().plugin_install.offer.is_none());
+
+    // Once the required add-in is there, the add-in unblocks; turning that one off asks first.
+    let vba = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-vba", "name": "craft-vba", "version": "0.1.5", "run": {"command": "./not-started"}}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(vba, std::env::temp_dir()).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Install Missing").is_none());
+    assert_eq!(gridcraft_ui_egui::plugin_ui::groups("Data").len(), 1, "unblocked without a restart");
+    let deactivate = h.query_all_by_label("Deactivate").last().expect("the second card's button");
+    deactivate.click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Reports needs craft-vba. Turn both off?").is_some());
+    assert!(gridcraft_engine::plugin::get("t.ui-vba").unwrap().enabled(), "nothing is turned off before the answer");
+    h.get_by_label("Turn Both Off").click();
+    h.run_steps(2);
+    assert!(!gridcraft_engine::plugin::get("t.ui-vba").unwrap().enabled());
+    assert!(!gridcraft_engine::plugin::get("t.ui-reports").unwrap().enabled());
+    gridcraft_engine::plugin::unload("t.ui-reports");
+    gridcraft_engine::plugin::unload("t.ui-vba");
+}
+
+#[test]
+fn add_ins_dialog_lists_and_unloads_plugins() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-addins", "name": "Dialog Test Plugin", "version": "1.0", "run": {"command": "./not-started"},
+            "functions": [{"name": "UITEST.F", "signature": "UITEST.F(x)"}],
+            "commands": [{"id": "go", "label": "Do The Thing"}]}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("addIns", json!({}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Dialog Test Plugin 1.0").is_some());
+    assert!(h.query_by_label("UITEST.F(x)").is_some());
+    assert!(h.query_by_label("Do The Thing").is_some());
+    h.get_by_label("Unload").click();
+    h.run_steps(3);
+    assert!(gridcraft_engine::plugin::get("t.ui-addins").is_none());
+    assert!(h.query_by_label("Dialog Test Plugin 1.0").is_none(), "the list refreshes after unloading");
+}
+
+/// What the fake web view host saw and what it hands back.
+#[derive(Default)]
+struct FakeWeb {
+    shown: Vec<(String, String)>,
+    hidden: Vec<String>,
+    closed: Vec<String>,
+    inbox: Vec<(String, String)>,
+    replies: Vec<(String, String)>,
+    hidden_loads: Vec<(String, String)>,
+    calls: Vec<(String, String, String)>,
+}
+
+struct FakeHost(std::rc::Rc<std::cell::RefCell<FakeWeb>>);
+
+impl gridcraft_ui_egui::office_pane::OfficeHost for FakeHost {
+    fn show(&mut self, key: &str, url: &str, _rect: egui::Rect, _ppp: f32) {
+        self.0.borrow_mut().shown.push((key.into(), url.into()));
+    }
+    fn hide(&mut self, key: &str) {
+        self.0.borrow_mut().hidden.push(key.into());
+    }
+    fn close(&mut self, key: &str) {
+        self.0.borrow_mut().closed.push(key.into());
+    }
+    fn load_hidden(&mut self, key: &str, url: &str) {
+        self.0.borrow_mut().hidden_loads.push((key.into(), url.into()));
+    }
+    fn call(&mut self, key: &str, entry: &str, json: &str) {
+        self.0.borrow_mut().calls.push((key.into(), entry.into(), json.into()));
+    }
+    fn take_messages(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.0.borrow_mut().inbox)
+    }
+    fn reply(&mut self, key: &str, json: &str) {
+        self.0.borrow_mut().replies.push((key.into(), json.into()));
+    }
+}
+
+#[test]
+fn office_add_ins_open_a_task_pane_and_sync_through_the_web_view() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let xml = r#"<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TaskPaneApp">
+      <Id>bbbbbbbb-0000-4000-8000-000000000001</Id><Version>1.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+      <DisplayName DefaultValue="Pane Test"/><Hosts><Host Name="Workbook"/></Hosts>
+      <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+      <Permissions>ReadWriteDocument</Permissions></OfficeApp>"#;
+    let m = gridcraft_engine::plugin::office::parse_manifest(xml, "gridcraft").unwrap();
+    let id = m.id.clone();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let web = std::rc::Rc::new(std::cell::RefCell::new(FakeWeb::default()));
+    let services = gridcraft_ui_egui::Services { office: Some(Box::new(FakeHost(web.clone()))), ..Default::default() };
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(blank(), services),
+    );
+    h.run_steps(2);
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": "taskpane"}));
+    h.run_steps(3);
+    assert!(h.query_by_label("Pane Test").is_some(), "the pane's title");
+    assert!(web.borrow().shown.iter().any(|(_, url)| url == "https://tests.example/pane.html"), "the page shows in the pane");
+    // The page's context.sync(): written to the sheet and answered with the same id.
+    let key = web.borrow().shown.last().map(|(k, _)| k.clone()).unwrap();
+    web.borrow_mut().inbox.push((
+        key.clone(),
+        json!({"id": 7, "actions": [
+            {"op": "set", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "prop": "values", "value": 42},
+            {"op": "load", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "props": ["address"]}
+        ]})
+        .to_string(),
+    ));
+    h.run_steps(2);
+    let (to, reply) = web.borrow().replies.last().cloned().unwrap();
+    assert_eq!(to, key);
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["id"], 7);
+    assert_eq!(reply["results"][1]["address"], "Sheet1!A1");
+    let a1 = h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    assert_eq!(a1, Value::Number(42.0));
+    // The File tab hides the page (a native web view would cover it); turning the add-in off closes it.
+    h.state_mut().run_or_alert("ui.backstage", json!({"page": "info"}));
+    h.run_steps(2);
+    assert!(web.borrow().hidden.contains(&key));
+    h.state_mut().backstage = None;
+    gridcraft_engine::plugin::set_enabled(&id, false).unwrap();
+    h.run_steps(2);
+    assert!(web.borrow().closed.contains(&key));
+    assert!(h.state().office.open.is_empty());
+    gridcraft_engine::plugin::unload(&id);
+}
+
+#[test]
+fn office_function_commands_wait_for_the_page_and_its_completed_call() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let xml = r#"<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xsi:type="TaskPaneApp">
+      <Id>bbbbbbbb-0000-4000-8000-000000000002</Id><Version>1.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+      <DisplayName DefaultValue="Function Test"/><Hosts><Host Name="Workbook"/></Hosts>
+      <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+      <Permissions>ReadWriteDocument</Permissions>
+      <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+        <Hosts><Host xsi:type="Workbook"><DesktopFormFactor>
+          <FunctionFile resid="Fn.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface"><OfficeTab id="TabHome"><Group id="Tests.Group"><Label resid="G.Label"/>
+            <Control xsi:type="Button" id="Tests.WriteButton"><Label resid="B.Label"/>
+              <Action xsi:type="ExecuteFunction"><FunctionName>writeValue</FunctionName></Action></Control>
+          </Group></OfficeTab></ExtensionPoint>
+        </DesktopFormFactor></Host></Hosts>
+        <Resources><bt:Urls><bt:Url id="Fn.Url" DefaultValue="https://tests.example/functions.html"/></bt:Urls>
+          <bt:ShortStrings><bt:String id="G.Label" DefaultValue="Tests"/><bt:String id="B.Label" DefaultValue="Write"/></bt:ShortStrings></Resources>
+      </VersionOverrides></OfficeApp>"#;
+    let m = gridcraft_engine::plugin::office::parse_manifest(xml, "gridcraft").unwrap();
+    let id = m.id.clone();
+    let command = m
+        .office
+        .as_ref()
+        .unwrap()
+        .commands
+        .iter()
+        .find(|(_, c)| matches!(c, gridcraft_engine::plugin::office::OfficeCommand::ExecuteFunction { .. }))
+        .map(|(k, _)| k.clone())
+        .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let web = std::rc::Rc::new(std::cell::RefCell::new(FakeWeb::default()));
+    let services = gridcraft_ui_egui::Services { office: Some(Box::new(FakeHost(web.clone()))), ..Default::default() };
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(blank(), services),
+    );
+    h.run_steps(2);
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": command}));
+    h.run_steps(2);
+    let (key, url) = web.borrow().hidden_loads.last().cloned().unwrap();
+    assert_eq!(url, "https://tests.example/functions.html", "the function file loads hidden");
+    assert!(web.borrow().calls.is_empty(), "nothing is called before the page's library is ready");
+    // The library started in the page: the call goes in, with the manifest's control id.
+    web.borrow_mut().inbox.push((key.clone(), json!({"event": "ready"}).to_string()));
+    h.run_steps(2);
+    let (to, entry, call) = web.borrow().calls.last().cloned().unwrap();
+    assert_eq!((to.as_str(), entry.as_str()), (key.as_str(), "__craftOfficeRunFunction"));
+    let call: serde_json::Value = serde_json::from_str(&call).unwrap();
+    assert_eq!(call["name"], "writeValue");
+    assert_eq!(call["control"], "Tests.WriteButton");
+    assert!(web.borrow().replies.is_empty(), "events aren't answered");
+    assert_eq!(h.state().office.calls.len(), 1);
+    // The function's context.sync() is answered like a pane's, then event.completed() ends it.
+    web.borrow_mut().inbox.push((
+        key.clone(),
+        json!({"id": 1, "actions": [{"op": "set", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "prop": "values", "value": "done"}]})
+            .to_string(),
+    ));
+    web.borrow_mut().inbox.push((key.clone(), json!({"event": "functionDone", "call": call["call"]}).to_string()));
+    h.run_steps(2);
+    assert!(h.state().office.calls.is_empty(), "completed");
+    let a1 = h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    assert_eq!(a1, Value::Text("done".into()));
+    // A ready page hears about selection changes.
+    let before = web.borrow().calls.len();
+    h.state_mut().run_or_alert("selection.set", json!({"range": "C3"}));
+    h.run_steps(2);
+    assert!(web.borrow().calls[before..].iter().any(|(k, e, j)| *k == key && e == "__craftOfficeEvent" && j.contains("documentSelectionChanged")));
+    // A function that never calls completed() is given up on, and the user is told.
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": command}));
+    h.run_steps(2);
+    assert_eq!(h.state().office.calls.len(), 1);
+    let later = gridcraft_ui_egui::now_ms() + gridcraft_ui_egui::office_pane::FUNCTION_TIMEOUT_MS + 1000.0;
+    gridcraft_ui_egui::office_pane::expire_calls(h.state_mut(), later);
+    assert!(h.state().office.calls.is_empty());
+    let toast = h.state().toast.clone().map(|(t, _)| t).unwrap_or_default();
+    assert!(toast.contains("writeValue") && toast.contains("completed"), "{toast}");
+    gridcraft_engine::plugin::unload(&id);
+}
+
+#[test]
+fn a_macro_add_in_brings_the_developer_tab_and_macros_start_disabled() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-vba", "name": "VBA Test", "macros": {"language": "VBA"}, "run": {"command": "./not-started"}}"#,
+    )
+    .unwrap();
+    assert!(!gridcraft_ui_egui::developer_ui::visible());
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    // Unloaded however the test ends, so the other tests never see it.
+    struct Unload;
+    impl Drop for Unload {
+        fn drop(&mut self) {
+            gridcraft_engine::plugin::unload("t.ui-vba");
+        }
+    }
+    let _unload = Unload;
+    assert!(gridcraft_ui_egui::developer_ui::visible(), "an add-in that runs macros brings the Developer tab");
+    let mut session = blank();
+    std::sync::Arc::make_mut(&mut session.active_mut().unwrap().wb).vba_project = Some(b"project".to_vec());
+    let mut h = harness(session);
+    h.run_steps(2);
+    let notice = h.state().notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(notice.contains("Macros have been disabled"), "{notice}");
+    assert!(!gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    h.get_by_label("Enable Content").click();
+    h.run_steps(2);
+    assert!(gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    assert!(h.state().notice.is_none());
+    // Developer › Macro Security.
+    h.state_mut().ui.ribbon_tab = "Developer".into();
+    h.run_steps(2);
+    h.get_by_label("Macro Security").click();
+    h.run_steps(2);
+    h.get_by_label("Disable all macros").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.prefs.macro_security, "disable");
+    assert!(!gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    // The Macros window reports the add-in's failure to start instead of hanging.
+    gridcraft_ui_egui::developer_ui::open_macros(h.state_mut());
+    h.run_steps(2);
+    assert!(h.state().dev.macros.as_ref().and_then(|w| w.error.clone()).is_some_and(|e| e.contains("can't start")));
+    gridcraft_engine::plugin::unload("t.ui-vba");
+    assert!(!gridcraft_ui_egui::developer_ui::visible());
+}
+
+#[test]
+fn a_workbooks_ribbon_buttons_show_on_their_tabs_and_run_their_macros() {
+    use gridcraft_engine::model::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
+    // No macro add-in loaded meanwhile: the buttons show without one.
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let button = |id: &str, label: &str| RibbonButton {
+        id: id.into(),
+        label: label.into(),
+        on_action: format!("Module1.{label}"),
+        large: true,
+        ..Default::default()
+    };
+    let group = |b| vec![RibbonGroup { id: "g".into(), label: "G".into(), buttons: vec![b] }];
+    let mut session = blank();
+    std::sync::Arc::make_mut(&mut session.active_mut().unwrap().wb).ribbon = Some(Ribbon {
+        tabs: vec![
+            RibbonTab { id: "tTools".into(), label: "Tools".into(), groups: group(button("b1", "Go")), ..Default::default() },
+            RibbonTab { builtin: Some("TabHome".into()), groups: group(button("b2", "Hello")), ..Default::default() },
+        ],
+    });
+    let mut h = harness(session);
+    h.run_steps(2);
+    // On Home, after Home's own groups.
+    assert!(h.query_by_label("Hello").is_some(), "the workbook's button on Home");
+    assert!(h.query_by_label("Go").is_none());
+    h.state_mut().ui.ribbon_tab = "Tools".into();
+    h.run_steps(2);
+    h.get_by_label("Go").click();
+    h.run_steps(2);
+    // Macros start disabled: the click says so instead of running.
+    let said = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
+    assert!(said.contains("disabled"), "{said}");
+    // Developer › Ribbon Buttons adds one more, saved in the workbook.
+    h.state_mut().message = None;
+    gridcraft_ui_egui::developer_ui::open_buttons(h.state_mut(), Some("Module1.Report"));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    let ribbon = h.state().session.active().unwrap().wb.ribbon.clone().unwrap();
+    let added = ribbon.tabs.iter().find(|t| t.label == "Macros").and_then(|t| t.groups.first()).and_then(|g| g.buttons.first()).cloned();
+    assert_eq!(added.map(|b| (b.label, b.on_action, b.image)), Some(("Report".into(), "Module1.Report".into(), Some("MacroPlay".into()))));
+    // Its tab joins the tab row: open it and the button is there.
+    h.state_mut().dev.buttons = None;
+    h.state_mut().ui.ribbon_tab = "Macros".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("Report").is_some());
+}
+
+#[test]
+fn add_in_functions_are_suggested_while_typing_with_their_hint() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-fx", "name": "Prices", "run": {"command": "./not-started"},
+            "functions": [{"name": "ACME.PRICE", "signature": "ACME.PRICE(ticker, [date])", "description": "Price of a share", "minArgs": 1, "maxArgs": 2},
+                          {"name": "ACME.RATE", "maxArgs": 0}]}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    struct Unload;
+    impl Drop for Unload {
+        fn drop(&mut self) {
+            gridcraft_engine::plugin::unload("t.ui-fx");
+        }
+    }
+    let _unload = Unload;
+    // Insert Function and agents see them too, in their own category.
+    let list = gridcraft_engine::cmd::formulas::function_list();
+    let price = list.iter().find(|f| f["name"] == "ACME.PRICE").expect("listed");
+    assert_eq!((price["category"].as_str(), price["plugin"].as_str()), (Some("Add-ins"), Some("t.ui-fx")));
+    assert_eq!(list.iter().find(|f| f["name"] == "ACME.RATE").unwrap()["signature"], "ACME.RATE(…)");
+    let mut h = harness(blank());
+    h.run_steps(2);
+    h.state_mut().begin_edit(Some("=AC".into()), true);
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("M".into()));
+    h.run_steps(3);
+    let suggested = h.state().editor.as_ref().unwrap().autocomplete.clone();
+    assert!(suggested.contains(&"ACME.PRICE".to_string()) && suggested.contains(&"ACME.RATE".to_string()), "{suggested:?}");
+    assert!(h.query_by_label_contains("Price of a share").is_some(), "the highlighted function's description");
+    // Accepting it opens the call, and the argument hint is the add-in's signature.
+    let ed = h.state_mut().editor.as_mut().unwrap();
+    ed.ac_index = ed.autocomplete.iter().position(|n| n == "ACME.PRICE").unwrap();
+    assert!(ed.accept_autocomplete());
+    assert_eq!(ed.text, "=ACME.PRICE(");
+    assert_eq!(gridcraft_ui_egui::formula_bar::function_signature("acme.price").as_deref(), Some("ACME.PRICE(ticker, [date])"));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("ticker").is_some(), "the argument hint");
+    h.state_mut().cancel_edit();
+    // Turned off, they're no longer suggested.
+    gridcraft_engine::plugin::set_enabled("t.ui-fx", false).unwrap();
+    h.state_mut().begin_edit(Some("=AC".into()), true);
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("M".into()));
+    h.run_steps(3);
+    assert!(!h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n.starts_with("ACME.")));
+    h.state_mut().cancel_edit();
 }

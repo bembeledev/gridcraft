@@ -10,8 +10,11 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod chat_ui;
+pub mod collab_ui;
 pub mod control;
 pub mod credits;
+pub mod developer_ui;
 pub mod dialogs;
 pub mod editor;
 pub mod fonts;
@@ -22,10 +25,12 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod office_pane;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
+pub mod plugin_ui;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
@@ -196,6 +201,22 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Desktop: the web view Office add-ins' task panes show in.
+    pub office: Option<Box<dyn office_pane::OfficeHost>>,
+    /// The page hosting GridCraft closes the document (craft-live inside Nextcloud, which shows
+    /// no close button of its own): the title bar gets a Close button, and File › Close calls
+    /// this instead of closing the workbook.
+    pub close: Option<Box<dyn Fn()>>,
+}
+
+/// A live session the hosting page runs (craft-live in Nextcloud): the session's popover shows
+/// its name for the transport and its lines, and has no Leave (the host owns the session).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HostSession {
+    /// In place of the transport's name ("Nextcloud").
+    pub label: String,
+    /// The file, the person, the saved state, the connection.
+    pub lines: Vec<String>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -224,6 +245,34 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,
+    /// Installing a plugin from GitHub (File › Options › Add-ins, Automate › Add-ins).
+    pub plugin_install: plugin_ui::Install,
+    /// Office add-ins' open task panes.
+    pub office: office_pane::Panes,
+    /// The Developer tab's windows (Macros, Visual Basic, Macro Security).
+    pub dev: developer_ui::DevState,
+    /// A plugin command's dialog (protocol 1.2).
+    pub plugin_dialog: Option<plugin_ui::DialogState>,
+    /// Where documents opened by a plugin come from (`open.label`), by document uid: shown in the
+    /// status bar.
+    pub doc_labels: HashMap<u64, String>,
+    /// A message for the status bar (a plugin's answer to a document event) and when it came.
+    pub status_message: Option<(String, f64)>,
+    /// Cells others changed in a live session, highlighted briefly: (document uid, sheet, cell, when).
+    pub collab_highlights: Vec<(u64, usize, gridcraft_engine::core::CellRef, f64)>,
+    /// When the live sessions' state was last kept for recovery.
+    pub collab_recovery_at: f64,
+    /// Invitation links transports gave for rooms (room id → link), for Share › Copy invitation.
+    pub collab_invites: std::collections::HashMap<String, String>,
+    /// A person's selection flashing after a click on their circle in the title bar.
+    pub collab_flash: Option<collab_ui::Flash>,
+    /// When each person in the live session last moved their selection (awareness client id →
+    /// where and when), so their name tag fades after a while.
+    pub collab_moved: HashMap<u64, collab_ui::Moved>,
+    /// The document chat's pane and title-bar button (draft, unread counts, the mention flash).
+    pub chat: chat_ui::ChatState,
+    /// The hosting page's live session, when it runs one (craft-live).
+    pub host_session: Option<HostSession>,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -280,6 +329,19 @@ impl SheetApp {
             notice: None,
             services,
             printing: Default::default(),
+            plugin_install: Default::default(),
+            office: Default::default(),
+            dev: Default::default(),
+            plugin_dialog: None,
+            doc_labels: HashMap::new(),
+            status_message: None,
+            collab_highlights: Vec::new(),
+            collab_recovery_at: 0.0,
+            collab_invites: Default::default(),
+            collab_flash: None,
+            collab_moved: HashMap::new(),
+            chat: Default::default(),
+            host_session: None,
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -379,6 +441,13 @@ impl SheetApp {
         }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
+        }
+        // The hosting page closes the document (craft-live: Nextcloud's editor goes away).
+        if id == "file.close"
+            && let Some(close) = &self.services.close
+        {
+            close();
+            return Ok(json!({"closedBy": "host"}));
         }
         let r = self.session.run(id, params);
         self.after_engine();
@@ -505,6 +574,11 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
+        // A plugin command run from a button, a menu item or a plugin dialog: the interface opens
+        // the file and shows the dialog its result asks for (programmatic callers get them back).
+        if id == "plugins.run" {
+            return plugin_ui::run_command(self, params);
+        }
         if let Err(e) = self.run(id, params) {
             self.alert(e);
         }
@@ -582,6 +656,13 @@ impl SheetApp {
             "view.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
+            }
+            "view.chat" => {
+                if self.session.active().is_none() {
+                    return Some(Err("no workbook open".into()));
+                }
+                let on = chat_ui::toggle(self, p.get("on").and_then(Json::as_bool));
+                Ok(json!({"on": on}))
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
@@ -704,6 +785,8 @@ impl SheetApp {
                         f(&u);
                     }
                 }
+                UiRequest::OfficePane { plugin, title, url, pane } => office_pane::open(self, plugin, title, url, pane),
+                UiRequest::OfficeFunction { plugin, url, function, control } => office_pane::run_function(self, plugin, url, function, control),
             }
         }
     }
@@ -714,6 +797,13 @@ impl SheetApp {
             return;
         }
         match name {
+            // The message bar's Enable Content (a workbook with macros).
+            "enableMacros" => {
+                self.run_or_alert("developer.enableMacros", json!({}));
+                self.notice = None;
+            }
+            "macrosVba" => developer_ui::open_macros(self),
+            "visualBasic" => developer_ui::open_editor(self, None),
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
@@ -1094,6 +1184,10 @@ impl SheetApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
+        plugin_ui::poll_install(self, &ctx);
+        plugin_ui::poll_events(self, &ctx);
+        collab_ui::pump(self, &ctx);
+        office_pane::pump(self);
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
             return;
@@ -1109,9 +1203,11 @@ impl SheetApp {
         ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
+            office_pane::covered(self);
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
+            developer_ui::notice(self);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
@@ -1121,6 +1217,7 @@ impl SheetApp {
             }
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
+            office_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();
@@ -1129,6 +1226,8 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        plugin_ui::dialog_window(self, &ctx);
+        developer_ui::windows(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
@@ -1150,11 +1249,11 @@ impl SheetApp {
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
+            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx") || p.ends_with(".xlsm")))
         {
             self.grid.last_autosave = now;
             self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
+            let _ = self.session.run("file.save", json!({"autosave": true}));
         }
         // Window title.
         if let Some(d) = self.session.active() {

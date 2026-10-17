@@ -2,6 +2,7 @@
 
 mod array_export;
 mod chart_bool_default;
+mod chat_tests;
 mod csv_tests;
 mod encrypted_tests;
 mod fixtures;
@@ -11,6 +12,7 @@ mod malformed;
 mod ods_tests;
 mod passthrough_tests;
 mod pivot_tests;
+mod ribbon_tests;
 mod richdata_tests;
 mod roundtrip;
 mod sheet_names;

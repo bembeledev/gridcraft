@@ -17,6 +17,7 @@ mod chart;
 mod chartex;
 mod crypto;
 mod csv;
+pub mod custom_ui;
 mod drawing;
 mod feature_bags;
 mod fmla;
@@ -50,6 +51,13 @@ pub use ods::read_ods;
 pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
+
+/// The document chat's part (craft-collab `docs/chat.md`), related from the package root.
+pub const CHAT_PART: &str = "craft/chat.json";
+/// Its relationship type.
+pub const CHAT_REL: &str = "urn:craft:relationships:chat";
+/// Its content type.
+pub const CHAT_CONTENT_TYPE: &str = "application/vnd.craft.chat+json";
 
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]

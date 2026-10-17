@@ -286,10 +286,21 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         }
         rewrite(&mut cx.wb, &name, &Edit::Insert { axis, at, count });
         cx.structural = true;
-        Ok(Json::Null)
+        Ok(name)
     })?;
+    log_lines(s, out, axis, &[(at, count)], true);
     cancel_copy_mode(s);
-    Ok(out)
+    Ok(Json::Null)
+}
+
+/// Records a row or column insert or delete for a live session (the line ids move with them).
+fn log_lines(s: &mut Session, sheet: String, axis: Axis, spans: &[(u32, u32)], insert: bool) {
+    if let Ok(d) = s.doc_mut() {
+        let axis = if axis == Axis::Rows { gridcraft_collab::Axis::Rows } else { gridcraft_collab::Axis::Cols };
+        for &(at, count) in spans {
+            d.struct_log.push(gridcraft_collab::StructOp { sheet: sheet.clone(), axis, at, count, insert });
+        }
+    }
 }
 
 /// The areas a line delete/insert targets as `(first line, count)`, merged and sorted from the
@@ -335,7 +346,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
         // Last area first, so the earlier ones keep their positions.
-        for (at, count) in areas {
+        for &(at, count) in &areas {
             {
                 let sh = cx.sheet_mut(sheet)?;
                 let block = match axis {
@@ -352,10 +363,11 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             rewrite(&mut cx.wb, &name, &Edit::Delete { axis, at, count });
         }
         cx.structural = true;
-        Ok(Json::Null)
+        Ok(name)
     })?;
+    log_lines(s, out, axis, &areas, false);
     cancel_copy_mode(s);
-    Ok(out)
+    Ok(Json::Null)
 }
 
 /// Reorders a contiguous block of whole columns without replacing the destination columns.
@@ -453,6 +465,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         cx.structural = true;
         Ok(json!({"cols": RangeRef::cols(final_start, final_start + count - 1).a1()}))
     })?;
+    if let Some(name) = s.doc()?.wb.sheet(sheet).map(|sh| sh.name.clone()) {
+        log_lines(s, name.clone(), Axis::Cols, &[(before, count)], true);
+        log_lines(s, name, Axis::Cols, &[(delete_at, count)], false);
+    }
     cancel_copy_mode(s);
     Ok(out)
 }

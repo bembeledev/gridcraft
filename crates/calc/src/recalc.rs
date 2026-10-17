@@ -483,10 +483,14 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        // Explicit blanks from an add-in function are this formula's own (dependencies evaluated
+        // meanwhile keep theirs).
+        let outer_blanks = crate::external::swap_blanks(false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        let blanks = crate::external::swap_blanks(outer_blanks);
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {
@@ -508,7 +512,10 @@ impl PassHost<'_> {
         // A blank cell shows as 0 in a formula's result, inside an array as well (`=A1:A3`,
         // FILTER or SORT of a range with blanks). GROUPBY and PIVOTBY lay out blank cells
         // of their own, which stay blank.
-        let keep_blanks = matches!(&*expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
+        // So do add-in functions that return explicit blanks (plugin protocol 2.2's `{"empty": true}`),
+        // when the formula is the call itself.
+        let blank_call = blanks && matches!(&*expr, Expr::Call(n, _) if crate::external::get(n).is_some());
+        let keep_blanks = blank_call || matches!(&*expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
         let v = match v {
             Value::Array(a) => {
                 let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
@@ -522,7 +529,7 @@ impl PassHost<'_> {
                 }
                 a.data.first().cloned().unwrap_or_default()
             }
-            Value::Empty => Value::Number(0.0),
+            Value::Empty if !blank_call => Value::Number(0.0),
             v => v,
         };
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.

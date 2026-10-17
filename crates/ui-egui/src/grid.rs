@@ -107,6 +107,9 @@ pub struct GridState {
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
     pub reveal_moving_end: bool,
+    /// Scroll to this cell once (someone else's selection in a live session) without moving the
+    /// selection.
+    pub reveal: Option<CellRef>,
     pub last_title: Option<String>,
     pub drag_select: bool,
     pub rect: Option<Rect>,
@@ -669,10 +672,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     view.scroll.y = view.scroll.y.min(max_y);
     let mut geo = make_geo(app, view.scroll);
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
-    if app.grid.ensure_visible {
+    if app.grid.ensure_visible || app.grid.reveal.is_some() {
         app.grid.ensure_visible = false;
         let cell = if std::mem::take(&mut app.grid.reveal_moving_end) { sel.moving_end() } else { sel.active };
-        let target = app.editor.as_ref().and_then(|e| e.point_cell).unwrap_or(cell);
+        let target = match app.grid.reveal.take() {
+            Some(cell) => cell,
+            None => app.editor.as_ref().and_then(|e| e.point_cell).unwrap_or(cell),
+        };
         if paper {
             crate::paper_view::ensure_covers(app, &wb, si, target);
             geo = make_geo(app, view.scroll);
@@ -741,6 +747,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
+    if geo.paper.is_none() {
+        crate::collab_ui::paint_remote_tags(&painter, &geo, sh, app, &quads);
+    }
     if geo.rtl {
         let mirror_to = painter.add(egui::Shape::Noop);
         mirror_painted(ui.ctx(), painter.layer_id(), mirror_from.0..mirror_to.0, &geo, &objects);
@@ -806,6 +815,7 @@ fn paint_panes(
         let p = painter.with_clip_rect(*clip);
         paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
+        crate::collab_ui::paint_remote(&p, geo, sh, app, *rows, *cols);
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -2926,6 +2936,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     }
                 }
             }
+            plugin_menu_items(app, ui, &mut close, gridcraft_engine::plugin::MenuKind::Cell, 190.0);
         });
     });
     if close
@@ -3116,6 +3127,20 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     }
 }
 
+/// The items plugins add to a right-click menu, after a separator.
+fn plugin_menu_items(app: &mut SheetApp, ui: &mut egui::Ui, close: &mut bool, kind: gridcraft_engine::plugin::MenuKind, width: f32) {
+    let items = crate::plugin_ui::menu_items(kind);
+    if !items.is_empty() {
+        ui.separator();
+    }
+    for item in &items {
+        if ui.add(egui::Button::new(item.label.as_str()).frame(false).min_size(vec2(width, 20.0))).on_hover_text(&item.tooltip).clicked() {
+            *close = true;
+            crate::plugin_ui::run(app, item, json!({}));
+        }
+    }
+}
+
 fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((at, rows)) = app.grid.header_menu else { return };
     let mut close = false;
@@ -3180,6 +3205,13 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     }
                 }
             }
+            plugin_menu_items(
+                app,
+                ui,
+                &mut close,
+                if rows { gridcraft_engine::plugin::MenuKind::Row } else { gridcraft_engine::plugin::MenuKind::Column },
+                180.0,
+            );
         });
     });
     if close || popup_dismissed(&response.response, was_open) {

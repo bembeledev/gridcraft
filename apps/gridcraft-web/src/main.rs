@@ -12,10 +12,15 @@
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
 //! workbook to open and stores what GridCraft saves (`host`), and `&author=` names the user for
 //! notes and comments.
+//!
+//! URL fragment `#craft-live=1&ws=…&room=…&token=…` (craft-live's embed contract): the live
+//! spreadsheet editor of Nextcloud Office, framed by craft-live (`live`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod live;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

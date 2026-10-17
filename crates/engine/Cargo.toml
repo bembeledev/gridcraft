@@ -22,8 +22,52 @@ log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
+gridcraft-plugin = { workspace = true }
+gridcraft-collab = { workspace = true }
+sha2 = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
+# The fake craft-live room in `live` tests holds a plain Yjs document, as the server does.
+yrs = "0.28"
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
+
+# `tests/live_wasm.rs`: the craft-live client compiled to wasm (wasm-bindgen-test-runner).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# Runs without libtest: the test binary doubles as the plugin process it starts.
+[[test]]
+name = "plugins"
+harness = false
+
+# Runs without libtest: the test binary doubles as the add-ins whose requirements it checks.
+[[test]]
+name = "plugin_requires"
+harness = false
+
+# Runs without libtest: the test binary doubles as the macro add-in it starts.
+[[test]]
+name = "macros"
+harness = false
+
+# Runs without libtest: the test binary doubles as the protocol 1.2 plugin it starts.
+[[test]]
+name = "plugin_protocol"
+harness = false
+
+# Runs without libtest: the test binary doubles as the protocol 2.2 plugin it starts.
+[[test]]
+name = "plugin_protocol_22"
+harness = false
+
+# Runs without libtest: the test binary doubles as the co-editing transport it starts.
+[[test]]
+name = "collab_push"
+harness = false
+
+# Runs without libtest: the test binary doubles as the two GridCraft peers it starts.
+[[test]]
+name = "collab_loopback"
+harness = false

@@ -109,10 +109,18 @@ pub struct Workbook {
     /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros.
     #[serde(default, with = "crate::b64::opt")]
     pub vba_project: Option<Vec<u8>>,
+    /// The workbook's own ribbon tabs, groups and macro buttons (`customUI14.xml`). `None` = none,
+    /// or a richer customisation kept unchanged in `preserved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ribbon: Option<crate::Ribbon>,
     /// Field separator of the CSV this workbook was read from, so saving it as CSV writes the same
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The document chat (craft-collab `docs/chat.md`): saved in the file, shared in a live
+    /// session, never part of undo.
+    #[serde(default, skip_serializing_if = "chat_is_empty")]
+    pub chat: Arc<crate::chat::Chat>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -120,6 +128,10 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+}
+
+fn chat_is_empty(c: &Arc<crate::chat::Chat>) -> bool {
+    c.is_empty()
 }
 
 impl Default for Workbook {
@@ -145,7 +157,9 @@ impl Workbook {
             custom_lists: vec![],
             cell_styles: vec![],
             vba_project: None,
+            ribbon: None,
             csv_delimiter: None,
+            chat: Arc::default(),
             preserved: None,
             source_dir: None,
         }

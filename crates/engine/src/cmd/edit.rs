@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings are read as typed input: numbers, dates, =formulas), literal?: bool (strings are stored as text exactly as given, never read as numbers, dates or formulas)}",
             has_doc,
             range_set_values
         ),
@@ -288,6 +288,14 @@ pub(crate) fn json_to_input(v: &Json) -> String {
     }
 }
 
+/// `t` cut to a cell's 32,767 characters.
+fn cell_text(t: &str) -> &str {
+    match t.char_indices().nth(32_767) {
+        Some((i, _)) => t.get(..i).unwrap_or(t),
+        None => t,
+    }
+}
+
 fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
@@ -295,6 +303,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     if rows.len() > MAX_ROWS as usize {
         return Err(bad("range.setValues", "too many rows"));
     }
+    let literal = bool_param(p, "literal").unwrap_or(false);
     let mut count = 0;
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
@@ -314,6 +323,12 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     Json::Bool(b) => {
                         Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
                     }
+                    // Text as given: `123`, `1/2`, `=A1`, `'quoted` stay text (an empty string clears).
+                    Json::String(t) if literal => (!t.is_empty()).then(|| Cell {
+                        value: Value::Text(std::sync::Arc::from(cell_text(t))),
+                        formula: None,
+                        style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                    }),
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
                 let sh = cx.sheet_mut(sheet)?;
@@ -608,6 +623,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    super::chat::keep_chat(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -627,6 +643,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    super::chat::keep_chat(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))

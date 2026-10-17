@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (the `collab` crate; previously minor: plugin install from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -21,6 +21,8 @@ including tests, 2026-10-10.
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
+| L3 | `collab` | ~2.5k | Co-editing (plugin protocol 2): the workbook as a Yjs document (schema 1, `yrs`), per-user undo, AES-256-GCM, awareness; no UI, builds for wasm ([collab.md](collab.md)) |
+| L4 | `plugin` | ~1.8k | Plugin host: `plugin.json` manifests, plugin processes over newline-delimited JSON-RPC (threads, timeouts, restarts), plugin functions registered with `calc::external`, plugin commands, installing from GitHub. Process-wide, like Excel's add-ins. Reference plugin `gridcraft-example-plugin`. See [plugins.md](plugins.md) |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
 | L6 | `mcp` | ~1.4k | MCP server over stdio (hand-written JSON-RPC), headless or bridged to a running app |
@@ -51,6 +53,18 @@ including tests, 2026-10-10.
 - MCP: `gridcraft-cli mcp`, headless or `--connect` to a running app, see [`mcp.md`](mcp.md).
 - CLI: [`cli.md`](cli.md).
 
+## Plugins
+
+Plugins are separate processes ([plugins.md](plugins.md)). A formula calling a name that isn't
+built in looks in `calc::external`, where `crates/plugin` registers each plugin function. Calls are
+synchronous with a timeout, and non-volatile results are cached. A plugin command answers with
+engine commands, which `plugins.run` executes through `Session::execute` as one undo step, rolling
+back if one fails. A manifest's `ui` section puts commands on the ribbon and in right-click menus;
+`ui-egui/src/plugin_ui.rs` reads it from the loaded plugins each frame. `plugin::install`
+downloads a plugin from GitHub (`ureq` with rustls, desktop and CLI only) and unpacks it into the
+plugins folder; the UI runs the download on its own thread and loads the result. The web build compiles the
+host but can't start processes.
+
 ## Platforms and builds
 
 macOS universal, Windows x64/x86/arm64, Linux x86_64/aarch64/riscv64 (AppImage, Flatpak, deb,
@@ -68,4 +82,8 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | `collab` (L3): co-editing, plugin protocol 2 |
+| 2026-10-13 | minor | Plugin install from GitHub (`plugin::install`, `ureq`) |
+| 2026-10-13 | minor | Plugin ribbon groups and menu items (`plugin_ui.rs`) |
+| 2026-10-13 | minor | `plugin` crate (L4) and the plugin data flow |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

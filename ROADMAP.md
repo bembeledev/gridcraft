@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (progress log: plugin protocol 2.2; previously minor: progress log: the web app in Nextcloud through craft-live; previously minor: progress log: document chat; previously minor: progress log: Office.js and Microsoft's add-in samples; previously minor: progress log: add-ins that require other add-ins; previously minor: progress log: co-editing, plugin protocol 2; previously minor: progress log: plugin protocol 1.2; previously minor: plugin host) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -22,7 +22,7 @@ This page is the summary. The detail is in:
 | Number | Value | Kind |
 |---|---|---|
 | **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
-| **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
+| **Ready for real work** | **~50%** | estimated from written weights (51.8); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
 | Remaining to **beta** | **~160–240 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
@@ -65,7 +65,7 @@ collaboration, mobile, AI).
 | Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
-| Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
+| Ecosystem / add-ins | ~20% (plugins: functions and commands; VBA out of scope; own scripts, MCP, CLI) | 15–25 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | AI features | ~15% (agent control strong; no in-app assistant) | 30–50 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | **Total** | **~50%** | **~700–1,100** | |
 
@@ -132,6 +132,14 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-16 | Plugin protocol 2.2, for add-ins that run code from workbooks (R, Python): their functions know which workbook calls them, so trust follows each formula's workbook; opening a file tells them before any formula is calculated; multi-line code fields in plugin dialogs; functions can return a real blank; plugins write text that stays text; and a plugin can make GridCraft recalculate the formulas that use its functions ([docs/plugins.md](docs/plugins.md#protocol-22-functions-that-know-their-workbook)) |
+| 2026-10-16 | The web app edits live in Nextcloud: craft-live (a WOPI editor that replaces Collabora in Nextcloud Office) opens spreadsheets in GridCraft's web build, which loads the Nextcloud file, edits it with everyone who has it open (selections, chat, per-person undo), saves it back in its own format (`.xlsx`, `.xlsm`, `.xltx`; an `.ods` as an `.xlsx` copy) and closes from its own Close button; the desktop writes the format craft-live asks for ([docs/collab.md](docs/collab.md#in-nextcloud-craft-live)) |
+| 2026-10-16 | Document chat (protocol 2.1, shared with WordCraft and DeckCraft): the people working on a workbook talk in a Chat pane beside it, with replies, edits, mentions and links; the title bar's chat button shows unread messages and flashes when someone mentions you; the chat is shared live in a session (encrypted with the room), saved in the file (`/craft/chat.json`; Office drops it) and never undone ([docs/collab.md](docs/collab.md#document-chat)) |
+| 2026-10-15 | Office add-ins written like Microsoft's samples work further: Microsoft's own `office.js` never runs in the task pane (GridCraft answers it with an empty script and keeps its `Office` object), colours by name (`"yellow"`), ribbon buttons that call a function of the add-in (ExecuteFunction, with `event.completed()`), selection-change events, the common API's enumerations and `new Excel.RequestContext()`; unsupported calls fail politely instead of breaking the page ([docs/officejs.md](docs/officejs.md)) |
+| 2026-10-15 | Add-ins that need other add-ins (plugin manifests 1.3, shared with WordCraft and DeckCraft): a manifest names the add-ins, app versions and protocol features it needs, with version ranges; GridCraft blocks an add-in whose needs aren't met and says why, starts required add-ins first, asks before turning off one others need, and installs what's missing from its newest GitHub release in range; Office add-ins needing more of Office.js than GridCraft has are blocked with the reason ([docs/plugins.md](docs/plugins.md#requirements-manifest-13)) |
+| 2026-10-15 | Co-editing (plugin protocol 2, shared with WordCraft and DeckCraft): several people edit one workbook live through a transport plugin (MQTT, a local relay…); GridCraft merges the edits itself (Yjs), shows the others' selections and edits in their colours, keeps a per-person undo, encrypts end to end with a room key, and recovers a session after a crash; Share and the people in the title bar ([docs/collab.md](docs/collab.md)) |
+| 2026-10-15 | Plugin protocol 1.2, shared with WordCraft and DeckCraft: plugins show dialogs GridCraft draws (lists, forms, messages, chained one step at a time), open local files, and hear when workbooks open, save and close (never holding them up); commands see the workbook's file (`context.document`) ([docs/plugins.md](docs/plugins.md#protocol-12-dialogs-opening-files-document-events)) |
+| 2026-10-13 | Plugins: programs in any language add formula functions and commands, each in its own process (a crash or hang costs a cell `#VALUE!`, never the workbook); Automate › Add-ins, `--plugin`, [docs/plugins.md](docs/plugins.md) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
@@ -193,6 +201,13 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Progress log: plugin protocol 2.2 |
+| 2026-10-16 | trivial | Progress log: the web app edits live in Nextcloud through craft-live |
+| 2026-10-15 | trivial | Progress log: Office.js and Microsoft's add-in samples |
+| 2026-10-15 | trivial | Progress log: add-ins that require other add-ins (manifest 1.3) |
+| 2026-10-15 | trivial | Progress log: co-editing (plugin protocol 2) |
+| 2026-10-15 | trivial | Progress log: plugin protocol 1.2 |
+| 2026-10-13 | minor | Plugin host; ecosystem 10% → 20%; full number 51.8 (~50%); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

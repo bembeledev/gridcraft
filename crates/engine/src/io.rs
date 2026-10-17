@@ -183,6 +183,23 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     }
 }
 
+/// Where a workbook with macros goes instead of `path`: an `.xlsx` can't hold a VBA project, so
+/// it becomes an `.xlsm` (a template `.xltx`, an `.xltm`), as Excel's macro-enabled formats.
+/// `None` when `path` is fine as it is.
+pub fn macro_enabled_path(wb: &Workbook, path: &str) -> Option<String> {
+    wb.vba_project.as_ref()?;
+    let p = std::path::Path::new(path);
+    let ext = p.extension().and_then(|e| e.to_str())?;
+    let to = match ext.to_ascii_lowercase().as_str() {
+        "xlsx" => "xlsm",
+        "xltx" => "xltm",
+        _ => return None,
+    };
+    // The same case as the name had (BOOK.XLSX → BOOK.XLSM).
+    let to = if ext.chars().all(|c| c.is_ascii_uppercase()) { to.to_ascii_uppercase() } else { to.to_string() };
+    Some(p.with_extension(to).to_string_lossy().into_owned())
+}
+
 /// Encodes a workbook in the format chosen by `path`'s extension.
 pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     // An unknown or missing extension is refused rather than written as an XLSX under that name:
@@ -212,6 +229,24 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
+}
+
+/// The workbook as a file in `format` (an extension such as `xlsx` or `ods`) for a live room's
+/// file (`collab/snapshot {file, format}`, craft-live's `save`): `(name, format written, bytes)`.
+/// GridCraft writes the Excel package kinds (`xlsx`, `xlsm`, `xltx`, `xltm`) as asked; any other
+/// format is written as `.xlsx` and reported so, and `name` gets the written format's extension.
+pub fn live_file_bytes(wb: &Workbook, name: &str, format: &str) -> Result<(String, String, Vec<u8>)> {
+    let asked = format.trim().trim_start_matches('.').to_ascii_lowercase();
+    let written = if matches!(asked.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") { asked } else { "xlsx".to_string() };
+    let p = std::path::Path::new(name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).filter(|s| !s.trim().is_empty()).unwrap_or("Book");
+    let name = match p.extension().and_then(|e| e.to_str()) {
+        // The name's own spelling when it already says the format (BUDGET.XLSX).
+        Some(ext) if ext.eq_ignore_ascii_case(&written) => p.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string(),
+        _ => format!("{stem}.{written}"),
+    };
+    let bytes = save_bytes_as(wb, &name, FileKind::Xlsx)?;
+    Ok((name, written, bytes))
 }
 
 /// [`save_bytes`] for the file at `path`: relative paths to linked workbooks are rewritten for
@@ -528,6 +563,12 @@ mod tests {
         assert!(has_macros("book.xltm"), "a macro-enabled template keeps the VBA project");
         assert!(!has_macros("book.xltx"), "a macro-free template never carries a VBA project");
         assert!(wb.vba_project.is_some(), "the open workbook keeps its macros");
+        assert_eq!(macro_enabled_path(&wb, "/tmp/Budget.xlsx").as_deref(), Some("/tmp/Budget.xlsm"));
+        assert_eq!(macro_enabled_path(&wb, "BOOK.XLSX").as_deref(), Some("BOOK.XLSM"));
+        assert_eq!(macro_enabled_path(&wb, "plan.xltx").as_deref(), Some("plan.xltm"));
+        assert_eq!(macro_enabled_path(&wb, "book.xlsm"), None);
+        assert_eq!(macro_enabled_path(&wb, "book.csv"), None, "exports have no macros to keep");
+        assert_eq!(macro_enabled_path(&Workbook::new(), "book.xlsx"), None, "no macros, no change");
     }
 
     #[test]

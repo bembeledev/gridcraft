@@ -35,9 +35,12 @@ pub const TABLE: &[(&str, Class)] = &[
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
     ("chart", Class::Layer(3)),
+    ("collab", Class::Layer(3)),
+    ("plugin", Class::Layer(4)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
+    ("office-js", Class::Layer(6)),
     // L7 apps (exempt) and tooling (unchecked)
     ("gridcraft", Class::Layer(7)),
     ("cli", Class::Layer(7)),

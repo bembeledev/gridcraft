@@ -5,6 +5,7 @@ mod chart_bool_default;
 mod csv_tests;
 mod encrypted_tests;
 mod fixtures;
+mod html_tests;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
 mod malformed;

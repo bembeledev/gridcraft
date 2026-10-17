@@ -43,7 +43,48 @@ use view::view;
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
-/// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
+
+/// Lay out the title truncated to fit `max_w` together with the unsaved marker (when `dirty`).
+fn title_galleys(
+    painter: &egui::Painter,
+    title: &str,
+    dirty: bool,
+    max_w: f32,
+    color: Color32,
+) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>) {
+    let font = theme::ui_bold(13.0);
+    let dot = dirty.then(|| painter.layout_no_wrap(" •".to_string(), font.clone(), color));
+    let dot_w = dot.as_ref().map_or(0.0, |g| g.size().x);
+    let mut job = egui::text::LayoutJob::simple_singleline(title.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((max_w - dot_w).max(0.0));
+    (painter.layout_job(job), dot)
+}
+
+/// Gap kept between the title and the controls beside it.
+const TITLE_GAP: f32 = 12.0;
+
+/// The widest the centred title may be without reaching the controls that end at `left_end` or
+/// start at `right_start`.
+fn title_max_width(center_x: f32, left_end: f32, right_start: f32) -> f32 {
+    let half = (center_x - left_end).min(right_start - center_x) - TITLE_GAP;
+    (2.0 * half).max(0.0)
+}
+
+/// Paint the workbook title centred on `center`, truncated with "…" to `max_w`. The unsaved
+/// marker stays visible however short the title gets.
+fn paint_title(ui: &Ui, center: egui::Pos2, title: &str, dirty: bool, max_w: f32, color: Color32) {
+    let (galley, dot) = title_galleys(ui.painter(), title, dirty, max_w, color);
+    let dot_w = dot.as_ref().map_or(0.0, |g| g.size().x);
+    let w = galley.size().x + dot_w;
+    let left = center.x - w / 2.0;
+    let top = center.y - galley.size().y / 2.0;
+    let galley_w = galley.size().x;
+    ui.painter().galley(pos2(left, top), galley, color);
+    if let Some(dot) = dot {
+        ui.painter().galley(pos2(left + galley_w, top), dot, color);
+    }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;

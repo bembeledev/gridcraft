@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Borders",
             ["Home", "Font"],
             None,
-            "{range?, preset: bottom|top|left|right|none|all|outside|thickOutside|thickBottom|doubleBottom|topBottom|topThickBottom|topDoubleBottom|insideHorizontal|insideVertical|inside|diagonalDown|diagonalUp, style?: thin|medium|thick|dashed|dotted|double|hair…, color?}",
+            "{range?, preset: bottom|top|left|right|none|all|outside|thickOutside|thickBottom|doubleBottom|topBottom|topThickBottom|topDoubleBottom|insideHorizontal|insideVertical|inside|diagonalDown|diagonalUp, style?: thin|medium|thick|dashed|dotted|double|hair|mediumDashed|dashDot|mediumDashDot|dashDotDot|mediumDashDotDot|slantDashDot|none, color?}",
             has_doc,
             borders
         ),
@@ -343,28 +343,35 @@ fn fill_color(s: &mut Session, p: &Json) -> Result<Json> {
     apply_style(s, p, |st| st.fill = if c == Color::Auto { Fill::default() } else { Fill::solid(c) })
 }
 
-fn border_style(name: &str) -> BorderStyle {
-    match name {
-        "medium" => BorderStyle::Medium,
-        "thick" => BorderStyle::Thick,
-        "dashed" => BorderStyle::Dashed,
-        "dotted" => BorderStyle::Dotted,
-        "double" => BorderStyle::Double,
-        "hair" => BorderStyle::Hair,
-        "mediumDashed" => BorderStyle::MediumDashed,
-        "dashDot" => BorderStyle::DashDot,
-        "mediumDashDot" => BorderStyle::MediumDashDot,
-        "dashDotDot" => BorderStyle::DashDotDot,
-        "slantDashDot" => BorderStyle::SlantDashDot,
-        "none" => BorderStyle::None,
-        _ => BorderStyle::Thin,
-    }
-}
+const BORDER_PRESETS: &[&str] = &[
+    "bottom",
+    "top",
+    "left",
+    "right",
+    "none",
+    "all",
+    "outside",
+    "thickOutside",
+    "thickBottom",
+    "doubleBottom",
+    "topBottom",
+    "topThickBottom",
+    "topDoubleBottom",
+    "insideHorizontal",
+    "insideVertical",
+    "inside",
+    "diagonalDown",
+    "diagonalUp",
+];
 
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
-    let base = border_style(str_param(p, "style").unwrap_or("thin"));
+    if !BORDER_PRESETS.contains(&preset.as_str()) {
+        return Err(bad("home.borders", format!("unknown border preset `{preset}`")));
+    }
+    let style = str_param(p, "style").unwrap_or("thin");
+    let base = BorderStyle::parse(style).ok_or_else(|| bad("home.borders", format!("unknown border style `{style}`")))?;
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {

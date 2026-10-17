@@ -1684,18 +1684,10 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
                 ("Diagonal ↗", &mut st.borders.diag_up),
             ] {
                 let n = lang.tr(n);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{n}:"));
-                    for (s, label) in [
-                        (BorderStyle::None, "none"),
-                        (BorderStyle::Thin, "thin"),
-                        (BorderStyle::Medium, "medium"),
-                        (BorderStyle::Thick, "thick"),
-                        (BorderStyle::Dashed, "dashed"),
-                        (BorderStyle::Dotted, "dotted"),
-                        (BorderStyle::Double, "double"),
-                    ] {
-                        let label = lang.tr(label);
+                    for s in BorderStyle::ALL {
+                        let label = lang.tr(s.as_str());
                         let response = ui.selectable_label(slot.style == s, label);
                         response
                             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), format!("{n} {label}")));

@@ -885,17 +885,9 @@ fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) 
 
 // ---------------------------------------------------------------- validation
 
-fn op_param(s: Option<&str>) -> CfOperator {
-    match s.unwrap_or("between") {
-        "notBetween" => CfOperator::NotBetween,
-        "equal" => CfOperator::Equal,
-        "notEqual" => CfOperator::NotEqual,
-        "greater" | "greaterThan" => CfOperator::Greater,
-        "less" | "lessThan" => CfOperator::Less,
-        "greaterOrEqual" | "greaterThanOrEqual" => CfOperator::GreaterOrEqual,
-        "lessOrEqual" | "lessThanOrEqual" => CfOperator::LessOrEqual,
-        _ => CfOperator::Between,
-    }
+fn op_param(s: Option<&str>) -> Result<CfOperator> {
+    let Some(name) = s else { return Ok(CfOperator::Between) };
+    CfOperator::parse(name).ok_or_else(|| bad("data.validation", format!("unknown operator `{name}`")))
 }
 
 /// `r` minus `cut`, as up to four non-overlapping rectangles.
@@ -941,20 +933,11 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("dataValidation".into(), json!({})));
         return ok();
     };
-    let kind = match kind {
-        "whole" => ValidationKind::Whole,
-        "decimal" => ValidationKind::Decimal,
-        "list" => ValidationKind::List,
-        "date" => ValidationKind::Date,
-        "time" => ValidationKind::Time,
-        "textLength" => ValidationKind::TextLength,
-        "custom" => ValidationKind::Custom,
-        _ => ValidationKind::Any,
-    };
+    let kind = ValidationKind::parse(kind).ok_or_else(|| bad("data.validation", format!("unknown validation type `{kind}`")))?;
     let dv = Validation {
         ranges: ranges.clone(),
         kind,
-        op: op_param(str_param(p, "operator")),
+        op: op_param(str_param(p, "operator"))?,
         f1: str_param(p, "formula1").unwrap_or("").trim_start_matches('=').to_string(),
         f2: str_param(p, "formula2").map(|f| f.trim_start_matches('=').to_string()),
         allow_blank: bool_param(p, "ignoreBlank").unwrap_or(true),

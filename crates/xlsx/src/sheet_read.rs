@@ -547,16 +547,7 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
 }
 
 fn cf_op(s: Option<&str>) -> CfOperator {
-    match s.unwrap_or("between") {
-        "notBetween" => CfOperator::NotBetween,
-        "equal" => CfOperator::Equal,
-        "notEqual" => CfOperator::NotEqual,
-        "greaterThan" => CfOperator::Greater,
-        "lessThan" => CfOperator::Less,
-        "greaterThanOrEqual" => CfOperator::GreaterOrEqual,
-        "lessThanOrEqual" => CfOperator::LessOrEqual,
-        _ => CfOperator::Between,
-    }
+    s.and_then(CfOperator::parse).unwrap_or(CfOperator::Between)
 }
 
 fn cfvo(e: &El) -> CfValueKind {
@@ -678,16 +669,7 @@ fn read_validation(v: &El) -> Option<Validation> {
         let t = f.child("f").map(|x| x.text.as_str()).unwrap_or(f.text.as_str()).trim();
         if t.is_empty() { None } else { Some(t.to_string()) }
     };
-    let kind = match v.attr("type").unwrap_or("none") {
-        "whole" => ValidationKind::Whole,
-        "decimal" => ValidationKind::Decimal,
-        "list" => ValidationKind::List,
-        "date" => ValidationKind::Date,
-        "time" => ValidationKind::Time,
-        "textLength" => ValidationKind::TextLength,
-        "custom" => ValidationKind::Custom,
-        _ => ValidationKind::Any,
-    };
+    let kind = v.attr("type").and_then(ValidationKind::parse).unwrap_or(ValidationKind::Any);
     let mut f1 = formula("formula1").unwrap_or_default();
     if kind == ValidationKind::List && !f1.is_empty() && !f1.starts_with('"') {
         f1 = format!("={}", from_file(&f1));

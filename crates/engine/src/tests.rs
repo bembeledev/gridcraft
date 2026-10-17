@@ -415,6 +415,81 @@ fn no_border_handles_sheet_corners_without_creating_out_of_bounds_cells() {
 }
 
 #[test]
+fn every_border_style_survives_xlsx_and_unknown_names_are_refused() {
+    use gridcraft_model::BorderStyle;
+
+    let mut s = s();
+    let lines: Vec<_> = BorderStyle::ALL.into_iter().filter(|b| *b != BorderStyle::None).collect();
+    for (row, style) in lines.iter().enumerate() {
+        let cell = format!("B{}", row + 1);
+        s.execute("home.borders", json!({"range": cell, "preset": "bottom", "style": style.as_str()})).unwrap();
+    }
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()).unwrap();
+    for (row, style) in lines.iter().enumerate() {
+        let cell = CellRef::parse(&format!("B{}", row + 1)).unwrap();
+        let live = &s.doc().unwrap().wb;
+        assert_eq!(live.styles.get(live.active().unwrap().style_id(cell)).borders.bottom.style, *style);
+        assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)).borders.bottom.style, *style, "{}", style.as_str());
+    }
+
+    let before = s.doc().unwrap().wb.clone();
+    let undo_count = s.doc().unwrap().undo.len();
+    for params in [
+        json!({"range": "B1", "preset": "bottom", "style": "wavy"}),
+        json!({"range": "B1", "preset": "bottom", "style": "Thin"}),
+        json!({"range": "B1", "preset": "bogus"}),
+    ] {
+        assert!(s.execute("home.borders", params.clone()).is_err(), "{params}");
+        assert_eq!(s.doc().unwrap().wb.styles, before.styles);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, before.active().unwrap().cells);
+        assert_eq!(s.doc().unwrap().undo.len(), undo_count);
+    }
+}
+
+#[test]
+fn validation_and_conditional_format_names_come_from_one_table() {
+    use gridcraft_model::{CfOperator, ValidationKind};
+
+    let mut s = s();
+    let undo_count = s.doc().unwrap().undo.len();
+    for params in [
+        json!({"range": "A1", "type": "whole", "operator": "bigger", "formula1": "5"}),
+        json!({"range": "A1", "type": "integer", "operator": "greater", "formula1": "5"}),
+    ] {
+        assert!(s.execute("data.validation", params.clone()).is_err(), "{params}");
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().validations.is_empty());
+    assert_eq!(s.doc().unwrap().undo.len(), undo_count);
+
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    for (cell, operator) in [("A1", "greaterOrEqual"), ("A2", "greaterThanOrEqual")] {
+        s.execute("data.validation", json!({"range": cell, "type": "whole", "operator": operator, "formula1": "5"})).unwrap();
+        assert!(ok(&mut s, cell, "7"), "{operator}");
+        assert!(ok(&mut s, cell, "5"), "{operator}");
+        assert!(!ok(&mut s, cell, "4"), "{operator}");
+    }
+    s.execute("data.validation", json!({"range": "A3", "type": "any"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(sh.validations.iter().take(2).all(|v| v.kind == ValidationKind::Whole && v.op == CfOperator::GreaterOrEqual));
+    assert_eq!(sh.validations[2].kind, ValidationKind::Any);
+
+    s.execute("home.conditionalFormat", json!({"range": "C1", "rule": {"type": "cellIs", "operator": "greaterThanOrEqual", "value": "3"}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "C2", "rule": {"type": "cellIs", "value": "3"}})).unwrap();
+    assert!(s.execute("home.conditionalFormat", json!({"range": "C3", "rule": {"type": "cellIs", "operator": "bigger", "value": "3"}})).is_err());
+    let op = |s: &Session, cell: &str| {
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        sh.cond_formats.iter().find(|cf| cf.ranges[0].a1() == cell).and_then(|cf| match &cf.rule {
+            gridcraft_model::CfRule::CellIs { op, .. } => Some(*op),
+            _ => None,
+        })
+    };
+    assert_eq!(op(&s, "C1"), Some(CfOperator::GreaterOrEqual));
+    assert_eq!(op(&s, "C2"), Some(CfOperator::Greater));
+    assert_eq!(op(&s, "C3"), None);
+}
+
+#[test]
 fn borders_respect_sheet_formatting_protection() {
     let mut s = s();
     s.execute("home.borders", json!({"range": "A1:B2", "preset": "all"})).unwrap();

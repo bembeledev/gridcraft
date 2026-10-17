@@ -1,6 +1,7 @@
 //! MCP tool definitions (names, descriptions, JSON Schemas) and their implementations on top of a
 //! [`Backend`].
 
+use gridcraft_engine::model::BorderStyle;
 use serde_json::{Map, Value, json};
 
 use crate::backend::Backend;
@@ -241,7 +242,7 @@ pub fn tool_definitions() -> Vec<Value> {
                             enumeration("Border preset", BORDER_PRESETS),
                             obj(json!({
                                 "preset": enumeration("Border preset", BORDER_PRESETS),
-                                "style": string("thin|medium|thick|dashed|dotted|double|hair…"),
+                                "style": enumeration("Border line style", &BorderStyle::ALL.map(BorderStyle::as_str)),
                                 "color": color("Border color \"#RRGGBB\""),
                             }), &["preset"]),
                         ],

@@ -532,8 +532,10 @@ fn invalid_borders_are_invalid_params() {
     bad(&mut s, 2, json!("bogus"));
     bad(&mut s, 3, json!({"preset": "bogus"}));
     bad(&mut s, 4, json!({"style": "thick"}));
+    bad(&mut s, 5, json!({"preset": "all", "style": "wavy"}));
     ok(&mut s, "format_range", json!({"range": "A1", "borders": "all"}));
     ok(&mut s, "format_range", json!({"range": "B1", "borders": {"preset": "all", "style": "thick", "color": "#123456"}}));
+    ok(&mut s, "format_range", json!({"range": "C1", "borders": {"preset": "all", "style": "mediumDashDotDot"}}));
 }
 
 #[test]

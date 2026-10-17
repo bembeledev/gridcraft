@@ -257,6 +257,47 @@ impl BorderStyle {
             BorderStyle::Thick | BorderStyle::Double => 3.0,
         }
     }
+
+    /// No border, then the 13 line styles in SpreadsheetML order.
+    pub const ALL: [BorderStyle; 14] = [
+        BorderStyle::None,
+        BorderStyle::Thin,
+        BorderStyle::Medium,
+        BorderStyle::Thick,
+        BorderStyle::Dashed,
+        BorderStyle::Dotted,
+        BorderStyle::Double,
+        BorderStyle::Hair,
+        BorderStyle::MediumDashed,
+        BorderStyle::DashDot,
+        BorderStyle::MediumDashDot,
+        BorderStyle::DashDotDot,
+        BorderStyle::MediumDashDotDot,
+        BorderStyle::SlantDashDot,
+    ];
+
+    /// The XLSX / command spelling: `none`, `thin`, …, `slantDashDot`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BorderStyle::None => "none",
+            BorderStyle::Thin => "thin",
+            BorderStyle::Medium => "medium",
+            BorderStyle::Thick => "thick",
+            BorderStyle::Dashed => "dashed",
+            BorderStyle::Dotted => "dotted",
+            BorderStyle::Double => "double",
+            BorderStyle::Hair => "hair",
+            BorderStyle::MediumDashed => "mediumDashed",
+            BorderStyle::DashDot => "dashDot",
+            BorderStyle::MediumDashDot => "mediumDashDot",
+            BorderStyle::DashDotDot => "dashDotDot",
+            BorderStyle::MediumDashDotDot => "mediumDashDotDot",
+            BorderStyle::SlantDashDot => "slantDashDot",
+        }
+    }
+    pub fn parse(s: &str) -> Option<BorderStyle> {
+        BorderStyle::ALL.into_iter().find(|b| b.as_str() == s)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -423,6 +464,17 @@ static DEFAULT_STYLE: std::sync::LazyLock<Style> = std::sync::LazyLock::new(Styl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_style_names_round_trip() {
+        for b in BorderStyle::ALL {
+            assert_eq!(BorderStyle::parse(b.as_str()), Some(b));
+        }
+        assert_eq!(BorderStyle::parse("mediumDashDotDot"), Some(BorderStyle::MediumDashDotDot));
+        for bad in ["wavy", "Thin", ""] {
+            assert_eq!(BorderStyle::parse(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn interning() {

@@ -129,6 +129,43 @@ pub enum CfOperator {
     LessOrEqual,
 }
 
+impl CfOperator {
+    pub const ALL: [CfOperator; 8] = [
+        CfOperator::Between,
+        CfOperator::NotBetween,
+        CfOperator::Equal,
+        CfOperator::NotEqual,
+        CfOperator::Greater,
+        CfOperator::Less,
+        CfOperator::GreaterOrEqual,
+        CfOperator::LessOrEqual,
+    ];
+
+    /// The XLSX spelling: `between`, …, `greaterThan`, `lessThanOrEqual`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CfOperator::Between => "between",
+            CfOperator::NotBetween => "notBetween",
+            CfOperator::Equal => "equal",
+            CfOperator::NotEqual => "notEqual",
+            CfOperator::Greater => "greaterThan",
+            CfOperator::Less => "lessThan",
+            CfOperator::GreaterOrEqual => "greaterThanOrEqual",
+            CfOperator::LessOrEqual => "lessThanOrEqual",
+        }
+    }
+    /// The XLSX names and the commands' short forms (`greater`, `lessOrEqual`, …).
+    pub fn parse(s: &str) -> Option<CfOperator> {
+        match s {
+            "greater" => Some(CfOperator::Greater),
+            "less" => Some(CfOperator::Less),
+            "greaterOrEqual" => Some(CfOperator::GreaterOrEqual),
+            "lessOrEqual" => Some(CfOperator::LessOrEqual),
+            _ => CfOperator::ALL.into_iter().find(|o| o.as_str() == s),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CfValueKind {
     Min,
@@ -257,6 +294,40 @@ pub enum ValidationKind {
     Time,
     TextLength,
     Custom,
+}
+
+impl ValidationKind {
+    pub const ALL: [ValidationKind; 8] = [
+        ValidationKind::Any,
+        ValidationKind::Whole,
+        ValidationKind::Decimal,
+        ValidationKind::List,
+        ValidationKind::Date,
+        ValidationKind::Time,
+        ValidationKind::TextLength,
+        ValidationKind::Custom,
+    ];
+
+    /// The XLSX spelling: `none` (any value), `whole`, …, `textLength`, `custom`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ValidationKind::Any => "none",
+            ValidationKind::Whole => "whole",
+            ValidationKind::Decimal => "decimal",
+            ValidationKind::List => "list",
+            ValidationKind::Date => "date",
+            ValidationKind::Time => "time",
+            ValidationKind::TextLength => "textLength",
+            ValidationKind::Custom => "custom",
+        }
+    }
+    /// The XLSX names, and `any` as the commands spell any value.
+    pub fn parse(s: &str) -> Option<ValidationKind> {
+        match s {
+            "any" => Some(ValidationKind::Any),
+            _ => ValidationKind::ALL.into_iter().find(|k| k.as_str() == s),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1044,5 +1115,28 @@ impl Default for PivotTable {
             values_on_rows: false,
             values_position: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_and_validation_names_round_trip() {
+        for op in CfOperator::ALL {
+            assert_eq!(CfOperator::parse(op.as_str()), Some(op));
+        }
+        for kind in ValidationKind::ALL {
+            assert_eq!(ValidationKind::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(CfOperator::parse("greater"), Some(CfOperator::Greater));
+        assert_eq!(CfOperator::parse("less"), Some(CfOperator::Less));
+        assert_eq!(CfOperator::parse("greaterOrEqual"), Some(CfOperator::GreaterOrEqual));
+        assert_eq!(CfOperator::parse("lessOrEqual"), Some(CfOperator::LessOrEqual));
+        assert_eq!(ValidationKind::parse("any"), Some(ValidationKind::Any));
+        assert_eq!(CfOperator::parse("bigger"), None);
+        assert_eq!(CfOperator::parse("GreaterThan"), None);
+        assert_eq!(ValidationKind::parse("integer"), None);
     }
 }

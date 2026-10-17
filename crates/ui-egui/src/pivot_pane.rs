@@ -84,6 +84,18 @@ fn area_drop_position(info: &Json, key: &str, drag: &FieldDrag, slot: usize) -> 
     drop_position(drag, key, position, existing)
 }
 
+/// Preserve the visible side of Σ Values in the same engine edit as the field drop.
+fn drop_values_position(info: &Json, key: &str, drag: &FieldDrag, slot: usize) -> Option<usize> {
+    if key != "rows" || drag.virtual_values {
+        return None;
+    }
+    let items = area_fields(info, key);
+    let virtual_slot = items.iter().position(|item| item.virtual_values)?;
+    let existing = items.iter().position(|item| !item.virtual_values && item.source.eq_ignore_ascii_case(&drag.source));
+    let before = items[..virtual_slot].iter().filter(|item| !item.virtual_values).count();
+    Some(before.saturating_sub(usize::from(existing.is_some_and(|i| i < virtual_slot))) + usize::from(slot <= virtual_slot))
+}
+
 /// An assigned Values field is identified by its summary caption, not its source column:
 /// the same source can have several summaries with different settings.
 #[derive(Clone)]
@@ -336,7 +348,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                         if ui.input(|i| i.pointer.primary_released()) {
                             let position = area_drop_position(&info, key, &drag, slot);
-                            drop = Some((drag, *key, position));
+                            let values_position = drop_values_position(&info, key, &drag, slot);
+                            drop = Some((drag, *key, position, values_position));
                         }
                     }
                 }
@@ -366,13 +379,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             return;
         }
         if ui.input(|i| i.pointer.primary_released()) {
-            if let Some((drag, to, position)) = drop {
+            if let Some((drag, to, position, values_position)) = drop {
                 if let Some(position) = position {
-                    if let Some((from, _)) = &drag.from {
-                        app.run_or_alert("pivot.moveField", json!({"pivot":name,"field":drag.field,"from":from,"to":to,"position":position}));
+                    let (command, mut params) = if let Some((from, _)) = &drag.from {
+                        ("pivot.moveField", json!({"pivot":name,"field":drag.field,"from":from,"to":to,"position":position}))
                     } else {
-                        app.run_or_alert("pivot.addField", json!({"pivot":name,"field":drag.field,"area":to,"position":position}));
+                        ("pivot.addField", json!({"pivot":name,"field":drag.field,"area":to,"position":position}))
+                    };
+                    if let Some(values_position) = values_position {
+                        params["valuesPosition"] = json!(values_position);
                     }
+                    app.run_or_alert(command, params);
                 }
             } else if let Some(pointer) = ui.ctx().pointer_interact_pos()
                 && !pane.response.rect.contains(pointer)

@@ -409,4 +409,67 @@ fn ordinary_row_drag_across_virtual_values_updates_its_visible_order() {
     let pt = &h.state().session.active().unwrap().wb.active().unwrap().pivots[0];
     assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Product"]);
     assert_eq!(pt.values_position, Some(1));
+    h.state_mut().session.active_mut().unwrap().undo.clear();
+    let virtual_rect = h.get_by_label("Σ Values ▾").rect();
+    let start = button(&h, "Region");
+    drag(&mut h, start, pos2(virtual_rect.center().x, virtual_rect.bottom() - 1.0));
+    let d = h.state().session.active().unwrap();
+    assert_eq!(d.wb.active().unwrap().pivots[0].values_position, Some(0));
+    assert_eq!(d.undo.len(), 1);
+}
+
+#[test]
+fn source_drop_after_virtual_values_keeps_the_indicated_order_and_one_undo_step() {
+    let mut h = harness();
+    h.state_mut().session.execute("pivot.addField", json!({"field":"Product","area":"rows"})).unwrap();
+    h.state_mut().session.execute("pivot.addField", json!({"field":"Sales","area":"values","name":"Second sales"})).unwrap();
+    h.state_mut().session.execute("pivot.moveField", json!({"field":"Σ Values","from":"columns","to":"rows","position":1})).unwrap();
+    h.run_steps(3);
+    h.state_mut().session.active_mut().unwrap().undo.clear();
+    let start = h.get_by_label("Units").rect().center();
+    let target = h.get_by_label("Σ Values ▾").rect();
+    drag(&mut h, start, pos2(target.center().x, target.bottom() - 1.0));
+    let d = h.state().session.active().unwrap();
+    let pt = &d.wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Units", "Product"]);
+    assert_eq!(pt.values_position, Some(1), "the dropped field must follow Σ Values");
+    assert_eq!(d.undo.len(), 1);
+    if let Ok(path) = std::env::var("GRIDCRAFT_PIVOT_DROP_SCREENSHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    let pt = &h.state().session.active().unwrap().wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Product"]);
+    assert_eq!(pt.values_position, Some(1));
+    h.state_mut().session.execute("edit.redo", json!({})).unwrap();
+    let pt = &h.state().session.active().unwrap().wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Units", "Product"]);
+    assert_eq!(pt.values_position, Some(1));
+}
+
+#[test]
+fn cross_area_drop_after_virtual_values_keeps_the_indicated_order_and_one_undo_step() {
+    let mut h = harness();
+    h.state_mut().session.execute("pivot.addField", json!({"field":"Product","area":"rows"})).unwrap();
+    h.state_mut().session.execute("pivot.addField", json!({"field":"Sales","area":"values","name":"Second sales"})).unwrap();
+    h.state_mut().session.execute("pivot.moveField", json!({"field":"Σ Values","from":"columns","to":"rows","position":1})).unwrap();
+    h.state_mut().session.execute("pivot.addField", json!({"field":"Units","area":"columns"})).unwrap();
+    h.run_steps(3);
+    h.state_mut().session.active_mut().unwrap().undo.clear();
+    let start = button(&h, "Units");
+    let target = h.get_by_label("Σ Values ▾").rect();
+    drag(&mut h, start, pos2(target.center().x, target.bottom() - 1.0));
+    let d = h.state().session.active().unwrap();
+    let pt = &d.wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Units", "Product"]);
+    assert_eq!(pt.values_position, Some(1), "the dropped field must follow Σ Values");
+    assert_eq!(d.undo.len(), 1);
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    let pt = &h.state().session.active().unwrap().wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Product"]);
+    assert_eq!(pt.values_position, Some(1));
+    h.state_mut().session.execute("edit.redo", json!({})).unwrap();
+    let pt = &h.state().session.active().unwrap().wb.active().unwrap().pivots[0];
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Region", "Units", "Product"]);
+    assert_eq!(pt.values_position, Some(1));
 }

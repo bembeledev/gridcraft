@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (CSV/text export writes General numbers without an exponent: `&`'s 15 digits below 1E+15, the shortest round-trip digits from 1E+15, so integers below 1e16 keep every digit) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (CSV/text export writes General numbers without an exponent: `&`'s 15 digits below 1E+15, the shortest round-trip digits from 1E+15, so integers below 1e16 keep every digit; previously trivial: formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -84,6 +84,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | minor | CSV/text export writes General numbers with the 15 significant digits `&` gives (`0.3`, not `0.30000000000000004`) but never an exponent (integers below 1e16 keep every digit; 1E+15 and up as the shortest round-trip digits; small numbers written out), also through coloured or sectioned General and Text formats (`[Blue]General` still wrote `1.24412E+11`). Duplicate CSV/text rows merged. Intentional difference from Excel, which writes the cell display. The underlying `&` conversion changed too (see [function-parity.md](function-parity.md)) |
+| 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |

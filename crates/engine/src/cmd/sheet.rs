@@ -220,7 +220,7 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
             if dv.kind != ValidationKind::List || !super::data::is_literal_list(&dv.f1) {
                 dv.f1 = fix_rule(&dv.f1);
             }
-            dv.f2 = dv.f2.as_deref().map(&fix_rule);
+            dv.f2 = dv.f2.as_deref().map(fix_rule);
         }
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {

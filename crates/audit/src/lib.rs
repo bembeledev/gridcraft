@@ -293,6 +293,15 @@ fn is_worksheet_part(name: &str) -> bool {
         && bytes[bytes.len() - SUFFIX.len()..].eq_ignore_ascii_case(SUFFIX)
 }
 
+/// Relationship parts, matched case-insensitively: OPC part names are ASCII
+/// case-insensitive, so `xl/_RELS/workbook.XML.RELS` is a relationship part.
+/// Missing it would drop everything it targets into false orphan findings.
+fn is_relationship_part(name: &str) -> bool {
+    const SUFFIX: &[u8] = b".rels";
+    let bytes = name.as_bytes();
+    bytes.len() >= SUFFIX.len() && bytes[bytes.len() - SUFFIX.len()..].eq_ignore_ascii_case(SUFFIX)
+}
+
 /// Parts the audit parses as XML. Everything else is only listed by name.
 /// Legacy comment parts are discovered through relationships (see
 /// [`comment_part_targets`]), not by path prefix.
@@ -303,7 +312,7 @@ fn is_scanned_part(name: &str) -> bool {
         || (name.starts_with("xl/persons/") && name.ends_with(".xml"))
         || name == "docProps/core.xml"
         || name == "docProps/app.xml"
-        || name.ends_with(".rels")
+        || is_relationship_part(name)
 }
 
 /// Every non-directory entry name in the ZIP, in archive order. The archive
@@ -368,7 +377,7 @@ fn root_namespace(xml: &[u8], part: &str) -> Result<Vec<u8>, AuditError> {
 /// under `xl/`, not under `xl/comments/`.
 fn comment_part_targets(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<String>, AuditError> {
     let mut targets = Vec::new();
-    for (name, xml) in parts.iter().filter(|(n, _)| n.ends_with(".rels")) {
+    for (name, xml) in parts.iter().filter(|(n, _)| is_relationship_part(n)) {
         let source_dir = source_dir_of_rels(name);
         for_each_element(xml, name, &mut |el| {
             if el.ns.as_slice() == NS_RELS
@@ -816,7 +825,7 @@ fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &
     // `.rels` parts are infrastructure: never reported as orphans themselves,
     // but only parsed once their source part is reachable.
     let mut rels_by_source: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for name in names.iter().filter(|n| n.ends_with(".rels")) {
+    for name in names.iter().filter(|n| is_relationship_part(n)) {
         reachable.insert(name.to_ascii_lowercase());
         if let Some(source) = source_part_of_rels(name) {
             rels_by_source.entry(source.to_ascii_lowercase()).or_default().push(name.clone());
@@ -853,11 +862,15 @@ fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &
 /// The package/content part whose relationships a `*.rels` part stores:
 /// `xl/_rels/workbook.xml.rels` stores `xl/workbook.xml`'s. The package-level
 /// `_rels/.rels` has no source part: it is the traversal root.
+/// Matching is on the lowercased name so case variants
+/// (`xl/_RELS/WORKBOOK.XML.RELS`) resolve too; the returned source is already
+/// lowercase, which is what the reachability index keys on.
 fn source_part_of_rels(rels: &str) -> Option<String> {
-    if rels == "_rels/.rels" {
+    let lower = rels.to_ascii_lowercase();
+    if lower == "_rels/.rels" {
         return None;
     }
-    let without_ext = rels.strip_suffix(".rels")?;
+    let without_ext = lower.strip_suffix(".rels")?;
     if let Some(name) = without_ext.strip_prefix("_rels/") {
         return Some(name.to_string());
     }
@@ -868,10 +881,16 @@ fn source_part_of_rels(rels: &str) -> Option<String> {
 /// The directory of the part a `*.rels` file describes:
 /// `xl/_rels/workbook.xml.rels` describes `xl/workbook.xml`, whose directory
 /// is `xl`; `_rels/.rels` describes the package root.
+/// The `/_rels/` marker is found case-insensitively, but the returned
+/// directory keeps the part's original case: it feeds `resolve_target`,
+/// whose result names a real ZIP entry for `by_name` (case-sensitive).
 fn source_dir_of_rels(rels: &str) -> String {
-    let without_ext = rels.strip_suffix(".rels").unwrap_or(rels);
+    let lower = rels.to_ascii_lowercase();
+    let without_ext: &str = lower.strip_suffix(".rels").unwrap_or(&lower);
     match without_ext.rfind("/_rels/") {
-        Some(i) => without_ext[..i].to_string(),
+        // ASCII lowercasing preserves byte length, so the index is valid in
+        // the original and lands on a char boundary (`/_rels/` is ASCII).
+        Some(i) => rels[..i].to_string(),
         None => String::new(),
     }
 }

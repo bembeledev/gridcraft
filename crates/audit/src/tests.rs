@@ -459,3 +459,31 @@ fn cased_worksheet_part_is_scanned() {
     // The case-variant part is reachable, not an orphan.
     assert!(fs.iter().all(|f| f.id != "package/orphan-part"), "{fs:?}");
 }
+
+#[test]
+fn cased_relationship_part_is_traversed() {
+    // A case-variant relationship part (`_RELS/SHEET1.XML.RELS`) is still a
+    // relationship part: its targets are discovered and reachable.
+    let comments = format!(
+        r#"<comments xmlns="{NS_X}"><authors><author>Wren Kessler</author></authors><commentList><comment ref="A1" authorId="0"><text><t>Note.</t></text></comment></commentList></comments>"#
+    );
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook(&sheet("Budget", "rId1", ""), "")),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        ("xl/worksheets/sheet1.xml", format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#)),
+        (
+            "xl/worksheets/_rels/SHEET1.XML.RELS",
+            format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}comments" Target="../comments1.xml"/></Relationships>"#
+            ),
+        ),
+        ("xl/comments1.xml", comments),
+    ]);
+    let fs = findings(&pkg);
+    let authors: Vec<_> = fs.iter().filter(|f| f.id == "author-pii/comment").collect();
+    assert_eq!(authors.len(), 1, "{fs:?}");
+    assert!(authors[0].detail.contains("Wren Kessler"), "{fs:?}");
+    assert!(fs.iter().all(|f| f.id != "package/orphan-part"), "{fs:?}");
+}

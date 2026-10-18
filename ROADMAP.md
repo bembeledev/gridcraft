@@ -111,7 +111,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Korean | ko | menus only | ~12% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: Russian and German (menus only, ~12%), Polish (pl: 900 labels incl. dialogs, ~41%; formulas stay English).
+Other shipped languages: Russian and German (menus only, ~12%), Polish (pl: 970 labels incl. dialogs, ~44%; formulas stay English).
 
 ## Upcoming
 
@@ -193,7 +193,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-18 | minor | Polish (pl): interface catalog (900 labels incl. dialogs, ~41%) |
+| 2026-10-18 | minor | Polish (pl): interface catalog (970 labels incl. dialogs, ~44%) |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

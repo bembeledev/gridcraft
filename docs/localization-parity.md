@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (Lithuanian interface draft; previously: Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -35,6 +35,12 @@ right-to-left sheets and full complex-script support. Part of
   through egui/winit and is unverified for Chinese, Japanese and Korean.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
+Lithuanian (`lt`) adds a **972-entry interface draft** covering the existing catalog keys and
+literal `Language::tr` call sites. The View switcher and File › Options list it as **Lietuvių**;
+`lt-LT`/`lt_LT.UTF-8` pick it on first run. This does not add Lithuanian formula syntax, number/date
+formats or proofing. Native-speaker and running-app review are pending. The existing English-only
+call sites remain a shared gap. Details: [localization-lt.md](localization-lt.md).
+
 ## Languages
 
 UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
@@ -44,6 +50,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
+| Lithuanian | lt | 972 catalog entries | translated where call sites use the catalog | Latin; running-app review pending | no | interface draft | not re-estimated |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
@@ -78,6 +85,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Lithuanian interface draft: 972 catalog entries, saved language and locale support; formulas/proofing unchanged, full application and native-speaker review pending |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

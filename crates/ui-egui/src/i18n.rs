@@ -14,6 +14,7 @@ mod de;
 mod es;
 mod fr;
 mod ko;
+mod lt;
 mod pt;
 mod ru;
 mod sr;
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Lt,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Lt];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Lt => "Lietuvių",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Lt => "lt",
         }
     }
 
@@ -91,6 +96,7 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "lt" => Some(Self::Lt),
             _ => None,
         }
     }
@@ -129,6 +135,7 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Lt => lt::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -611,6 +618,7 @@ mod tests {
             assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
             assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
             assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
+            assert!(lt::translate(english).is_some_and(|text| !text.is_empty()), "missing Lithuanian: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
         assert_eq!(Language::Zh.tr("Data"), "数据");
@@ -713,5 +721,36 @@ mod tests {
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+    #[test]
+    fn lithuanian_locales_switch_and_persist_without_changing_the_workbook() {
+        let lt = Language::Lt;
+        for tag in ["lt", "lt-LT", "lt_LT.UTF-8", "LT-lt", "lt-Latn-LT", " lt-LT "] {
+            assert_eq!(Language::parse(tag), Some(lt), "{tag}");
+        }
+        assert_eq!(lt.code(), "lt");
+        assert_eq!(lt.name(), "Lietuvių");
+        assert_eq!(serde_json::to_value(lt).unwrap(), serde_json::json!("lt"));
+        assert_eq!(saved_language(&serde_json::json!({"language": "lt-LT"})), Some(lt));
+        // This is interface-only work: formula names and separators keep the English locale.
+        assert_eq!(lt.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"Ąžuolas"})).unwrap();
+        app.run("cell.set", serde_json::json!({"cell":"A2", "input":"=SUM(1,2)"})).unwrap();
+        let before = serde_json::to_value(&app.session.active().unwrap().wb).unwrap();
+        app.run("app.language.set", serde_json::json!({"language":"lt-LT"})).unwrap();
+        assert_eq!(app.ui.language, lt);
+        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+        assert_eq!(restored.language, lt);
+        assert_eq!(serde_json::to_value(&app.session.active().unwrap().wb).unwrap(), before);
+        assert_eq!(lt.tr("Home"), "Pradžia");
+        assert_eq!(lt.tr("Data"), "Duomenys");
+        assert_eq!(lt.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(lt.tr("unknown|Future label"), "Future label");
+        assert_eq!(lt.tr("Orientation"), "Teksto kryptis");
+        assert_eq!(lt.tr("Page Layout|Orientation"), "Puslapio padėtis");
+        assert_eq!(lt.tr("Format Cells|Fill"), "Langelio fonas");
     }
 }

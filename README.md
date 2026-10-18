@@ -115,6 +115,10 @@ cargo xtask ci                                                 # fmt, clippy, te
 Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.
 
+Choose **Lietuvių** under **View → Interface language** for the Lithuanian interface draft
+(972 catalog entries). This changes interface labels only; formulas and workbook data keep their
+current syntax. See [Lithuanian interface scope and review notes](docs/localization-lt.md).
+
 ### Web
 
 ```sh

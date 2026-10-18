@@ -456,4 +456,6 @@ fn cased_worksheet_part_is_scanned() {
     assert_eq!(rows.len(), 1, "{fs:?}");
     assert!(rows[0].location.contains("xl/Worksheets/Sheet1.XML"), "{fs:?}");
     assert!(rows[0].location.contains("(Budget)"), "{fs:?}");
+    // The case-variant part is reachable, not an orphan.
+    assert!(fs.iter().all(|f| f.id != "package/orphan-part"), "{fs:?}");
 }

@@ -33,7 +33,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Cursor, Read};
 
 use quick_xml::XmlVersion;
@@ -799,48 +799,51 @@ fn scan_package_parts(names: &[String], findings: &mut Vec<AuditFinding>) {
 }
 
 /// ZIP entries no relationship targets: content nothing references.
-/// Reachability is computed from the package root: a relationship part is
-/// only parsed once its *source* part is reachable, so relationships inside
-/// an orphaned subtree cannot rescue their targets. External relationship
+///
+/// Reachability is keyed by ASCII-lowercased part name: OPC part names are
+/// case-insensitive, so `xl/Worksheets/Sheet1.XML` and the rel target
+/// `xl/worksheets/sheet1.xml` name the same part.
+///
+/// A relationship part is parsed only once its *source* part is reachable, so
+/// relationships inside an orphaned subtree cannot rescue their targets.
+/// Traversal is breadth-first from the package root over an index of `.rels`
+/// parts by source: each part is parsed at most once, so a hostile chain of
+/// relationship parts cannot force quadratic work. External relationship
 /// targets (`TargetMode="External"`) are not package parts.
 fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
     let mut reachable: BTreeSet<String> = BTreeSet::new();
-    reachable.insert("[Content_Types].xml".to_string());
-    for name in names {
-        if name.ends_with(".rels") {
-            reachable.insert(name.clone());
+    reachable.insert("[content_types].xml".to_string());
+    // `.rels` parts are infrastructure: never reported as orphans themselves,
+    // but only parsed once their source part is reachable.
+    let mut rels_by_source: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for name in names.iter().filter(|n| n.ends_with(".rels")) {
+        reachable.insert(name.to_ascii_lowercase());
+        if let Some(source) = source_part_of_rels(name) {
+            rels_by_source.entry(source.to_ascii_lowercase()).or_default().push(name.clone());
         }
     }
-    // To fixpoint: parsing one rels part can make another rels part's source
-    // reachable, unlocking nested relationships.
-    let mut scanned_rels: BTreeSet<String> = BTreeSet::new();
-    loop {
-        let mut progressed = false;
-        for name in names.iter().filter(|n| n.ends_with(".rels")) {
-            let source_reachable = name == "_rels/.rels" || source_part_of_rels(name).is_some_and(|s| reachable.contains(&s));
-            if !source_reachable || !scanned_rels.insert(name.clone()) {
-                continue;
-            }
-            progressed = true;
-            let Some(xml) = parts.get(name) else { continue };
-            let source_dir = source_dir_of_rels(name);
-            for_each_element(xml, name, &mut |el| {
-                if el.ns.as_slice() == NS_RELS
-                    && el.local == "Relationship"
-                    && let Some(target) = attr(el, b"", "Target")
-                    && attr(el, b"", "TargetMode") != Some("External")
+    let mut queue: VecDeque<String> = names.iter().filter(|n| n.eq_ignore_ascii_case("_rels/.rels")).cloned().collect();
+    while let Some(name) = queue.pop_front() {
+        let Some(xml) = parts.get(&name) else { continue };
+        let source_dir = source_dir_of_rels(&name);
+        for_each_element(xml, &name, &mut |el| {
+            if el.ns.as_slice() == NS_RELS
+                && el.local == "Relationship"
+                && let Some(target) = attr(el, b"", "Target")
+                && attr(el, b"", "TargetMode") != Some("External")
+            {
+                let resolved = resolve_target(&source_dir, target).to_ascii_lowercase();
+                if reachable.insert(resolved.clone())
+                    && let Some(rels) = rels_by_source.remove(&resolved)
                 {
-                    reachable.insert(resolve_target(&source_dir, target));
+                    queue.extend(rels);
                 }
-                Ok(())
-            })?;
-        }
-        if !progressed {
-            break;
-        }
+            }
+            Ok(())
+        })?;
     }
     for name in names {
-        if !reachable.contains(name) {
+        if !reachable.contains(&name.to_ascii_lowercase()) {
             findings.push(AuditFinding::new(FindingKind::OrphanPart, name.clone(), "no relationship targets this part".to_string()));
         }
     }

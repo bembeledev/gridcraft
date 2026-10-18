@@ -23,7 +23,7 @@ pub(crate) fn canonical(
     // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
     let body = text;
     if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
@@ -102,17 +102,27 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
 ];
 
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
-    let canonical = locale.canonical_name(name);
+    canonical_signature(locale.canonical_name(name), locale)
+}
+
+/// Help for a canonical catalog name, without interpreting it as a localized alias.
+pub(crate) fn canonical_signature(canonical: &str, locale: FormulaLocale) -> Option<String> {
     if locale == FormulaLocale::Es
         && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
     {
         return Some((*signature).into());
     }
-    crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
+    crate::formula_bar::function_signature(canonical).map(|s| {
+        let localized = s.strip_prefix(canonical).map(|tail| format!("{}{tail}", locale.function_name(canonical))).unwrap_or(s);
+        localized.replace(',', &locale.list_separator().to_string())
+    })
 }
 
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
-    let canonical = locale.canonical_name(name);
+    canonical_description(locale.canonical_name(name), locale)
+}
+
+pub(crate) fn canonical_description(canonical: &str, locale: FormulaLocale) -> Option<String> {
     if locale == FormulaLocale::Es
         && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
     {
@@ -137,4 +147,19 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
         return format!("={}(", completion_name(name, locale, wb, sheet));
     }
     display(text, locale, wb, sheet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hungarian_help_distinguishes_catalog_names_from_typed_aliases() {
+        let locale = FormulaLocale::Hu;
+        assert_eq!(signature("VAR.S", locale), canonical_signature("VAR.P", locale));
+        assert_eq!(description("VAR.S", locale), canonical_description("VAR.P", locale));
+        assert!(canonical_signature("VAR.S", locale).unwrap().starts_with("VAR.M("));
+        assert!(canonical_signature("VAR.P", locale).unwrap().starts_with("VAR.S("));
+        assert_eq!(canonical_description("VAR.S", locale), crate::formula_bar::function_description("VAR.S"));
+    }
 }

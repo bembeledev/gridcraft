@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-18 · **Change:** minor (Hungarian interface catalog) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian formula localization) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -91,13 +91,15 @@ collaboration, mobile, AI).
 
 Hungarian (`hu`, **Magyar**) now has 971 catalog entries, covering all existing catalog keys
 and the Macros dialog introduction. UI strings not connected to the catalog remain English;
-formula syntax and number/date formats are unchanged.
+Hungarian formulas use localized function names, decimal commas and semicolon arguments.
+Function help text and number/date display formats remain English/default.
 
 The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
+(#38). Dialogs, menus and messages still have untranslated areas. Formula entry supports English,
+Spanish (a partial alias table) and Hungarian; number/date display formats are unchanged.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -137,6 +139,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-19 | Hungarian formulas: 520 name entries (447 translated), localized separators, accented autocomplete and canonical XLSX storage |
 | 2026-10-18 | Hungarian interface: language selector, saved preference and system-locale detection; 971 catalog entries and translated Macros dialog |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
@@ -199,6 +202,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Hungarian formula entry, display and completion; localized separators |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

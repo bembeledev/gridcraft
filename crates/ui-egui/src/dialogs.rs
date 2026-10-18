@@ -1752,19 +1752,19 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
 
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
+        ui.label(app.ui.language.tr("Search:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(app.ui.language.tr("e.g. lookup, average, date")));
         r.request_focus();
     });
     let locale = app.ui.language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
+    let q = d.search.to_lowercase();
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
             q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_lowercase().contains(&q))
+                || f["description"].as_str().is_some_and(|n| n.to_lowercase().contains(&q))
         })
         .take(300)
         .collect();
@@ -1786,8 +1786,10 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
+        ui.label(
+            egui::RichText::new(crate::formula_locale::canonical_signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong(),
+        );
+        ui.label(crate::formula_locale::canonical_description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);

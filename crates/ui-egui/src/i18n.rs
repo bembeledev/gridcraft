@@ -115,7 +115,11 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        match self {
+            Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::Hu => gridcraft_engine::formula::FormulaLocale::Hu,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -727,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn hungarian_translates_interface_only_and_preserves_formula_syntax() {
+    fn hungarian_translates_interface_and_selects_formula_locale() {
         let lang = Language::Hu;
         assert_eq!(lang.name(), "Magyar");
         assert_eq!(lang.tr("Home"), "Kezdőlap");
@@ -740,7 +744,7 @@ mod tests {
         for text in ["Ági!A1", "=SUM(A1,1.5)", "file.save", "Saját munkafüzet"] {
             assert_eq!(lang.tr(text), text);
         }
-        assert_eq!(lang.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+        assert_eq!(lang.formula_locale(), gridcraft_engine::formula::FormulaLocale::Hu);
         assert_eq!(saved_language(&serde_json::json!({"language": "hu"})), Some(lang));
     }
 }

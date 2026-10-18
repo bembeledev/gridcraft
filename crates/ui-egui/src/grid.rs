@@ -1024,6 +1024,9 @@ fn mirror_shape(shape: &mut egui::Shape, axis: f32) {
     }
 }
 
+/// Paints one pane's cells for the given row/column window: fills, text (with its overflow and
+/// gridline repair), pictures, and borders. `ed_cell` is the cell being edited in place, whose
+/// committed text stays hidden while the editor shows it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_quadrant(
     p: &Painter,
@@ -1613,11 +1616,13 @@ fn device_ppp(ppp: f32) -> f32 {
     if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 }
 }
 
+/// A point snapped to the nearest whole device pixel, so a border edge never straddles one.
 fn snap_pos(p: Pos2, ppp: f32) -> Pos2 {
     let ppp = device_ppp(ppp);
     pos2((p.x * ppp).round() / ppp, (p.y * ppp).round() / ppp)
 }
 
+/// A rectangle with both corners snapped to whole device pixels.
 fn snap_rect(r: Rect, ppp: f32) -> Rect {
     Rect::from_min_max(snap_pos(r.min, ppp), snap_pos(r.max, ppp))
 }
@@ -2744,6 +2749,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
 }
 
+/// Paints the in-cell editor over the grid: fills the active cell, sizes the border to the text
+/// (and the value it overrides), grows it over overflowed cells/rows, and lays out the text widget.
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let Some(ed) = app.editor.as_ref() else { return };
     if ed.sheet != wb.active_sheet {

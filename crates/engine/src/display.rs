@@ -106,7 +106,14 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// A cell's value through its number format, General at the 11-character cell width.
 fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    with_fill_space(format(&sheet.value(c), style.num_fmt.as_str(), wb))
+    value_text_as(wb, &sheet.value(c), style.num_fmt.as_str())
+}
+
+/// A value through a format code given apart from a cell, as a cell shows it (General at the
+/// 11-character cell width). Print takes the code from the cell's effective look, which a
+/// conditional format can override.
+pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    with_fill_space(format(v, code, wb))
 }
 
 /// The formatted text with a single space where a `*x` repeat fill would expand.

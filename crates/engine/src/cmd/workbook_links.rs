@@ -622,7 +622,12 @@ mod tests {
     fn relative_paths_start_from_the_workbook_folder() {
         let base = PathBuf::from("base");
         assert_eq!(resolve("Source.xlsx", Some(&base)), base.join("Source.xlsx"));
-        assert_eq!(resolve(r"C:\links\Source.xlsx", Some(&base)), PathBuf::from(r"C:\links\Source.xlsx"));
+        // Windows keeps native separators; other hosts normalise imported Windows
+        // paths to forward slashes. An absolute drive path must never gain `base`.
+        let drive = if cfg!(windows) { r"C:\links\Source.xlsx" } else { "C:/links/Source.xlsx" };
+        assert_eq!(resolve(r"C:\links\Source.xlsx", Some(&base)), PathBuf::from(drive));
+        let nested = if cfg!(windows) { r"links\Source.xlsx" } else { "links/Source.xlsx" };
+        assert_eq!(resolve(r"links\Source.xlsx", Some(&base)), base.join(nested));
         assert_eq!(resolve("/srv/Source.xlsx", Some(&base)), PathBuf::from("/srv/Source.xlsx"));
         assert_eq!(resolve("Source.xlsx", None), PathBuf::from("Source.xlsx"));
     }

@@ -29,6 +29,7 @@ macro_rules! outln {
     }};
 }
 
+mod audit;
 mod check;
 
 use gridcraft_engine::Session;
@@ -41,6 +42,7 @@ const USAGE: &str = "usage:
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
+  gridcraft-cli audit <file>                      hidden-information report (JSON; exit 1 on findings, 2 on error)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
   gridcraft-cli commands [--json] [--search X]
@@ -77,6 +79,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("audit") => return audit::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),

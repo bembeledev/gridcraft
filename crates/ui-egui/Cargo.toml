@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
-craft-credits = { git = "https://github.com/zuujiscom/craft-libs", rev = "3d8dca51d78f8a875b379aec7a23afcd3ec30391" }
+craft-credits = { git = "https://github.com/zuujiscom/craft-libs", rev = "4a3f21ae27791a2bdb79f607bdf3de96d812b6b3" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 egui = { workspace = true }
@@ -40,4 +40,4 @@ sys-locale = { workspace = true }
 web-sys = { version = "0.3", features = ["Window", "Navigator"] }
 
 [build-dependencies]
-craft-credits = { git = "https://github.com/zuujiscom/craft-libs", rev = "3d8dca51d78f8a875b379aec7a23afcd3ec30391", features = ["build"] }
+craft-credits = { git = "https://github.com/zuujiscom/craft-libs", rev = "4a3f21ae27791a2bdb79f607bdf3de96d812b6b3", features = ["build"] }

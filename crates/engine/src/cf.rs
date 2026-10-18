@@ -362,6 +362,32 @@ mod tests {
         assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats.len(), 1);
     }
 
+    /// Detects priority and Stop If True changes even when the rule's ranges and formatting match.
+    #[test]
+    fn formatting_rejects_stale_priority_and_stop_if_true() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A3","rule":{"type":"expression","formula":"TRUE","preset":"redText"}})).unwrap();
+        for field in ["priority", "stopIfTrue"] {
+            let expected = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+            {
+                let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+                let rule = &mut wb.sheet_mut(0).unwrap().cond_formats[0];
+                if field == "priority" {
+                    rule.priority += 1;
+                } else {
+                    rule.stop_if_true = !rule.stop_if_true;
+                }
+            }
+            let before = s.doc().unwrap().wb.clone();
+            let undo = s.doc().unwrap().undo.len();
+            let error = s.execute("home.manageRules", json!({"format":0,"style":{"font":{"bold":true}},"expected":expected})).unwrap_err();
+            assert!(error.to_string().contains("rule changed"), "{field} must invalidate the editor");
+            assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+            assert_eq!(s.doc().unwrap().undo.len(), undo);
+        }
+    }
+
     /// Verifies format editing preserves rule metadata, rejects invalid or stale edits, and remains undoable.
     #[test]
     fn editing_format_preserves_rule_metadata_and_rejects_stale_or_invalid_changes() {

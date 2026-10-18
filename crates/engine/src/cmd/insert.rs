@@ -1494,18 +1494,17 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Captures all editable rule state so an open format editor detects metadata changes too.
+fn cf_snapshot(rule: &CondFormat) -> Json {
+    json!({"ranges": rule.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": rule.rule,
+        "priority": rule.priority, "stopIfTrue": rule.stop_if_true})
+}
+
 /// Lists, formats, deletes or reorders rules; stale edits fail and unchanged format-only requests do not commit.
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() && p.get("format").is_none() {
-        let list: Vec<Json> = s
-            .doc()?
-            .wb
-            .sheet(sheet)
-            .map(|sh| {
-                sh.cond_formats.iter().map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule})).collect()
-            })
-            .unwrap_or_default();
+        let list: Vec<Json> = s.doc()?.wb.sheet(sheet).map(|sh| sh.cond_formats.iter().map(cf_snapshot).collect()).unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
     let replacement = if p.get("format").is_some() {
@@ -1515,7 +1514,7 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
         let current =
             s.doc()?.wb.sheet(sheet).and_then(|sh| sh.cond_formats.get(index)).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
         if let Some(expected) = p.get("expected").filter(|v| !v.is_null()) {
-            let snapshot = json!({"ranges": current.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": current.rule});
+            let snapshot = cf_snapshot(current);
             if expected != &snapshot {
                 return Err(bad("home.manageRules", "rule changed while the format editor was open; reopen it"));
             }

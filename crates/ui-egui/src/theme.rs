@@ -495,6 +495,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-hebrew", hebrew()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
+        ("sys-symbols-3", symbols_technical()),
     ]
 }
 
@@ -663,19 +664,31 @@ fn symbols() -> Vec<(String, u32)> {
 /// Symbols 2 where it is installed, or Segoe UI Symbol behind Segoe UI.
 #[cfg(not(target_arch = "wasm32"))]
 fn symbols_more() -> Vec<(String, u32)> {
-    let mut v: Vec<(String, u32)> = Vec::new();
-    for d in [
+    noto_symbol_face("NotoSansSymbols2-Regular.ttf")
+}
+
+/// A third symbol face for the keyboard symbols neither DejaVu Sans nor Noto Sans Symbols 2 has,
+/// such as ⌃ (Control): Noto Sans Symbols where it is installed.
+#[cfg(not(target_arch = "wasm32"))]
+fn symbols_technical() -> Vec<(String, u32)> {
+    noto_symbol_face("NotoSansSymbols-Regular.ttf")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn noto_symbol_face(file: &str) -> Vec<(String, u32)> {
+    [
         "/usr/share/fonts/noto",
         "/usr/share/fonts/truetype/noto",
         "/usr/share/fonts/opentype/noto",
         "/usr/share/fonts/google-noto-sans-symbols-2-fonts",
+        "/usr/share/fonts/google-noto-sans-symbols-fonts",
         "/usr/share/fonts/google-noto",
         "/usr/local/share/fonts/noto",
         "/usr/share/fonts/chromeos/noto",
-    ] {
-        v.push((format!("{d}/NotoSansSymbols2-Regular.ttf"), 0));
-    }
-    v
+    ]
+    .iter()
+    .map(|d| (format!("{d}/{file}"), 0))
+    .collect()
 }
 
 /// Whether any symbol fallback face is installed (tests skip their glyph checks without one).
@@ -830,11 +843,11 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2", "sys-symbols-3"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2", "sys-symbols-3"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs] {
@@ -915,6 +928,7 @@ mod tests {
         assert!(probes(cjk_han_simplified(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
         assert!(probes(cjk_hangul(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
         assert!(probes(symbols_more(), &format!("{cros}/noto/NotoSansSymbols2-Regular.ttf")));
+        assert!(probes(symbols_technical(), &format!("{cros}/noto/NotoSansSymbols-Regular.ttf")));
         assert!(probes(candidates(UI), &format!("{cros}/noto/NotoSans-Regular.ttf")));
         assert!(probes(candidates(CELL), &format!("{cros}/crosextra/Carlito-Regular.ttf")));
     }

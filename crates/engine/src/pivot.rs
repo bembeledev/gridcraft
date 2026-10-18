@@ -464,17 +464,31 @@ pub enum RowKind {
     Placeholder,
 }
 
+/// The semantic role of a cell in a PivotTable report for in-cell editing and protection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PivotCellTarget {
+    /// The row axis header (e.g. "Row Labels" in Compact layout).
+    RowHeader,
+    /// The column axis header (e.g. "Column Labels" in Compact layout).
+    ColHeader,
+    /// A value field header for value field index `vi`.
+    ValueHeader(usize),
+    /// A calculated data cell or non-editable report cell (subtotals, grand totals, dimension items).
+    Data,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutCell {
     pub value: Value,
     pub kind: CellKind,
     pub indent: u8,
     pub num_fmt: Option<String>,
+    pub target: PivotCellTarget,
 }
 
 impl OutCell {
     fn empty() -> OutCell {
-        OutCell { value: Value::Empty, kind: CellKind::Empty, indent: 0, num_fmt: None }
+        OutCell { value: Value::Empty, kind: CellKind::Empty, indent: 0, num_fmt: None, target: PivotCellTarget::Data }
     }
 }
 
@@ -520,8 +534,11 @@ impl Grid {
         Ok(self.rows.len() - 1)
     }
     fn set(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>) {
+        self.set_with_target(r, c, value, kind, indent, fmt, PivotCellTarget::Data);
+    }
+    fn set_with_target(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>, target: PivotCellTarget) {
         if let Some(cell) = self.rows.get_mut(r).and_then(|row| row.get_mut(c)) {
-            *cell = OutCell { value, kind, indent, num_fmt: fmt };
+            *cell = OutCell { value, kind, indent, num_fmt: fmt, target };
         }
     }
 }
@@ -1048,7 +1065,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             return;
         }
         if compact {
-            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
+            let caption = pt.row_header_caption.as_deref().unwrap_or("Row Labels");
+            g.set_with_target(r, 0, Value::text(caption), CellKind::Header, 0, None, PivotCellTarget::RowHeader);
         } else {
             // One column per row field, Σ Values ("Values") at its place.
             let mut names: Vec<&str> = row_fields.iter().map(|f| f.source_col.as_str()).collect();
@@ -1067,7 +1085,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         row_header(&mut g, r);
         for (j, (_, vi)) in data_cols.iter().enumerate() {
             match vi {
-                Some(vi) => g.set(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None),
+                Some(vi) => g.set_with_target(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None, PivotCellTarget::ValueHeader(*vi)),
                 // Values on rows, no column field: the one data column is the grand total.
                 None if on_rows => g.set(r, l + j, Value::text("Total"), CellKind::Header, 0, None),
                 None => {}
@@ -1076,11 +1094,13 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     } else {
         let cap = g.push_row(RowKind::Header)?;
         if l > 0 && k == 1 {
-            g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
+            g.set_with_target(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None, PivotCellTarget::ValueHeader(0));
         }
         if headers_on {
-            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
-            g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
+            let default_caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
+            let caption = if compact { pt.col_header_caption.clone().unwrap_or(default_caption) } else { default_caption };
+            let target = if compact { PivotCellTarget::ColHeader } else { PivotCellTarget::Data };
+            g.set_with_target(cap, l, Value::text(caption), CellKind::Header, 0, None, target);
         }
         let levels = cols.len() + usize::from(k > 1 && !on_rows);
         let first_level = g.rows.len();
@@ -1104,7 +1124,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                     if k > 1
                         && let Some(vi) = vi
                     {
-                        g.set(first_level + cols.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None);
+                        g.set_with_target(first_level + cols.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None, PivotCellTarget::ValueHeader(*vi));
                     }
                 }
                 ColKind::Subtotal => {
@@ -1227,7 +1247,12 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             chart_rows.push(r as u32);
         }
         for (c, v, indent, fmt) in &line.labels {
-            g.set(r, *c, v.clone(), ck.0, *indent, fmt.clone());
+            let target = if let (LineKind::Item(_), Some(vi)) = (line.kind, line.vi) {
+                PivotCellTarget::ValueHeader(vi)
+            } else {
+                PivotCellTarget::Data
+            };
+            g.set_with_target(r, *c, v.clone(), ck.0, *indent, fmt.clone(), target);
         }
         if !line.values {
             continue;
@@ -1474,6 +1499,27 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
     Ok(area)
+}
+
+/// What kind of cell `at` is in PivotTable `idx` of `sheet`.
+/// Returns None if `at` is not within the PivotTable's report range.
+pub fn cell_target(wb: &Workbook, sheet: usize, idx: usize, at: CellRef) -> Option<PivotCellTarget> {
+    let pt = wb.sheet(sheet)?.pivots.get(idx)?;
+    let r = pt.last_range?;
+    if !r.contains(at) {
+        return None;
+    }
+    let out = compute(wb, pt, sheet).ok()?;
+    let k = out.body_offset;
+    let origin_row = if pt.anchor.row >= k { pt.anchor.row - k } else { pt.anchor.row };
+    let origin = CellRef::new(origin_row, pt.anchor.col);
+    if at.row < origin.row || at.col < origin.col {
+        return Some(PivotCellTarget::Data);
+    }
+    let ri = (at.row - origin.row) as usize;
+    let ci = (at.col - origin.col) as usize;
+    let target = out.grid.get(ri).and_then(|row| row.get(ci)).map(|c| c.target).unwrap_or(PivotCellTarget::Data);
+    Some(target)
 }
 
 // ---------------------------------------------------------------- PivotCharts

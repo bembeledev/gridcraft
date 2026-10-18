@@ -116,6 +116,8 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        row_header_caption: None,
+        col_header_caption: None,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -175,6 +177,8 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        row_header_caption: None,
+        col_header_caption: None,
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -723,4 +727,22 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+#[test]
+fn row_and_col_header_captions_roundtrip() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(0).unwrap();
+        p.row_header_caption = Some("Custom Rows".into());
+        p.col_header_caption = Some("Custom Cols".into());
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let t1 = String::from_utf8(unzip(&bytes).get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+    assert!(t1.contains("rowHeaderCaption=\"Custom Rows\""), "{t1}");
+    assert!(t1.contains("colHeaderCaption=\"Custom Cols\""), "{t1}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    assert_eq!(pt.row_header_caption.as_deref(), Some("Custom Rows"));
+    assert_eq!(pt.col_header_caption.as_deref(), Some("Custom Cols"));
 }

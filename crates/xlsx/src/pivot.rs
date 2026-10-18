@@ -826,6 +826,12 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     if !pt.grand_totals_rows {
         s.push_str(" colGrandTotals=\"0\"");
     }
+    if let Some(c) = &pt.row_header_caption {
+        s.push_str(&format!(" rowHeaderCaption=\"{}\"", esc_attr(c)));
+    }
+    if let Some(c) = &pt.col_header_caption {
+        s.push_str(&format!(" colHeaderCaption=\"{}\"", esc_attr(c)));
+    }
     s.push_str(" multipleFieldFilters=\"0\">");
 
     // Location: the body (report filters sit above it).
@@ -1249,6 +1255,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         pt.name = format!("PivotTable{id}");
     }
     pt.source = cache.source.clone();
+    pt.row_header_caption = x.attr("rowHeaderCaption").map(str::to_string);
+    pt.col_header_caption = x.attr("colHeaderCaption").map(str::to_string);
     let Some(loc) = x.child("location").and_then(|l| l.attr("ref")).and_then(|r| RangeRef::parse(&r.replace('$', ""))) else {
         cx.warn(format!("PivotTable \"{}\" has no valid location; kept as plain cells", pt.name));
         return None;

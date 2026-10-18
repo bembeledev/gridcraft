@@ -1753,16 +1753,8 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     let locale = app.ui.language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
-    let hits: Vec<&Json> = list
-        .iter()
-        .filter(|f| {
-            q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
-        })
-        .take(300)
-        .collect();
+    let q = fold_search(&d.search);
+    let hits: Vec<&Json> = list.iter().filter(|f| function_matches(f, &q, locale)).take(300).collect();
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         for (i, f) in hits.iter().enumerate() {
             let name = locale.function_name(f["name"].as_str().unwrap_or(""));
@@ -2660,6 +2652,47 @@ fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bo
             }
         }
     });
+}
+
+fn fold_search(text: &str) -> String {
+    text.to_lowercase().replace('ё', "е")
+}
+
+/// Insert Function search: the name as shown or in English, and the description as shown or in English.
+fn function_matches(f: &Json, folded_query: &str, locale: gridcraft_engine::formula::FormulaLocale) -> bool {
+    if folded_query.is_empty() {
+        return true;
+    }
+    let Some(name) = f["name"].as_str() else { return false };
+    fold_search(locale.function_name(name)).contains(folded_query)
+        || fold_search(name).contains(folded_query)
+        || crate::formula_locale::description(name, locale).is_some_and(|d| fold_search(&d).contains(folded_query))
+        || f["description"].as_str().is_some_and(|d| fold_search(d).contains(folded_query))
+}
+
+#[cfg(test)]
+mod function_search_tests {
+    use super::*;
+    use gridcraft_engine::formula::FormulaLocale;
+
+    fn find(query: &str, locale: FormulaLocale) -> Vec<String> {
+        let q = fold_search(query);
+        gridcraft_engine::cmd::formulas::function_list()
+            .iter()
+            .filter(|f| function_matches(f, &q, locale))
+            .filter_map(|f| f["name"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn russian_search_matches_the_shown_name_and_description() {
+        assert!(find("срзнач", FormulaLocale::Ru).contains(&"AVERAGE".to_string()));
+        assert!(find("среднее", FormulaLocale::Ru).contains(&"AVERAGE".to_string()));
+        assert!(find("счет", FormulaLocale::Ru).contains(&"COUNT".to_string()));
+        assert!(find("average", FormulaLocale::Ru).contains(&"AVERAGE".to_string()));
+        assert!(find("average", FormulaLocale::En).contains(&"AVERAGE".to_string()));
+        assert!(!find("среднее", FormulaLocale::En).contains(&"AVERAGE".to_string()));
+    }
 }
 
 #[cfg(test)]

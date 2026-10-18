@@ -86,8 +86,8 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
-// Descriptions/signatures for the supported Spanish function table; untranslated functions
-// retain their English help. Parameter punctuation follows the same locale as entry.
+// Descriptions/signatures for the supported Spanish and Russian function tables; untranslated
+// functions retain their English help. Parameter punctuation follows the same locale as entry.
 const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("SUM", "SUMA(número1; [número2]; ...)", "Suma los números."),
     ("AVERAGE", "PROMEDIO(número1; [número2]; ...)", "Devuelve el promedio de los números."),
@@ -101,11 +101,51 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
 ];
 
+const RUSSIAN_HELP: &[(&str, &str, &str)] = &[
+    ("SUM", "СУММ(число1; [число2]; ...)", "Суммирует аргументы."),
+    ("AVERAGE", "СРЗНАЧ(число1; [число2]; ...)", "Возвращает среднее арифметическое аргументов."),
+    (
+        "IF",
+        "ЕСЛИ(лог_выражение; значение_если_истина; [значение_если_ложь])",
+        "Возвращает одно значение, если условие истинно, и другое, если ложно.",
+    ),
+    ("COUNT", "СЧЁТ(значение1; [значение2]; ...)", "Подсчитывает количество ячеек с числами."),
+    ("SUMIF", "СУММЕСЛИ(диапазон; критерий; [диапазон_суммирования])", "Суммирует ячейки, удовлетворяющие условию."),
+    ("COUNTIF", "СЧЁТЕСЛИ(диапазон; критерий)", "Подсчитывает ячейки, удовлетворяющие условию."),
+    (
+        "VLOOKUP",
+        "ВПР(искомое_значение; таблица; номер_столбца; [интервальный_просмотр])",
+        "Ищет значение в первом столбце таблицы и возвращает значение из указанного столбца.",
+    ),
+    ("TODAY", "СЕГОДНЯ()", "Возвращает текущую дату."),
+    ("TRUE", "ИСТИНА()", "Возвращает логическое значение ИСТИНА."),
+    ("FALSE", "ЛОЖЬ()", "Возвращает логическое значение ЛОЖЬ."),
+    ("MAX", "МАКС(число1; [число2]; ...)", "Возвращает наибольшее значение из набора."),
+    ("MIN", "МИН(число1; [число2]; ...)", "Возвращает наименьшее значение из набора."),
+    ("ROUND", "ОКРУГЛ(число; число_разрядов)", "Округляет число до указанного количества разрядов."),
+    ("AND", "И(логическое_значение1; [логическое_значение2]; ...)", "Возвращает ИСТИНА, если все аргументы истинны."),
+    ("OR", "ИЛИ(логическое_значение1; [логическое_значение2]; ...)", "Возвращает ИСТИНА, если хотя бы один аргумент истинен."),
+    ("NOT", "НЕ(логическое_значение)", "Меняет логическое значение на противоположное."),
+    ("IFERROR", "ЕСЛИОШИБКА(значение; значение_если_ошибка)", "Возвращает заданное значение, если вычисление дало ошибку."),
+    ("LEN", "ДЛСТР(текст)", "Возвращает количество символов в тексте."),
+    ("LEFT", "ЛЕВСИМВ(текст; [число_знаков])", "Возвращает первые символы текста."),
+    ("RIGHT", "ПРАВСИМВ(текст; [число_знаков])", "Возвращает последние символы текста."),
+    ("CONCATENATE", "СЦЕПИТЬ(текст1; [текст2]; ...)", "Объединяет несколько текстовых строк в одну."),
+    ("NOW", "ТДАТА()", "Возвращает текущие дату и время."),
+    ("DATE", "ДАТА(год; месяц; день)", "Возвращает число, представляющее дату."),
+];
+
+fn help_table(locale: FormulaLocale) -> &'static [(&'static str, &'static str, &'static str)] {
+    match locale {
+        FormulaLocale::En => &[],
+        FormulaLocale::Es => SPANISH_HELP,
+        FormulaLocale::Ru => RUSSIAN_HELP,
+    }
+}
+
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, signature, _)) = help_table(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*signature).into());
     }
     crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
@@ -113,9 +153,7 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
 
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, _, description)) = help_table(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*description).into());
     }
     crate::formula_bar::function_description(canonical)

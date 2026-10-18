@@ -11,6 +11,17 @@ for display. API, clipboard and XLSX syntax remain stable. Existing names overri
 The revision is based directly on main after #31/#104 and Portuguese interface support (#82)
 merged. Those locales retain their existing formula fallback; this change adds only Spanish.
 
+## Russian formulas reuse the Spanish mechanism
+
+Русский selects `FormulaLocale::Ru` through the same `UiState.language` preference. The function
+table lives in `crates/formula/src/input/ru.rs` and is looked up through case- and ё-folded maps
+built once per locale, because ASCII-only case comparison does not fold Cyrillic. Separators match
+Spanish (`;`, decimal comma, `\` between array columns). Aliases still translate to canonical
+English at the editor boundary only, so files, API and clipboard keep English. The editor's
+autocomplete, argument hints and the Insert Function search now accept non-ASCII letters.
+Functions missing from the table keep their English names. Names were written from Excel's Russian
+function names and need a native-speaker review.
+
 ## Preserve array evaluation when exporting formulas (#64)
 
 GridCraft evaluates ordinary formulas with array semantics even when the final result occupies one cell. XLSX export marks actual spills and formulas whose results may differ under legacy implicit intersection as dynamic, using the spill range or a single-cell array reference. Legacy CSE array ranges keep their existing representation.

@@ -6,6 +6,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
+mod ai_studio;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -210,6 +212,8 @@ pub struct Perf {
 }
 
 pub struct SheetApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub ai_studio: ai_studio::Studio,
     pub session: Session,
     pub ui: UiState,
     pub views: HashMap<(u64, usize), SheetView>,
@@ -268,6 +272,8 @@ pub struct SheetApp {
 impl SheetApp {
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
+            #[cfg(not(target_arch = "wasm32"))]
+            ai_studio: Default::default(),
             session,
             ui: UiState::default(),
             views: HashMap::new(),
@@ -1106,6 +1112,8 @@ impl SheetApp {
         if self.backstage.is_none() {
             self.ribbon_keys(&ctx);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        ai_studio::show(self, ui);
         ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.

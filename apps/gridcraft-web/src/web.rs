@@ -38,12 +38,15 @@ pub fn start() {
                     let mut session = Session::new();
                     // In host mode the parent sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
-                    // Samples are written in the browser's language (Georgian for `ka`).
-                    let language = gridcraft_ui_egui::i18n::Language::system().code();
+                    // Follow the browser's language, except one the web build can't draw (CJK,
+                    // Georgian: no installed fonts here and none bundled) — it would be tofu.
+                    // Samples are written in that language (Georgian for `ka`).
+                    let browser = gridcraft_ui_egui::i18n::Language::system();
+                    let language = if browser.draws_on_web() { browser } else { Default::default() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": name, "language": language}));
+                        let _ = session.execute("file.new", serde_json::json!({"sample": name, "language": language.code()}));
                     } else if q.contains("sample") {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales", "language": language}));
+                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales", "language": language.code()}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {
@@ -51,15 +54,7 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
-                    let browser = gridcraft_ui_egui::i18n::Language::system();
-                    if !matches!(
-                        browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
-                    ) {
-                        app.ui.language = browser;
-                    }
+                    app.ui.language = language;
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     if let Some(bridge) = &app_bridge {
                         if let Some(author) = query_param("author") {

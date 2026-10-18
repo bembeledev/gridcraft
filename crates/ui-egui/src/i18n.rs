@@ -114,6 +114,13 @@ impl Language {
         }
     }
 
+    /// Can the web build draw this language? It reads no installed fonts and bundles none for
+    /// CJK or Georgian, so those would show as tofu; the browser's language is followed only
+    /// when this holds.
+    pub const fn draws_on_web(self) -> bool {
+        !matches!(self, Self::Zh | Self::Ja | Self::Ko | Self::Ka)
+    }
+
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }
@@ -707,6 +714,12 @@ mod tests {
         let restored: crate::UiState = serde_json::from_str("{}").unwrap();
         assert_eq!(restored.language, Language::En);
         assert_eq!(saved_language(&serde_json::json!({"language": "zh"})), Some(Language::Zh));
+    }
+
+    #[test]
+    fn the_web_build_follows_only_languages_it_can_draw() {
+        let skipped: Vec<_> = Language::ALL.into_iter().filter(|l| !l.draws_on_web()).collect();
+        assert_eq!(skipped, [Language::Zh, Language::Ja, Language::Ko, Language::Ka]);
     }
 
     #[test]

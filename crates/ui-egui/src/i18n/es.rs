@@ -440,6 +440,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "AutoSave" => "Autoguardado",
+        "AutoSave: save after every change (workbooks saved to a file)" => "Autoguardado: guardar tras cada cambio (libros guardados en un archivo)",
         _ => return None,
     })
 }

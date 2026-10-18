@@ -599,6 +599,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("AutoSave", "自動保存"),
+    ("AutoSave: save after every change (workbooks saved to a file)", "自動保存: 変更のたびに保存します (ファイルに保存されたブック)"),
 ];
 
 #[cfg(test)]

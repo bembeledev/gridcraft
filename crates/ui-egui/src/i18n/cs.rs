@@ -535,6 +535,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "AutoSave" => "Automatické ukládání",
+        "AutoSave: save after every change (workbooks saved to a file)" => "Automatické ukládání: ukládat po každé změně (sešity uložené do souboru)",
         _ => return None,
     })
 }

@@ -402,6 +402,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "AutoSave" => "自动保存",
+        "AutoSave: save after every change (workbooks saved to a file)" => "自动保存：每次更改后保存（已保存到文件的工作簿）",
         _ => return None,
     })
 }

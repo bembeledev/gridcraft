@@ -408,6 +408,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "AutoSave" => "Automatsko čuvanje",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Automatsko čuvanje: sačuvaj posle svake izmene (radne sveske sačuvane u datoteku)"
+        }
         _ => return None,
     })
 }

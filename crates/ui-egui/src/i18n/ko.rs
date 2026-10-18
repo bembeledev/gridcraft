@@ -410,6 +410,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "AutoSave" => "자동 저장",
+        "AutoSave: save after every change (workbooks saved to a file)" => "자동 저장: 변경할 때마다 저장(파일로 저장된 통합 문서)",
         _ => return None,
     })
 }

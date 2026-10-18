@@ -410,6 +410,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "AutoSave" => "Enregistrement automatique",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Enregistrement automatique : enregistrer après chaque modification (classeurs enregistrés dans un fichier)"
+        }
         _ => return None,
     })
 }

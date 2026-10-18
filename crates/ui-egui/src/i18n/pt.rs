@@ -956,6 +956,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nSheet" => "Proteger\nPlanilha",
         "Watch\nWindow" => "Janela de\nInspeção",
         "Workbook\nStatistics" => "Estatísticas da\nPasta de Trabalho",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Salvamento Automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
+        }
         _ => return None,
     })
 }

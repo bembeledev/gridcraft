@@ -240,13 +240,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let active_sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         let pivot_hit = cx.wb.sheet(sheet).and_then(|sh| {
-            sh.pivots.iter().enumerate().find_map(|(pi, pt)| {
-                if pt.last_range.is_some_and(|r| r.contains(at)) {
-                    Some(pi)
-                } else {
-                    None
-                }
-            })
+            sh.pivots.iter().enumerate().find_map(|(pi, pt)| if pt.last_range.is_some_and(|r| r.contains(at)) { Some(pi) } else { None })
         });
         if let Some(pi) = pivot_hit {
             if array {
@@ -258,7 +252,15 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                     if input.is_empty() {
                         return Err(EngineError::Other("The name isn't valid.".into()));
                     }
-                    let pt = cx.wb.sheet(sheet).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| EngineError::Other("There's no such PivotTable.".into()))?;
+                    let pt = cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .cloned()
+                        .ok_or_else(|| EngineError::Other("There's no such PivotTable.".into()))?;
+                    if pt.values.get(vi).is_some_and(|v| v.name == input) {
+                        return Ok(Json::Null);
+                    }
                     let src = crate::pivot::read_source(&cx.wb, &pt.source, sheet).map_err(EngineError::Other)?;
                     if src.col(&input).is_some() {
                         return Err(EngineError::Other("PivotTable field name already exists.".into()));
@@ -272,25 +274,41 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                     {
                         v.name = input.clone();
                     }
-                    crate::pivot::refresh(&mut cx.wb, sheet, pi, true).map_err(EngineError::Other)?;
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
                     cx.structural = true;
                     return Ok(Json::Null);
                 }
                 crate::pivot::PivotCellTarget::RowHeader => {
+                    if cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .is_some_and(|p| p.row_header_caption.as_deref().unwrap_or("Row Labels") == input)
+                    {
+                        return Ok(Json::Null);
+                    }
                     let shm = cx.sheet_mut(sheet)?;
                     if let Some(p) = shm.pivots.get_mut(pi) {
                         p.row_header_caption = Some(input.clone());
                     }
-                    crate::pivot::refresh(&mut cx.wb, sheet, pi, true).map_err(EngineError::Other)?;
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
                     cx.structural = true;
                     return Ok(Json::Null);
                 }
                 crate::pivot::PivotCellTarget::ColHeader => {
+                    if cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .is_some_and(|p| p.col_header_caption.as_deref().unwrap_or("Column Labels") == input)
+                    {
+                        return Ok(Json::Null);
+                    }
                     let shm = cx.sheet_mut(sheet)?;
                     if let Some(p) = shm.pivots.get_mut(pi) {
                         p.col_header_caption = Some(input.clone());
                     }
-                    crate::pivot::refresh(&mut cx.wb, sheet, pi, true).map_err(EngineError::Other)?;
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
                     cx.structural = true;
                     return Ok(Json::Null);
                 }

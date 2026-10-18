@@ -1574,8 +1574,10 @@ fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
 
 #[cfg(test)]
 mod tests {
-    use gridcraft_core::{CellError, CellRef, Value};
+    use gridcraft_core::{CellError, CellRef, RangeRef, Value};
     use serde_json::{Value as Json, json};
+
+    use std::sync::Arc;
 
     use crate::Session;
 
@@ -2529,5 +2531,110 @@ mod tests {
         s.execute("edit.copy", json!({})).unwrap();
         let err_paste = s.execute("edit.paste", json!({"at": "B4"})).unwrap_err().to_string();
         assert_eq!(err_paste, "Cannot change part of a PivotTable report.");
+    }
+
+    #[test]
+    fn in_cell_rename_noop_does_not_push_undo() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        let u0 = s.doc().unwrap().undo.len();
+
+        // Default caption no-ops do not push undo
+        s.execute("cell.set", json!({"cell": "A4", "input": "Row Labels"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        s.execute("cell.set", json!({"cell": "B3", "input": "Column Labels"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        // Rename Row Labels
+        s.execute("cell.set", json!({"cell": "A4", "input": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Setting same name again is a no-op
+        s.execute("cell.set", json!({"cell": "A4", "input": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Rename Column Labels
+        s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+
+        // Setting same name again is a no-op
+        s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+
+        // Now test ValueHeader no-op
+        let mut s2 = sales();
+        s2.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let u0_val = s2.doc().unwrap().undo.len();
+
+        // Value header default is "Sum of Sales" at B3
+        assert_eq!(text(&s2, "B3"), "Sum of Sales");
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Sum of Sales"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val);
+
+        // Rename to "Revenue"
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val + 1);
+
+        // Setting same name again is a no-op
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val + 1);
+    }
+
+    #[test]
+    fn row_items_under_values_in_rows_are_not_value_headers() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
+        assert_eq!(pt(&s).values_position, Some(0));
+        assert_eq!(text(&s, "A4"), "Sum of Sales");
+        assert_eq!(text(&s, "A5"), "East");
+
+        // Editing A5 ("East") must fail with "Cannot change part of a PivotTable report."
+        let err = s.execute("cell.set", json!({"cell": "A5", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales");
+
+        // Editing A4 ("Sum of Sales") succeeds in renaming the value field
+        s.execute("cell.set", json!({"cell": "A4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s, "A4"), "Revenue");
+        assert_eq!(pt(&s).values[0].name, "Revenue");
+
+        // Tabular layout: values after region
+        let mut s_tab = sales();
+        s_tab.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+        s_tab.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s_tab.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        assert_eq!(text(&s_tab, "A4"), "East");
+        assert_eq!(text(&s_tab, "B4"), "Sum of Sales");
+
+        // Editing A4 ("East") must fail with "Cannot change part of a PivotTable report."
+        let err_tab = s_tab.execute("cell.set", json!({"cell": "A4", "input": "West"})).unwrap_err().to_string();
+        assert_eq!(err_tab, "Cannot change part of a PivotTable report.");
+        assert_eq!(pt(&s_tab).values[0].name, "Sum of Sales");
+
+        // Editing B4 ("Sum of Sales") succeeds in renaming the value field
+        s_tab.execute("cell.set", json!({"cell": "B4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s_tab, "B4"), "Revenue");
+        assert_eq!(pt(&s_tab).values[0].name, "Revenue");
+    }
+
+    #[test]
+    fn in_cell_rename_respects_replace_protection() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(text(&s, "B3"), "Sum of Sales");
+
+        // Pretend last_range did not cover the grand total row A7:B7.
+        // B3 is still in last_range (A3:B6), so cell.set identifies it as a ValueHeader.
+        // But refresh(replace: false) detects that the report would overwrite data in A7 outside last_range.
+        let act = s.doc().unwrap().wb.active_sheet;
+        let p = &mut Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(act).unwrap().pivots[0];
+        p.last_range = Some(RangeRef::new(CellRef::new(2, 0), CellRef::new(5, 1)));
+
+        let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
+        assert!(err.contains("There's already data in") && err.contains("A7"), "{err}");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales");
     }
 }

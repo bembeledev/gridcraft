@@ -560,6 +560,8 @@ struct Line {
     labels: Vec<(usize, Value, u8, Option<String>)>,
     /// The value field of the line when Σ Values sits in Rows (`None`: one per data column).
     vi: Option<usize>,
+    /// Index in `labels` of the Σ Values caption (the only label that is a value header).
+    value_label: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -612,6 +614,7 @@ impl Ctx<'_> {
                 values: true,
                 labels: vec![(col, Value::text(format!("{label} {name}")), indent, None)],
                 vi: Some(vi),
+                value_label: None,
             });
         }
     }
@@ -623,7 +626,8 @@ impl Ctx<'_> {
         for (vi, name) in self.val_names.iter().enumerate() {
             let labels = vec![(col, Value::text(name.as_str()), indent, None)];
             let leaf = nodes.is_empty();
-            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi) });
+            let value_label = Some(labels.len() - 1);
+            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi), value_label });
             if !leaf {
                 self.flatten(nodes, depth, Some(vi), prefix, out);
             }
@@ -652,6 +656,7 @@ impl Ctx<'_> {
                     values: true,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_label: None,
                 });
             } else if leaf {
                 out.push(Line {
@@ -661,6 +666,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_label: None,
                 });
                 // Outline gives each level its own column, so the captions go in the Values
                 // column even when the levels between are collapsed away.
@@ -675,6 +681,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_label: None,
                 });
                 self.flatten(&node.children, depth + 1, None, prefix, out);
                 if self.pt.subtotals {
@@ -689,6 +696,7 @@ impl Ctx<'_> {
                     values: top,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_label: None,
                 });
                 self.flatten(&node.children, depth + 1, vi, prefix, out);
                 if self.pt.subtotals && !self.pt.subtotals_top {
@@ -699,6 +707,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(format!("{label} Total")), indent, None)],
                         vi,
+                        value_label: None,
                     });
                 }
             }
@@ -718,8 +727,9 @@ impl Ctx<'_> {
         for (vi, name) in self.val_names.iter().enumerate() {
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if vi == 0 { pending.to_vec() } else { vec![] };
             labels.push((depth, Value::text(name.as_str()), 0, None));
+            let value_label = Some(labels.len() - 1);
             if nodes.is_empty() {
-                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi) });
+                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi), value_label });
             } else {
                 self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, out);
             }
@@ -752,7 +762,7 @@ impl Ctx<'_> {
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
                 } else {
-                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi });
+                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, value_label: None });
                 }
             } else {
                 self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, out);
@@ -766,6 +776,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(format!("{label} Total")), 0, None)],
                         vi,
+                        value_label: None,
                     });
                 }
             }
@@ -957,7 +968,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
-        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
+        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None, value_label: None });
     } else {
         if pt.layout == PivotLayout::Tabular {
             ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut lines);
@@ -973,6 +984,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                 values: true,
                 labels: vec![(0, Value::text(text), 0, None)],
                 vi,
+                value_label: None,
             };
             if on_rows {
                 lines.extend(val_names.iter().enumerate().map(|(vi, name)| grand(format!("Total {name}"), Some(vi))));
@@ -1097,7 +1109,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             g.set_with_target(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None, PivotCellTarget::ValueHeader(0));
         }
         if headers_on {
-            let default_caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
+            let default_caption =
+                if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
             let caption = if compact { pt.col_header_caption.clone().unwrap_or(default_caption) } else { default_caption };
             let target = if compact { PivotCellTarget::ColHeader } else { PivotCellTarget::Data };
             g.set_with_target(cap, l, Value::text(caption), CellKind::Header, 0, None, target);
@@ -1124,7 +1137,15 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                     if k > 1
                         && let Some(vi) = vi
                     {
-                        g.set_with_target(first_level + cols.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None, PivotCellTarget::ValueHeader(*vi));
+                        g.set_with_target(
+                            first_level + cols.len(),
+                            c,
+                            Value::text(val_name(*vi)),
+                            CellKind::ColLabel,
+                            0,
+                            None,
+                            PivotCellTarget::ValueHeader(*vi),
+                        );
                     }
                 }
                 ColKind::Subtotal => {
@@ -1246,11 +1267,10 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         if line.leaf && k > 0 {
             chart_rows.push(r as u32);
         }
-        for (c, v, indent, fmt) in &line.labels {
-            let target = if let (LineKind::Item(_), Some(vi)) = (line.kind, line.vi) {
-                PivotCellTarget::ValueHeader(vi)
-            } else {
-                PivotCellTarget::Data
+        for (li, (c, v, indent, fmt)) in line.labels.iter().enumerate() {
+            let target = match (line.kind, line.vi, line.value_label) {
+                (LineKind::Item(_), Some(vi), Some(vl)) if vl == li => PivotCellTarget::ValueHeader(vi),
+                _ => PivotCellTarget::Data,
             };
             g.set_with_target(r, *c, v.clone(), ck.0, *indent, fmt.clone(), target);
         }

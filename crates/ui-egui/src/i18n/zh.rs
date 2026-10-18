@@ -423,6 +423,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert continuous letters and numbers to a date" => "将连续的字母和数字转换为日期",
         "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft 从不进行此转换：12JAN2026 保持为文本。",
         "Data conversion settings apply to every workbook; they are not saved in the file." => "数据转换设置适用于所有工作簿，不会保存在文件中。",
+        "Remove trailing zeros after the decimal separator" => "删除小数分隔符后的尾随零",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "关闭：720.0 显示和保存为 720.0，3.10 为 3.10（单元格获得 0.0 或 0.00 数字格式）。它仍是数字。这不是 Excel 选项。"
+        }
         _ => return None,
     })
 }

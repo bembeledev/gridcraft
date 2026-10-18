@@ -562,6 +562,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Nastavení převodu dat platí pro všechny sešity; neukládá se do souboru."
         }
+        "Remove trailing zeros after the decimal separator" => "Odebrat koncové nuly za desetinným oddělovačem",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Vypnuto: 720.0 se zobrazí i uloží jako 720.0 a 3.10 jako 3.10 (buňka dostane číselný formát 0.0 nebo 0.00). Zůstane číslem. Nejde o možnost Excelu."
+        }
         _ => return None,
     })
 }

@@ -433,6 +433,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Podešavanja konverzije podataka važe za svaku radnu svesku; ne čuvaju se u datoteci."
         }
+        "Remove trailing zeros after the decimal separator" => "Ukloni završne nule posle decimalnog separatora",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Isključeno: 720.0 se prikazuje i čuva kao 720.0, a 3.10 kao 3.10 (ćelija dobija format broja 0.0 ili 0.00). Ostaje broj. Nije opcija programa Excel."
+        }
         _ => return None,
     })
 }

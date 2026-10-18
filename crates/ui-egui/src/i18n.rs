@@ -615,6 +615,11 @@ const JAPANESE: &[(&str, &str)] = &[
         "Data conversion settings apply to every workbook; they are not saved in the file.",
         "データ変換の設定はすべてのブックに適用され、ファイルには保存されません。",
     ),
+    ("Remove trailing zeros after the decimal separator", "小数点記号の後の末尾のゼロを削除する"),
+    (
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option.",
+        "オフ: 720.0 は 720.0、3.10 は 3.10 のまま表示・保存されます (セルに 0.0 または 0.00 の表示形式が設定されます)。数値のままです。Excel にはないオプションです。",
+    ),
 ];
 
 #[cfg(test)]

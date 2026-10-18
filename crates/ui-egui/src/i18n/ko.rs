@@ -433,6 +433,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "데이터 변환 설정은 모든 통합 문서에 적용되며 파일에 저장되지 않습니다."
         }
+        "Remove trailing zeros after the decimal separator" => "소수 구분 기호 뒤의 후행 0 제거",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "끄기: 720.0은 720.0으로, 3.10은 3.10으로 표시되고 저장됩니다(셀에 0.0 또는 0.00 숫자 서식이 지정됨). 숫자로 유지됩니다. Excel 옵션이 아닙니다."
+        }
         _ => return None,
     })
 }

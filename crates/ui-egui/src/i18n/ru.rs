@@ -439,6 +439,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Параметры преобразования данных применяются ко всем книгам и не сохраняются в файле."
         }
+        "Remove trailing zeros after the decimal separator" => "Удалять конечные нули после десятичного разделителя",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Выкл.: 720.0 отображается и сохраняется как 720.0, а 3.10 — как 3.10 (ячейка получает числовой формат 0.0 или 0.00). Значение остаётся числом. Этого параметра нет в Excel."
+        }
         _ => return None,
     })
 }

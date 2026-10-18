@@ -306,6 +306,13 @@ pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     editor(app, ui, geo, &pg);
 }
 
+/// Whether `p` (screen) is over a header or footer zone, which a click edits in place.
+pub fn over_header_footer(geo: &crate::grid::Geo, p: egui::Pos2) -> bool {
+    let Some(pg) = geo.paper.as_ref() else { return false };
+    let (x, y) = (geo.scroll.x as f64 + ((p.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((p.y - geo.cells.top()) / geo.z) as f64);
+    geo.cells.contains(p) && pg.hf_zone_at(x, y).is_some()
+}
+
 /// The `pageLayout.headerFooter` parameter holding one kind of page's header or footer.
 fn hf_key(kind: HfPage, footer: bool) -> &'static str {
     match (kind, footer) {

@@ -222,20 +222,57 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
             } else {
                 i = j + 1;
             }
-            let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
-            let idx = match seen.iter().position(|k| *k == key) {
-                Some(k) => k,
-                None => {
-                    seen.push(key);
-                    seen.len() - 1
-                }
-            };
+            let idx = colour_index(&mut seen, body.get(start..end).unwrap_or(""));
             out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
+            continue;
+        }
+        // Whole columns and rows (`A:A`, `$B:$D`, `2:2`, `Sheet2!3:5`) are references too.
+        if let Some(t) = toks.get(j)
+            && let Some(range) = whole_line_ref(&t.tok, toks.get(j + 1).map(|t| &t.tok), toks.get(j + 2).map(|t| &t.tok))
+            && let Some(last) = toks.get(j + 2)
+        {
+            let end = last.end;
+            let idx = colour_index(&mut seen, body.get(start..end).unwrap_or(""));
+            out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
+            i = j + 3;
             continue;
         }
         i += 1;
     }
     out
+}
+
+/// The colour slot of a reference: the same text (ignoring `$` and case) keeps its colour.
+fn colour_index(seen: &mut Vec<String>, text: &str) -> usize {
+    let key = text.replace('$', "").to_ascii_uppercase();
+    match seen.iter().position(|k| *k == key) {
+        Some(k) => k,
+        None => {
+            seen.push(key);
+            seen.len() - 1
+        }
+    }
+}
+
+/// `A:C` or `2:5` as three tokens (the lexer splits them around the colon): whole columns or
+/// whole rows, the same words the formula parser accepts there.
+fn whole_line_ref(
+    a: &gridcraft_engine::formula::lexer::Tok,
+    colon: Option<&gridcraft_engine::formula::lexer::Tok>,
+    b: Option<&gridcraft_engine::formula::lexer::Tok>,
+) -> Option<RangeRef> {
+    use gridcraft_engine::formula::lexer::Tok;
+    if !matches!(colon, Some(Tok::Colon | Tok::Trim(_))) {
+        return None;
+    }
+    let word = |t: &Tok| match t {
+        Tok::Word(w) => Some(w.clone()),
+        Tok::Number(n) if n.fract() == 0.0 && *n >= 1.0 => Some(format!("{n}")),
+        _ => None,
+    };
+    let (w1, w2) = (word(a)?, word(b?)?);
+    let range = RangeRef::parse(&format!("{w1}:{w2}"))?;
+    (range.is_full_cols() || range.is_full_rows()).then_some(range)
 }
 
 /// Excel-style AutoComplete: the one distinct text entry in the same column (contiguous data
@@ -328,5 +365,32 @@ mod tests {
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
         assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    /// Whole columns and rows are coloured and outlined like any reference (#873, #875).
+    #[test]
+    fn whole_column_and_row_refs() {
+        use gridcraft_engine::core::{MAX_COLS, MAX_ROWS};
+        let text = "=SUM(A:A)+SUM(2:2)+COUNT($B:$D,Sheet2!3:5,a:a)";
+        let r = formula_refs(text);
+        let spans: Vec<&str> = r.iter().map(|x| &text[x.0..x.1]).collect();
+        assert_eq!(spans, ["A:A", "2:2", "$B:$D", "Sheet2!3:5", "a:a"]);
+        assert_eq!(r[0].2, RangeRef::cols(0, 0));
+        assert_eq!(r[1].2, RangeRef::rows(1, 1));
+        assert_eq!(r[2].2, RangeRef::cols(1, 3));
+        assert_eq!((r[3].2, r[3].3.as_deref()), (RangeRef::rows(2, 4), Some("Sheet2")));
+        // Distinct references get distinct colours; the same one (any case or `$`) keeps its own.
+        assert_eq!([r[0].4, r[1].4, r[2].4, r[3].4], [0, 1, 2, 3]);
+        assert_eq!(r[4].4, r[0].4);
+        // The outline spans the whole sheet's height or width.
+        assert_eq!(r[0].2.end.row, MAX_ROWS - 1);
+        assert_eq!(r[1].2.end.col, MAX_COLS - 1);
+        // Mixed with cells, in order of appearance.
+        let r = formula_refs("=A1+B:B*C2:D3+10:10");
+        assert_eq!(r.iter().map(|x| x.2.a1()).collect::<Vec<_>>(), ["A1", "B:B", "C2:D3", "10:10"]);
+        // Not references: a name, numbers around a colon in text, beyond the sheet, half a range.
+        for text in ["=SUM(Sales)", "=\"1:2\"&A", "=SUM(XFE:XFE)", "=SUM(0:0)", "=SUM(1048577:1048577)", "=SUM(A:", "=A:"] {
+            assert!(formula_refs(text).is_empty(), "{text}: {:?}", formula_refs(text));
+        }
     }
 }

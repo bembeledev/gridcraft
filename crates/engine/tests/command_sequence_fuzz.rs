@@ -748,6 +748,7 @@ const CURATED: &[(&str, usize)] = &[
     ("edit.fillDown", 2),
     ("edit.fillRight", 1),
     ("edit.autoFill", 2),
+    ("edit.autoFillToData", 1),
     ("edit.fillSeries", 1),
     ("home.bold", 1),
     ("home.fillColor", 1),
@@ -845,6 +846,7 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             let tgt = RangeRef::new(src.start, CellRef::new(src.end.row + rng.int(0, 6) as u32, src.end.col + rng.int(0, 1) as u32));
             json!({"source": src.a1(), "target": tgt.a1(), "mode": rng.pick(&["series", "copy", "alternate", "formats", "values"])})
         }
+        "edit.autoFillToData" => json!({"source": near_range(rng).a1(), "mode": rng.pick(&["series", "copy"])}),
         "edit.fillSeries" => json!({"range": near_range(rng).a1(), "type": rng.pick(&["linear", "growth", "autofill"]), "step": rng.int(-2, 3)}),
         "home.bold" => json!({"range": range(rng)}),
         "home.fillColor" => json!({"range": range(rng), "color": color(rng)}),

@@ -186,11 +186,16 @@ pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
 
 /// The contiguous data region around `c` (Ctrl+A / Ctrl+Shift+8, AutoSum, sort, tables).
 pub fn current_region(sheet: &Sheet, c: CellRef) -> RangeRef {
+    current_region_of(sheet, RangeRef::cell(c))
+}
+
+/// [`current_region`] grown from a whole range rather than one cell.
+pub fn current_region_of(sheet: &Sheet, from: RangeRef) -> RangeRef {
     let filled = |c: CellRef| sheet.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sheet.spill.contains_key(&c);
     // Whether a row (or column) has a filled cell between two columns (rows), inclusive.
     let row_has = |row: u32, a: u32, b: u32| (a..=b).any(|col| filled(CellRef::new(row, col)));
     let col_has = |col: u32, a: u32, b: u32| (a..=b).any(|row| filled(CellRef::new(row, col)));
-    let (mut r0, mut r1, mut c0, mut c1) = (c.row, c.row, c.col, c.col);
+    let (mut r0, mut r1, mut c0, mut c1) = (from.start.row, from.end.row, from.start.col, from.end.col);
     // Grow one side at a time while the line next to it (diagonals included) has data. Each
     // pass scans only the lines next to the region, so tall regions take linear time.
     loop {
@@ -214,6 +219,27 @@ pub fn current_region(sheet: &Sheet, c: CellRef) -> RangeRef {
         }
     }
     RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
+}
+
+/// Where a double-click on the fill handle fills `src` to, as observed in Excel: down to the last
+/// row of the data region around it (its current region, so a column of data on either side, or
+/// one reached only diagonally, counts), stopping above the first filled cell under the source.
+/// `None` when there is nothing to fill.
+pub fn fill_down_extent(sheet: &Sheet, src: RangeRef) -> Option<RangeRef> {
+    let region = current_region_of(sheet, src);
+    let mut last = region.end.row;
+    if last <= src.end.row {
+        return None;
+    }
+    // A filled cell under the source ends the fill just above it. Only stored cells are visited,
+    // so a tall region costs what the sheet holds, not its height.
+    let under = RangeRef::new(CellRef::new(src.end.row + 1, src.start.col), CellRef::new(last, src.end.col));
+    let first_cell = sheet.cells.iter_range(under).find(|(_, x)| !x.value.is_empty() || x.formula.is_some()).map(|(c, _)| c.row);
+    let first_spill = sheet.spill.range(under.start..=under.end).map(|(c, _)| *c).find(|c| under.contains(*c)).map(|c| c.row);
+    if let Some(r) = first_cell.into_iter().chain(first_spill).min() {
+        last = r - 1;
+    }
+    (last > src.end.row).then(|| RangeRef::new(src.start, CellRef::new(last, src.end.col)))
 }
 
 #[cfg(test)]

@@ -734,6 +734,127 @@ fn fill_series() {
     assert_eq!(v(&s, "C2"), Value::from("Item 10"));
 }
 
+/// The fill-handle double-click (#877), case by case as observed in Excel 365 for Windows.
+#[test]
+#[allow(clippy::disallowed_methods)] // times the tall fill; native-only test
+fn fill_handle_double_click_fills_to_adjacent_data() {
+    // The column of a cell, rows 1..=n, with `.` for empty.
+    let col = |s: &Session, c: &str, n: u32| -> String {
+        (1..=n)
+            .map(|r| match v(s, &format!("{c}{r}")) {
+                Value::Empty => ".".to_string(),
+                Value::Number(x) => format!("{x}"),
+                Value::Text(t) => t.to_string(),
+                x => format!("{x:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let nums = |s: &mut Session, c: &str, rows: &[u32]| {
+        for r in rows {
+            s.execute("cell.set", json!({"cell": format!("{c}{r}"), "input": r.to_string()})).unwrap();
+        }
+    };
+    let dbl = |s: &mut Session, src: &str| s.execute("edit.autoFillToData", json!({"source": src})).unwrap();
+
+    // The issue's sheet: a 2, 4, 6, 8 series next to 1..10 continues to row 10.
+    let mut s = self::s();
+    nums(&mut s, "A", &(1..=10).collect::<Vec<_>>());
+    s.execute("range.setValues", json!({"range": "B1", "values": [[2], [4], [6], [8]]})).unwrap();
+    assert_eq!(dbl(&mut s, "B1:B4"), json!({"target": "B1:B10"}));
+    assert_eq!(col(&s, "B", 12), "2,4,6,8,10,12,14,16,18,20,.,.");
+    assert_eq!(s.doc().unwrap().selection.current().a1(), "B1:B10");
+    // Undo takes the whole fill back in one step.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(col(&s, "B", 12), "2,4,6,8,.,.,.,.,.,.,.,.");
+
+    // Its last cell alone copies.
+    assert_eq!(dbl(&mut s, "B4"), json!({"target": "B4:B10"}));
+    assert_eq!(col(&s, "B", 12), "2,4,6,8,8,8,8,8,8,8,.,.");
+
+    // Data only on the right counts.
+    let mut s = self::s();
+    nums(&mut s, "D", &(1..=8).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "C1", "input": "5"})).unwrap();
+    dbl(&mut s, "C1");
+    assert_eq!(col(&s, "C", 10), "5,5,5,5,5,5,5,5,.,.");
+
+    // A filled cell under the source stops the fill above it.
+    let mut s = self::s();
+    nums(&mut s, "A", &(1..=10).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B6", "input": "x"})).unwrap();
+    dbl(&mut s, "B1");
+    assert_eq!(col(&s, "B", 12), "7,7,7,7,7,x,.,.,.,.,.,.");
+    // ... and right under it, nothing happens.
+    let mut s = self::s();
+    nums(&mut s, "A", &(1..=6).collect::<Vec<_>>());
+    s.execute("range.setValues", json!({"range": "B1", "values": [[7], [9]]})).unwrap();
+    assert_eq!(dbl(&mut s, "B1"), json!({"target": null}));
+    assert_eq!(col(&s, "B", 8), "7,9,.,.,.,.,.,.");
+
+    // A gap in the neighbouring column ends the region.
+    let mut s = self::s();
+    nums(&mut s, "A", &[1, 2, 3, 4, 5, 7, 8, 9, 10]);
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    dbl(&mut s, "B1");
+    assert_eq!(col(&s, "B", 12), "7,7,7,7,7,.,.,.,.,.,.,.");
+
+    // The longer side wins: 3 rows on the left, 9 on the right.
+    let mut s = self::s();
+    nums(&mut s, "A", &[1, 2, 3]);
+    nums(&mut s, "C", &(1..=9).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    dbl(&mut s, "B1");
+    assert_eq!(col(&s, "B", 12), "7,7,7,7,7,7,7,7,7,.,.,.");
+
+    // Data reached only diagonally belongs to the region too (A1:A3, then C4:C9).
+    let mut s = self::s();
+    nums(&mut s, "A", &[1, 2, 3]);
+    nums(&mut s, "C", &[4, 5, 6, 7, 8, 9]);
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    dbl(&mut s, "B1");
+    assert_eq!(col(&s, "B", 12), "7,7,7,7,7,7,7,7,7,.,.,.");
+
+    // A column further away doesn't.
+    let mut s = self::s();
+    nums(&mut s, "D", &(1..=9).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "B1", "input": "7"})).unwrap();
+    assert_eq!(dbl(&mut s, "B1"), json!({"target": null}));
+
+    // From the middle of the data, and at its end (nothing to do).
+    let mut s = self::s();
+    nums(&mut s, "A", &(1..=10).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "B5", "input": "7"})).unwrap();
+    dbl(&mut s, "B5");
+    assert_eq!(col(&s, "B", 12), ".,.,.,.,7,7,7,7,7,7,.,.");
+    let mut s = self::s();
+    nums(&mut s, "A", &[1, 2, 3]);
+    s.execute("cell.set", json!({"cell": "B3", "input": "7"})).unwrap();
+    assert_eq!(dbl(&mut s, "B3"), json!({"target": null}));
+
+    // Formulas fill with their references moving.
+    let mut s = self::s();
+    nums(&mut s, "A", &(1..=5).collect::<Vec<_>>());
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    dbl(&mut s, "B1");
+    assert_eq!(v(&s, "B5"), Value::Number(10.0));
+
+    // A whole data column a million rows tall is fine (and quick: only stored cells are visited).
+    let mut s = self::s();
+    let tall: Vec<Vec<f64>> = (0..200_000).map(|i| vec![i as f64]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": tall})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+    let t = std::time::Instant::now();
+    assert_eq!(dbl(&mut s, "B1"), json!({"target": "B1:B200000"}));
+    assert!(t.elapsed().as_secs_f64() < 20.0, "double-click fill of 200,000 rows took {:?}", t.elapsed());
+    assert_eq!(v(&s, "B200000"), Value::Number(1.0));
+
+    // Programmatic calls with nothing selected or empty params don't fail.
+    let mut s = self::s();
+    assert_eq!(s.execute("edit.autoFillToData", json!({})).unwrap(), json!({"target": null}));
+}
+
 #[test]
 fn ctrl_drag_fill_swaps_copy_and_series() {
     // Issue #264: Ctrl+drag fills a lone number as a series, and copies what a plain drag extends.

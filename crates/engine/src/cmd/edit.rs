@@ -84,6 +84,15 @@ pub fn specs() -> Vec<CommandSpec> {
             auto_fill
         ),
         cmd!(
+            "edit.autoFillToData",
+            "AutoFill to Adjacent Data",
+            [],
+            None,
+            "{source?: \"B1:B4\", mode?: series|alternate|copy|formats|values}: the fill-handle double-click: fills the source down to the bottom of the data region around it, stopping above the first filled cell under it; {target: null} when there is nothing to fill",
+            has_doc,
+            auto_fill_to_data
+        ),
+        cmd!(
             "edit.fillSeries",
             "Series…",
             ["Home", "Editing", "Fill"],
@@ -1367,6 +1376,19 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         *cx.sel = crate::Selection { active: src.start, anchor: src.start, ranges: vec![target.union(&src)] };
         Ok(Json::Null)
     })
+}
+
+fn auto_fill_to_data(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let src = str_param(p, "source").and_then(RangeRef::parse).map_or_else(|| target_range(s, p), Ok)?;
+    let sh = s.doc()?.wb.sheets.get(sheet).ok_or_else(|| bad("edit.autoFillToData", "no such sheet"))?;
+    let Some(target) = crate::selection::fill_down_extent(sh, src) else { return Ok(json!({"target": null})) };
+    let mut params = json!({"source": src.a1(), "target": target.a1(), "sheet": sheet});
+    if let Some(mode) = str_param(p, "mode") {
+        params["mode"] = json!(mode);
+    }
+    auto_fill(s, &params)?;
+    Ok(json!({"target": target.a1()}))
 }
 
 fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {

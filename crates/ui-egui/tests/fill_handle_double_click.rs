@@ -1,4 +1,4 @@
-//! Double-clicking the fill handle fills down to the neighbouring column's last used row,
+//! Double-clicking the fill handle fills down to the bottom of the data beside it (`edit.autoFillToData`),
 //! even with the pointer up for a frame between the two clicks.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
@@ -55,5 +55,5 @@ fn double_click_on_the_fill_handle_fills_down_with_a_frame_between_the_clicks() 
 
     assert_eq!([number(&h, 3), number(&h, 4), number(&h, 5)], [Value::Number(40.0), Value::Number(50.0), Value::Number(60.0)]);
     assert_eq!(h.state().session.active().unwrap().selection.a1(), "B1:B6");
-    assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "edit.autoFill").count(), 1);
+    assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "edit.autoFillToData").count(), 1);
 }

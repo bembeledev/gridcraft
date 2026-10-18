@@ -422,25 +422,7 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
     for (a, b, ..) in formula_refs(&ed.text) {
         if a <= caret_b && caret_b <= b {
             let Some(r) = ed.text.get(a..b) else { return };
-            let cycled: String = r
-                .split(':')
-                .map(|part| {
-                    let p = part.split('!').next_back().unwrap_or(part);
-                    let prefix = &part[..part.len() - p.len()];
-                    let bare = p.replace('$', "");
-                    let letters: String = bare.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-                    let digits = &bare[letters.len()..];
-                    let state = (p.starts_with('$'), p[letters.len().min(p.len())..].contains('$') || p.trim_start_matches('$').contains('$'));
-                    let next = match state {
-                        (false, false) => format!("${letters}${digits}"),
-                        (true, true) => format!("{letters}${digits}"),
-                        (false, true) => format!("${letters}{digits}"),
-                        (true, false) => format!("{letters}{digits}"),
-                    };
-                    format!("{prefix}{next}")
-                })
-                .collect::<Vec<_>>()
-                .join(":");
+            let cycled = cycle_ref(r);
             let (Some(x), Some(y)) = (ed.text.get(..a), ed.text.get(b..)) else { return };
             ed.text = format!("{x}{cycled}{y}");
             ed.caret = ed.text.get(..a + cycled.len()).map(|s| s.chars().count()).unwrap_or(ed.caret);
@@ -450,6 +432,46 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
             return;
         }
     }
+}
+
+/// F4 on one reference: `A1` → `$A$1` → `A$1` → `$A1` → `A1`. Whole columns and rows have one
+/// coordinate, so they toggle: `B:D` ⇄ `$B:$D`, `2:3` ⇄ `$2:$3` (as Excel does).
+fn cycle_ref(r: &str) -> String {
+    let unqualified = |part: &str| part.split('!').next_back().unwrap_or(part).to_string();
+    let first = unqualified(r.split(':').next().unwrap_or(r));
+    let first_bare = first.replace('$', "");
+    let whole_line = r.contains(':') && (first_bare.chars().all(|c| c.is_ascii_alphabetic()) || first_bare.chars().all(|c| c.is_ascii_digit()));
+    if whole_line {
+        let anchored = first.starts_with('$');
+        return r
+            .split(':')
+            .map(|part| {
+                let p = unqualified(part);
+                let prefix = &part[..part.len() - p.len()];
+                let bare = p.replace('$', "");
+                if anchored { format!("{prefix}{bare}") } else { format!("{prefix}${bare}") }
+            })
+            .collect::<Vec<_>>()
+            .join(":");
+    }
+    r.split(':')
+        .map(|part| {
+            let p = part.split('!').next_back().unwrap_or(part);
+            let prefix = &part[..part.len() - p.len()];
+            let bare = p.replace('$', "");
+            let letters: String = bare.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+            let digits = &bare[letters.len()..];
+            let state = (p.starts_with('$'), p[letters.len().min(p.len())..].contains('$') || p.trim_start_matches('$').contains('$'));
+            let next = match state {
+                (false, false) => format!("${letters}${digits}"),
+                (true, true) => format!("{letters}${digits}"),
+                (false, true) => format!("${letters}{digits}"),
+                (true, false) => format!("{letters}{digits}"),
+            };
+            format!("{prefix}{next}")
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn function_names() -> Vec<String> {
@@ -473,4 +495,33 @@ pub fn function_signature(name: &str) -> Option<String> {
 
 pub fn function_description(name: &str) -> Option<String> {
     function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cycle_ref;
+
+    #[test]
+    fn f4_cycles_cells_through_four_states() {
+        let mut r = "A1".to_string();
+        let mut seen = vec![];
+        for _ in 0..4 {
+            r = cycle_ref(&r);
+            seen.push(r.clone());
+        }
+        assert_eq!(seen, ["$A$1", "A$1", "$A1", "A1"]);
+        assert_eq!(cycle_ref("B2:C3"), "$B$2:$C$3");
+        assert_eq!(cycle_ref("Sheet2!B2"), "Sheet2!$B$2");
+    }
+
+    /// As observed in Excel: F4 on a whole column or row toggles its `$` (#873).
+    #[test]
+    fn f4_toggles_whole_columns_and_rows() {
+        assert_eq!(cycle_ref("B:B"), "$B:$B");
+        assert_eq!(cycle_ref("$B:$B"), "B:B");
+        assert_eq!(cycle_ref("2:3"), "$2:$3");
+        assert_eq!(cycle_ref("$2:$3"), "2:3");
+        assert_eq!(cycle_ref("Sheet2!C:E"), "Sheet2!$C:$E");
+        assert_eq!(cycle_ref("'My Sheet'!$4:$4"), "'My Sheet'!4:4");
+    }
 }

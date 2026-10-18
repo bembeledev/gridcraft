@@ -63,6 +63,12 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode while editing a formula: dragging over the column (`cols`) or row headers from
+    /// `anchor` puts `B:D` or `2:5` into the formula.
+    PointLines {
+        cols: bool,
+        anchor: u32,
+    },
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -118,6 +124,12 @@ pub struct GridState {
     /// The selection outline on its way to a new selection.
     pub glide: crate::selection_glide::SelectionGlide,
     pub last_click: Option<(CellRef, f64)>,
+    /// The grid acted on the current press when the button went down (#900): its drag start or
+    /// click must not act again. Cleared when the button is up.
+    pub press_consumed: bool,
+    /// The cell a plain press selected: releasing over it without dragging is a click, which
+    /// toggles its checkbox or follows its hyperlink.
+    pub click_cell: Option<CellRef>,
     pub hover_cell: Option<CellRef>,
     pub autosave: bool,
     pub last_autosave: f64,
@@ -1779,6 +1791,10 @@ pub(crate) fn paint_headers(
 const OBJECT_RESIZE_RADIUS: f32 = 10.0;
 
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+    // A press the grid acted on lasts through its release, however the release is handled.
+    if ui.input(|i| !i.pointer.any_down() && !i.pointer.any_pressed() && !i.pointer.any_released()) {
+        app.grid.press_consumed = false;
+    }
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
         return;
@@ -1970,38 +1986,67 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
     }
 
-    // Double-click the fill handle: a double-click is also a click, so run it before the handle press returns.
+    // A double-click on the fill handle fills down as far as the data next to the source goes
+    // (#877). It arrives with the second release, after that press armed a fill drag.
     if resp.double_clicked()
-        && let Some(p) = pos
+        && app.editor.is_none()
+        && let Some(p) = pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos)
         && on_handle(p)
     {
-        // Fill down as far as the neighbouring column goes.
-        let src = sel.current();
-        let neighbour = if src.start.col > 0 { src.start.col - 1 } else { src.end.col + 1 };
-        let mut last = src.end.row;
-        while last + 1 < MAX_ROWS && sh.value_ref(CellRef::new(last + 1, neighbour)).is_some_and(|v| !v.is_empty()) && last - src.end.row < 1_000_000
-        {
-            last += 1;
-        }
-        if last > src.end.row {
-            let target = RangeRef::new(src.start, CellRef::new(last, src.end.col));
-            let _ = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1()}));
-        }
         app.grid.drag = Drag::None;
         app.grid.drag_select = false;
-        resp.request_focus();
+        app.grid.click_cell = None;
+        app.run_or_alert("edit.autoFillToData", json!({"source": sel.current().a1()}));
         return;
     }
 
+    // A press acts when the button goes down, as in Excel (#900): the cell under it is selected
+    // at once and a drag extends from it. Targets that behave like buttons (the outline band) or
+    // whose press may still turn into a drag of something else (the selection border, a selected
+    // column header, an object) wait for the drag to start or for the click.
+    let press_now = resp.hovered() && pointer.primary_pressed() && app.grid.drag == Drag::None;
+    let follow_up = !press_now && (resp.drag_started() || primary_clicked) && app.grid.drag == Drag::None && !app.grid.press_consumed;
+    if press_now {
+        app.grid.press_consumed = true;
+        app.grid.click_cell = None;
+    }
+    // Releasing a plain press without dragging away from its cell clicks it.
+    if primary_clicked
+        && !press_now
+        && let Some(c) = app.grid.click_cell.take()
+        && let Some(p) = pos
+        && in_cells
+        && geo.cell_at(sh, p) == c
+        && app.editor.is_none()
+    {
+        click_cell(app, geo, sh, c, p, mods);
+    }
+    // Leaves this press to its drag start or its click.
+    let defer = |app: &mut SheetApp| {
+        if press_now && !primary_clicked {
+            app.grid.press_consumed = false;
+            true
+        } else {
+            false
+        }
+    };
+
     // Press: decide the drag mode.
-    if resp.drag_started() || (primary_clicked && app.grid.drag == Drag::None) {
+    if press_now || follow_up {
         // Where the press began (a drag is only recognised after the pointer has moved).
         let Some(p) = pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) else { return };
+        // Objects take their press on its drag start or click (above), and a header or footer
+        // in Page Layout view on its click (`paper_view`).
+        if (crate::chartview::hit(app, geo, sh, p).is_some() || crate::paper_view::over_header_footer(geo, geo.mirror_pos(p))) && defer(app) {
+            return;
+        }
         // The outline band's − / + and level buttons act on release, like buttons.
         if let Some(action) = crate::outline::hit(geo, sh, p) {
             if primary_clicked {
                 let (command, params) = action.command();
                 app.run_or_alert(command, params);
+            } else {
+                defer(app);
             }
             return;
         }
@@ -2020,17 +2065,20 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let c = geo.col_at(sh, p.x);
-            if point_header(app, wb, sh, RangeRef::cols(c, c)) {
+            // Point mode: a column header puts the whole column into the formula (`C:C`).
+            if point_lines(app, wb, sh, true, c, c) {
+                app.grid.drag = Drag::PointLines { cols: true, anchor: c };
                 return;
             }
-            if resp.drag_started()
-                && !mods.any()
-                && sel.ranges.len() == 1
-                && sel.current().is_full_cols()
-                && sel.current().contains(CellRef::new(0, c))
-            {
-                app.grid.drag = Drag::MoveCols { source: sel.current(), before: None };
-                return;
+            if !mods.any() && sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, c)) {
+                // A selected column: dragging it moves the columns, a click selects just it.
+                if resp.drag_started() {
+                    app.grid.drag = Drag::MoveCols { source: sel.current(), before: None };
+                    return;
+                }
+                if defer(app) {
+                    return;
+                }
             }
             let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
             select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
@@ -2043,7 +2091,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let r = geo.row_at(sh, p.y);
-            if point_header(app, wb, sh, RangeRef::rows(r, r)) {
+            if point_lines(app, wb, sh, false, r, r) {
+                app.grid.drag = Drag::PointLines { cols: false, anchor: r };
                 return;
             }
             let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
@@ -2095,9 +2144,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.drag = Drag::Fill { target: None };
             return;
         }
-        if on_cur_border(p) && resp.drag_started() {
-            app.grid.drag = Drag::Move { grab: c, to: None };
-            return;
+        if on_cur_border(p) {
+            // The selection's border drags it to a new place; a click on it selects the cell.
+            if resp.drag_started() {
+                app.grid.drag = Drag::Move { grab: c, to: None };
+                return;
+            }
+            if defer(app) {
+                return;
+            }
         }
         // Double-click edits.
         let now = crate::now_ms();
@@ -2121,18 +2176,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             select_ranges(app, RangeRef::cell(c), true, c);
         } else {
             let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-            if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
-                let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
-            }
-            // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
-            if let Some(h) = sh.hyperlinks.get(&c).cloned()
-                && primary_clicked
-                && !mods.any()
-            {
-                let r = geo.cell_rect(sh, c);
-                if p.x < r.left() + r.width() * 0.8 {
-                    follow_link(app, &h.target);
-                }
+            if primary_clicked {
+                click_cell(app, geo, sh, c, p, mods);
+            } else {
+                app.grid.click_cell = Some(c);
             }
         }
         app.grid.drag = Drag::Select;
@@ -2185,6 +2232,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let _ =
                     app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
+            }
+            Drag::PointLines { cols, anchor } => {
+                let to = if cols { geo.col_at(sh, p.x) } else { geo.row_at(sh, p.y) };
+                point_lines(app, wb, sh, cols, anchor, to);
+                scroll_by(app, if cols { vec2(auto.x, 0.0) } else { vec2(0.0, auto.y) });
             }
             Drag::MoveCols { source, .. } => {
                 let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
@@ -2328,20 +2380,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
     }
 
-    if primary_clicked || resp.drag_started() {
+    // The grid takes the keyboard, except from a formula being pointed at (its press already
+    // handed focus back to the editor).
+    if (primary_clicked || resp.drag_started()) && app.editor.is_none() {
         resp.request_focus();
     }
     keyboard(app, &ctx, resp, geo, sh);
-}
-
-/// Point mode on a header: inserts the whole-column or whole-row reference instead of selecting.
-fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef) -> bool {
-    let Some(ed) = app.editor.as_mut().filter(|ed| ed.can_point()) else { return false };
-    let r = range.a1();
-    let r = if ed.sheet != wb.active_sheet { format!("{}!{r}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { r };
-    ed.insert_ref(&r);
-    ed.request_focus = true;
-    true
 }
 
 fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p: Pos2) {
@@ -2371,6 +2415,23 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
             d.selection.anchor = anchor;
         }
     }
+}
+
+/// Point mode on the headers: puts whole columns (`cols`, `B:D`) or rows (`2:5`) from `a` to `b`
+/// into the formula being edited, as Excel does for a click or drag on the headings. `false`
+/// (nothing changed) when not editing a formula where a reference can go.
+fn point_lines(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, cols: bool, a: u32, b: u32) -> bool {
+    let Some(ed) = app.editor.as_mut() else { return false };
+    if !ed.can_point() {
+        return false;
+    }
+    let range = if cols { RangeRef::cols(a.min(b), a.max(b)) } else { RangeRef::rows(a.min(b), a.max(b)) };
+    let text = range.a1();
+    let text = if ed.sheet != wb.active_sheet { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { text };
+    ed.insert_ref(&text);
+    ed.point_cell = None;
+    ed.request_focus = true;
+    true
 }
 
 fn coalesce_last_undo(app: &mut SheetApp) {
@@ -2526,6 +2587,23 @@ fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
     app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
     app.selected_chart = None;
     true
+}
+
+/// What a click on a cell does beyond selecting it: toggles its checkbox, or follows its
+/// hyperlink when the click is on the link's text (like Excel; elsewhere in the cell it selects).
+fn click_cell(app: &mut SheetApp, geo: &Geo, sh: &Sheet, c: CellRef, p: Pos2, mods: egui::Modifiers) {
+    let checkbox = app.session.active().is_some_and(|d| d.wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox");
+    if checkbox {
+        let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
+    }
+    if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        && !mods.any()
+    {
+        let r = geo.cell_rect(sh, c);
+        if p.x < r.left() + r.width() * 0.8 {
+            follow_link(app, &h.target);
+        }
+    }
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's

@@ -252,8 +252,11 @@ pub fn audit_bytes(bytes: &[u8]) -> Result<Vec<AuditFinding>, AuditError> {
         return Err(AuditError::Xml("xl/workbook.xml".to_string(), "unrecognized workbook namespace".to_string()));
     }
     let sheet_names = scan_workbook(workbook, &names, &parts, &mut findings)?;
-    for (part, data) in parts.iter().filter(|(n, _)| n.starts_with("xl/worksheets/") && n.ends_with(".xml")) {
-        let sheet_label = sheet_names.get(part).map(|n| format!(" ({n})")).unwrap_or_default();
+    for (part, data) in parts.iter().filter(|(n, _)| is_worksheet_part(n)) {
+        // Labels are matched case-insensitively too: the rel target and the
+        // part name may differ in case while naming the same part.
+        let sheet_label =
+            sheet_names.iter().find(|(target, _)| target.eq_ignore_ascii_case(part)).map(|(_, n)| format!(" ({n})")).unwrap_or_default();
         scan_worksheet(part, &sheet_label, data, &mut findings)?;
     }
     for target in &comment_targets {
@@ -278,12 +281,24 @@ pub fn audit_bytes(bytes: &[u8]) -> Result<Vec<AuditFinding>, AuditError> {
     Ok(findings)
 }
 
+/// Worksheet parts, matched case-insensitively: OPC part names are ASCII
+/// case-insensitive, so `xl/Worksheets/Sheet1.XML` is a worksheet too.
+/// Missing it would silently drop hidden-row/column findings.
+fn is_worksheet_part(name: &str) -> bool {
+    const PREFIX: &[u8] = b"xl/worksheets/";
+    const SUFFIX: &[u8] = b".xml";
+    let bytes = name.as_bytes();
+    bytes.len() >= PREFIX.len() + SUFFIX.len()
+        && bytes[..PREFIX.len()].eq_ignore_ascii_case(PREFIX)
+        && bytes[bytes.len() - SUFFIX.len()..].eq_ignore_ascii_case(SUFFIX)
+}
+
 /// Parts the audit parses as XML. Everything else is only listed by name.
 /// Legacy comment parts are discovered through relationships (see
 /// [`comment_part_targets`]), not by path prefix.
 fn is_scanned_part(name: &str) -> bool {
     name == "xl/workbook.xml"
-        || (name.starts_with("xl/worksheets/") && name.ends_with(".xml"))
+        || is_worksheet_part(name)
         || (name.starts_with("xl/threadedComments/") && name.ends_with(".xml"))
         || (name.starts_with("xl/persons/") && name.ends_with(".xml"))
         || name == "docProps/core.xml"
@@ -784,8 +799,10 @@ fn scan_package_parts(names: &[String], findings: &mut Vec<AuditFinding>) {
 }
 
 /// ZIP entries no relationship targets: content nothing references.
-/// Reachability is computed lexically from every `*.rels` part; external
-/// relationship targets (`TargetMode="External"`) are not package parts.
+/// Reachability is computed from the package root: a relationship part is
+/// only parsed once its *source* part is reachable, so relationships inside
+/// an orphaned subtree cannot rescue their targets. External relationship
+/// targets (`TargetMode="External"`) are not package parts.
 fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
     let mut reachable: BTreeSet<String> = BTreeSet::new();
     reachable.insert("[Content_Types].xml".to_string());
@@ -794,19 +811,33 @@ fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &
             reachable.insert(name.clone());
         }
     }
-    for name in names.iter().filter(|n| n.ends_with(".rels")) {
-        let Some(xml) = parts.get(name) else { continue };
-        let source_dir = source_dir_of_rels(name);
-        for_each_element(xml, name, &mut |el| {
-            if el.ns.as_slice() == NS_RELS
-                && el.local == "Relationship"
-                && let Some(target) = attr(el, b"", "Target")
-                && attr(el, b"", "TargetMode") != Some("External")
-            {
-                reachable.insert(resolve_target(&source_dir, target));
+    // To fixpoint: parsing one rels part can make another rels part's source
+    // reachable, unlocking nested relationships.
+    let mut scanned_rels: BTreeSet<String> = BTreeSet::new();
+    loop {
+        let mut progressed = false;
+        for name in names.iter().filter(|n| n.ends_with(".rels")) {
+            let source_reachable = name == "_rels/.rels" || source_part_of_rels(name).is_some_and(|s| reachable.contains(&s));
+            if !source_reachable || !scanned_rels.insert(name.clone()) {
+                continue;
             }
-            Ok(())
-        })?;
+            progressed = true;
+            let Some(xml) = parts.get(name) else { continue };
+            let source_dir = source_dir_of_rels(name);
+            for_each_element(xml, name, &mut |el| {
+                if el.ns.as_slice() == NS_RELS
+                    && el.local == "Relationship"
+                    && let Some(target) = attr(el, b"", "Target")
+                    && attr(el, b"", "TargetMode") != Some("External")
+                {
+                    reachable.insert(resolve_target(&source_dir, target));
+                }
+                Ok(())
+            })?;
+        }
+        if !progressed {
+            break;
+        }
     }
     for name in names {
         if !reachable.contains(name) {
@@ -814,6 +845,21 @@ fn scan_orphans(names: &[String], parts: &BTreeMap<String, Vec<u8>>, findings: &
         }
     }
     Ok(())
+}
+
+/// The package/content part whose relationships a `*.rels` part stores:
+/// `xl/_rels/workbook.xml.rels` stores `xl/workbook.xml`'s. The package-level
+/// `_rels/.rels` has no source part: it is the traversal root.
+fn source_part_of_rels(rels: &str) -> Option<String> {
+    if rels == "_rels/.rels" {
+        return None;
+    }
+    let without_ext = rels.strip_suffix(".rels")?;
+    if let Some(name) = without_ext.strip_prefix("_rels/") {
+        return Some(name.to_string());
+    }
+    let (dir, name) = without_ext.rsplit_once("/_rels/")?;
+    Some(format!("{dir}/{name}"))
 }
 
 /// The directory of the part a `*.rels` file describes:

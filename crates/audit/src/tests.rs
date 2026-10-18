@@ -415,3 +415,45 @@ fn entity_references_are_decoded() {
     assert_eq!(authors.len(), 1, "{fs:?}");
     assert!(authors[0].detail.contains("Smith & Jones"), "{fs:?}");
 }
+
+#[test]
+fn orphan_subtree_targets_stay_orphans() {
+    // Relationships inside an unreachable subtree must not rescue their
+    // targets: both the orphan part and what it points at are orphans.
+    let orphan_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="related.bin"/></Relationships>"#;
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook(&sheet("Budget", "rId1", ""), "")),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        ("xl/worksheets/sheet1.xml", format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#)),
+        ("xl/orphan.bin", "leftover".to_string()),
+        ("xl/_rels/orphan.bin.rels", orphan_rels.to_string()),
+        ("xl/related.bin", "rescued?".to_string()),
+    ]);
+    let fs = findings(&pkg);
+    let orphans: Vec<_> = fs.iter().filter(|f| f.id == "package/orphan-part").map(|f| f.location.as_str()).collect();
+    assert!(orphans.contains(&"xl/orphan.bin"), "{orphans:?}");
+    assert!(orphans.contains(&"xl/related.bin"), "{orphans:?}");
+}
+
+#[test]
+fn cased_worksheet_part_is_scanned() {
+    // OPC part names are ASCII case-insensitive: a worksheet spelled
+    // `xl/Worksheets/Sheet1.XML` must still be scanned, with its label.
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook(&sheet("Budget", "rId1", ""), "")),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        (
+            "xl/Worksheets/Sheet1.XML",
+            format!(r#"<worksheet xmlns="{NS_X}"><sheetData><row r="2" hidden="1"><c r="A2"><v>1</v></c></row></sheetData></worksheet>"#),
+        ),
+    ]);
+    let fs = findings(&pkg);
+    let rows: Vec<_> = fs.iter().filter(|f| f.id == "hidden/row").collect();
+    assert_eq!(rows.len(), 1, "{fs:?}");
+    assert!(rows[0].location.contains("xl/Worksheets/Sheet1.XML"), "{fs:?}");
+    assert!(rows[0].location.contains("(Budget)"), "{fs:?}");
+}

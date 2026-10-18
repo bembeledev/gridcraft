@@ -1078,7 +1078,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     {
         let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
         let max_chars = (avail / digit).floor().max(1.0) as usize;
-        gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
+        gridcraft_numfmt::format_general_fit(n, max_chars.min(11), wb.locale).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
         // The look's code, which a conditional format can override (#1163).
         crate::display::value_text_as(wb, &v, code)

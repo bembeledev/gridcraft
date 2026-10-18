@@ -266,6 +266,10 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Uid of the blank workbook the session started with, which a change of default names may
+    /// replace ([`Session::set_default_names`]). Cleared once any other document is added, so an
+    /// opened or imported workbook (even a blank one) is never discarded.
+    startup: Option<u64>,
 }
 
 impl Session {
@@ -296,6 +300,7 @@ impl Session {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
     pub fn add_document(&mut self, d: DocState) -> usize {
+        self.startup = None;
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -312,15 +317,15 @@ impl Session {
     pub fn default_names(&self) -> (String, String) {
         self.prefs.default_names.clone()
     }
-    /// Sets [`Prefs::default_names`] (the interface passes its language's words). An untouched blank
-    /// workbook (the one the app starts with) is replaced by one with the new names. Empty words
+    /// Sets [`Prefs::default_names`] (the interface passes its language's words). The startup
+    /// workbook, while still untouched, is replaced by one with the new names. Empty words
     /// keep the current ones.
     pub fn set_default_names(&mut self, book: &str, sheet: &str) {
         if book.trim().is_empty() || sheet.trim().is_empty() || self.prefs.default_names == (book.to_string(), sheet.to_string()) {
             return;
         }
         self.prefs.default_names = (book.to_string(), sheet.to_string());
-        if self.documents().len() == 1 && self.active().is_some_and(DocState::is_untouched_blank) {
+        if self.documents().len() == 1 && self.active().is_some_and(|d| Some(d.uid) == self.startup && d.is_untouched_blank()) {
             self.close_document(0);
             self.new_workbook();
         }
@@ -329,8 +334,10 @@ impl Session {
     pub fn next_sheet_name(&self) -> Result<String> {
         Ok(self.doc()?.wb.next_sheet_name_in(&self.default_names().1))
     }
-    /// A new blank workbook titled `BookN`.
+    /// A new blank workbook titled `BookN`. Created into an empty session, it is the startup
+    /// workbook ([`Session::set_default_names`]).
     pub fn new_workbook(&mut self) -> usize {
+        let first = self.docs.is_empty();
         let (book, sheet) = self.default_names();
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
@@ -339,7 +346,11 @@ impl Session {
             let name = wb.next_sheet_name_in(&sheet);
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("{book}{n}")))
+        let i = self.add_document(DocState::new(wb, None, format!("{book}{n}")));
+        if first {
+            self.startup = Some(self.docs[i].uid);
+        }
+        i
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {

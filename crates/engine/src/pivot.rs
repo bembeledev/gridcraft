@@ -1538,7 +1538,14 @@ pub fn cell_target(wb: &Workbook, sheet: usize, idx: usize, at: CellRef) -> Opti
     }
     let ri = (at.row - origin.row) as usize;
     let ci = (at.col - origin.col) as usize;
-    let target = out.grid.get(ri).and_then(|row| row.get(ci)).map(|c| c.target).unwrap_or(PivotCellTarget::Data);
+    let oc = out.grid.get(ri).and_then(|row| row.get(ci));
+    let target = oc.map(|c| c.target).unwrap_or(PivotCellTarget::Data);
+    if target != PivotCellTarget::Data {
+        let displayed = wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
+        if oc.is_none_or(|c| c.value != displayed) {
+            return Some(PivotCellTarget::Data);
+        }
+    }
     Some(target)
 }
 

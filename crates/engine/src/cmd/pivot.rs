@@ -1250,12 +1250,22 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     let gc = bool_param(p, "grandTotalsCols");
     let hd = bool_param(p, "showHeaders");
     let row_cap = match p.get("rowHeaderCaption") {
-        Some(Json::String(s)) => Some(Some(s.clone())),
+        Some(Json::String(s)) => {
+            if s.trim().is_empty() {
+                return Err(other("A PivotTable report field name cannot be blank."));
+            }
+            Some(Some(s.clone()))
+        }
         Some(Json::Null) => Some(None),
         _ => None,
     };
     let col_cap = match p.get("colHeaderCaption") {
-        Some(Json::String(s)) => Some(Some(s.clone())),
+        Some(Json::String(s)) => {
+            if s.trim().is_empty() {
+                return Err(other("A PivotTable report field name cannot be blank."));
+            }
+            Some(Some(s.clone()))
+        }
         Some(Json::Null) => Some(None),
         _ => None,
     };
@@ -2459,44 +2469,40 @@ mod tests {
         assert_eq!(text(&s, "A4"), "Territories");
         assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
 
-        // Setting empty string makes Row Labels blank
-        s.execute("cell.set", json!({"cell": "A4", "input": ""})).unwrap();
-        assert_eq!(text(&s, "A4"), "");
-        assert_eq!(pt(&s).row_header_caption.as_deref(), Some(""));
+        // Blank row header captions are rejected
+        let err_row_empty = s.execute("cell.set", json!({"cell": "A4", "input": ""})).unwrap_err().to_string();
+        assert_eq!(err_row_empty, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
 
-        // Setting a space also makes Row Labels blank
-        s.execute("cell.set", json!({"cell": "A4", "input": " "})).unwrap();
-        assert_eq!(text(&s, "A4"), " ");
-        assert_eq!(pt(&s).row_header_caption.as_deref(), Some(" "));
+        let err_row_space = s.execute("cell.set", json!({"cell": "A4", "input": "   "})).unwrap_err().to_string();
+        assert_eq!(err_row_space, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
 
         // In-cell rename of Column Labels
         s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
         assert_eq!(text(&s, "B3"), "Goods");
         assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
 
-        // Setting empty string makes Column Labels blank
-        s.execute("cell.set", json!({"cell": "B3", "input": ""})).unwrap();
-        assert_eq!(text(&s, "B3"), "");
-        assert_eq!(pt(&s).col_header_caption.as_deref(), Some(""));
+        // Blank column header captions are rejected
+        let err_col_empty = s.execute("cell.set", json!({"cell": "B3", "input": ""})).unwrap_err().to_string();
+        assert_eq!(err_col_empty, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
 
-        // Setting a space also makes Column Labels blank
-        s.execute("cell.set", json!({"cell": "B3", "input": " "})).unwrap();
-        assert_eq!(text(&s, "B3"), " ");
-        assert_eq!(pt(&s).col_header_caption.as_deref(), Some(" "));
+        let err_col_space = s.execute("cell.set", json!({"cell": "B3", "input": "   "})).unwrap_err().to_string();
+        assert_eq!(err_col_space, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
+
+        // pivot.layout also rejects blank captions
+        let err_lay_row = s.execute("pivot.layout", json!({"rowHeaderCaption": "  "})).unwrap_err().to_string();
+        assert_eq!(err_lay_row, "A PivotTable report field name cannot be blank.");
+        let err_lay_col = s.execute("pivot.layout", json!({"colHeaderCaption": ""})).unwrap_err().to_string();
+        assert_eq!(err_lay_col, "A PivotTable report field name cannot be blank.");
 
         // Undo restores default captions
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(text(&s, "B3"), "");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(text(&s, "B3"), "Goods");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(text(&s, "B3"), "Column Labels");
         assert_eq!(pt(&s).col_header_caption, None);
 
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(text(&s, "A4"), "");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(text(&s, "A4"), "Territories");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(text(&s, "A4"), "Row Labels");
         assert_eq!(pt(&s).row_header_caption, None);
@@ -2636,5 +2642,21 @@ mod tests {
         let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
         assert!(err.contains("There's already data in") && err.contains("A7"), "{err}");
         assert_eq!(pt(&s).values[0].name, "Sum of Sales");
+    }
+
+    #[test]
+    fn stale_pivot_cell_target_falls_back_to_data() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(text(&s, "B3"), "Sum of Sales");
+
+        // When the cell value in the sheet does not match the recomputed header (e.g. un-refreshed report),
+        // cell_target returns Data to protect against stale header classification.
+        let act = s.doc().unwrap().wb.active_sheet;
+        let p = &mut Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(act).unwrap().pivots[0];
+        p.values[0].name = "Renamed Outside Refresh".into();
+
+        let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
     }
 }

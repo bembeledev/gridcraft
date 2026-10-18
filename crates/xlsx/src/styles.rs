@@ -672,6 +672,9 @@ fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
     if has(Fill) {
         out.push_str(&fill_xml(&d.fill, true));
     }
+    if let Some(a) = alignment_xml(&d.align) {
+        out.push_str(&a);
+    }
     let mut border = String::new();
     for (property, tag, line) in [
         (LeftBorder, "left", d.borders.left),
@@ -699,9 +702,6 @@ fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
     if !border.is_empty() {
         let _ =
             write!(out, "<border diagonalDown=\"{}\" diagonalUp=\"{}\">{border}</border>", u8::from(has(DiagonalDown)), u8::from(has(DiagonalUp)));
-    }
-    if let Some(a) = alignment_xml(&d.align) {
-        out.push_str(&a);
     }
     if let Some(p) = protection_xml(&d.protection) {
         out.push_str(&p);
@@ -840,4 +840,35 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    /// Checks schema child ordering and retained values when all differential sections coexist.
+    #[test]
+    fn differential_sections_follow_schema_order_and_round_trip() {
+        let mut style = Style::default();
+        style.font.bold = true;
+        style.num_fmt = NumFmt::new("0.00");
+        style.fill = Fill::solid(Color::rgb(10, 20, 30));
+        style.align.h = HAlign::Center;
+        style.borders.bottom = BorderLine::thin();
+        style.protection.locked = false;
+        let (xml, _) = write_styles(&Workbook::new(), &[style.clone()], &[]);
+        let root = crate::xml::parse(xml.as_bytes()).unwrap();
+        let dxf = root.child("dxfs").unwrap().child("dxf").unwrap();
+        assert_eq!(
+            dxf.children.iter().map(|child| child.name.as_str()).collect::<Vec<_>>(),
+            ["font", "numFmt", "fill", "alignment", "border", "protection"]
+        );
+        let loaded = read_styles(&root, &[]).dxfs.remove(0);
+        assert_eq!(loaded.font.bold, style.font.bold);
+        assert_eq!(loaded.num_fmt, style.num_fmt);
+        assert_eq!(loaded.fill, style.fill);
+        assert_eq!(loaded.align, style.align);
+        assert_eq!(loaded.borders, style.borders);
+        assert_eq!(loaded.protection, style.protection);
+    }
 }

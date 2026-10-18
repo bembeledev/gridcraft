@@ -893,6 +893,7 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
     }
 }
 
+/// Exercises custom-format selection and confirmation, then verifies the applied rule survives XLSX save/reopen.
 #[test]
 fn conditional_format_custom_editor_returns_to_rule_and_round_trips() {
     use gridcraft_engine::model::{BorderLine, BorderStyle, Color, Fill, NumFmt, Style, StyleProperty};
@@ -977,6 +978,7 @@ fn conditional_format_custom_editor_returns_to_rule_and_round_trips() {
     assert!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.is_empty());
 }
 
+/// Checks that cancelling a child draft or choosing a preset does not apply its saved custom style.
 #[test]
 fn conditional_format_cancel_and_preset_ignore_saved_custom_style() {
     let mut h = harness(blank());
@@ -999,6 +1001,7 @@ fn conditional_format_cancel_and_preset_ignore_saved_custom_style() {
     assert_eq!(st.font.color, gridcraft_engine::model::Color::rgb(0x9C, 0, 6));
 }
 
+/// Verifies custom colors and existing-rule format edits stay isolated until their confirmation path succeeds.
 #[test]
 fn custom_color_control_and_existing_rule_editor_keep_changes_in_the_draft() {
     let mut h = harness(blank());
@@ -1025,6 +1028,7 @@ fn custom_color_control_and_existing_rule_editor_keep_changes_in_the_draft() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats, original);
 }
 
+/// Checks regular Format Cells applies colors through the same editor controls as conditional formatting.
 #[test]
 fn format_cells_uses_the_shared_font_color_control() {
     let mut h = harness(blank());
@@ -1040,6 +1044,7 @@ fn format_cells_uses_the_shared_font_color_control() {
     assert_eq!(st.font.color, gridcraft_engine::model::Color::rgb(0x24, 0x68, 0xAC));
 }
 
+/// Verifies unchecked font controls inherit the cell style and hex drafts cannot leak between dialogs.
 #[test]
 fn inherited_controls_use_the_cell_font_and_color_drafts_belong_to_the_dialog() {
     let mut h = harness(blank());
@@ -1070,6 +1075,7 @@ fn inherited_controls_use_the_cell_font_and_color_drafts_belong_to_the_dialog() 
     assert_eq!(h.get_by_label("Color hex").value().as_deref(), Some("#123456"));
 }
 
+/// Checks rule creation retains its opening range and rejects confirmation on a different worksheet.
 #[test]
 fn conditional_format_remembers_its_range_and_rejects_another_worksheet() {
     use gridcraft_ui_egui::control::{self, Outcome};
@@ -1099,6 +1105,7 @@ fn conditional_format_remembers_its_range_and_rejects_another_worksheet() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats[0].ranges[0].a1(), "A1");
 }
 
+/// Checks explicit default overrides, patterned fills and theme font colors survive repeated XLSX round trips.
 #[test]
 fn explicit_resets_patterned_fills_and_theme_font_colors_round_trip() {
     use gridcraft_engine::model::*;
@@ -1121,6 +1128,7 @@ fn explicit_resets_patterned_fills_and_theme_font_colors_round_trip() {
     }
 }
 
+/// Inspects painted grid output to verify conditional number text and font-color precedence.
 #[test]
 fn conditional_number_format_and_font_color_are_actually_painted() {
     let mut session = blank();
@@ -1145,6 +1153,7 @@ fn conditional_number_format_and_font_color_are_actually_painted() {
     assert_eq!(shape.galley.job.sections[0].format.color, egui::Color32::from_rgb(0x12, 0x34, 0x56));
 }
 
+/// Exercises invalid hex validation, retained editor state, correction and successful rule confirmation.
 #[test]
 fn invalid_custom_color_cannot_confirm_and_a_valid_replacement_can() {
     let mut h = harness(blank());
@@ -1175,6 +1184,7 @@ fn invalid_custom_color_cannot_confirm_and_a_valid_replacement_can() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.len(), 1);
 }
 
+/// Checks regular and conditional editors retain translated font-size and underline labels.
 #[test]
 fn shared_font_controls_keep_translations_in_both_format_editors() {
     let mut h = harness(blank());
@@ -1187,4 +1197,27 @@ fn shared_font_controls_keep_translations_in_both_format_editors() {
         assert!(h.query_by_label("Unterstrichen").is_some(), "{dialog} translates underline");
         assert!(h.query_by_label("Font size").is_none(), "{dialog} keeps the localized label");
     }
+}
+
+/// Confirming an unchanged existing-rule draft must not dirty a saved workbook or add undo history.
+#[test]
+fn existing_rule_format_confirmation_without_changes_is_a_noop() {
+    let mut h = harness(blank());
+    h.state_mut().run("home.conditionalFormat", json!({"range":"A1:A3","rule":{"type":"expression","formula":"TRUE","preset":"redText"}})).unwrap();
+    {
+        let doc = h.state_mut().session.active_mut().unwrap();
+        doc.saved = doc.wb.clone();
+    }
+    let before = h.state().session.active().unwrap().wb.clone();
+    let undo = h.state().session.active().unwrap().undo.len();
+    h.state_mut().open_dialog("manageRules", json!({}));
+    h.run_steps(3);
+    h.get_by_label("Format…").click();
+    h.run_steps(3);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    let doc = h.state().session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &doc.wb));
+    assert!(!doc.is_dirty());
+    assert_eq!(doc.undo.len(), undo);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "manageRules");
 }

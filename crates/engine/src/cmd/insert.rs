@@ -8,6 +8,7 @@ use serde_json::{Value as Json, json};
 use super::*;
 use crate::selection::current_region;
 
+/// Registers insert and conditional-format commands and their accepted parameters for every front end.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -1330,6 +1331,7 @@ pub fn conditional_style(patch: &Json) -> Result<Style> {
     Ok(style)
 }
 
+/// Builds the differential style used by the built-in conditional-format presets.
 pub fn preset_style(name: &str) -> Style {
     let mut s = Style::default();
     match name {
@@ -1355,6 +1357,7 @@ pub fn preset_style(name: &str) -> Style {
     s
 }
 
+/// Validates a new conditional rule and inserts it ahead of existing rules on the target ranges.
 fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
@@ -1491,6 +1494,7 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Lists, formats, deletes or reorders rules; stale edits fail and unchanged format-only requests do not commit.
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() && p.get("format").is_none() {
@@ -1508,23 +1512,33 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
         let index = u32_param(p, "format").ok_or_else(|| bad("home.manageRules", "missing or invalid rule index"))? as usize;
         let patch = p.get("style").ok_or_else(|| bad("home.manageRules", "missing style"))?;
         let style = conditional_style(patch)?;
-        Some((index, style))
+        let current =
+            s.doc()?.wb.sheet(sheet).and_then(|sh| sh.cond_formats.get(index)).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
+        if let Some(expected) = p.get("expected").filter(|v| !v.is_null()) {
+            let snapshot = json!({"ranges": current.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": current.rule});
+            if expected != &snapshot {
+                return Err(bad("home.manageRules", "rule changed while the format editor was open; reopen it"));
+            }
+        }
+        let mut replacement = current.rule.clone();
+        let destination =
+            replacement.style_mut().ok_or_else(|| bad("home.manageRules", "this rule uses a scale, bar or icon set instead of a cell format"))?;
+        let mut previous = destination.clone();
+        previous.normalize_differential();
+        // Returning from inside `edit` would still commit and replace the workbook Arc.
+        if previous == style && ["delete", "moveUp", "moveDown"].iter().all(|key| p.get(key).is_none()) {
+            return Ok(Json::Null);
+        }
+        *destination = style;
+        Some((index, replacement))
     } else {
         None
     };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
-        if let Some((index, style)) = &replacement {
+        if let Some((index, replacement)) = &replacement {
             let rule = sh.cond_formats.get_mut(*index).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
-            if let Some(expected) = p.get("expected").filter(|v| !v.is_null()) {
-                let current = json!({"ranges": rule.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": rule.rule});
-                if expected != &current {
-                    return Err(bad("home.manageRules", "rule changed while the format editor was open; reopen it"));
-                }
-            }
-            let destination =
-                rule.rule.style_mut().ok_or_else(|| bad("home.manageRules", "this rule uses a scale, bar or icon set instead of a cell format"))?;
-            *destination = style.clone();
+            rule.rule = replacement.clone();
         }
         // The count is taken again after each step: a delete shortens the list.
         if let Some(i) = u32_param(p, "delete").map(|v| v as usize)

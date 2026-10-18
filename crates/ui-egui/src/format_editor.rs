@@ -13,6 +13,7 @@ pub(crate) struct ColorDraft {
 
 pub(crate) type ColorDrafts = std::collections::BTreeMap<&'static str, ColorDraft>;
 
+/// Rejects invalid hex drafts only for enabled properties whose colors affect the resulting format.
 pub(crate) fn validate_colors(d: &Dialog) -> Result<(), String> {
     let style: Style = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let enabled = |p| d.name == "formatCells" || style.sets(p);
@@ -34,6 +35,7 @@ pub(crate) fn validate_colors(d: &Dialog) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads the selected cell’s base or table style so unchecked conditional controls show inherited values.
 fn active_style(app: &SheetApp) -> Style {
     let Some(doc) = app.session.active() else { return Style::default() };
     let Some(sheet) = doc.wb.active() else { return Style::default() };
@@ -44,6 +46,7 @@ fn active_style(app: &SheetApp) -> Style {
     }
 }
 
+/// Paints the selected cell with the draft differential style, including number format, text color and borders.
 pub(crate) fn preview(app: &SheetApp, ui: &mut egui::Ui, style: &Style) {
     let Some(doc) = app.session.active() else { return };
     let lang = app.ui.language;
@@ -92,12 +95,13 @@ pub(crate) fn preview(app: &SheetApp, ui: &mut egui::Ui, style: &Style) {
     }
 }
 
-// Keep the shared editor's English labels and reuse translations from Format Cells.
+/// Keeps the shared editor's English labels and reuses translations from Format Cells.
 fn translated_label<'a>(lang: crate::i18n::Language, label: &'a str, key: &'a str) -> &'a str {
     let translated = lang.tr(key);
     if translated == key { label } else { translated }
 }
 
+/// Draws a translated option list while preserving the unlocalized control ID and stored enum value.
 fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: &str, value: &mut T, options: &[(T, &str)], lang: crate::i18n::Language) {
     let label = options.iter().find(|(v, _)| v == value).map(|(_, n)| *n).unwrap_or("");
     egui::ComboBox::from_id_salt(id).selected_text(lang.tr(label)).show_ui(ui, |ui| {
@@ -107,6 +111,7 @@ fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: &str, value: &mut T, optio
     });
 }
 
+/// Adds an inheritance checkbox for a conditional property and disables its controls while it is unset.
 fn override_row(
     ui: &mut egui::Ui,
     set: &mut std::collections::BTreeSet<StyleProperty>,
@@ -135,6 +140,7 @@ fn override_row(
     });
 }
 
+/// Edits a theme-aware color through the picker, palette or isolated hex draft without discarding invalid text.
 fn color(ui: &mut egui::Ui, value: &mut Color, theme: &gridcraft_engine::model::Theme, draft: &mut ColorDraft, lang: crate::i18n::Language) {
     let hex = |c: Color| {
         let [r, g, b] = c.resolve(theme).unwrap_or([0, 0, 0]);
@@ -435,6 +441,7 @@ pub(crate) fn options(
     }
 }
 
+/// Edits selected conditional properties while preserving imported alignment/protection and the parent rule draft.
 pub(crate) fn editor(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let lang = app.ui.language;
     let patch: Style = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();

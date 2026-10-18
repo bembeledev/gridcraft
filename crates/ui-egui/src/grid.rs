@@ -431,6 +431,7 @@ fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }
 
+/// Maps a number-format color into the grid and conditional-preview renderer’s color type.
 pub(crate) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
     use gridcraft_engine::numfmt::FormatColor as F;
     match c {
@@ -455,6 +456,7 @@ fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) -> bool) ->
     end
 }
 
+/// Combines cell/table styling with matching conditional overrides for on-screen rendering.
 fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
@@ -990,6 +992,7 @@ fn mirror_shape(shape: &mut egui::Shape, axis: f32) {
     }
 }
 
+/// Paints a visible sheet region, applying effective conditional styles to text, fills and borders.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_quadrant(
     p: &Painter,
@@ -3391,6 +3394,7 @@ mod tests {
         assert_eq!(center_across_end(0, 1, |_| true), 1);
     }
 
+    /// Checks conditional number-format precedence, font-only inheritance and explicit General resets in grid text.
     #[test]
     fn conditional_number_format_reaches_the_cell_text() {
         // #1163: a rule's number format replaces the cell's own; unmatched cells keep theirs.

@@ -326,6 +326,43 @@ mod tests {
 
     use super::*;
 
+    /// Unchanged style confirmation preserves the saved pointer and both history stacks;
+    /// stale targets still fail, and combined delete/reorder requests still execute.
+    #[test]
+    fn unchanged_format_preserves_clean_state_history_and_combined_operations() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        for preset in ["lightRedFill", "redText"] {
+            s.execute("home.conditionalFormat", json!({"range":"A1:A3", "rule":{"type":"expression","formula":"TRUE","preset":preset}})).unwrap();
+        }
+        s.doc_mut().unwrap().saved = s.doc().unwrap().wb.clone();
+        s.execute("cell.set", json!({"cell":"B1","input":"redo me"})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let before = s.doc().unwrap().wb.clone();
+        let undo = s.doc().unwrap().undo.len();
+        let redo = s.doc().unwrap().redo.len();
+        let style = serde_json::to_value(crate::cmd::insert::preset_style("redText")).unwrap();
+        let expected = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+        s.execute("home.manageRules", json!({"format":0,"style":style,"expected":expected})).unwrap();
+        let doc = s.doc().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &doc.wb));
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.undo.len(), undo);
+        assert_eq!(doc.redo.len(), redo);
+        let mut stale = expected.clone();
+        stale["ranges"] = json!(["B1:B3"]);
+        assert!(s.execute("home.manageRules", json!({"format":0,"style":style,"expected":stale})).is_err());
+        s.execute("home.manageRules", json!({"format":0,"style":style,"expected":expected,"moveDown":0})).unwrap();
+        assert!(s.doc().unwrap().is_dirty());
+        assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+        assert!(s.doc().unwrap().redo.is_empty());
+        let moved = s.execute("home.manageRules", json!({})).unwrap()["rules"][1].clone();
+        assert_eq!(moved["rule"], expected["rule"]);
+        s.execute("home.manageRules", json!({"format":1,"style":style,"expected":moved,"delete":0})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats.len(), 1);
+    }
+
+    /// Verifies format editing preserves rule metadata, rejects invalid or stale edits, and remains undoable.
     #[test]
     fn editing_format_preserves_rule_metadata_and_rejects_stale_or_invalid_changes() {
         let mut s = crate::Session::new();
@@ -357,6 +394,7 @@ mod tests {
         assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats, before);
     }
 
+    /// Verifies explicit default overrides win by priority without erasing unrelated lower-priority properties.
     #[test]
     fn explicit_defaults_win_priority_and_leave_other_properties_unchanged() {
         use gridcraft_model::StyleProperty::*;

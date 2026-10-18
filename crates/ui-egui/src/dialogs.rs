@@ -59,6 +59,7 @@ impl Dialog {
         self.values.insert(key.into(), value);
     }
 
+    /// Creates a command-backed form with draft values; confirmation builds and submits the command parameters.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -79,6 +80,7 @@ impl Dialog {
         }
     }
 
+    /// Creates a dialog whose specialized UI owns confirmation and whose values remain an isolated draft.
     fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -99,11 +101,13 @@ impl Dialog {
         }
     }
 
+    /// Identifies the active document and worksheet by stable document ID and worksheet name.
     fn format_view(app: &SheetApp) -> Option<(u64, String)> {
         let (document, _) = app.view_key()?;
         app.session.active()?.wb.active().map(|sheet| (document, sheet.name.clone()))
     }
 
+    /// Rejects formatting a different worksheet or confirming an enabled color field with invalid text.
     pub(crate) fn validate_confirmation(&self, app: &SheetApp) -> Result<(), String> {
         if self.format_target.is_some() && self.format_target != Self::format_view(app) {
             return Err("Return to the original worksheet to apply this conditional format.".into());
@@ -111,6 +115,7 @@ impl Dialog {
         crate::format_editor::validate_colors(self)
     }
 
+    /// Commits an existing rule’s format or returns a new-rule style draft to its parent after validation.
     pub(crate) fn confirm_custom_format(&mut self, app: &mut SheetApp) -> Result<(), String> {
         self.validate_confirmation(app)?;
         if self.values.contains_key("ruleIndex") {
@@ -127,6 +132,7 @@ impl Dialog {
         Ok(())
     }
 
+    /// Builds a named dialog from command parameters and current selection, capturing formatting targets when needed.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -1080,6 +1086,7 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Renders the active dialog, validates confirmation, and restores its parent when a nested editor closes.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
@@ -1634,6 +1641,7 @@ fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
     });
 }
 
+/// Edits a cell-style draft with shared format controls and applies it only after successful confirmation.
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
     // labels are translated. The Fill tab is keyed by context: the Alignment tab's "Fill" is a
@@ -2198,6 +2206,7 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     }
 }
 
+/// Lists worksheet rules and exposes priority, format and deletion actions through engine commands.
 fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     let list = app.session.run("home.manageRules", json!({})).unwrap_or(Json::Null);
     let rules = list["rules"].as_array().cloned().unwrap_or_default();

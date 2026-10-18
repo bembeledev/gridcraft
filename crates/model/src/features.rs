@@ -225,6 +225,7 @@ pub enum CfRule {
 }
 
 impl CfRule {
+    /// Returns the editable differential style for cell-format rules; scales, bars and icon sets have none.
     pub fn style_mut(&mut self) -> Option<&mut Style> {
         match self {
             Self::CellIs { style, .. }

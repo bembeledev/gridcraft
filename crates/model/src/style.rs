@@ -401,6 +401,7 @@ impl Style {
         self.specified.as_ref().map_or_else(|| self.is_non_default(property), |set| set.contains(&property))
     }
 
+    /// Tests the legacy default-as-unset interpretation of one differential property without allocating.
     fn is_non_default(&self, property: StyleProperty) -> bool {
         match property {
             StyleProperty::FontName => self.font.name != crate::DEFAULT_FONT,
@@ -422,6 +423,7 @@ impl Style {
         }
     }
 
+    /// Collects the properties a legacy style overrides when explicit presence metadata is absent.
     fn non_default_properties(&self) -> std::collections::BTreeSet<StyleProperty> {
         StyleProperty::ALL.into_iter().filter(|&p| self.is_non_default(p)).collect()
     }
@@ -459,6 +461,7 @@ impl Style {
         }
     }
 
+    /// Copies one property without changing the destination style’s presence metadata or unrelated values.
     pub fn copy_property(&mut self, source: &Style, property: StyleProperty) {
         match property {
             StyleProperty::FontName => self.font.name = source.font.name.clone(),

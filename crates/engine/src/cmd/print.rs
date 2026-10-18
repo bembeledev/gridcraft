@@ -631,6 +631,7 @@ struct Look {
     cf: Option<crate::cf::CfLook>,
 }
 
+/// Combines cell, table and conditional styles into the effective style and fill used for PDF output.
 fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
     let mut style = match sh.table_at(c) {
         Some(t) => crate::tables::table_cell_style(wb, si, t, c),
@@ -1021,6 +1022,7 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// Draws cell text using the effective number format, font, script position and available printable width.
 fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
     let (x, y, w, h) = rect;
     let sh = b.sh;
@@ -1746,6 +1748,7 @@ mod tests {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
     }
 
+    /// Checks that conditional number formatting and font overrides reach the generated PDF.
     #[test]
     fn conditional_number_format_and_font_are_used_in_pdf() {
         let mut session = s();

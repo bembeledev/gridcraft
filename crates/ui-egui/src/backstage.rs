@@ -592,6 +592,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     let path = d.path.clone();
     let sheets = d.wb.sheets.len();
     let protected = d.wb.protected_structure;
+    let has_links = !d.wb.external_books.is_empty();
     let current: Vec<String> = {
         let pr = &d.wb.props;
         vec![pr.title.clone(), pr.subject.clone(), pr.author.clone(), pr.company.clone(), pr.keywords.clone(), pr.description.clone()]
@@ -650,6 +651,15 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
             ui.end_row();
         }
     });
+    // Excel lists Related Documents only for a workbook that links to others.
+    if has_links {
+        ui.add_space(22.0);
+        section(ui, lang, "Related Documents");
+        // The dialog opens over the Info page, as in Excel.
+        if ui.link(lang.tr("Edit Links to Files")).clicked() {
+            app.run_or_alert("data.editLinks", json!({}));
+        }
+    }
 }
 
 fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {

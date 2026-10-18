@@ -111,6 +111,15 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
+/// A linked workbook's file, read for its values (Data › Workbook Links): rows aren't fitted, and
+/// an encrypted file is refused (GridCraft can't ask for its password there).
+pub fn read_link_source(name: &str, bytes: &[u8]) -> Result<Workbook> {
+    if gridcraft_xlsx::sniff(bytes) == gridcraft_xlsx::Format::Encrypted {
+        return Err(EngineError::Other(format!("'{name}' {PASSWORD_REQUIRED}")));
+    }
+    open_plain(name, bytes).map(|(wb, _)| wb)
+}
+
 /// Parses bytes that aren't encrypted.
 fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);

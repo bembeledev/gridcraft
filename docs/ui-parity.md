@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (preserve workbook links during sheet transfer; retains Workbook Links controls and prior updates) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -137,7 +137,10 @@ Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
 Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing or partial: Options,
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
-Workbook Links, Accessibility checker.
+Accessibility checker. Links to other workbooks have Excel 365's Workbook Links task pane, the
+classic Edit Links dialog (File › Info › Edit Links to Files) with Change Source, Startup Prompt
+and the Break Links confirmation, and the yellow message bar ("Security Warning: Automatic update
+of links has been disabled", Enable Content) when a workbook with links opens.
 
 ## Accessibility
 
@@ -157,10 +160,21 @@ Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus
 8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
+## Worksheet transfer
+
+Move or Copy now offers an open-workbook picker and a new-workbook destination.
+Sheets transfer with their styles and names; ordinary cell and defined-name references
+between workbooks are preserved through Workbook Links. Linked undo restores both
+workbooks for a move. Unsupported object dependencies and transfers without a usable
+link target path are explicitly refused. See [sheet-transfer.md](sheet-transfer.md) for the scope and limits.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Sheet transfer: rewrite outbound and inbound cell/name references, seed bounded link caches from open workbook snapshots, remap existing links and preserve their path bases; refuse unsupported object dependencies (#1739, builds on #1200/#829/#464) |
+| 2026-10-17 | minor | Move or Copy destinations across workbooks, checked self-contained transfer and linked undo (#1739) |
+| 2026-10-14 | minor | Data › Queries & Connections group (Refresh All split button, Queries & Connections, Properties, Workbook Links); Workbook Links task pane; Edit Links dialog from File › Info with Change Source, Startup Prompt and Break Links confirmation; reusable message bar for the links security warning (Enable Content); German labels |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

@@ -15,6 +15,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("file.exportCsv", "File", "Export", "CSV"),
     ("file.exportHtml", "File", "Export", "Web Page"),
     ("file.properties", "File", "Info", "Properties"),
+    ("data.editLinks", "File", "Info", "Edit Links to Files"),
     ("file.options", "File", "Options", "Options"),
     // Home
     ("edit.paste", "Home", "Clipboard", "Paste"),
@@ -197,6 +198,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("data.fromTableRange", "Data", "Get & Transform Data", "From Table/Range"),
     ("data.refreshAll", "Data", "Queries & Connections", "Refresh All"),
     ("data.queriesConnections", "Data", "Queries & Connections", "Queries & Connections"),
+    ("data.workbookLinks", "Data", "Queries & Connections", "Workbook Links"),
     ("data.stocks", "Data", "Data Types", "Stocks"),
     ("data.geography", "Data", "Data Types", "Geography"),
     ("data.sortAscending", "Data", "Sort & Filter", "Sort A to Z"),

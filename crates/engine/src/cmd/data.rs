@@ -951,6 +951,9 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         "custom" => ValidationKind::Custom,
         _ => ValidationKind::Any,
     };
+    for f in [str_param(p, "formula1"), str_param(p, "formula2")].into_iter().flatten() {
+        super::edit::refuse_linked_books(f)?;
+    }
     let dv = Validation {
         ranges: ranges.clone(),
         kind,

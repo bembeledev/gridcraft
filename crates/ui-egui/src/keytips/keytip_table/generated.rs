@@ -276,11 +276,11 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AGG", Entry::Finish(Action::Command("data.group"))),    // Excel: Group
     ("AH", Entry::Finish(Action::Command("data.hideDetail"))), // Excel: Hide Detail
     ("AJ", Entry::Finish(Action::Command("data.showDetail"))), // Excel: Show Detail
-    ("AK", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Edit Links; Edit Links (Queries & Connections);
-    ("AM", Entry::Finish(Action::Dialog("removeDuplicates"))), // Excel: Remove Duplicates
+    ("AK", Entry::Finish(Action::Command("data.workbookLinks"))), // Excel: Workbook Links; Workbook Links (Queries & Connections), formerly Edit Links
+    ("AM", Entry::Finish(Action::Dialog("removeDuplicates"))),    // Excel: Remove Duplicates
     ("AO", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Queries & Connections
-    ("AP1", Entry::Finish(Action::Command("file.properties"))), // Excel: Properties
-    ("APN", Entry::Continue),                                 // Excel: Get Data (Power Query) Menu; group level: Power Query variants = GAP
+    ("AP1", Entry::Finish(Action::Command("file.properties"))),   // Excel: Properties
+    ("APN", Entry::Continue),                                     // Excel: Get Data (Power Query) Menu; group level: Power Query variants = GAP
     ("APND", Entry::Finish(Action::Pending("data.fromDatabase"))), // pending; Excel: From Database (Microsoft Query); gap #12; reserved until the command lands
     ("APNE", Entry::Finish(Action::Pending("data.powerQueryEditor"))), // pending; Excel: Launch Power Query Editor; gap #12; reserved until the command lands
     ("APNG", Entry::Finish(Action::Command("data.getData"))),          // Excel: Get Data (Power Query); containment(Get Data)

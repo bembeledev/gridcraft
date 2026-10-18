@@ -1390,9 +1390,17 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                     format!("\"{}\"", v.replace('"', "\"\""))
                 }
             };
-            CfRule::CellIs { op, a: quote(a), b: b.map(quote), style }
+            let (a, b) = (quote(a), b.map(quote));
+            for f in std::iter::once(&a).chain(b.as_ref()) {
+                super::edit::refuse_linked_books(f)?;
+            }
+            CfRule::CellIs { op, a, b, style }
         }
-        "expression" => CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style },
+        "expression" => {
+            let formula = g("formula").unwrap_or_default().trim_start_matches('=').to_string();
+            super::edit::refuse_linked_books(&formula)?;
+            CfRule::Expression { formula, style }
+        }
         "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
         "notContainsText" => CfRule::NotContainsText { text: g("text").unwrap_or_default(), style },
         "beginsWith" => CfRule::BeginsWith { text: g("text").unwrap_or_default(), style },

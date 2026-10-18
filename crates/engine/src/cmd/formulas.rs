@@ -262,7 +262,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         None | Some("Workbook") => None,
         Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
     };
-    let refers = match str_param(p, "refersTo") {
+    let mut refers = match str_param(p, "refersTo") {
         // As in Excel, relative references are relative to the active cell; names keep them
         // relative to A1, as files do.
         Some(r) => match gridcraft_formula::parse(r.trim_start_matches('=')) {
@@ -280,8 +280,11 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), body)
         }
     };
-    if gridcraft_formula::parse(&refers).is_err() {
-        return Err(EngineError::Other("There's a problem with this formula.".into()));
+    let parsed = gridcraft_formula::parse(&refers).map_err(|_| EngineError::Other("There's a problem with this formula.".into()))?;
+    let checked = super::edit::check_linked_books(parsed.clone(), d.wb.external_books.len())?;
+    // `[0]Sheet1!$C$1` is stored as `Sheet1!$C$1`, so it follows the sheet when it's renamed.
+    if checked != parsed {
+        refers = gridcraft_formula::print(&checked);
     }
     let comment = str_param(p, "comment").unwrap_or("").to_string();
     // Editing an existing name (Name Manager › Edit…): it must exist, and its new name must not
@@ -311,9 +314,10 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
+        let refers = cx.wb.link_typed_text(&refers);
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
-        Ok(json!({"name": name, "refersTo": format!("={refers}")}))
+        Ok(json!({"name": name, "refersTo": format!("={}", cx.wb.shown_formula(&refers))}))
     })
 }
 
@@ -390,7 +394,7 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .map(|n| {
             let sheet = n.scope.unwrap_or(d.wb.active_sheet);
             let v = gridcraft_calc::evaluate(&d.wb, sheet, CellRef::default(), &n.formula);
-            json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
+            json!({"name": n.name, "refersTo": format!("={}", d.wb.shown_formula(&n.formula)), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
         })
         .collect();
     Ok(Json::Array(list))

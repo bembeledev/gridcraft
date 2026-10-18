@@ -149,8 +149,12 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
             parsed = gridcraft_formula::parse(&text);
         }
         let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
+        let expr = check_linked_books(expr, wb.external_books.len())?;
         let expr = wb.name_call_case(expr);
         check_arg_counts(&expr)?;
+        // Another workbook by file name or path: files only hold the number of its link, `[1]`.
+        // Last, so a formula refused above never leaves a new link behind.
+        let expr = wb.link_typed_books(expr);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
@@ -189,6 +193,136 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
     Ok(Some(Cell { value: parsed.value, formula: None, style }))
+}
+
+/// The workbook a sheet name (or the sheet part of a qualified name) is in: `Ok(None)` = this one,
+/// `Ok(Some(n))` = `[n]Prices`, linked workbook `n` (`[0]` = this one). `Err` = a bracketed prefix
+/// that names no workbook (`[-1]`, `[Book2]`, `[ 1]`): a sheet name can't contain `[` or `]`, and a
+/// stored formula names a linked workbook only by its index. A file typed in brackets
+/// (`[Book2.xlsx]`, `C:\links\[Book2.xlsx]`) is also `Err` here; [`first_bad_book`] lets it through
+/// where typed entry turns it into a link (`Workbook::link_typed_books`).
+fn sheet_book(s: &str) -> std::result::Result<Option<usize>, String> {
+    if !s.contains(['[', ']']) {
+        return Ok(None);
+    }
+    let bad = || s.find(']').and_then(|i| s.get(..=i)).unwrap_or(s).to_string();
+    let Some((book, rest)) = s.strip_prefix('[').and_then(|x| x.split_once(']')) else { return Err(bad()) };
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) || rest.contains(['[', ']']) {
+        return Err(bad());
+    }
+    book.parse().map(Some).map_err(|_| bad())
+}
+
+/// The sheets an expression names, as written: both ends of a sheet range (`'[1]Jan:Dec'`) and the
+/// sheet part of qualified names (`[1]!Rates`, `[1]Prices!Rates`). `true` = the second sheet of a
+/// range, which can't carry a workbook index (MS-XLSX `sheet-range`).
+fn sheets_named(e: &gridcraft_formula::Expr) -> Vec<(&str, bool)> {
+    use gridcraft_formula::{Expr, SheetSel};
+    match e {
+        Expr::Ref(r) => match &r.sheet {
+            SheetSel::Named(a) => vec![(a.as_str(), false)],
+            SheetSel::Span(a, b) => vec![(a.as_str(), false), (b.as_str(), true)],
+            SheetSel::Current => vec![],
+        },
+        Expr::Name(n) => n.rsplit_once('!').map(|(s, _)| vec![(s, false)]).unwrap_or_default(),
+        _ => vec![],
+    }
+}
+
+/// The first workbook prefix in `expr` that isn't `[0]` or one of `links` linked workbooks
+/// (`[1]` is the first), as written (`[5]`, `[Book2]`). With `typed`, a workbook typed by file
+/// name or path (`[Book2.xlsx]Sheet1`) is fine: entry makes it a link.
+fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize, typed: bool) -> Option<String> {
+    let mut bad = None;
+    expr.walk(&mut |e| {
+        for (s, range_end) in sheets_named(e) {
+            if bad.is_some() {
+                return;
+            }
+            bad = match sheet_book(s) {
+                Ok(None) => None,
+                Ok(Some(n)) if n <= links && !range_end => None,
+                Ok(Some(_)) => s.find(']').and_then(|i| s.get(..=i)).map(str::to_string),
+                Err(_) if typed && !range_end && gridcraft_model::links::typed_book(s).is_some() => None,
+                Err(prefix) => Some(prefix),
+            };
+        }
+    });
+    bad
+}
+
+/// Typed references into other workbooks. `[n]` must name one of the workbook's `links` external
+/// links (`[1]` is the first): Excel refuses any other index on entry, and a file saved with one
+/// can't be opened. `[0]` is this workbook, as in Excel: `[0]Sheet1!A1` is entered as `Sheet1!A1`.
+pub(crate) fn check_linked_books(expr: gridcraft_formula::Expr, links: usize) -> Result<gridcraft_formula::Expr> {
+    use gridcraft_formula::{Expr, SheetSel};
+    if let Some(book) = first_bad_book(&expr, links, true) {
+        return Err(EngineError::Other(format!("There's a problem with this formula: {book} isn't a linked workbook.")));
+    }
+    let own = |s: &str| match sheet_book(s) {
+        Ok(Some(0)) => s.split_once(']').map(|(_, rest)| rest.to_string()).filter(|rest| !rest.is_empty()),
+        _ => None,
+    };
+    Ok(expr.map(&mut |e| match e {
+        Expr::Ref(mut r) => {
+            r.sheet = match r.sheet {
+                SheetSel::Named(a) => SheetSel::Named(own(&a).unwrap_or(a)),
+                SheetSel::Span(a, b) => SheetSel::Span(own(&a).unwrap_or(a), b),
+                s => s,
+            };
+            Expr::Ref(r)
+        }
+        // `[0]!Rates` is the workbook's `Rates`, `[0]Sheet1!Rates` its `Sheet1!Rates`.
+        Expr::Name(n) => {
+            let local = match n.rsplit_once('!') {
+                Some((s, name)) if sheet_book(s) == Ok(Some(0)) => match s.split_once(']').map_or("", |(_, sheet)| sheet) {
+                    "" => Some(name.to_string()),
+                    sheet => Some(format!("{sheet}!{name}")),
+                },
+                _ => None,
+            };
+            Expr::Name(local.unwrap_or(n))
+        }
+        e => e,
+    }))
+}
+
+/// Conditional formats and data validation can't refer to other workbooks: Excel refuses it in
+/// those dialogs. Text that isn't a formula is left to the caller.
+pub(crate) fn refuse_linked_books(text: &str) -> Result<()> {
+    match gridcraft_formula::parse(text.trim_start_matches('=')) {
+        Ok(e) if first_bad_book(&e, 0, false).is_some() => {
+            Err(EngineError::Other("There's a problem with this formula: references to other workbooks can't be used here.".into()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Which of the source workbook's links (`[1]` first) the target holds at the same index: the same
+/// linked workbook with the same saved sheets and names. A New Window of the workbook shares them.
+fn shared_links(src: &gridcraft_model::Workbook, dst: &gridcraft_model::Workbook) -> Vec<bool> {
+    if std::sync::Arc::ptr_eq(&src.external_books, &dst.external_books) {
+        return vec![true; src.external_books.len()];
+    }
+    src.external_books.iter().enumerate().map(|(i, b)| dst.external_books.get(i) == Some(b)).collect()
+}
+
+/// A formula pasted from another workbook: its references into links the target doesn't share
+/// (`shared`, from [`shared_links`]) are `#REF!`. `[1]` there would be a link it doesn't have, or a
+/// different workbook.
+fn drop_linked_books(expr: gridcraft_formula::Expr, shared: &[bool]) -> gridcraft_formula::Expr {
+    use gridcraft_formula::Expr;
+    if shared.iter().all(|&s| s) && first_bad_book(&expr, shared.len(), false).is_none() {
+        return expr;
+    }
+    expr.map(&mut |e| {
+        let unshared = sheets_named(&e).iter().any(|(s, _)| match sheet_book(s) {
+            Ok(None | Some(0)) => false,
+            Ok(Some(n)) => !shared.get(n - 1).copied().unwrap_or(false),
+            Err(_) => true,
+        });
+        if unshared { Expr::Error(gridcraft_core::CellError::Ref) } else { e }
+    })
 }
 
 /// Like Excel, a formula that calls a built-in function with too few or too many arguments is
@@ -595,40 +729,20 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 // ---------------------------------------------------------------- history
 
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
-    let steps = u32_param(p, "steps").unwrap_or(1).max(1);
-    let d = s.doc_mut()?;
     let mut label = String::new();
-    let now = d.wb.clone();
-    for _ in 0..steps {
-        let Some(e) = d.undo.pop() else { break };
-        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: d.selection.clone() };
-        d.redo.push(cur);
-        label = e.label.clone();
-        d.wb = e.wb;
-        d.selection = e.selection;
+    for _ in 0..u32_param(p, "steps").unwrap_or(1).max(1) {
+        let Some(next) = s.restore_history(false)? else { break };
+        label = next;
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
-    d.calc.rebuild(&d.wb);
-    d.revision += 1;
     Ok(json!({"undone": label}))
 }
 
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
-    let steps = u32_param(p, "steps").unwrap_or(1).max(1);
-    let d = s.doc_mut()?;
     let mut label = String::new();
-    let now = d.wb.clone();
-    for _ in 0..steps {
-        let Some(e) = d.redo.pop() else { break };
-        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: d.selection.clone() };
-        d.undo.push(cur);
-        label = e.label.clone();
-        d.wb = e.wb;
-        d.selection = e.selection;
+    for _ in 0..u32_param(p, "steps").unwrap_or(1).max(1) {
+        let Some(next) = s.restore_history(true)? else { break };
+        label = next;
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
-    d.calc.rebuild(&d.wb);
-    d.revision += 1;
     Ok(json!({"redone": label}))
 }
 
@@ -936,6 +1050,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
+    let shared = if same_doc { vec![] } else { shared_links(&src_wb, &s.doc()?.wb) };
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.
         let mut style_map = std::collections::HashMap::new();
@@ -981,6 +1096,8 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                             let f = cell.formula.as_ref()?;
                             let e = f.expr()?;
+                            // `[1]…` is the source workbook's first link: kept where this one shares it.
+                            let e = if same_doc { e } else { drop_linked_books(e, &shared) };
                             if cut_move {
                                 // A moved formula still reads cells on its original sheet. Qualify
                                 // those references before the workbook-wide move adjustment below.

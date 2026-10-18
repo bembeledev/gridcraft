@@ -282,6 +282,80 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Sperrt die Blattstruktur, sodass Blätter nicht hinzugefügt, verschoben, umbenannt oder gelöscht werden können."
         }
         "Properties" => "Eigenschaften",
+        // Data › Queries & Connections and linked workbooks (Workbook Links pane, Edit Links).
+        "Queries & Connections|Refresh\nAll" => "Alle\naktualisieren",
+        "Queries & Connections|Refresh All (Ctrl+Alt+F5)" => "Alle aktualisieren (Strg+Alt+F5)",
+        "Queries & Connections|Refresh All" => "Alle aktualisieren",
+        "Queries & Connections|Refresh" => "Aktualisieren",
+        "Queries & Connections|Refresh Status" => "Status aktualisieren",
+        "Queries & Connections|Cancel Refresh" => "Aktualisierung abbrechen",
+        "Queries & Connections|Connection Properties…" => "Verbindungseigenschaften…",
+        "Queries & Connections|GridCraft has no data connections to refresh yet." => "GridCraft hat noch keine Datenverbindungen zum Aktualisieren.",
+        "Queries & Connections|Queries & Connections" => "Abfragen und Verbindungen",
+        "Queries & Connections|Select a cell in an external data range to see its properties." => {
+            "Markieren Sie eine Zelle in einem externen Datenbereich, um seine Eigenschaften zu sehen."
+        }
+        "Workbook Links" => "Arbeitsmappenlinks",
+        "Edit Links" => "Verknüpfungen bearbeiten",
+        "Edit Links to Files" => "Verknüpfungen mit Dateien bearbeiten",
+        "Related Documents" => "Verwandte Dokumente",
+        "Startup Prompt" => "Eingabeaufforderung beim Start",
+        "Break Links" => "Links unterbrechen",
+        "Workbook Links|Security Warning" => "Sicherheitswarnung",
+        "Workbook Links|Automatic update of links has been disabled" => "Die automatische Aktualisierung von Links wurde deaktiviert",
+        "Workbook Links|Enable Content" => "Inhalt aktivieren",
+        "Workbook Links|Refresh All" => "Alle aktualisieren",
+        "Workbook Links|Refresh" => "Aktualisieren",
+        "Workbook Links|Break All" => "Alle unterbrechen",
+        "Workbook Links|Break Links" => "Links unterbrechen",
+        "Workbook Links|Open Workbook" => "Arbeitsmappe öffnen",
+        "Workbook Links|Change Source…" => "Quelle ändern…",
+        "Workbook Links|Change Source" => "Quelle ändern",
+        "Workbook Links|Search" => "Suchen",
+        "Workbook Links|Last refreshed:" => "Zuletzt aktualisiert:",
+        "Workbook Links|This workbook has no links to other workbooks." => "Diese Arbeitsmappe enthält keine Links zu anderen Arbeitsmappen.",
+        "Workbook Links|Updating links needs the desktop app: it reads the linked files." => {
+            "Zum Aktualisieren von Links wird die Desktop-App gebraucht: Sie liest die verknüpften Dateien."
+        }
+        "Workbook Links|Source" => "Quelle",
+        "Workbook Links|Type" => "Typ",
+        "Workbook Links|Update" => "Aktualisieren",
+        "Workbook Links|Status" => "Status",
+        "Workbook Links|Worksheet" => "Arbeitsblatt",
+        "Workbook Links|Other" => "Andere",
+        "Workbook Links|OK" => "OK",
+        "Workbook Links|Unknown" => "Unbekannt",
+        "Workbook Links|Error: Source not found" => "Fehler: Quelle nicht gefunden",
+        "Workbook Links|Error: Worksheet not found" => "Fehler: Arbeitsblatt nicht gefunden",
+        "Workbook Links|Warning: Values not updated" => "Warnung: Werte nicht aktualisiert",
+        "Workbook Links|Error: Undetermined" => "Fehler: Unbestimmt",
+        "Workbook Links|N/A" => "Nicht verfügbar",
+        "Workbook Links|Location:" => "Speicherort:",
+        "Workbook Links|Item:" => "Element:",
+        "Workbook Links|Update:" => "Aktualisieren:",
+        "Workbook Links|Automatic" => "Automatisch",
+        "Workbook Links|Manual" => "Manuell",
+        "Workbook Links|Update Values" => "Werte aktualisieren",
+        "Workbook Links|Open Source" => "Quelle öffnen",
+        "Workbook Links|Break Link" => "Verknüpfung löschen",
+        "Workbook Links|Check Status" => "Status prüfen",
+        "Workbook Links|Startup Prompt…" => "Eingabeaufforderung beim Start…",
+        "Workbook Links|Close" => "Schließen",
+        "Workbook Links|File name:" => "Dateiname:",
+        "Workbook Links|Browse…" => "Durchsuchen…",
+        "Workbook Links|Cancel" => "Abbrechen",
+        "Workbook Links|When this workbook opens, ask whether to update its links to other workbooks:" => {
+            "Beim Öffnen dieser Arbeitsmappe fragen, ob ihre Links zu anderen Arbeitsmappen aktualisiert werden:"
+        }
+        "Workbook Links|Let users choose to display the alert or not" => "Benutzer entscheiden lassen, ob die Warnung angezeigt werden soll",
+        "Workbook Links|Don't display the alert and don't update automatic links" => {
+            "Warnung nicht anzeigen und automatische Verknüpfungen nicht aktualisieren"
+        }
+        "Workbook Links|Don't display the alert and update links" => "Warnung nicht anzeigen und Verknüpfungen aktualisieren",
+        "Workbook Links|Breaking links turns every formula that uses them into the value it shows now. Defined names that use them keep their links. Undo brings the formulas back." => {
+            "Beim Unterbrechen werden alle Formeln, die die Links verwenden, durch ihren aktuellen Wert ersetzt. Definierte Namen behalten ihre Links. Mit Rückgängig kommen die Formeln zurück."
+        }
+        "Workbook Links|Break the links?" => "Links unterbrechen?",
         "Title" => "Titel",
         "Subject" => "Thema",
         "Author" => "Autor",

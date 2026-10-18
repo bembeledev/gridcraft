@@ -21,6 +21,7 @@ pub mod solver;
 pub mod spelling;
 pub mod view;
 pub mod whatif;
+pub mod workbook_links;
 
 use gridcraft_calc::Key;
 use gridcraft_core::{CellRef, RangeRef};
@@ -144,6 +145,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(forecast::specs());
         v.extend(analysis::specs());
         v.extend(print::specs());
+        v.extend(workbook_links::specs());
         v
     })
 }

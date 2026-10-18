@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (§12: linked workbooks update from their files; Workbook Links pane and Edit Links) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -104,6 +104,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 12. Get & Transform, external data, data model (F)
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
+- Links to other workbooks work (Data › Workbook Links, File › Info › Edit Links: update values
+  from the source file, Check Status, Change Source, Open Source, Break Link, Startup Prompt, the
+  security warning on open). Left: links to workbooks open in GridCraft don't update live (values
+  come from the file on disk), DDE/OLE links stay as saved, a source's password can't be asked
+  for, the browser can't read source files, the formula bar shows a relative link's file name
+  rather than Excel's full path, and "update links" at startup still shows the security warning
+  first (GridCraft has no trusted locations).
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
@@ -168,6 +175,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §12: linked workbooks update from their source files; Workbook Links pane, Edit Links dialog, Break Link, Change Source, startup prompt and the security warning landed; what's left listed |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

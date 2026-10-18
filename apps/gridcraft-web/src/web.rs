@@ -153,17 +153,29 @@ impl eframe::App for WebShell {
                 }
             });
         }
-        // Commands the host page sent (`gridcraft:cmd`): run them like ribbon buttons.
+        // The app first: `gridcraft:open` messages wait in the inbox that `app.logic` drains,
+        // and a command sent right after an open must not act on the previous workbook.
+        // Commands still run in the same frame, right after a queued open lands.
+        self.app.logic(ctx);
         if let Some(bridge) = &self.bridge {
             for (id, params) in bridge.take_commands() {
-                let parsed: serde_json::Value = serde_json::from_str(&params).unwrap_or(serde_json::Value::Null);
+                let parsed: serde_json::Value = if params.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    match serde_json::from_str(&params) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            bridge.post_response(false, &format!("invalid params for {id}: {e}"));
+                            continue;
+                        }
+                    }
+                };
                 match self.app.run(&id, parsed) {
                     Ok(v) => bridge.post_response(true, &v.to_string()),
                     Err(e) => bridge.post_response(false, &e),
                 }
             }
         }
-        self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {

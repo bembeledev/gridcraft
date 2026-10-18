@@ -2467,5 +2467,71 @@ mod tests {
         s.execute("home.deleteRows", json!({"rows": "3:7"})).unwrap();
         assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
     }
+
+    #[test]
+    fn line_shifts_preserve_surviving_pivot_metadata() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(pt(&s).anchor.a1(), "A3");
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A3:B7");
+        assert_eq!(text(&s, "A4"), "East");
+
+        // Inserting a row cutting through the report is refused.
+        let err = s.execute("home.insertRows", json!({"rows": "5:5"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Inserting a column cutting through the report is refused.
+        let err = s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Deleting preceding row 2 shifts the surviving pivot table up.
+        s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+        assert_eq!(pt(&s).anchor.a1(), "A2");
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A2:B6");
+        assert_eq!(text(&s, "A3"), "East");
+
+        // Refreshing the shifted pivot table writes to the new location.
+        s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(pt(&s).anchor.a1(), "A2");
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A2:B6");
+        assert_eq!(text(&s, "A3"), "East");
+
+        // Clearing the entire new range deletes the pivot table.
+        s.execute("edit.clearContents", json!({"range": "A2:B6"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
+        assert!(val(&s, "A3").is_empty());
+    }
+
+    #[test]
+    fn cell_shift_checks_reject_moving_report_segment() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A3:B7");
+
+        // Inserting cells at A2 shifting down moves column A of the report: refused.
+        let err = s.execute("home.insertCells", json!({"range": "A2", "shift": "down"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Deleting cells at A2 shifting up moves column A of the report: refused.
+        let err = s.execute("home.deleteCells", json!({"range": "A2", "shift": "up"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Inserting cells at A1:B2 shifting down moves both columns of the report: refused.
+        let err = s.execute("home.insertCells", json!({"range": "A1:B2", "shift": "down"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Inserting cells at A4 shifting right moves row 4 of the report: refused.
+        let err = s.execute("home.insertCells", json!({"range": "A4", "shift": "right"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Deleting cells at A4 shifting left moves row 4 of the report: refused.
+        let err = s.execute("home.deleteCells", json!({"range": "A4", "shift": "left"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Shifts that don't reach the report are permitted.
+        s.execute("home.insertCells", json!({"range": "C2", "shift": "down"})).unwrap();
+        s.execute("home.insertCells", json!({"range": "A1", "shift": "right"})).unwrap();
+        s.execute("home.insertCells", json!({"range": "A10", "shift": "down"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
     }
 }

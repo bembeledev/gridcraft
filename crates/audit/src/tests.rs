@@ -208,9 +208,7 @@ fn comment_authors_found() {
     let comments = format!(
         r#"<comments xmlns="{NS_X}"><authors><author>Quill Ramsey</author><author>Ona Vettel</author></authors><commentList><comment ref="B2" authorId="0"><text><t>Check this.</t></text></comment><comment ref="C3" authorId="1"><text><t>Agreed.</t></text></comment></commentList></comments>"#
     );
-    let mut rels = workbook_rels(&[("rId1", "worksheets/sheet1.xml")]);
-    rels =
-        rels.replace("</Relationships>", &format!(r#"<Relationship Id="rId2" Type="{RT}comments" Target="comments/comment1.xml"/></Relationships>"#));
+    let rels = workbook_rels(&[("rId1", "worksheets/sheet1.xml")]);
     let sheet_xml = format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#);
     let pkg = zip(&[
         ("[Content_Types].xml", content_types()),
@@ -221,10 +219,10 @@ fn comment_authors_found() {
         (
             "xl/worksheets/_rels/sheet1.xml.rels",
             format!(
-                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}comments" Target="../comments/comment1.xml"/></Relationships>"#
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}comments" Target="../comments1.xml"/></Relationships>"#
             ),
         ),
-        ("xl/comments/comment1.xml", comments),
+        ("xl/comments1.xml", comments),
     ]);
     let fs = findings(&pkg);
     let authors: Vec<_> = fs.iter().filter(|f| f.id == "author-pii/comment").collect();
@@ -355,4 +353,65 @@ fn findings_come_back_in_deterministic_order() {
     reversed.reverse();
     let b = findings(&zip(&reversed));
     assert_eq!(a, b);
+}
+
+const NS_X_STRICT: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+const NS_R_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
+#[test]
+fn strict_workbook_is_scanned_not_clean() {
+    // A "Strict Open XML Spreadsheet" workbook must not pass as clean: the
+    // Strict namespaces are understood, not skipped.
+    let workbook = format!(
+        r#"<workbook xmlns="{NS_X_STRICT}" xmlns:r="{NS_R_STRICT}"><sheets><sheet name="Secret" sheetId="1" r:id="rId1" state="veryHidden"/></sheets></workbook>"#
+    );
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        ("xl/worksheets/sheet1.xml", format!(r#"<worksheet xmlns="{NS_X_STRICT}"><sheetData/></worksheet>"#)),
+    ]);
+    let fs = findings(&pkg);
+    assert!(fs.iter().any(|f| f.id == "hidden/sheet" && f.detail.contains("veryHidden")), "{fs:?}");
+}
+
+#[test]
+fn unrecognized_workbook_namespace_is_an_error() {
+    // Fail closed: an unknown workbook vocabulary must error, never scan
+    // to a false clean result.
+    let workbook = r#"<workbook xmlns="http://example.com/not-a-spreadsheet"><sheets/></workbook>"#.to_string();
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[])),
+    ]);
+    assert!(matches!(audit_bytes(&pkg), Err(AuditError::Xml(_, _))));
+}
+
+#[test]
+fn entity_references_are_decoded() {
+    // `&amp;` in an author name must come back as `&`, not vanish.
+    let comments = format!(
+        r#"<comments xmlns="{NS_X}"><authors><author>Smith &amp; Jones</author></authors><commentList><comment ref="B2" authorId="0"><text><t>Hi.</t></text></comment></commentList></comments>"#
+    );
+    let pkg = zip(&[
+        ("[Content_Types].xml", content_types()),
+        ("_rels/.rels", root_rels()),
+        ("xl/workbook.xml", workbook(&sheet("Budget", "rId1", ""), "")),
+        ("xl/_rels/workbook.xml.rels", workbook_rels(&[("rId1", "worksheets/sheet1.xml")])),
+        ("xl/worksheets/sheet1.xml", format!(r#"<worksheet xmlns="{NS_X}"><sheetData/></worksheet>"#)),
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}comments" Target="../comments1.xml"/></Relationships>"#
+            ),
+        ),
+        ("xl/comments1.xml", comments),
+    ]);
+    let fs = findings(&pkg);
+    let authors: Vec<_> = fs.iter().filter(|f| f.id == "author-pii/comment").collect();
+    assert_eq!(authors.len(), 1, "{fs:?}");
+    assert!(authors[0].detail.contains("Smith & Jones"), "{fs:?}");
 }

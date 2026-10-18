@@ -32,7 +32,7 @@ pub fn main(args: &[String]) -> ExitCode {
     };
     let report = serde_json::json!({ "file": path, "findings": findings, "count": findings.len() });
     match serde_json::to_string_pretty(&report) {
-        Ok(text) => println!("{text}"),
+        Ok(text) => outln!("{text}"),
         Err(e) => return fail(&format!("audit: cannot render report: {e}")),
     }
     if findings.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) }

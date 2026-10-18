@@ -83,4 +83,7 @@ Exit codes: `0` = no findings, `1` = findings present (CI-gate usable),
   `personId` is reported as unresolved rather than dropped.
 - A part that cannot be parsed is an error, never a silent pass (fail closed).
 - Hostile-input guards: at most 100,000 ZIP entries, 256 MiB per part,
+  1 GiB total decompressed bytes across all scanned parts,
   2,000,000 XML elements per part.
+- Both Transitional and Strict OOXML namespaces are understood; a workbook in
+  an unrecognized namespace fails the audit instead of scanning clean.

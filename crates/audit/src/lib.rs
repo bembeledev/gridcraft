@@ -45,19 +45,38 @@ use serde::Serialize;
 #[cfg(test)]
 mod tests;
 
-// ECMA-376 namespaces the audit understands.
+// ECMA-376 namespaces the audit understands: Transitional, plus the Strict
+// variants Excel writes for "Strict Open XML Spreadsheet" files. The OPC
+// relationships namespace and the Dublin Core / core-properties namespaces
+// are identical in both formats, so they need no Strict twin.
 const NS_X: &[u8] = b"http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const NS_X_STRICT: &[u8] = b"http://purl.oclc.org/ooxml/spreadsheetml/main";
 const NS_THREADED: &[u8] = b"http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
 const NS_DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const NS_CP: &[u8] = b"http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
 const NS_EP: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties";
+const NS_EP_STRICT: &[u8] = b"http://purl.oclc.org/ooxml/officeDocument/extendedProperties";
 const NS_R: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_R_STRICT: &[u8] = b"http://purl.oclc.org/ooxml/officeDocument/relationships";
 const NS_RELS: &[u8] = b"http://schemas.openxmlformats.org/package/2006/relationships";
+
+/// SpreadsheetML element namespace, Transitional or Strict.
+fn is_sml(ns: &[u8]) -> bool {
+    ns == NS_X || ns == NS_X_STRICT
+}
+
+/// The value of a relationship attribute (`r:id`, …), Transitional or Strict.
+fn attr_rel<'a>(el: &'a Element, local: &str) -> Option<&'a str> {
+    attr(el, NS_R, local).or_else(|| attr(el, NS_R_STRICT, local))
+}
 
 /// Cap on ZIP entries read: a package is a handful of parts, not millions.
 const MAX_PARTS: usize = 100_000;
 /// Cap on decompressed bytes read from a single part (zip-bomb guard).
 const MAX_PART_BYTES: u64 = 256 * 1024 * 1024;
+/// Cap on decompressed bytes read across all scanned parts: the per-part cap
+/// does not bound total memory, and deflate can compress ~1000:1.
+const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 /// Cap on XML elements walked in a single part.
 const MAX_XML_ELEMENTS: u64 = 2_000_000;
 
@@ -197,11 +216,25 @@ pub enum AuditError {
 /// Fails closed: unreadable or unparsable input is an [`AuditError`], never an
 /// empty finding list that looks like a clean bill of health.
 pub fn audit_bytes(bytes: &[u8]) -> Result<Vec<AuditFinding>, AuditError> {
-    let names = part_names(bytes)?;
+    // The archive is opened exactly once: re-opening it per part would
+    // re-parse the central directory every time (quadratic on hostile input).
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| AuditError::Zip(e.to_string()))?;
+    let mut total: u64 = 0;
+    let names = part_names(&mut archive)?;
     let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for name in names.iter().filter(|n| is_scanned_part(n)) {
-        if let Some(data) = read_part(bytes, name)? {
-            parts.insert(name.clone(), data);
+        let data = read_part(&mut archive, name, &mut total)?;
+        parts.insert(name.clone(), data);
+    }
+    // Legacy comment parts live at Excel-style paths (`xl/comments1.xml`);
+    // discover them through their relationships, not path prefixes.
+    let mut comment_targets = comment_part_targets(&parts)?;
+    comment_targets.sort();
+    comment_targets.dedup();
+    for target in &comment_targets {
+        if !parts.contains_key(target) {
+            let data = read_part(&mut archive, target, &mut total)?;
+            parts.insert(target.clone(), data);
         }
     }
 
@@ -212,13 +245,21 @@ pub fn audit_bytes(bytes: &[u8]) -> Result<Vec<AuditFinding>, AuditError> {
             return Err(AuditError::Xml("xl/workbook.xml".to_string(), "missing: not a spreadsheet package".to_string()));
         }
     };
+    // Fail closed on an unrecognized workbook vocabulary: skipping every
+    // element of a Strict (or otherwise unknown) workbook would report a
+    // false clean result.
+    if !is_sml(&root_namespace(workbook, "xl/workbook.xml")?) {
+        return Err(AuditError::Xml("xl/workbook.xml".to_string(), "unrecognized workbook namespace".to_string()));
+    }
     let sheet_names = scan_workbook(workbook, &names, &parts, &mut findings)?;
     for (part, data) in parts.iter().filter(|(n, _)| n.starts_with("xl/worksheets/") && n.ends_with(".xml")) {
         let sheet_label = sheet_names.get(part).map(|n| format!(" ({n})")).unwrap_or_default();
         scan_worksheet(part, &sheet_label, data, &mut findings)?;
     }
-    for (part, data) in parts.iter().filter(|(n, _)| n.starts_with("xl/comments/") && n.ends_with(".xml")) {
-        scan_comments(part, data, &mut findings)?;
+    for target in &comment_targets {
+        if let Some(data) = parts.get(target) {
+            scan_comments(target, data, &mut findings)?;
+        }
     }
     let persons = collect_persons(&parts)?;
     for (part, data) in parts.iter().filter(|(n, _)| n.starts_with("xl/threadedComments/") && n.ends_with(".xml")) {
@@ -238,10 +279,11 @@ pub fn audit_bytes(bytes: &[u8]) -> Result<Vec<AuditFinding>, AuditError> {
 }
 
 /// Parts the audit parses as XML. Everything else is only listed by name.
+/// Legacy comment parts are discovered through relationships (see
+/// [`comment_part_targets`]), not by path prefix.
 fn is_scanned_part(name: &str) -> bool {
     name == "xl/workbook.xml"
         || (name.starts_with("xl/worksheets/") && name.ends_with(".xml"))
-        || (name.starts_with("xl/comments/") && name.ends_with(".xml"))
         || (name.starts_with("xl/threadedComments/") && name.ends_with(".xml"))
         || (name.starts_with("xl/persons/") && name.ends_with(".xml"))
         || name == "docProps/core.xml"
@@ -249,9 +291,9 @@ fn is_scanned_part(name: &str) -> bool {
         || name.ends_with(".rels")
 }
 
-/// Every non-directory entry name in the ZIP, in archive order.
-fn part_names(bytes: &[u8]) -> Result<Vec<String>, AuditError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| AuditError::Zip(e.to_string()))?;
+/// Every non-directory entry name in the ZIP, in archive order. The archive
+/// is opened once by the caller and reused for every read.
+fn part_names(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Vec<String>, AuditError> {
     let len = archive.len();
     if len > MAX_PARTS {
         return Err(AuditError::Limit(format!("too many ZIP entries: {len}")));
@@ -267,21 +309,65 @@ fn part_names(bytes: &[u8]) -> Result<Vec<String>, AuditError> {
     Ok(names)
 }
 
-/// Read one part, capped against decompression bombs. `Ok(None)` when the part
-/// vanished between listing and reading (the archive is not re-read otherwise).
-fn read_part(bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>, AuditError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| AuditError::Zip(e.to_string()))?;
-    let mut file = match archive.by_name(name) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
+/// Read one part from the already-open archive, capped against decompression
+/// bombs — per part and cumulatively. Every read error is propagated: the
+/// input bytes are immutable, so a part cannot vanish between listing and
+/// reading, and skipping it would contradict the fail-closed contract.
+fn read_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, total: &mut u64) -> Result<Vec<u8>, AuditError> {
+    let mut file = archive.by_name(name).map_err(|e| AuditError::Zip(format!("{name}: {e}")))?;
     let mut data = Vec::new();
     let mut limited = (&mut file).take(MAX_PART_BYTES + 1);
     limited.read_to_end(&mut data).map_err(|e| AuditError::Zip(format!("{name}: {e}")))?;
     if data.len() as u64 > MAX_PART_BYTES {
         return Err(AuditError::Limit(format!("part too large: {name}")));
     }
-    Ok(Some(data))
+    *total = total.saturating_add(data.len() as u64);
+    if *total > MAX_TOTAL_BYTES {
+        return Err(AuditError::Limit(format!("package too large: over {MAX_TOTAL_BYTES} decompressed bytes across scanned parts")));
+    }
+    Ok(data)
+}
+
+/// The namespace URI of a part's root element, for fail-closed format checks.
+fn root_namespace(xml: &[u8], part: &str) -> Result<Vec<u8>, AuditError> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let (resolution, event) = reader.read_resolved_event_into(&mut buf).map_err(|e| AuditError::Xml(part.to_string(), e.to_string()))?;
+        match event {
+            Event::Start(_) | Event::Empty(_) => {
+                return Ok(match &resolution {
+                    ResolveResult::Bound(n) => n.0.to_vec(),
+                    _ => Vec::new(),
+                });
+            }
+            Event::Eof => return Err(AuditError::Xml(part.to_string(), "no root element".to_string())),
+            _ => {}
+        }
+    }
+}
+
+/// Legacy comment parts (`xl/comments1.xml`, …) discovered through
+/// relationships whose type ends in `/comments`: Excel writes them directly
+/// under `xl/`, not under `xl/comments/`.
+fn comment_part_targets(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<String>, AuditError> {
+    let mut targets = Vec::new();
+    for (name, xml) in parts.iter().filter(|(n, _)| n.ends_with(".rels")) {
+        let source_dir = source_dir_of_rels(name);
+        for_each_element(xml, name, &mut |el| {
+            if el.ns.as_slice() == NS_RELS
+                && el.local == "Relationship"
+                && let Some(target) = attr(el, b"", "Target")
+                && attr(el, b"", "TargetMode") != Some("External")
+                && attr(el, b"", "Type").is_some_and(|t| t.ends_with("/comments"))
+            {
+                targets.push(resolve_target(&source_dir, target));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(targets)
 }
 
 /// One element the walker saw: namespace URI, local name, decoded attributes.
@@ -429,6 +515,26 @@ fn texts_of(xml: &[u8], part: &str, ns: &[u8], local: &str) -> Result<Vec<String
                     current.push_str(&String::from_utf8_lossy(t.as_ref()));
                 }
             }
+            // Entity and character references arrive as their own events:
+            // without this, `Smith &amp; Jones` would read as `Smith  Jones`.
+            Event::GeneralRef(ref r) => {
+                if depth > 0 {
+                    if let Ok(Some(c)) = r.resolve_char_ref() {
+                        current.push(c);
+                    } else {
+                        match r.as_ref() {
+                            b"amp" => current.push('&'),
+                            b"lt" => current.push('<'),
+                            b"gt" => current.push('>'),
+                            b"quot" => current.push('"'),
+                            b"apos" => current.push('\''),
+                            other => {
+                                return Err(AuditError::Xml(part.to_string(), format!("unknown entity &{};", String::from_utf8_lossy(other))));
+                            }
+                        }
+                    }
+                }
+            }
             Event::Eof => break,
             _ => {}
         }
@@ -476,13 +582,13 @@ fn scan_workbook(
     let mut sheet_names: BTreeMap<String, String> = BTreeMap::new();
     let mut external_targets: BTreeSet<String> = BTreeSet::new();
     for_each_element(xml, "xl/workbook.xml", &mut |el| {
-        if el.ns.as_slice() != NS_X {
+        if !is_sml(&el.ns) {
             return Ok(());
         }
         match el.local.as_str() {
             "sheet" => {
                 let name = attr(el, b"", "name").unwrap_or("?");
-                if let Some(rid) = attr(el, NS_R, "id")
+                if let Some(rid) = attr_rel(el, "id")
                     && let Some(target) = rel_targets.get(rid)
                 {
                     sheet_names.insert(target.clone(), name.to_string());
@@ -509,7 +615,7 @@ fn scan_workbook(
                 }
             }
             "externalReference" => {
-                if let Some(rid) = attr(el, NS_R, "id") {
+                if let Some(rid) = attr_rel(el, "id") {
                     let target = rel_targets.get(rid).cloned().unwrap_or_else(|| format!("(unresolved {rid})"));
                     external_targets.insert(target);
                 }
@@ -535,7 +641,7 @@ fn scan_workbook(
 fn scan_worksheet(part: &str, sheet_label: &str, xml: &[u8], findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
     let here = format!("{part}{sheet_label}");
     for_each_element(xml, part, &mut |el| {
-        if el.ns.as_slice() != NS_X {
+        if !is_sml(&el.ns) {
             return Ok(());
         }
         match el.local.as_str() {
@@ -572,12 +678,13 @@ fn scan_worksheet(part: &str, sheet_label: &str, xml: &[u8], findings: &mut Vec<
     })
 }
 
-/// `xl/comments/*.xml`: legacy comments; `authorId` indexes the `authors` list
-/// (ECMA-376 §18.7.3).
+/// Legacy comment parts (`xl/comments1.xml`, …): `authorId` indexes the
+/// `authors` list (ECMA-376 §18.7.3). Transitional and Strict namespaces.
 fn scan_comments(part: &str, xml: &[u8], findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
-    let authors = texts_of(xml, part, NS_X, "author")?;
+    let mut authors = texts_of(xml, part, NS_X, "author")?;
+    authors.extend(texts_of(xml, part, NS_X_STRICT, "author")?);
     for_each_element(xml, part, &mut |el| {
-        if el.ns.as_slice() == NS_X
+        if is_sml(&el.ns)
             && el.local == "comment"
             && let Some(id) = attr(el, b"", "authorId")
         {
@@ -598,7 +705,7 @@ fn collect_persons(parts: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String,
     let mut persons = BTreeMap::new();
     for (part, xml) in parts.iter().filter(|(n, _)| n.starts_with("xl/persons/") && n.ends_with(".xml")) {
         for_each_element(xml, part, &mut |el| {
-            if (el.ns.as_slice() == NS_X || el.ns.as_slice() == NS_THREADED)
+            if (is_sml(&el.ns) || el.ns.as_slice() == NS_THREADED)
                 && el.local == "person"
                 && let (Some(id), Some(name)) = (attr(el, b"", "id"), attr(el, b"", "displayName"))
                 && !name.is_empty()
@@ -616,7 +723,7 @@ fn collect_persons(parts: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String,
 /// namespaces, since producers vary.
 fn scan_threaded_comments(part: &str, xml: &[u8], persons: &BTreeMap<String, String>, findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
     for_each_element(xml, part, &mut |el| {
-        if (el.ns.as_slice() == NS_X || el.ns.as_slice() == NS_THREADED)
+        if (is_sml(&el.ns) || el.ns.as_slice() == NS_THREADED)
             && el.local == "threadedComment"
             && let Some(pid) = attr(el, b"", "personId")
         {
@@ -648,7 +755,10 @@ fn scan_core_properties(xml: &[u8], findings: &mut Vec<AuditFinding>) -> Result<
 /// but still identifying — reported at `info` severity.
 fn scan_extended_properties(xml: &[u8], findings: &mut Vec<AuditFinding>) -> Result<(), AuditError> {
     for local in ["Company", "Manager"] {
-        for value in texts_of(xml, "docProps/app.xml", NS_EP, local)? {
+        // Transitional and Strict extended-properties namespaces.
+        let mut values = texts_of(xml, "docProps/app.xml", NS_EP, local)?;
+        values.extend(texts_of(xml, "docProps/app.xml", NS_EP_STRICT, local)?);
+        for value in values {
             let value = value.trim();
             if !value.is_empty() {
                 findings.push(AuditFinding::new(FindingKind::ExtendedProperties, format!("docProps/app.xml <{local}>"), value.to_string()));

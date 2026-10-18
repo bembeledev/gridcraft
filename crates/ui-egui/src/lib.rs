@@ -383,7 +383,11 @@ impl SheetApp {
         {
             self.commit_text_box_edit()?;
         }
+        // Before the first frame too (a control command, a host's file.new), new workbooks and
+        // sheets are named in the interface language; after a language change, at once.
+        self.sync_naming_language();
         if let Some(r) = self.run_ui_command(id, &params) {
+            self.sync_naming_language();
             return r;
         }
         let r = self.session.run(id, params);

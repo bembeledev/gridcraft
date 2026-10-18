@@ -219,3 +219,21 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
 }
+
+#[test]
+fn new_workbooks_and_sheets_follow_the_language_before_any_frame() {
+    let mut app = app();
+    app.ui.language = Language::Ka; // set before the first frame, as a saved preference is
+    app.run("file.new", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().title, "წიგნი2");
+    app.run("home.insertSheet", json!({})).unwrap();
+    assert!(app.session.active().unwrap().wb.sheet_index("ფურცელი2").is_some());
+    for (command, params, book) in [
+        ("app.language.set", json!({"language": "en"}), "Book"),
+        ("app.language.set", json!({"language": "ka"}), "წიგნი"),
+        ("app.language.english", json!({}), "Book"),
+    ] {
+        app.run(command, params).unwrap();
+        assert_eq!(app.session.default_names().0, book, "{command}");
+    }
+}

@@ -743,6 +743,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-credits"
+version = "0.1.0"
+source = "git+https://github.com/zuujiscom/craft-libs?rev=3d8dca51d78f8a875b379aec7a23afcd3ec30391#3d8dca51d78f8a875b379aec7a23afcd3ec30391"
+dependencies = [
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d#d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d"
@@ -1635,6 +1644,7 @@ version = "0.8.0"
 name = "gridcraft-ui-egui"
 version = "0.8.0"
 dependencies = [
+ "craft-credits",
  "craft-ui",
  "egui",
  "egui_kittest",
@@ -1648,7 +1658,6 @@ dependencies = [
  "serde_json",
  "skrifa",
  "sys-locale",
- "toml",
  "web-sys",
  "zbus",
 ]

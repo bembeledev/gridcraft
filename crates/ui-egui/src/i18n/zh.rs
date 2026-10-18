@@ -2,6 +2,8 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "AutoSave failed" => "自动保存失败",
+        "Your changes are still unsaved. Save the workbook, then turn AutoSave on again." => "更改尚未保存。请先保存工作簿，然后重新开启自动保存。",
         "Paste" => "粘贴",
         "Paste Values" => "粘贴值",
         "Paste Formulas" => "粘贴公式",

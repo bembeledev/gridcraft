@@ -1150,11 +1150,24 @@ impl SheetApp {
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
+            && self.session.active().is_some_and(|d| {
+                d.is_dirty()
+                    && d.path.as_deref().is_some_and(|p| gridcraft_engine::io::FileKind::from_path(p) == Some(gridcraft_engine::io::FileKind::Xlsx))
+            })
         {
             self.grid.last_autosave = now;
             self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
+            if let Err(error) = self.session.run("file.save", json!({})) {
+                self.grid.autosave = false;
+                self.message = Some((
+                    self.ui.language.tr("AutoSave failed").into(),
+                    format!(
+                        "{}\n\n{}",
+                        self.ui.language.tr("Your changes are still unsaved. Save the workbook, then turn AutoSave on again."),
+                        clean_error(&error.to_string())
+                    ),
+                ));
+            }
         }
         // Window title.
         if let Some(d) = self.session.active() {
@@ -1258,4 +1271,63 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod autosave_tests {
+    use super::*;
+
+    fn frame(app: &mut SheetApp) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        app.fonts_ready = true;
+        let mut output = ctx.run_ui(Default::default(), |ui| app.ui(ui));
+        output.textures_delta.clear();
+    }
+
+    fn app(path: &std::path::Path) -> SheetApp {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
+        let mut app = SheetApp::new(session, Services::default());
+        app.run("cell.set", json!({"cell":"A1", "input":"unsaved change"})).unwrap();
+        app.grid.autosave = true;
+        app
+    }
+
+    #[test]
+    fn autosave_failure_is_visible_and_stops_retrying() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-autosave-failure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let blocked = dir.join("book.xlsx");
+        std::fs::create_dir_all(&blocked).unwrap();
+        let mut app = app(&blocked);
+        frame(&mut app);
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(!app.grid.autosave, "failed AutoSave must stop retrying");
+        let message = app.message.as_ref().unwrap();
+        assert!(message.0.contains("AutoSave"));
+        assert!(message.1.contains("Save"));
+        app.message = None;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        assert!(app.message.is_none(), "failure must not reopen a dialog every frame");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn autosave_accepts_case_insensitive_macro_enabled_workbooks() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-autosave-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["book.XLSX", "book.xlsm", "book.XLTM"] {
+            let path = dir.join(name);
+            let mut app = app(&path);
+            frame(&mut app);
+            assert!(!app.session.active().unwrap().is_dirty(), "{name} was not saved");
+            let (back, _) = gridcraft_engine::io::open_bytes(name, &std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(back.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("unsaved change"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

@@ -415,14 +415,42 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    let tmp = format!("{path}.sctmp");
-    std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
-        // A write or rename that fails (full disk, the workbook locked by another app) leaves
-        // no temporary file beside the user's workbook.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let error = |e: std::io::Error| EngineError::Other(format!("{path}: {e}"));
+    let permissions = std::fs::metadata(path).ok().filter(|m| m.is_file()).map(|m| m.permissions());
+    // Create our own sibling before writing. A fixed name can overwrite another file or
+    // follow a symlink; create_new also protects against a name collision between writers.
+    for _ in 0..32 {
+        let tmp = format!("{path}.sctmp-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&tmp) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(error(e)),
+        };
+        let result = file.write_all(bytes).and_then(|()| {
+            if let Some(permissions) = &permissions {
+                file.set_permissions(permissions.clone())?;
+            }
+            file.sync_all()
+        });
+        drop(file);
+        let result = result.and_then(|()| std::fs::rename(&tmp, path));
+        if result.is_err() {
+            // Only remove a file this call created, never a pre-existing name or link.
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return result.map_err(error);
+    }
+    Err(error(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no unused temporary save filename")))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -552,13 +580,57 @@ mod tests {
         let blocked = dir.join("Book1.xlsx");
         std::fs::create_dir(&blocked).unwrap();
         assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
-        assert!(!dir.join("Book1.xlsx.sctmp").exists(), "the temporary file is removed");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the temporary file is removed");
         // An ordinary save still works and leaves only the workbook.
         let ok = dir.join("Book2.xlsx");
         write_file(ok.to_str().unwrap(), b"workbook").unwrap();
         assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
-        assert!(!dir.join("Book2.xlsx.sctmp").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn save_preserves_preexisting_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-collision-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        let other = dir.join("book.xlsx.sctmp");
+        std::fs::write(&other, b"unrelated file").unwrap();
+        write_file(path.to_str().unwrap(), b"new workbook").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new workbook");
+        assert_eq!(std::fs::read(&other).unwrap(), b"unrelated file");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_existing_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        std::fs::write(&path, b"old workbook").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_file(path.to_str().unwrap(), b"new workbook").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_does_not_follow_a_temporary_file_symlink() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        let other = dir.join("unrelated.txt");
+        std::fs::write(&other, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&other, dir.join("book.xlsx.sctmp")).unwrap();
+        write_file(path.to_str().unwrap(), b"new workbook").unwrap();
+        assert_eq!(std::fs::read(&other).unwrap(), b"keep me");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new workbook");
+        assert!(dir.join("book.xlsx.sctmp").is_symlink());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A minimal compound (CFB/OLE2) file — FAT in sector 0, directory in sector 1 — holding a

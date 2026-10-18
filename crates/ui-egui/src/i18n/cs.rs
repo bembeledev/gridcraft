@@ -557,14 +557,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Převést číslice kolem písmene „E“ na číslo v exponenciálním tvaru"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Vypnuto: 1244121406E6 zůstane textem a nezmění se na 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Převést souvislá písmena a čísla na datum",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft tento převod nikdy neprovádí: 12JAN2026 zůstane textem.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Nastavení převodu dat platí pro všechny sešity; neukládá se do souboru."
         }
         "Remove trailing zeros after the decimal separator" => "Odebrat koncové nuly za desetinným oddělovačem",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Vypnuto: 720.0 se zobrazí i uloží jako 720.0 a 3.10 jako 3.10 (buňka dostane číselný formát 0.0 nebo 0.00). Zůstane číslem. Nejde o možnost Excelu."
+        }
+        "Convert text that looks like a date or time to a date" => "Převést text, který vypadá jako datum nebo čas, na datum",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Vypnuto: 2.6.70, 3/4/2026 a 10:30 zůstanou textem tak, jak byly zapsány. Nejde o možnost Excelu; pokrývá i možnost Excelu „Převést souvislá písmena a čísla na datum“ (12JAN2026 je v GridCraftu vždy text)."
         }
         _ => return None,
     })

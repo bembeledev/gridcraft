@@ -420,12 +420,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "digits as text" => "位的数字保留为文本",
         "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "将字母“E”两侧的数字转换为科学记数法表示的数字",
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "关闭：1244121406E6 保持为文本，不会变成 1.24412E+15。",
-        "Convert continuous letters and numbers to a date" => "将连续的字母和数字转换为日期",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft 从不进行此转换：12JAN2026 保持为文本。",
         "Data conversion settings apply to every workbook; they are not saved in the file." => "数据转换设置适用于所有工作簿，不会保存在文件中。",
         "Remove trailing zeros after the decimal separator" => "删除小数分隔符后的尾随零",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "关闭：720.0 显示和保存为 720.0，3.10 为 3.10（单元格获得 0.0 或 0.00 数字格式）。它仍是数字。这不是 Excel 选项。"
+        }
+        "Convert text that looks like a date or time to a date" => "将看起来像日期或时间的文本转换为日期",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "关闭：2.6.70、3/4/2026 和 10:30 按原样保持为文本。这不是 Excel 选项；它也涵盖 Excel 的“将连续的字母和数字转换为日期”（在 GridCraft 中 12JAN2026 始终是文本）。"
         }
         _ => return None,
     })

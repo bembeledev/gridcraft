@@ -609,8 +609,6 @@ const JAPANESE: &[(&str, &str)] = &[
     ("digits as text", "桁"),
     ("Convert digits surrounding the letter \"E\" to a number in scientific notation", "文字「E」の前後の数字を指数表記の数値に変換する"),
     ("Off: 1244121406E6 stays text instead of becoming 1.24412E+15.", "オフ: 1244121406E6 は 1.24412E+15 にならず、文字列のままです。"),
-    ("Convert continuous letters and numbers to a date", "連続する文字と数字を日付に変換する"),
-    ("GridCraft never makes this conversion: 12JAN2026 stays text.", "GridCraft はこの変換を行いません: 12JAN2026 は文字列のままです。"),
     (
         "Data conversion settings apply to every workbook; they are not saved in the file.",
         "データ変換の設定はすべてのブックに適用され、ファイルには保存されません。",
@@ -619,6 +617,11 @@ const JAPANESE: &[(&str, &str)] = &[
     (
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option.",
         "オフ: 720.0 は 720.0、3.10 は 3.10 のまま表示・保存されます (セルに 0.0 または 0.00 の表示形式が設定されます)。数値のままです。Excel にはないオプションです。",
+    ),
+    ("Convert text that looks like a date or time to a date", "日付や時刻のように見える文字列を日付に変換する"),
+    (
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft).",
+        "オフ: 2.6.70、3/4/2026、10:30 は入力どおり文字列のままです。Excel にはないオプションで、Excel の「連続する文字と数字を日付に変換する」も兼ねます (GridCraft では 12JAN2026 は常に文字列です)。",
     ),
 ];
 

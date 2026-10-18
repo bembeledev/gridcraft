@@ -428,14 +428,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "digits as text" => "자리",
         "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "문자 'E' 앞뒤의 숫자를 지수 표기 숫자로 변환",
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "끄기: 1244121406E6은 1.24412E+15가 되지 않고 텍스트로 유지됩니다.",
-        "Convert continuous letters and numbers to a date" => "연속된 문자와 숫자를 날짜로 변환",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft는 이 변환을 하지 않습니다. 12JAN2026은 텍스트로 유지됩니다.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "데이터 변환 설정은 모든 통합 문서에 적용되며 파일에 저장되지 않습니다."
         }
         "Remove trailing zeros after the decimal separator" => "소수 구분 기호 뒤의 후행 0 제거",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "끄기: 720.0은 720.0으로, 3.10은 3.10으로 표시되고 저장됩니다(셀에 0.0 또는 0.00 숫자 서식이 지정됨). 숫자로 유지됩니다. Excel 옵션이 아닙니다."
+        }
+        "Convert text that looks like a date or time to a date" => "날짜나 시간처럼 보이는 텍스트를 날짜로 변환",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "끄기: 2.6.70, 3/4/2026, 10:30은 입력한 그대로 텍스트로 유지됩니다. Excel 옵션이 아니며, Excel의 '연속된 문자와 숫자를 날짜로 변환'도 포함합니다(GridCraft에서 12JAN2026은 항상 텍스트입니다)."
         }
         _ => return None,
     })

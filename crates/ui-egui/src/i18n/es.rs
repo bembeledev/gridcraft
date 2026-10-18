@@ -464,14 +464,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => {
             "Desactivado: 1244121406E6 se queda como texto en lugar de convertirse en 1.24412E+15."
         }
-        "Convert continuous letters and numbers to a date" => "Convertir letras y números continuos en una fecha",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nunca hace esta conversión: 12JAN2026 se queda como texto.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "La configuración de conversión de datos se aplica a todos los libros; no se guarda en el archivo."
         }
         "Remove trailing zeros after the decimal separator" => "Quitar los ceros finales después del separador decimal",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Desactivado: 720.0 se muestra y se guarda como 720.0, y 3.10 como 3.10 (la celda recibe el formato de número 0.0 o 0.00). Sigue siendo un número. No es una opción de Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Convertir en fecha el texto que parece una fecha o una hora",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Desactivado: 2.6.70, 3/4/2026 y 10:30 se quedan como texto, tal como se escribieron. No es una opción de Excel; también abarca la opción de Excel \"Convertir letras y números continuos en una fecha\" (12JAN2026 siempre es texto en GridCraft)."
         }
         _ => return None,
     })

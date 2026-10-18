@@ -432,16 +432,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Преобразовывать цифры вокруг буквы «E» в число в экспоненциальном представлении"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Выкл.: 1244121406E6 остаётся текстом и не становится 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Преобразовывать непрерывные буквы и цифры в дату",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => {
-            "GridCraft никогда не выполняет это преобразование: 12JAN2026 остаётся текстом."
-        }
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Параметры преобразования данных применяются ко всем книгам и не сохраняются в файле."
         }
         "Remove trailing zeros after the decimal separator" => "Удалять конечные нули после десятичного разделителя",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Выкл.: 720.0 отображается и сохраняется как 720.0, а 3.10 — как 3.10 (ячейка получает числовой формат 0.0 или 0.00). Значение остаётся числом. Этого параметра нет в Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Преобразовывать в дату текст, похожий на дату или время",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Выкл.: 2.6.70, 3/4/2026 и 10:30 остаются текстом в исходном виде. Этого параметра нет в Excel; он также заменяет параметр Excel «Преобразовывать непрерывные буквы и цифры в дату» (в GridCraft 12JAN2026 всегда текст)."
         }
         _ => return None,
     })

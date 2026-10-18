@@ -433,14 +433,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Ziffern um den Buchstaben „E“ in eine Zahl in wissenschaftlicher Schreibweise konvertieren"
         }
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Aus: 1244121406E6 bleibt Text, statt zu 1.24412E+15 zu werden.",
-        "Convert continuous letters and numbers to a date" => "Fortlaufende Buchstaben und Zahlen in ein Datum konvertieren",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nimmt diese Konvertierung nie vor: 12JAN2026 bleibt Text.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Die Einstellungen zur Datenkonvertierung gelten für alle Arbeitsmappen; sie werden nicht in der Datei gespeichert."
         }
         "Remove trailing zeros after the decimal separator" => "Nachgestellte Nullen nach dem Dezimaltrennzeichen entfernen",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Aus: 720.0 wird als 720.0 angezeigt und gespeichert, 3.10 als 3.10 (die Zelle erhält das Zahlenformat 0.0 oder 0.00). Es bleibt eine Zahl. Keine Excel-Option."
+        }
+        "Convert text that looks like a date or time to a date" => "Text, der wie ein Datum oder eine Uhrzeit aussieht, in ein Datum konvertieren",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Aus: 2.6.70, 3/4/2026 und 10:30 bleiben Text, wie geschrieben. Keine Excel-Option; sie deckt auch Excels „Fortlaufende Buchstaben und Zahlen in ein Datum konvertieren“ ab (12JAN2026 ist in GridCraft immer Text)."
         }
         _ => return None,
     })

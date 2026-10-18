@@ -428,14 +428,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "digits as text" => "cifara",
         "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "Pretvori cifre oko slova „E“ u broj u naučnoj notaciji",
         "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Isključeno: 1244121406E6 ostaje tekst umesto da postane 1.24412E+15.",
-        "Convert continuous letters and numbers to a date" => "Pretvori uzastopna slova i brojeve u datum",
-        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nikada ne pravi ovu konverziju: 12JAN2026 ostaje tekst.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Podešavanja konverzije podataka važe za svaku radnu svesku; ne čuvaju se u datoteci."
         }
         "Remove trailing zeros after the decimal separator" => "Ukloni završne nule posle decimalnog separatora",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Isključeno: 720.0 se prikazuje i čuva kao 720.0, a 3.10 kao 3.10 (ćelija dobija format broja 0.0 ili 0.00). Ostaje broj. Nije opcija programa Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Pretvori u datum tekst koji izgleda kao datum ili vreme",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Isključeno: 2.6.70, 3/4/2026 i 10:30 ostaju tekst, onako kako su napisani. Nije opcija programa Excel; pokriva i Excelovu opciju „Pretvori uzastopna slova i brojeve u datum“ (12JAN2026 je u GridCraftu uvek tekst)."
         }
         _ => return None,
     })

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (Hungarian interface catalog and language selection) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -35,6 +35,19 @@ right-to-left sheets and full complex-script support. Part of
   through egui/winit and is unverified for Chinese, Japanese and Korean.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
+## Hungarian interface (2026-10-18)
+
+Hungarian (`hu`, shown as **Magyar**) is available in the interface-language selector.
+`hu-HU` and `hu_HU.UTF-8` system locales select it on first launch; an explicit choice is saved
+with the other UI preferences. Its 971 catalog entries cover all 970 distinct keys in the
+existing language catalogs plus the Macros dialog introduction. The Macros dialog now looks
+up its explanatory text and step counts too, without translating user-defined script names.
+
+This is interface-only localization: formulas, argument separators, number/date formats,
+command IDs and workbook content are unchanged. Catalog coverage is not complete UI coverage:
+strings that do not use the translation lookup, including engine/import warnings and parts
+of dialogs and task panes, still appear in English. Native-speaker review remains pending.
+
 ## Languages
 
 UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
@@ -43,6 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
+| Hungarian | hu | 971 catalog entries (~44% of the historical ~2,200 estimate) | where translation lookup is wired; Macros dialog included | Latin | pending | interface catalog; English formula syntax | not estimated |
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
@@ -78,6 +92,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Add Hungarian selection, locale detection and 971 catalog entries; localize the Macros dialog; keep formula syntax unchanged |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

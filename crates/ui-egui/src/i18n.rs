@@ -13,6 +13,7 @@ mod cs;
 mod de;
 mod es;
 mod fr;
+mod hu;
 mod ko;
 mod pt;
 mod ru;
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Hu,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Hu];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Hu => "Magyar",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Hu => "hu",
         }
     }
 
@@ -91,6 +96,7 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "hu" => Some(Self::Hu),
             _ => None,
         }
     }
@@ -129,6 +135,7 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Hu => hu::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -611,6 +618,7 @@ mod tests {
             assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
             assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
             assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
+            assert!(hu::translate(english).is_some_and(|text| !text.is_empty()), "missing Hungarian: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
         assert_eq!(Language::Zh.tr("Data"), "数据");
@@ -664,6 +672,9 @@ mod tests {
 
     #[test]
     fn tags_reduce_to_a_supported_language() {
+        assert_eq!(Language::from_tag("hu-HU"), Some(Language::Hu));
+        assert_eq!(Language::from_tag("hu_HU.UTF-8"), Some(Language::Hu));
+        assert_eq!(Language::parse(" HU "), Some(Language::Hu));
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
@@ -713,5 +724,23 @@ mod tests {
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+
+    #[test]
+    fn hungarian_translates_interface_only_and_preserves_formula_syntax() {
+        let lang = Language::Hu;
+        assert_eq!(lang.name(), "Magyar");
+        assert_eq!(lang.tr("Home"), "Kezdőlap");
+        assert_eq!(lang.tr("Save As"), "Mentés másként");
+        assert_eq!(lang.tr("Format Cells|Fill"), "Kitöltés");
+        assert_eq!(lang.tr("Orientation"), "Szövegirány");
+        assert_eq!(lang.tr("Page Layout|Orientation"), "Tájolás");
+        assert_eq!(lang.tr("{n} days ago").replace("{n}", "3"), "3 napja");
+        assert_eq!(lang.tr("Unknown context|Unknown label"), "Unknown label");
+        for text in ["Ági!A1", "=SUM(A1,1.5)", "file.save", "Saját munkafüzet"] {
+            assert_eq!(lang.tr(text), text);
+        }
+        assert_eq!(lang.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+        assert_eq!(saved_language(&serde_json::json!({"language": "hu"})), Some(lang));
     }
 }

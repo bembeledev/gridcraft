@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
+use gridcraft_core::{CellError, Value, compare_numbers, compare_text, text_eq};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -173,7 +173,10 @@ impl Criterion {
                         Value::Text(t) => Some(t.to_string()),
                         _ => None,
                     };
-                    let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                    // Without wildcards the equality is the canonical one of `compare_text`
+                    // (NFC = NFD, accents kept); patterns with wildcards keep matching per char.
+                    let plain = !pat.contains(['*', '?', '~']);
+                    let m = cell_text.is_some_and(|t| if plain { text_eq(pat, &t) } else { wildcard_match(pat, &t) });
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {

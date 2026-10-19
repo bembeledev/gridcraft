@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use gridcraft_core::{Array, CellError, Value, sort_compare};
+use gridcraft_core::{Array, CellError, Value, fold_key, sort_compare};
 
 use crate::util::{A, MAX_CELLS, R, arg, array_val, as_array, has, num, opt_bool, scalar};
 use crate::{Arg, Ctx, FnSpec, VAR};
@@ -71,12 +71,13 @@ fn pad_arg(args: &[Arg], i: usize) -> Value {
     }
 }
 
-/// Hashable key for case-insensitive equality of values.
+/// Hashable key for equality of values; text is compared case-insensitively and canonically
+/// (NFC = NFD), like `compare_text`.
 fn key_of(v: &Value) -> String {
     match v {
         Value::Empty => "e".into(),
         Value::Number(n) => format!("n{}", if *n == 0.0 { 0u64 } else { n.to_bits() }),
-        Value::Text(t) => format!("t{}", t.to_lowercase()),
+        Value::Text(t) => format!("t{}", fold_key(t)),
         Value::Bool(b) => format!("b{b}"),
         Value::Error(e) => format!("x{}", e.code()),
         Value::Array(a) => key_of(a.data.first().unwrap_or(&Value::Empty)),
@@ -1304,5 +1305,13 @@ mod tests {
         assert!(2300 * w > crate::util::MAX_CELLS && h * w > crate::util::MAX_CELLS);
         let wide: Vec<f64> = (0..2300).map(f64::from).collect();
         is_err(ev("PIVOTBY", vec![av(row(&[1.0])), av(row(&wide)), av(row(&wide)), t("SUM")]), CellError::Num);
+    }
+
+    #[test]
+    fn unique_merges_nfc_and_nfd() {
+        let nfc = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+        let nfd = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+        let v = arr(vec![vec![tv(nfc)], vec![tv(nfd)], vec![tv("nguy\u{1ec5}n th\u{1ecb} ng\u{1ecd}c \u{e1}nh")]]);
+        assert_eq!(rows_of(&ev("UNIQUE", vec![av(v)])), vec![vec![tv(nfc)]]);
     }
 }

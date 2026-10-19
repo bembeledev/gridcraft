@@ -803,4 +803,18 @@ mod tests {
         is_err(ev("ADDRESS", vec![n(1.0), n(16385.0)]), CellError::Value);
         is_err(ev("ADDRESS", vec![n(1.0), n(1.0), n(5.0)]), CellError::Value);
     }
+
+    const NFC: &str = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+    const NFD: &str = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+
+    #[test]
+    fn match_and_xlookup_find_nfd_needle() {
+        let hay = arr(vec![vec![tv("An")], vec![tv(NFC)]]);
+        close(ev("MATCH", vec![t(NFD), rf(hay), n(0.0)]), 2.0);
+        let keys = arr(vec![vec![tv(NFC)]]);
+        let vals = arr(vec![vec![tv("ok")]]);
+        is_text(ev("XLOOKUP", vec![t(NFD), rf(keys), rf(vals)]), "ok");
+        let table = arr(vec![vec![tv(NFC), nv(1.0)]]);
+        close(ev("VLOOKUP", vec![t(NFD), rf(table), n(2.0), b(false)]), 1.0);
+    }
 }

@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 
-use gridcraft_core::{Array, CellError, Value, compare_text};
+use gridcraft_core::{Array, CellError, Value, text_eq};
 
 use crate::criteria::Criterion;
 use crate::util::{A, R, as_array, has, num_val};
@@ -20,7 +20,7 @@ use crate::{Arg, Ctx, FnSpec};
 fn find_column(db: &Array, label: &str) -> Option<usize> {
     let label = label.trim();
     (0..db.cols).find(|&c| match db.get(0, c) {
-        Some(Value::Text(t)) => compare_text(t.trim(), label).is_eq(),
+        Some(Value::Text(t)) => text_eq(t.trim(), label),
         Some(Value::Number(n)) => gridcraft_core::number_to_text(*n) == label,
         _ => false,
     })
@@ -442,5 +442,14 @@ mod tests {
         is_err(get("d"), CellError::NA);
         is_text(get("j"), "Text");
         is_err(get("k"), CellError::Value);
+    }
+
+    #[test]
+    fn field_label_matches_nfd() {
+        let nfc = "Th\u{1ecb}";
+        let nfd = "Thi\u{323}";
+        let db = arr(vec![vec![tv("Tree"), tv(nfc)], vec![tv("A"), nv(2.0)], vec![tv("B"), nv(3.0)]]);
+        let crit = arr(vec![vec![tv("Tree")], vec![Value::Empty]]);
+        close(ev("DSUM", vec![rf(db), t(nfd), rf(crit)]), 5.0);
     }
 }

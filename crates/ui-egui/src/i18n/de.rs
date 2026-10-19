@@ -444,6 +444,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
             "Aus: 2.6.70, 3/4/2026 und 10:30 bleiben Text, wie geschrieben. Keine Excel-Option; sie deckt auch Excels „Fortlaufende Buchstaben und Zahlen in ein Datum konvertieren“ ab (12JAN2026 ist in GridCraft immer Text)."
         }
+        // grid.rs cell and row/column header context menus.
+        "Cut" => "Ausschneiden",
+        "Copy" => "Kopieren",
+        "Insert…" => "Einfügen…",
+        "Delete…" => "Löschen…",
+        "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
+        "New Comment" => "Neuer Kommentar",
+        "Pick From Drop-down List…" => "Aus Dropdownliste auswählen…",
+        "Define Name…" => "Namen definieren…",
+        "Link…" => "Link…",
+        "Hide" => "Ausblenden",
+        "Unhide" => "Einblenden",
         _ => return None,
     })
 }

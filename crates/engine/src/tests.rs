@@ -254,6 +254,22 @@ fn undo_redo() {
 }
 
 #[test]
+fn redo_selects_the_redone_cell() {
+    // #1855: type into A1..A3, click A1, undo, redo: the selection follows the edit to A3.
+    let mut s = s();
+    for (cell, text) in [("A1", "first"), ("A2", "second"), ("A3", "third")] {
+        s.execute("selection.set", json!({"cell": cell})).unwrap();
+        s.execute("cell.set", json!({"cell": cell, "input": text})).unwrap();
+    }
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.a1(), "A3");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::from("third"));
+    assert_eq!(s.doc().unwrap().selection.a1(), "A3");
+}
+
+#[test]
 fn shape_text_edit_undo_redo_and_noop() {
     let mut s = s();
     let id = s.execute("insert.textBox", json!({"at": "C4", "width": 210, "height": 90, "text": "Original"})).unwrap()["shape"].clone();
@@ -1204,6 +1220,26 @@ fn table_rename_keeps_a_defined_name_with_the_same_name() {
     assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], "=Data");
     assert_eq!(s.execute("cell.get", json!({"cell": "F1"})).unwrap()["formula"], "=SUM(Later[Qty])");
     assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(100.0), Value::Number(7.0)));
+}
+
+#[test]
+fn table_names_are_limited_to_255_characters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [7]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A2", "header": true, "name": "Original"})).unwrap();
+
+    let name_255 = "ع".repeat(255);
+    s.execute("table.rename", json!({"table": "Original", "name": name_255})).unwrap();
+    assert!(s.doc().unwrap().wb.table(&"ع".repeat(255)).is_some());
+
+    let name_256 = "ع".repeat(256);
+    let error = s.execute("table.rename", json!({"table": &"ع".repeat(255), "name": name_256})).unwrap_err();
+    assert!(error.to_string().contains("not valid"), "{error}");
+    assert!(s.doc().unwrap().wb.table(&"ع".repeat(255)).is_some());
+
+    let name_200 = "ع".repeat(200);
+    s.execute("table.rename", json!({"table": &"ع".repeat(255), "name": name_200})).unwrap();
+    assert!(s.doc().unwrap().wb.table(&"ع".repeat(200)).is_some());
 }
 
 #[test]
@@ -3509,6 +3545,10 @@ fn typed_decimal_places_show_as_written() {
     s.execute("home.numberFormat", json!({"range": "B1", "code": "0.000"})).unwrap();
     s.execute("cell.set", json!({"cell": "B1", "input": "2.0"})).unwrap();
     assert_eq!(shown(&s, "B1"), "2.000");
+    // Ctrl+Enter gives a cell that already holds a value the 0.0 too, like a blank one.
+    s.execute("cell.set", json!({"cell": "E2", "input": "1"})).unwrap();
+    s.execute("range.fill", json!({"range": "E1:E2", "input": "720.0"})).unwrap();
+    assert_eq!((shown(&s, "E1"), shown(&s, "E2")), ("720.0".to_string(), "720.0".to_string()));
     // Removed again (the default): General, as before.
     s.execute("app.dataConversion", json!({"removeTrailingZeros": true})).unwrap();
     s.execute("cell.set", json!({"cell": "C1", "input": "720.0"})).unwrap();
@@ -3590,4 +3630,53 @@ fn paste_special_validation_moves_relative_references() {
     s.execute("edit.pasteSpecial", json!({"what": "validation", "at": "C3"})).unwrap();
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
+}
+
+#[test]
+fn csv_as_text_keeps_identifier_columns_as_written() {
+    let csv = "gtin,zip,flag,day\n8435392892278,01234,TRUE,2026-03-04\n";
+    let open = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"name": "feed.csv", "base64": crate::io::base64_encode(csv.as_bytes())});
+        if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+            p.extend(extra.clone());
+        }
+        s.execute("file.open", p).unwrap();
+    };
+    let value = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+    // By default fields are typed like typed input: the leading zero is lost and the GTIN is a number.
+    let mut s = s();
+    open(&mut s, json!({}));
+    assert!(value(&mut s, "A2").is_number());
+    assert_eq!(value(&mut s, "B2").as_f64(), Some(1234.0));
+    // With csvAsText every field stays the text the file holds, and saves back unchanged.
+    let mut s = self::s();
+    open(&mut s, json!({"csvAsText": true}));
+    for (cell, text) in [("A2", "8435392892278"), ("B2", "01234"), ("C2", "TRUE"), ("D2", "2026-03-04")] {
+        assert_eq!(value(&mut s, cell), json!(text), "{cell}");
+    }
+    let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
+    assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
+}
+
+#[test]
+fn csv_as_text_and_the_conversion_options_both_reach_file_open() {
+    let csv = "8435392892278,01234,TRUE,2026-03-04\n";
+    let open = |s: &mut Session, as_text: bool| {
+        s.execute("file.open", json!({"name": "feed.csv", "base64": crate::io::base64_encode(csv.as_bytes()), "csvAsText": as_text})).unwrap();
+    };
+    let value = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+    // The options keep the identifiers as text and still convert the rest.
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": false, "keepFirst15Digits": false})).unwrap();
+    open(&mut s, false);
+    assert_eq!(value(&mut s, "A1"), json!("8435392892278"));
+    assert_eq!(value(&mut s, "B1"), json!("01234"));
+    assert_eq!(value(&mut s, "C1"), json!(true));
+    assert!(value(&mut s, "D1").is_number(), "the date still converts");
+    // csvAsText keeps every field as text whatever the options say.
+    s.execute("app.dataConversion", json!({"all": true})).unwrap();
+    open(&mut s, true);
+    for (cell, text) in [("A1", "8435392892278"), ("B1", "01234"), ("C1", "TRUE"), ("D1", "2026-03-04")] {
+        assert_eq!(value(&mut s, cell), json!(text), "{cell}");
+    }
 }

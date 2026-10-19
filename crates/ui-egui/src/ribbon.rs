@@ -112,20 +112,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title — truncated with "…" so it never overlaps the side controls.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            let title_str = format!("{title}{}", if dirty { " •" } else { "" });
-            // Reserve ~300 px on each side for the toolbar controls (a comfortable heuristic;
-            // the exact widths vary with window size).
-            let max_title_w = (rect.width() - 600.0).max(80.0);
-            let mut job = egui::text::LayoutJob::simple_singleline(title_str, theme::ui_bold(13.0), t.text);
-            job.wrap.max_width = max_title_w;
-            job.wrap.max_rows = 1;
-            job.wrap.break_anywhere = true;
-            job.wrap.overflow_character = Some('…');
-            let galley = ui.fonts_mut(|f| f.layout_job(job));
-            ui.painter().galley(rect.center() - vec2(galley.size().x * 0.5, galley.size().y * 0.5), galley, t.text);
+            // The title goes in the gap between the left controls (just laid out) and the right
+            // ones, so it is painted after them: a fixed reservation can't know their real widths,
+            // and at the 640 px minimum window it paints over them.
+            let left_end = ui.min_rect().right();
+            let mut right_start = rect.right();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
@@ -161,7 +152,22 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, "view.darkMode", json!({}));
                 }
                 theme.context_menu(|ui| theme_choices(app, ui));
+                right_start = ui.min_rect().left();
             });
+            let gap = right_start - left_end;
+            if gap > 0.0 {
+                let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+                let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+                let mut job =
+                    egui::text::LayoutJob::simple_singleline(format!("{title}{}", if dirty { " •" } else { "" }), theme::ui_bold(13.0), t.text);
+                job.wrap.max_width = gap;
+                job.wrap.max_rows = 1;
+                job.wrap.break_anywhere = true;
+                job.wrap.overflow_character = Some('…');
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                let center = pos2((left_end + right_start) / 2.0, rect.center().y);
+                ui.painter().galley(center - vec2(galley.size().x * 0.5, galley.size().y * 0.5), galley, t.text);
+            }
         });
     });
 }

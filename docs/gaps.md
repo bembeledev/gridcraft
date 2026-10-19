@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (Linux font discovery and role fallback use fontconfig) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -161,13 +161,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
 
 ### 24. Fonts and look (U)
-- Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
-  chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
+- Font weights beyond regular/bold (#168), system font list on macOS/Windows (#4; Linux uses
+  fontconfig), Calibri metrics (#29), macOS chrome (#169, #170), Linux title bar (#54), icon
+  consistency across apps (#173). **Estimate:** 7–12 h.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | §24: Linux font discovery uses `fc-list` and the ribbon lists installed families; directory scanning remains the fallback (#1231) |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

@@ -1,9 +1,9 @@
 //! Space on a checkbox cell toggles it instead of starting a text edit (#1951).
 
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -35,12 +35,35 @@ fn value(h: &Harness, a1: &str) -> gridcraft_engine::core::Value {
     sh.value(CellRef::parse(a1).unwrap())
 }
 
+fn point(h: &Harness, a1: &str) -> Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse(a1).unwrap()).center()
+}
+
 /// Press Space the way winit reports it: a Key press followed by the Text(" ") it types.
 fn press_space(h: &mut Harness) {
-    h.input_mut().events.push(Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::Key {
+        key: Key::Space,
+        physical_key: Some(Key::Space),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
     h.input_mut().events.push(Event::Text(" ".to_string()));
-    h.input_mut().events.push(Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::Key {
+        key: Key::Space,
+        physical_key: Some(Key::Space),
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
     h.run_steps(2);
+}
+
+/// All events land in one frame, before the next `run_steps`.
+fn push(h: &mut Harness, ev: Event) {
+    h.input_mut().events.push(ev);
 }
 
 #[test]
@@ -64,4 +87,34 @@ fn space_still_starts_edit_on_a_plain_cell() {
     let mut h = harness(s);
     press_space(&mut h);
     assert!(h.state().editor.is_some(), "Space on a plain cell types a space, as before");
+}
+
+#[test]
+fn arrow_off_the_checkbox_then_space_edits_the_new_cell() {
+    // Arrow off the checkbox, then Space: it must apply to the plain cell the arrow landed
+    // on, not the checkbox the selection started on (#1951 review).
+    let mut h = harness(checkbox_book());
+    // Click a plain cell so the grid has focus (clicking A1 would toggle the checkbox),
+    // then move the selection onto the checkbox via command.
+    let at = point(&h, "C1");
+    push(&mut h, Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    push(&mut h, Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.state_mut().session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    push(&mut h, Event::Key { key: Key::ArrowRight, physical_key: Some(Key::ArrowRight), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    press_space(&mut h);
+    assert_eq!(value(&h, "A1"), gridcraft_engine::core::Value::Bool(false), "the checkbox was not toggled");
+    assert!(h.state().editor.is_some(), "Space on the plain cell B1 starts an edit");
+}
+
+#[test]
+fn checkbox_cell_holding_text_still_edits() {
+    // A checkbox-formatted cell with text can't be toggled, so Space must not be swallowed (#1951 review).
+    let mut s = checkbox_book();
+    s.execute("cell.set", json!({"cell": "A1", "input": "hello"})).unwrap();
+    let mut h = harness(s);
+    press_space(&mut h);
+    assert_eq!(value(&h, "A1").display(), "hello", "text is untouched");
+    assert!(h.state().editor.is_some(), "Space starts an edit when the toggle cannot apply");
 }

@@ -3508,6 +3508,10 @@ fn typed_decimal_places_show_as_written() {
     s.execute("home.numberFormat", json!({"range": "B1", "code": "0.000"})).unwrap();
     s.execute("cell.set", json!({"cell": "B1", "input": "2.0"})).unwrap();
     assert_eq!(shown(&s, "B1"), "2.000");
+    // Ctrl+Enter gives a cell that already holds a value the 0.0 too, like a blank one.
+    s.execute("cell.set", json!({"cell": "E2", "input": "1"})).unwrap();
+    s.execute("range.fill", json!({"range": "E1:E2", "input": "720.0"})).unwrap();
+    assert_eq!((shown(&s, "E1"), shown(&s, "E2")), ("720.0".to_string(), "720.0".to_string()));
     // Removed again (the default): General, as before.
     s.execute("app.dataConversion", json!({"removeTrailingZeros": true})).unwrap();
     s.execute("cell.set", json!({"cell": "C1", "input": "720.0"})).unwrap();

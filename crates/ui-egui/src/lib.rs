@@ -31,6 +31,7 @@ pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
+pub mod text_measure;
 pub mod theme;
 pub mod widgets;
 
@@ -320,7 +321,9 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
-        ctx.set_fonts(theme::font_definitions_for_language(language));
+        let defs = theme::font_definitions_for_language(language);
+        text_measure::install(&defs);
+        ctx.set_fonts(defs);
         theme::apply(ctx, dark);
     }
 
@@ -1022,7 +1025,9 @@ impl SheetApp {
                 let used = self.used_fonts();
                 self.fonts_seen = seen;
                 if used != self.fonts_bound {
-                    ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
+                    let defs = theme::font_definitions_with(self.ui.language, &used);
+                    text_measure::install(&defs);
+                    ctx.set_fonts(defs);
                     self.fonts_bound = used;
                     self.fonts_rebind = true;
                     ctx.request_repaint();

@@ -88,3 +88,28 @@ fn a_word_wider_than_the_column_takes_several_lines() {
     assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("", 11.0, false, w), 1.0);
     assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aa", 11.0, false, 0.0), 2.0, "a zero width can't loop or panic");
 }
+
+/// With a UI's measurer installed, a wrapped row takes the measured height (plus the grid's
+/// margin), not the per-character estimate; one measured line keeps the font's line height.
+#[test]
+fn wrapped_text_row_uses_the_installed_measurer() {
+    use gridcraft_engine::measure::{TextMeasure, set_text_measurer};
+    use std::rc::Rc;
+    let height = |text: &str| {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
+        s.doc().unwrap().wb.active().unwrap().row_height(0)
+    };
+    let default_one_line = height("one");
+    set_text_measurer(Some(Rc::new(|q: &TextMeasure<'_>| {
+        assert!(q.wrap_width.is_some_and(|w| w > 0.0), "wrapped text is measured at the column's width");
+        Some(if q.text == "one" { (18.0, 1) } else { (200.0, 11) })
+    })));
+    let measured = height("many words that wrap");
+    let one_line = height("one");
+    set_text_measurer(None);
+    assert_eq!(measured, 205.0, "the measured height and the grid's margin");
+    assert_eq!(one_line, default_one_line, "a single measured line keeps the line height");
+}

@@ -486,8 +486,10 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         let size = st.font.size;
         let line = (size * 1.8).round().max(default * size / gridcraft_model::DEFAULT_FONT_SIZE);
         let mut lines = 1.0f32;
+        let mut measured = None;
         if !cell.value.is_empty() || cell.formula.is_some() {
-            let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
+            let at = CellRef::new(row, c);
+            let text = crate::display::cell_text(wb, sh, at);
             let explicit = text.lines().count().max(1) as f32;
             lines = if st.align.wrap {
                 let w = sh.col_width(c).max(1.0) - 6.0;
@@ -495,10 +497,30 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
             } else {
                 explicit
             };
+            // A UI's measurer lays the text out in the drawing font, wrapped where the grid wraps
+            // it (2.5 px padding a side, the indent and a filter button), instead of estimating.
+            if st.align.wrap || explicit > 1.0 {
+                let wrap_width =
+                    st.align.wrap.then(|| (sh.col_width(c) - 5.0 - f32::from(st.align.indent) * 9.0 - sh.filter_button_space(at)).max(4.0));
+                measured = crate::measure::measure(&crate::measure::TextMeasure {
+                    text: &text,
+                    font: &st.font.name,
+                    size,
+                    bold: st.font.bold,
+                    italic: st.font.italic,
+                    wrap_width,
+                });
+            }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
         }
-        let h = if lines > 1.0 { (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil() } else { line };
+        let h = match measured {
+            // The grid insets wrapped text 1.5 px top and bottom; this keeps the estimate's margin.
+            Some((text_h, n)) if n > 1 => (text_h + 5.0).ceil(),
+            Some(_) => line,
+            None if lines > 1.0 => (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil(),
+            None => line,
+        };
         need = need.max(h.min(546.0));
     }
     let Some(shm) = wb.sheet_mut(si) else { return };

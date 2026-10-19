@@ -995,14 +995,16 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
         _ => vec![],
     };
     // A range source (e.g. a whole column) drops duplicates, keeping first-seen order (#1932).
-    // A typed literal list keeps the entries as the user wrote them.
-    let mut seen: Vec<String> = Vec::with_capacity(items.len());
+    // A typed literal list keeps the entries as the user wrote them. The set mirrors `out` with
+    // lower-cased keys so the membership test stays O(1) for whole-column sources.
+    let mut out: Vec<String> = Vec::with_capacity(items.len());
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::with_capacity(items.len());
     for it in items {
-        if !seen.iter().any(|s| s.eq_ignore_ascii_case(&it)) {
-            seen.push(it);
+        if seen.insert(it.to_lowercase()) {
+            out.push(it);
         }
     }
-    seen
+    out
 }
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.

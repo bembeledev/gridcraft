@@ -3546,3 +3546,26 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
+
+#[test]
+fn csv_as_text_and_the_conversion_options_both_reach_file_open() {
+    let csv = "8435392892278,01234,TRUE,2026-03-04\n";
+    let open = |s: &mut Session, as_text: bool| {
+        s.execute("file.open", json!({"name": "feed.csv", "base64": crate::io::base64_encode(csv.as_bytes()), "csvAsText": as_text})).unwrap();
+    };
+    let value = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+    // The options keep the identifiers as text and still convert the rest.
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": false, "keepFirst15Digits": false})).unwrap();
+    open(&mut s, false);
+    assert_eq!(value(&mut s, "A1"), json!("8435392892278"));
+    assert_eq!(value(&mut s, "B1"), json!("01234"));
+    assert_eq!(value(&mut s, "C1"), json!(true));
+    assert!(value(&mut s, "D1").is_number(), "the date still converts");
+    // csvAsText keeps every field as text whatever the options say.
+    s.execute("app.dataConversion", json!({"all": true})).unwrap();
+    open(&mut s, true);
+    for (cell, text) in [("A1", "8435392892278"), ("B1", "01234"), ("C1", "TRUE"), ("D1", "2026-03-04")] {
+        assert_eq!(value(&mut s, cell), json!(text), "{cell}");
+    }
+}

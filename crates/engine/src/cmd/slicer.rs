@@ -5,7 +5,7 @@
 //! [`super::data::apply_filter`] hides the rows. Creating a slicer (`insert.slicer` /
 //! `table.insertSlicer`) selects everything, i.e. applies no filter.
 
-use gridcraft_core::{CellRef, fold_key, text_eq};
+use gridcraft_core::{CellRef, TextSet, fold_key, text_eq};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -64,13 +64,12 @@ pub fn column_values(wb: &Workbook, sheet: usize, table: &str, column: &str) -> 
 /// A slicer's tiles as `(value, selected)`, for the UI. `selected` is true for every tile when the
 /// slicer has no filter (`selected == None`).
 pub fn slicer_items(wb: &Workbook, sheet: usize, sl: &Slicer) -> Vec<(String, bool)> {
+    // The selection folded once (the UI asks for the tiles every frame).
+    let selected = sl.selected.as_ref().map(TextSet::new);
     column_values(wb, sheet, &sl.table, &sl.column)
         .into_iter()
         .map(|v| {
-            let on = match &sl.selected {
-                None => true,
-                Some(set) => set.iter().any(|x| text_eq(x, &v)),
-            };
+            let on = selected.as_ref().is_none_or(|set| set.contains(&v));
             (v, on)
         })
         .collect()
@@ -184,8 +183,9 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
             }
             None => set.push(value.clone()),
         }
-        // Everything selected is the same as no filter.
-        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| text_eq(x, a))) { None } else { Some(set) }
+        // Everything selected is the same as no filter (the selection folded once, not per tile).
+        let chosen = TextSet::new(&set);
+        if set.len() == all.len() && all.iter().all(|a| chosen.contains(a)) { None } else { Some(set) }
     } else {
         // Single click: show only this value; clicking the sole selected value clears the filter.
         match &current {

@@ -439,3 +439,80 @@ fn xlsx_pivot_collapsed_item_named_in_nfd_round_trips() {
     let labels = computed_labels(&back, si, &pt);
     assert_eq!(labels.len() as u32, collapsed_height, "{labels:?}");
 }
+
+#[test]
+fn xlsx_pivot_over_the_nfd_twin_of_a_header_round_trips_on_its_column() {
+    // Two headers equal but for encoding: the engine keeps them apart (source headers match by
+    // ASCII case), so the saved cache must too, and the field must resolve to its own column.
+    let tn = "Tên";
+    for (header, other) in [(nfd(tn), "x"), (tn.to_string(), "a")] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[tn, nfd(tn), "Qty"], ["a", "x", 1], ["b", "y", 2]]})).unwrap();
+        s.execute("selection.set", json!({"range": "A1"})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": [header], "values": ["Qty"]})).unwrap();
+        let shown = pivot_column(&s);
+        assert_eq!(shown.get(1).map(String::as_str), Some(other), "{shown:?}");
+        let (_, back, si, pt) = save_and_reopen(&s);
+        assert_eq!(pt.rows.iter().map(|f| f.source_col.clone()).collect::<Vec<_>>(), vec![header.clone()]);
+        let labels = computed_labels(&back, si, &pt);
+        assert_eq!(labels, shown, "the reopened PivotTable reads the same column");
+    }
+}
+
+/// The first `n` (at most 2 560) of a list of distinct Vietnamese full names.
+fn many_names(n: usize) -> Vec<String> {
+    let fam = ["Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Phan", "Vũ", "Võ", "Đặng", "Bùi", "Đỗ", "Hồ", "Ngô", "Dương", "Lý"];
+    let mid = ["Văn", "Thị", "Ngọc", "Minh", "Hữu", "Đức", "Thanh", "Quốc"];
+    let giv = [
+        "Anh", "Ánh", "Bình", "Cường", "Dũng", "Hà", "Hương", "Lan", "Long", "Mai", "Nam", "Phương", "Quân", "Sơn", "Thảo", "Trung", "Tuấn", "Uyên",
+        "Ưng", "Yến",
+    ];
+    let mut out = Vec::new();
+    for f in fam {
+        for m in mid {
+            for g in giv {
+                out.push(format!("{f} {m} {g}"));
+            }
+        }
+    }
+    out.truncate(n);
+    out
+}
+
+#[test]
+fn value_filter_over_2000_names_folds_each_cell_once() {
+    // Review C1: every row used to be compared with every chosen value (two folds per pair, 3 s
+    // per apply and per menu frame at this size). The chosen values now go into a `TextSet`
+    // once (one fold each, pinned by core's `text_set_folds_each_text_once`) and each cell is
+    // folded once to look it up; the answers are the same relation as before.
+    let names = many_names(2_000);
+    let mut rows = vec![json!(["Tên"])];
+    rows.extend(names.iter().map(|n| json!([n])));
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A2001"})).unwrap();
+    // Every name but the first, chosen in NFD or upper case.
+    let chosen: Vec<String> = names.iter().skip(1).enumerate().map(|(i, n)| if i % 2 == 0 { nfd(n) } else { n.to_uppercase() }).collect();
+    let r = s.execute("data.filterBy", json!({"column": "A", "values": chosen})).unwrap();
+    assert_eq!(r["hiddenRows"], 1);
+    assert_eq!(hidden_rows(&s), vec![1]);
+    let list = crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0);
+    assert_eq!(list.len(), 2_000);
+    let off: Vec<&String> = list.iter().filter(|(_, on)| !on).map(|(t, _)| t).collect();
+    assert_eq!(off, vec![&names[0]]);
+}
+
+#[test]
+fn match_case_tie_break_reads_letters_in_canonical_form() {
+    // Review M1: `ÁNH` and `Ánh` tie ignoring case; the first letter is `Á` in one encoding and
+    // `A` + U+0301 in the other, so the case of `N`/`n` must decide: lowercase first.
+    for (upper, lower) in [("ÁNH".to_string(), nfd("Ánh")), (nfd("ÁNH"), "Ánh".to_string())] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[upper.clone()], [lower.clone()]]})).unwrap();
+        s.execute("data.sort", json!({"range": "A1:A2", "header": false, "matchCase": true, "keys": [{"column": "A"}]})).unwrap();
+        assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::from(lower.as_str()), Value::from(upper.as_str())), "{upper:?} {lower:?}");
+    }
+}

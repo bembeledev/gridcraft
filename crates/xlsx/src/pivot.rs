@@ -65,6 +65,13 @@ fn same(a: &str, b: &str) -> bool {
     gridcraft_core::text_eq(a, b)
 }
 
+/// The field among those `keep` accepts that a PivotTable names `name`: the one whose name the
+/// engine reads it as (equal but for ASCII case, like `pivot::Source::col`), else one equal by
+/// [`same`] (the name typed in another case or encoding).
+fn find_field(fields: &[CField], name: &str, keep: impl Fn(&CField) -> bool) -> Option<usize> {
+    fields.iter().position(|f| keep(f) && f.name.eq_ignore_ascii_case(name)).or_else(|| fields.iter().position(|f| keep(f) && same(&f.name, name)))
+}
+
 fn func_name(f: PivotFunc) -> &'static str {
     match f {
         PivotFunc::Sum => "sum",
@@ -425,7 +432,11 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     let sh = wb.sheet(si)?;
     let mut fields: Vec<CField> = Vec::new();
-    // Lower-case names taken, and the next suffix for each header (linear for repeated headers).
+    // Names taken, and the next suffix for each header (linear for repeated headers). Field
+    // names are the engine's (`pivot::read_source`): a header repeated but for ASCII case gets a
+    // suffix, while headers equal only under `same` (NFC `Tên`, NFD `Tên`; `Ă`, `ă`) stay apart
+    // as the engine keeps them, so a PivotTable over either column saves and reopens on it
+    // ([`find_field`] tries that exact name before `same`).
     let mut taken = std::collections::HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
     for (k, c) in (r.start.col..=r.end.col).enumerate() {
@@ -434,13 +445,13 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             h = format!("Column{}", k + 1);
         }
         let mut n = h.clone();
-        let mut i = next_suffix.get(&h.to_lowercase()).copied().unwrap_or(2);
-        while taken.contains(&n.to_lowercase()) {
+        let mut i = next_suffix.get(&h.to_ascii_lowercase()).copied().unwrap_or(2);
+        while taken.contains(&n.to_ascii_lowercase()) {
             n = format!("{h}{i}");
             i += 1;
         }
-        next_suffix.insert(h.to_lowercase(), i);
-        taken.insert(n.to_lowercase());
+        next_suffix.insert(h.to_ascii_lowercase(), i);
+        taken.insert(n.to_ascii_lowercase());
         fields.push(CField {
             name: n,
             col: Some(k as u32),
@@ -452,7 +463,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             formula: None,
         });
     }
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = |fields: &[CField], name: &str| find_field(fields, name, |f| f.col.is_some());
 
     // Records (rows that aren't entirely blank), read once.
     let mut rows: Vec<u32> = Vec::new();
@@ -772,7 +783,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
 
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let nf = c.fields.len();
-    let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find_db = |name: &str| find_field(&c.fields, name, |f| f.col.is_some());
     let row_idx: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let col_idx: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.
@@ -899,7 +910,11 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let is_page = axis == Some("axisPage");
         // Hidden items; never hide every item (a field needs one visible item).
         let mut hide: Vec<bool> = match filter.and_then(|f| f.selected.as_ref()) {
-            Some(sel) if !(is_page && sel.len() == 1) => labels.iter().map(|l| !sel.iter().any(|x| same(x, l))).collect(),
+            Some(sel) if !(is_page && sel.len() == 1) => {
+                // The selection folded once (the relation of `same`), each item label once.
+                let sel = gridcraft_core::TextSet::new(sel);
+                labels.iter().map(|l| !sel.contains(l)).collect()
+            }
             _ => vec![false; labels.len()],
         };
         if !hide.is_empty() && hide.iter().all(|h| *h) {

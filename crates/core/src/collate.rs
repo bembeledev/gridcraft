@@ -42,12 +42,13 @@
 
 //! Canonical decomposition and combining classes for collation.
 //!
-//! The collation key (`fold_key`, `compare_text`) must give the same order to a letter typed precomposed (`ế`,
-//! U+1EBF) and typed as base + marks (`e` U+0302 U+0301), and to marks of different combining classes
-//! typed in either order (`a` U+0302 U+0323 and `a` U+0323 U+0302). Only the Latin letters
-//! U+00C0..=U+024F and U+1E00..=U+1EFF and the marks U+0300..=U+036F are covered. [`canonical`] turns text into the one form the
-//! key builder reads: fully decomposed (canonical decomposition, flattened) and with each run of
-//! combining marks put in canonical order (UAX #15 canonical ordering).
+//! The collation key (`fold_key`, `compare_text`) must give the same order to a letter typed
+//! precomposed (`ế`, U+1EBF) and typed as base + marks (`e` U+0302 U+0301), and to marks of
+//! different combining classes typed in either order (`a` U+0302 U+0323 and `a` U+0323 U+0302).
+//! Only the Latin letters U+00C0..=U+024F and U+1E00..=U+1EFF and the marks U+0300..=U+036F are
+//! covered. [`canonical`] turns text into the one form the key builder reads: fully decomposed
+//! (canonical decomposition, flattened) and with each run of combining marks put in canonical
+//! order (UAX #15 canonical ordering).
 //!
 //! The tables cover the Latin letters in U+00C0..=U+024F and U+1E00..=U+1EFF (497 characters
 //! that decompose) and the 111 combining marks of U+0300..=U+036F that have a nonzero combining
@@ -712,8 +713,9 @@ fn decompose(c: char) -> Option<&'static str> {
 }
 
 /// `s` with every character in the table fully decomposed and each run of combining marks put in
-/// canonical order (what `EXACT` compares: NFC and NFD text give the same result). Case is kept and characters outside the table are kept as they are. A run of
-/// more than 32 marks keeps its input order. ASCII text comes back unchanged.
+/// canonical order (what `EXACT` compares: NFC and NFD text give the same result). Case is kept
+/// and characters outside the table are kept as they are. A run of more than 32 marks keeps its
+/// input order. ASCII text comes back unchanged.
 pub fn canonical(s: &str) -> String {
     if s.is_ascii() {
         return s.to_string();
@@ -785,15 +787,26 @@ fn mark_code(c: char) -> u16 {
 /// character is lowercased first, so one whose lowercase is a precomposed letter (the Angstrom
 /// sign U+212B, lowercase `å`) is decomposed too. Either way NFC and NFD text give the same chars.
 fn push_folded(c: char, out: &mut Vec<char>) {
+    fold_char(c, |x| out.push(x));
+}
+
+/// [`push_folded`] without a buffer: hands each char of the folded form of `c` to `emit`.
+fn fold_char(c: char, mut emit: impl FnMut(char)) {
     if let Some(d) = decompose(c) {
-        out.extend(d.chars().map(lower_char));
+        d.chars().map(lower_char).for_each(emit);
         return;
     }
     let lowered = lower_char(c);
     match decompose(lowered) {
-        Some(d) => out.extend(d.chars()),
-        None => out.push(lowered),
+        Some(d) => d.chars().for_each(emit),
+        None => emit(lowered),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`fold_key`] ran on this thread (tests only: proves a caller folds once).
+    static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The form two strings must share to be equal as text: lowercased one char to one char, fully
@@ -801,6 +814,8 @@ fn push_folded(c: char, out: &mut Vec<char>) {
 /// [`compare_text`] and [`text_eq`] exactly when their `fold_key`s are equal, so it is the key to
 /// group, deduplicate and look up by (`HashMap`, `BTreeMap`). It never changes the user's text.
 pub fn fold_key(s: &str) -> String {
+    #[cfg(test)]
+    FOLDS.with(|n| n.set(n.get().saturating_add(1)));
     if s.is_ascii() {
         return s.to_ascii_lowercase();
     }
@@ -819,6 +834,60 @@ pub fn text_eq(a: &str, b: &str) -> bool {
         return a.eq_ignore_ascii_case(b);
     }
     fold_key(a) == fold_key(b)
+}
+
+/// `text_eq(s, other)` with `other` already folded (`folded == fold_key(other)`), so a needle
+/// compared with many cells is folded once. It allocates nothing unless `s` holds a combining mark
+/// U+0300..=U+036F of its own: precomposed letters are folded char by char as they are read, and
+/// the comparison stops at the first char that differs. (Each letter of the tables decomposes to
+/// a base letter and marks already in canonical order, so only marks typed separately can need
+/// the reordering of [`fold_key`]; text holding one is folded whole.)
+pub fn text_eq_prefolded(s: &str, folded: &str) -> bool {
+    if s.is_ascii() {
+        return s.eq_ignore_ascii_case(folded);
+    }
+    // U+0300..=U+036F are the UTF-8 sequences CC 80..=CD AF; a CC or CD lead byte (U+0300..=U+037F)
+    // takes the full path.
+    if s.bytes().any(|b| b == 0xcc || b == 0xcd) {
+        return fold_key(s) == folded;
+    }
+    let mut want = folded.chars();
+    for c in s.chars() {
+        let mut same = true;
+        fold_char(c, |x| same &= want.next() == Some(x));
+        if !same {
+            return false;
+        }
+    }
+    want.next().is_none()
+}
+
+/// A set of texts under [`text_eq`]: each text is folded once when it goes in, and a probe once
+/// when it is looked up, so testing `n` cells against `k` chosen values is `n + k` folds, not
+/// `n * k` comparisons (AutoFilter value lists, slicer and PivotTable selections).
+#[derive(Debug, Clone, Default)]
+pub struct TextSet(std::collections::HashSet<String>);
+
+impl TextSet {
+    /// The set of `items`, compared by [`text_eq`].
+    pub fn new<I: IntoIterator<Item = S>, S: AsRef<str>>(items: I) -> TextSet {
+        TextSet(items.into_iter().map(|t| fold_key(t.as_ref())).collect())
+    }
+
+    /// Whether some text in the set is [`text_eq`] to `s`.
+    pub fn contains(&self, s: &str) -> bool {
+        self.0.contains(&fold_key(s))
+    }
+
+    /// How many distinct texts (under [`text_eq`]) the set holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// The weights `compare_text` compares, in order.
@@ -1496,5 +1565,71 @@ mod tests {
                 assert_eq!(ends_with_prefolded(h, &k), ends_with_folded(h, n), "{h:?} {n:?}");
             }
         }
+    }
+
+    fn folds() -> usize {
+        FOLDS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn text_eq_prefolded_equals_text_eq() {
+        let mut rng = Rng(0x5eed_0f0f_d1ab_1e00);
+        // Every letter the tables decompose, both cases, against its NFD spelling and its
+        // neighbours: the streaming fold must agree with `fold_key` letter by letter.
+        let letters: Vec<char> = DECOMPOSITION.iter().map(|&(c, _)| c).collect();
+        for &c in &letters {
+            for x in [c, c.to_uppercase().next().unwrap_or(c), lower_char(c)] {
+                let x = x.to_string();
+                for y in [x.clone(), canonical(&x), x.to_uppercase(), "a".to_string(), letters[rng.below(letters.len())].to_string()] {
+                    assert_eq!(text_eq_prefolded(&x, &fold_key(&y)), text_eq(&x, &y), "{x:?} {y:?}");
+                    assert_eq!(text_eq_prefolded(&y, &fold_key(&x)), text_eq(&y, &x), "{y:?} {x:?}");
+                }
+            }
+        }
+        // Random text (loose marks, any scalar, Vietnamese pieces) against re-encoded and
+        // re-cased copies of itself, prefixes, and other random text.
+        for i in 0..30_000 {
+            let a = random_text(&mut rng);
+            let b = match i % 4 {
+                0 => reencode(&mut rng, &a),
+                1 => a.to_uppercase(),
+                2 => a.chars().take(rng.below(4)).collect(),
+                _ => random_text(&mut rng),
+            };
+            assert_eq!(text_eq_prefolded(&a, &fold_key(&b)), text_eq(&a, &b), "{a:?} {b:?}");
+            assert_eq!(text_eq_prefolded(&b, &fold_key(&a)), text_eq(&a, &b), "{b:?} {a:?}");
+        }
+        let marks = "a".to_string() + &"\u{323}\u{302}".repeat(5_000);
+        let big = "Nguyễn Văn ".repeat(100_000);
+        let cases: [&str; 10] = ["", "\u{301}", "a\u{301}\u{301}", "\u{10FFFF}", "İ", "i\u{307}", "\u{212b}", "å", &marks, &big];
+        for a in cases {
+            for b in cases {
+                assert_eq!(text_eq_prefolded(a, &fold_key(b)), text_eq(a, b), "{a:.20?} {b:.20?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_set_folds_each_text_once() {
+        let names: Vec<String> = (0..2_000).map(|i| format!("Nguyễn Văn Ánh {i}")).collect();
+        let before = folds();
+        let set = TextSet::new(names.iter().skip(1));
+        assert_eq!(folds() - before, names.len() - 1, "one fold per value put in");
+        assert_eq!(set.len(), names.len() - 1);
+        let before = folds();
+        let hits = names.iter().filter(|n| set.contains(n)).count();
+        assert_eq!(hits, names.len() - 1);
+        assert_eq!(folds() - before, names.len(), "one fold per probe");
+        // The same relation as `text_eq`: case and NFD spellings are members, accents are kept.
+        assert!(set.contains(&canonical(&names[1].to_uppercase())));
+        assert!(!set.contains("Nguyen Van Anh 1"));
+        assert!(!set.contains(&names[0]));
+        assert!(TextSet::new(["Hà", "HA\u{300}"]).len() == 1 && TextSet::default().is_empty());
+        // Comparing with a folded needle folds nothing when the text has no loose marks.
+        let k = fold_key("Nguyễn Văn Ánh");
+        let before = folds();
+        assert!(text_eq_prefolded("NGUYỄN VĂN ÁNH", &k));
+        assert!(!text_eq_prefolded("Nguyễn Văn Anh", &k));
+        assert_eq!(folds(), before);
     }
 }

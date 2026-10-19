@@ -62,7 +62,10 @@ right-to-left sheets and full complex-script support. Part of
   `crates/core/src/collate.rs` is case-insensitive, treats a letter typed precomposed and typed as
   base plus combining marks as the same text (`ế` U+1EBF equals `e` U+0302 U+0301, and marks of
   different combining classes match in either order), and puts accented letters next to their base
-  letter (`Ánh` beside `Anh`, ties broken by the accent) instead of after `z`. Equality is the
+  letter (`Ánh` beside `Anh`, ties broken by the accent) instead of after `z`. Accent-only ties
+  are broken by the code point of the combining mark (`hà` < `há`: grave U+0300 before acute
+  U+0301; `hâ` < `hă`), which is not ICU's root order (acute before grave): this order is
+  language-neutral, not a tailored one. Equality is the
   same in `=`, `COUNTIF`/`SUMIF`/`COUNTIFS`, `MATCH`/`XMATCH`/`XLOOKUP`/`VLOOKUP`, `UNIQUE`,
   `SWITCH`, D-function field labels, Remove Duplicates, AutoFilter and Slicer lists, data
   validation lists, conditional formatting (duplicates, text rules), PivotTable items and
@@ -76,8 +79,9 @@ right-to-left sheets and full complex-script support. Part of
   and Replace still match one character at a time, so `COUNTIF(r,"Nguyễn*")` and the begins-with
   criteria of D-functions do not unify NFC and NFD, and Advanced Filter header labels use
   canonical equality while the engine's PivotTable source-header lookup and table column names
-  keep ASCII-case matching (the XLSX pivot writer matches field names with canonical equality,
-  `xlsx/src/pivot.rs` `same()`).
+  keep ASCII-case matching. The XLSX pivot writer names cache fields as the engine does (headers
+  equal only under canonical equality stay apart) and resolves a field by that exact name first,
+  then by canonical equality (`xlsx/src/pivot.rs` `find_field`, `same()`).
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -143,7 +147,7 @@ language (none so far) and of localized function names.
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
-| 2026-10-19 | minor | Text comparison: NFC equals NFD and accented Latin letters sort next to their base letter in functions, filters, Remove Duplicates, PivotTables and validation (scope U+00C0–U+024F, U+1E00–U+1EFF, marks U+0300–U+036F; wildcards and Find / Replace not covered yet) |
+| 2026-10-19 | minor | Text comparison: NFC equals NFD and accented Latin letters sort next to their base letter in functions, filters, Remove Duplicates, PivotTables and validation (scope U+00C0–U+024F, U+1E00–U+1EFF, marks U+0300–U+036F; wildcards and Find / Replace not covered yet). Accent-only ties follow the mark's code point (`hà` < `há`), unlike ICU root |
 | 2026-10-17 | minor | Vietnamese catalog (`i18n/vi.rs`, every key in the master table); `vi` locale tags resolve to Vietnamese |
 | 2026-10-17 | minor | Lao text falls back to an installed Lao face (`sys-lao`) instead of tofu boxes |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |

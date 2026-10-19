@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef, TextKey, Value, fold_key, sort_compare, text_eq, text_key};
+use gridcraft_core::{CellRef, RangeRef, TextKey, TextSet, Value, fold_key, sort_compare, text_eq, text_eq_prefolded, text_key};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -287,31 +287,45 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
         let styles = &cx.wb.styles;
-        let key_val = |i: u32, k: &SortKey| -> (Value, u32) {
+        // A custom list ranks text by its first entry equal to it (`text_eq`): the list is
+        // folded once into a map, and each cell is ranked once below, not on every comparison.
+        let lists: Vec<Option<std::collections::HashMap<String, u32>>> = keys
+            .iter()
+            .map(|k| {
+                k.list.as_ref().map(|list| {
+                    let mut pos = std::collections::HashMap::new();
+                    for (i, x) in list.iter().enumerate() {
+                        pos.entry(fold_key(x)).or_insert(u32::try_from(i).unwrap_or(u32::MAX));
+                    }
+                    pos
+                })
+            })
+            .collect();
+        // The value and its rank: the colour for a sort by colour, the list position for a
+        // custom list (`u32::MAX` when not in it), 0 otherwise.
+        let key_val = |i: u32, ki: usize, k: &SortKey| -> (Value, u32) {
             let c = line(i, k.col);
             let v = sh.value(c);
-            let color = match k.by.as_str() {
-                "cellColor" => {
+            let rank = match (k.by.as_str(), lists.get(ki).and_then(Option::as_ref)) {
+                ("values", Some(pos)) => v.as_text().and_then(|t| pos.get(&fold_key(t)).copied()).unwrap_or(u32::MAX),
+                ("cellColor", _) => {
                     styles.get(sh.style_id(c)).fill.fg.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX)
                 }
-                "fontColor" => {
+                ("fontColor", _) => {
                     styles.get(sh.style_id(c)).font.color.resolve(&theme).map(|[r, g, b]| u32::from_be_bytes([0, r, g, b])).unwrap_or(u32::MAX)
                 }
                 _ => 0,
             };
-            (v, color)
+            (v, rank)
         };
         let mut order: Vec<u32> = (0..n).collect();
-        let keyed: Vec<Vec<(Value, u32)>> = (0..n).map(|i| keys.iter().map(|k| key_val(i, k)).collect()).collect();
+        let keyed: Vec<Vec<(Value, u32)>> = (0..n).map(|i| keys.iter().enumerate().map(|(ki, k)| key_val(i, ki, k)).collect()).collect();
         order.sort_by(|&a, &b| {
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
                 let (vb, cb) = &keyed[b as usize][ki];
-                let o = if k.by != "values" {
+                let o = if k.by != "values" || k.list.is_some() {
                     ca.cmp(cb)
-                } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| text_eq(x, t))).unwrap_or(usize::MAX);
-                    pos(va).cmp(&pos(vb))
                 } else if case && va.is_text() && vb.is_text() {
                     sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
                 } else {
@@ -611,14 +625,21 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)? `folded` is `fold_key(crit)`,
-/// computed once per criterion for the begins/ends/contains tests.
+/// computed once per criterion for the equality and begins/ends/contains tests. Only what `op`
+/// needs is computed: text is ordered (a key per side) for `<`, `<=`, `>` and `>=` alone.
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, folded: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
-    let cmp = match (v.as_f64(), num) {
+    let nums = v.as_f64().zip(num);
+    let cmp = || match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
         // A numeric ordering comparison only matches numbers; blanks and text never do.
         (None, Some(_)) if matches!(op, "<" | "<=" | ">" | ">=") => None,
         _ => Some(gridcraft_core::compare_text(text, crit)),
+    };
+    // `compare_text(text, crit) == Equal` exactly when `text_eq(text, crit)`.
+    let eq = || match nums {
+        Some((a, b)) => a.partial_cmp(&b) == Some(Ordering::Equal),
+        None => text_eq_prefolded(text, folded),
     };
     let wild = || super::edit::wildcard(&text.to_lowercase(), &crit.to_lowercase());
     match op {
@@ -626,20 +647,20 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, folded: &str) -> bool 
             if crit.contains(['*', '?']) {
                 wild()
             } else {
-                cmp == Some(Ordering::Equal)
+                eq()
             }
         }
         "<>" => {
             if crit.contains(['*', '?']) {
                 !wild()
             } else {
-                cmp != Some(Ordering::Equal)
+                !eq()
             }
         }
-        ">" => cmp == Some(Ordering::Greater),
-        "<" => cmp == Some(Ordering::Less),
-        ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
-        "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
+        ">" => cmp() == Some(Ordering::Greater),
+        "<" => cmp() == Some(Ordering::Less),
+        ">=" => matches!(cmp(), Some(Ordering::Greater | Ordering::Equal)),
+        "<=" => matches!(cmp(), Some(Ordering::Less | Ordering::Equal)),
         // Case- and encoding-blind, matching whole letters (`e` is not in `Nguyễn`).
         "beginsWith" => gridcraft_core::starts_with_prefolded(text, folded),
         "endsWith" => gridcraft_core::ends_with_prefolded(text, folded),
@@ -679,7 +700,16 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
-    // Custom criteria folded once (for begins/ends/contains), not once per row.
+    // Value lists folded once into a set (a fold per cell, not a comparison per cell and value).
+    let value_sets: Vec<Option<TextSet>> = af
+        .criteria
+        .iter()
+        .map(|(_, c)| match c {
+            FilterCriterion::Values { values, .. } => Some(TextSet::new(values)),
+            _ => None,
+        })
+        .collect();
+    // Custom criteria folded once (for equality and begins/ends/contains), not once per row.
     let folded: Vec<(String, String)> = af
         .criteria
         .iter()
@@ -695,11 +725,12 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let v = sh.value(c);
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
-                FilterCriterion::Values { values, blanks } => {
+                FilterCriterion::Values { blanks, .. } => {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| text_eq(x, &text) || text_eq(x, &v.display()))
+                        // Always `Some`: built from these criteria above.
+                        value_sets.get(i).and_then(Option::as_ref).is_some_and(|set| set.contains(&text) || set.contains(&v.display()))
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -780,6 +811,11 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    // The chosen values folded once (the UI calls this every frame while the menu is open).
+    let chosen: Option<(TextSet, bool)> = match selected {
+        Some(FilterCriterion::Values { values, blanks }) => Some((TextSet::new(values), *blanks)),
+        _ => None,
+    };
     // One entry per group key, showing the first text met. Text is grouped by `fold_key`, so
     // "Abc", "abc" and an NFD spelling are one entry; other values by their key and shown text.
     let mut seen: std::collections::HashSet<(u8, i64, String, String)> = std::collections::HashSet::new();
@@ -789,22 +825,22 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         let v = sh.value(c);
         let blank = filter_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = match selected {
-            Some(FilterCriterion::Values { values, blanks }) => {
+        let on = match &chosen {
+            Some((set, blanks)) => {
                 if blank {
                     *blanks
                 } else {
-                    values.iter().any(|x| text_eq(x, &t))
+                    set.contains(&t)
                 }
             }
-            _ => true,
+            None => true,
         };
         let (class, num, k) = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
         let key = if !blank && v.is_text() { (class, num, fold_key(&t), String::new()) } else { (class, num, k, t.clone()) };
         if seen.insert(key.clone()) {
             // The sort key is built once per entry, not per comparison (the list is rebuilt
             // every frame while the filter menu is open).
-            let tk = v.is_text().then(|| text_key(&t));
+            let tk = (!blank && v.is_text()).then(|| text_key(&t));
             entries.push((key, tk, t, on));
         }
     }
@@ -816,9 +852,18 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
-/// before uppercase at the first letter that differs in case.
+/// before uppercase at the first letter that differs in case. Non-ASCII text is compared in its
+/// canonical (decomposed) form, so a precomposed `Á` and `A` + U+0301 line up and only the case
+/// of the base letters decides: `Ánh` sorts before `ÁNH` whichever of them is NFC.
 fn case_order(a: &str, b: &str) -> Ordering {
-    a.chars().zip(b.chars()).find(|(x, y)| x != y).map_or(Ordering::Equal, |(x, y)| y.is_lowercase().cmp(&x.is_lowercase()))
+    fn first_case_difference(a: impl Iterator<Item = char>, b: impl Iterator<Item = char>) -> Ordering {
+        a.zip(b).find(|(x, y)| x != y).map_or(Ordering::Equal, |(x, y)| y.is_lowercase().cmp(&x.is_lowercase()))
+    }
+    if a.is_ascii() && b.is_ascii() {
+        return first_case_difference(a.chars(), b.chars());
+    }
+    let (a, b) = (gridcraft_core::canonical(a), gridcraft_core::canonical(b));
+    first_case_difference(a.chars(), b.chars())
 }
 
 /// Class, number and text of a filter-list value. Text gets no key here: `filter_values` groups

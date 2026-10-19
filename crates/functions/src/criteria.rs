@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text, text_eq};
+use gridcraft_core::{CellError, Value, compare_numbers, compare_text, fold_key, text_eq_prefolded};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -24,8 +24,10 @@ enum Operand {
     Number(f64),
     Bool(bool),
     Error(CellError),
-    /// Text (lower-cased chars kept for wildcard matching).
-    Text(String),
+    /// Text as typed (wildcard matching lowercases it char by char), and its [`fold_key`] when it
+    /// holds no `*`, `?` or `~`: then `=` and `<>` are the canonical equality of `compare_text`
+    /// (NFC = NFD, accents kept), tested against the criterion folded once here, not per cell.
+    Text(String, Option<String>),
     /// A criterion cut to its first 255 UTF-16 units in the middle of a surrogate pair: the
     /// complete characters before the cut, followed (in Excel) by a lone high surrogate.
     ///
@@ -118,7 +120,9 @@ impl Criterion {
         } else if let Some(e) = CellError::parse(rest) {
             Operand::Error(e)
         } else {
-            Operand::Text(rest.to_string())
+            // Not `has_wildcards`: a `~` escape keeps the per-char wildcard path too.
+            let plain = !rest.contains(['*', '?', '~']);
+            Operand::Text(rest.to_string(), plain.then(|| fold_key(rest)))
         };
         Criterion { op, operand, bare_empty: false }
     }
@@ -166,17 +170,18 @@ impl Criterion {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => match self.op {
+            Operand::Text(pat, folded) => match self.op {
                 Op::Eq | Op::Ne => {
                     // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                    let cell_text = match &v {
-                        Value::Text(t) => Some(t.to_string()),
-                        _ => None,
-                    };
                     // Without wildcards the equality is the canonical one of `compare_text`
                     // (NFC = NFD, accents kept); patterns with wildcards keep matching per char.
-                    let plain = !pat.contains(['*', '?', '~']);
-                    let m = cell_text.is_some_and(|t| if plain { text_eq(pat, &t) } else { wildcard_match(pat, &t) });
+                    let m = match &v {
+                        Value::Text(t) => match folded {
+                            Some(f) => text_eq_prefolded(t, f),
+                            None => wildcard_match(pat, t),
+                        },
+                        _ => false,
+                    };
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {
@@ -383,6 +388,30 @@ mod tests {
         assert!(!m("<>*", Value::from("")));
         assert!(!m("?*", Value::Empty));
         assert!(m("<>a*", Value::Empty));
+    }
+
+    #[test]
+    fn plain_text_criteria_use_the_canonical_equality() {
+        let words = ["Nguyễn", "Ánh", "Anh", "Ảnh", "Đặng", "Dang", "Hoà", "Hòa", "İ", "i\u{307}", "ậ", "a\u{323}\u{302}", "abc", "ABC"];
+        let spell = |w: &str| {
+            let d = gridcraft_core::canonical(w);
+            [w.to_string(), d.clone(), w.to_uppercase(), d.to_uppercase()]
+        };
+        for p in words {
+            for cell in words {
+                for (pv, cv) in spell(p).iter().zip(spell(cell).iter().rev()) {
+                    let eq = gridcraft_core::text_eq(pv, cv);
+                    assert_eq!(m(pv, Value::from(cv.as_str())), eq, "{pv:?} {cv:?}");
+                    assert_eq!(m(&format!("={pv}"), Value::from(cv.as_str())), eq, "={pv:?} {cv:?}");
+                    assert_eq!(m(&format!("<>{pv}"), Value::from(cv.as_str())), !eq, "<>{pv:?} {cv:?}");
+                }
+            }
+        }
+        // A `~` escape keeps the wildcard path (per-char): `~*` is a literal star.
+        assert!(m("a~*", Value::from("A*")));
+        assert!(!m("a~*", Value::from("ab")));
+        // Non-text cells never equal a text criterion.
+        assert!(!m("Ánh", Value::Number(1.0)) && m("<>Ánh", Value::Empty));
     }
 
     #[test]

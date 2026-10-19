@@ -870,11 +870,14 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
+    // Page-filter selections folded once: one fold per record label, not one per selected item.
+    let filter_sets: Vec<Option<gridcraft_core::TextSet>> =
+        filters.iter().map(|(_, f, ..)| f.selected.as_ref().map(gridcraft_core::TextSet::new)).collect();
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
-        for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
-            if let Some(sel) = &f.selected {
+        for (((c, _, g, _), fmt), sel) in filters.iter().zip(filter_fmts.iter()).zip(filter_sets.iter()) {
+            if let Some(sel) = sel {
                 let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
-                if !sel.iter().any(|s| gridcraft_core::text_eq(s, &label)) {
+                if !sel.contains(&label) {
                     continue 'rec;
                 }
             }

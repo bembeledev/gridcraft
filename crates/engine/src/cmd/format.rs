@@ -1025,6 +1025,41 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
     w * size * if bold { 1.07 } else { 1.0 } * 96.0 / 72.0
 }
 
+/// How many lines `line` (no line breaks) takes wrapped at `width` (the units of
+/// [`approx_text_width`]), the way the grid wraps it: whole words, a word wider than the line
+/// split across lines. Counting the text's width over the line's width alone misses the room a
+/// word leaves when it moves to the next line, so a narrow column cut off the last lines.
+pub fn wrapped_line_count(line: &str, size: f32, bold: bool, width: f32) -> f32 {
+    let width = width.max(1.0);
+    let space = approx_text_width(" ", size, bold);
+    let mut lines = 1.0f32;
+    let mut used = 0.0f32;
+    for word in line.split(' ') {
+        let w = approx_text_width(word, size, bold);
+        if used > 0.0 && used + space + w <= width {
+            used += space + w;
+            continue;
+        }
+        if used > 0.0 {
+            lines += 1.0;
+            used = 0.0;
+        }
+        if w <= width {
+            used = w;
+            continue;
+        }
+        for c in word.chars() {
+            let cw = approx_text_width(c.encode_utf8(&mut [0; 4]), size, bold);
+            if used > 0.0 && used + cw > width {
+                lines += 1.0;
+                used = 0.0;
+            }
+            used += cw;
+        }
+    }
+    lines
+}
+
 fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let lines = line_targets(s, p, false)?;
     edit(s, |cx| {

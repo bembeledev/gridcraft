@@ -59,3 +59,32 @@ fn whole_row_format_keeps_hidden_rows_hidden() {
     assert!(info.size.unwrap_or(before) > before + 10.0, "hidden row still grows to its font: before={before}, size={:?}", info.size);
     assert!(info.hidden, "formatting a hidden row must not unhide it");
 }
+
+/// Wrapped text moves whole words to the next line, leaving room at the end of each line. A row
+/// sized from the text's total width over the column's (as if words split anywhere) cut off the
+/// last lines of a narrow column.
+#[test]
+fn wrapped_text_row_fits_every_word_wrapped_line() {
+    let height = |text: &str| {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 12})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
+        s.doc().unwrap().wb.active().unwrap().row_height(0)
+    };
+    // Each word fits the column alone, never two together: one line per word.
+    let wrapped = height("aaaaaaaa aaaaaaaa aaaaaaaa aaaaaaaa aaaaaaaa");
+    let broken = height("aaaaaaaa\naaaaaaaa\naaaaaaaa\naaaaaaaa\naaaaaaaa");
+    assert_eq!(wrapped, broken, "five words that each fill a line take five lines");
+}
+
+/// A word wider than the column is split across lines, as the grid draws it.
+#[test]
+fn a_word_wider_than_the_column_takes_several_lines() {
+    let w = gridcraft_engine::cmd::format::approx_text_width("aaaaaaaa", 11.0, false);
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aaaaaaaa aaaaaaaa", 11.0, false, w * 1.5), 2.0);
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count(&"a".repeat(24), 11.0, false, w), 3.0);
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("", 11.0, false, w), 1.0);
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aa", 11.0, false, 0.0), 2.0, "a zero width can't loop or panic");
+}

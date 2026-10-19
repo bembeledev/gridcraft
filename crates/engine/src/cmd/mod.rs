@@ -491,10 +491,7 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
             let explicit = text.lines().count().max(1) as f32;
             lines = if st.align.wrap {
                 let w = sh.col_width(c).max(1.0) - 6.0;
-                text.lines()
-                    .map(|l| (crate::cmd::format::approx_text_width(l, size, st.font.bold) / w.max(1.0)).ceil().max(1.0))
-                    .sum::<f32>()
-                    .max(1.0)
+                text.lines().map(|l| crate::cmd::format::wrapped_line_count(l, size, st.font.bold, w)).sum::<f32>().max(1.0)
             } else {
                 explicit
             };

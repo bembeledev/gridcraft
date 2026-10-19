@@ -161,3 +161,31 @@ fn wrapped_rows_refit_when_the_measurer_changes() {
     s.set_active(0);
     assert_eq!(row(&s, 0), 405.0, "a workbook that isn't active is refitted too");
 }
+
+/// Undo and redo restore workbooks saved before the measurer changed; their wrapped rows are
+/// refitted with the current measurer, so an undo doesn't bring back a row too short for its text.
+#[test]
+fn undo_and_redo_refit_rows_sized_before_the_measurer_changed() {
+    use gridcraft_engine::measure::{TextMeasure, set_text_measurer};
+    use std::rc::Rc;
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["many words that wrap"]]})).unwrap();
+    // An edit made before the measurer existed: its undo snapshot holds the estimated height.
+    s.execute("range.setValues", json!({"range": "B5", "values": [["later"]]})).unwrap();
+    let row = |s: &gridcraft_engine::Session| s.doc().unwrap().wb.active().unwrap().row_height(0);
+    let estimated = row(&s);
+
+    set_text_measurer(Some(Rc::new(|_: &TextMeasure<'_>| Some((300.0, 15)))));
+    s.refit_wrapped_rows();
+    assert_eq!(row(&s), 305.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    let undone = row(&s);
+    s.execute("edit.redo", json!({})).unwrap();
+    let redone = row(&s);
+    set_text_measurer(None);
+    assert!(estimated < 305.0, "the estimate was shorter: {estimated}");
+    assert_eq!(undone, 305.0, "undo keeps the measured height");
+    assert_eq!(redone, 305.0, "and so does redo");
+}

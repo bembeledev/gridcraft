@@ -39,6 +39,11 @@ pub fn set_text_measurer(m: Option<Rc<Measurer>>) {
     });
 }
 
+/// Whether this thread has a measurer installed.
+pub(crate) fn installed() -> bool {
+    MEASURER.with(|cell| cell.try_borrow().is_ok_and(|slot| slot.is_some()))
+}
+
 /// The measured height and line count of `q`, if a measurer is installed and gives a usable size.
 pub(crate) fn measure(q: &TextMeasure<'_>) -> Option<(f32, usize)> {
     // Clone the measurer out so no borrow is held while it runs.

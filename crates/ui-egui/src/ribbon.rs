@@ -83,11 +83,12 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             egui::Popup::menu(&undo_list).show(|ui| {
                 let labels: Vec<String> =
                     app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default();
+                let lang = app.ui.language;
                 if labels.is_empty() {
-                    ui.label("Can't Undo");
+                    ui.label(lang.tr("Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
+                    if ui.button(format!("{} {}", lang.tr("Undo"), lang.tr(l))).clicked() {
                         app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                     }
                 }
@@ -97,6 +98,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
             egui::Popup::menu(&more).show(|ui| {
+                let lang = app.ui.language;
                 for (label, id) in [
                     ("New Workbook", "file.new"),
                     ("Open…", "file.open"),
@@ -104,11 +106,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
-                    if ui.button(label).clicked() {
+                    if ui.button(lang.tr(label)).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
                 }
-                if ui.button("Print…").clicked() {
+                if ui.button(lang.tr("Print…")).clicked() {
                     app.print_now(json!({}));
                 }
             });
@@ -131,13 +133,14 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
                 egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
+                    let lang = app.ui.language;
+                    if ui.button(lang.tr("Export as PDF…")).clicked() {
                         app.run_or_alert("file.exportPdf", json!({}));
                     }
                     for (label, fmt) in
                         [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
                     {
-                        if ui.button(label).clicked() {
+                        if ui.button(lang.tr(label)).clicked() {
                             app.open_dialog("saveCopy", json!({"format": fmt}));
                         }
                     }
@@ -427,7 +430,9 @@ pub(crate) fn editable_combo(
             });
         }
         let text_id = anchor.id.with(salt).with("__combo_text");
-        let te = ui.add(egui::TextEdit::singleline(&mut st.text).id(text_id).desired_width(220.0).hint_text("Type to filter…"));
+        let te = ui.add(
+            egui::TextEdit::singleline(&mut st.text).id(text_id).desired_width(220.0).hint_text(crate::i18n::current(ui.ctx()).tr("Type to filter…")),
+        );
         if open_now && !te.has_focus() {
             ui.ctx().memory_mut(|m| m.request_focus(text_id));
             // Select all once focus lands so typing replaces the filter.
@@ -637,6 +642,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Border presets"));
             egui::Popup::menu(&ba).show(|ui| {
+                let lang = app.ui.language;
                 for (label, preset) in [
                     ("Bottom Border", "bottom"),
                     ("Top Border", "top"),
@@ -653,13 +659,13 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ("Top and Double Bottom Border", "topDoubleBottom"),
                     ("Inside Borders", "inside"),
                 ] {
-                    if crate::border_preview::preset_button(ui, label, preset).clicked() {
+                    if crate::border_preview::preset_button(ui, lang.tr(label), preset).clicked() {
                         app.grid.last_border = preset.to_string();
                         act(app, "home.borders", json!({"preset": preset}));
                     }
                 }
                 ui.separator();
-                if ui.button("More Borders…").clicked() {
+                if ui.button(lang.tr("More Borders…")).clicked() {
                     app.open_dialog("formatCells", json!({"tab": "Border"}));
                 }
             });
@@ -672,7 +678,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             let forced = invoke(app, "home.fillColor");
             egui::Popup::menu(&fa).open_memory(popup_command(forced, fa.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
+                if let Some(c) = color_palette(ui, &theme_colors(app), crate::i18n::current(ui.ctx()).tr("No Fill")) {
                     if c != "none" {
                         app.grid.last_fill = c.clone();
                     }
@@ -967,7 +973,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.separator();
-                if ui.button("More Functions…").clicked() {
+                if ui.button(crate::i18n::current(ui.ctx()).tr("More Functions…")).clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
             });
@@ -1144,23 +1150,24 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
 }
 
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
-    ui.menu_button("Highlight Cells Rules", |ui| {
+    let lang = app.ui.language;
+    ui.menu_button(lang.tr("Highlight Cells Rules"), |ui| {
         for (label, op) in [("Greater Than…", "greater"), ("Less Than…", "less"), ("Between…", "between"), ("Equal To…", "equal")] {
-            if ui.button(label).clicked() {
-                app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": label}));
+            if ui.button(lang.tr(label)).clicked() {
+                app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": lang.tr(label)}));
             }
         }
-        if ui.button("Text that Contains…").clicked() {
-            app.open_dialog("cfQuick", json!({"type": "containsText", "title": "Text that Contains"}));
+        if ui.button(lang.tr("Text that Contains…")).clicked() {
+            app.open_dialog("cfQuick", json!({"type": "containsText", "title": lang.tr("Text that Contains")}));
         }
-        if ui.button("A Date Occurring…").clicked() {
-            app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"}));
+        if ui.button(lang.tr("A Date Occurring…")).clicked() {
+            app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": lang.tr("A Date Occurring")}));
         }
-        if ui.button("Duplicate Values…").clicked() {
+        if ui.button(lang.tr("Duplicate Values…")).clicked() {
             act(app, "home.conditionalFormat", json!({"rule": {"type": "duplicate"}}));
         }
     });
-    ui.menu_button("Top/Bottom Rules", |ui| {
+    ui.menu_button(lang.tr("Top/Bottom Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -1174,16 +1181,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.menu_button("Data Bars", |ui| {
+    ui.menu_button(lang.tr("Data Bars"), |ui| {
         for (label, c) in
             [("Blue", "#638EC6"), ("Green", "#63BE7B"), ("Red", "#F8696B"), ("Orange", "#FFB628"), ("Light Blue", "#008AEF"), ("Purple", "#D6007B")]
         {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "dataBar", "color": c}}));
             }
         }
     });
-    ui.menu_button("Color Scales", |ui| {
+    ui.menu_button(lang.tr("Color Scales"), |ui| {
         for (label, cols) in [
             ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
             ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
@@ -1192,12 +1199,12 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("White - Green", vec!["#FCFCFF", "#63BE7B"]),
             ("White - Red", vec!["#FCFCFF", "#F8696B"]),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
             }
         }
     });
-    ui.menu_button("Icon Sets", |ui| {
+    ui.menu_button(lang.tr("Icon Sets"), |ui| {
         for (label, set) in [
             ("3 Arrows", "3Arrows"),
             ("3 Traffic Lights", "3TrafficLights1"),
@@ -1206,16 +1213,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("5 Arrows", "5Arrows"),
             ("5 Quarters", "5Quarters"),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "iconSet", "set": set}}));
             }
         }
     });
     ui.separator();
-    if ui.button("New Rule…").clicked() {
+    if ui.button(lang.tr("New Rule…")).clicked() {
         app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
     }
-    ui.menu_button("Clear Rules", |ui| {
+    ui.menu_button(lang.tr("Clear Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -1225,7 +1232,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    if ui.button("Manage Rules…").clicked() {
+    if ui.button(lang.tr("Manage Rules…")).clicked() {
         app.open_dialog("manageRules", json!({}));
     }
 }
@@ -1234,8 +1241,9 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
 fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     ui.set_width(430.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
+    let lang = app.ui.language;
     for (fam, n) in [("Light", 21u32), ("Medium", 28), ("Dark", 11)] {
-        ui.label(egui::RichText::new(fam).strong());
+        ui.label(egui::RichText::new(lang.tr(fam)).strong());
         egui::Grid::new(("tg", fam)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for i in 1..=n {
                 let name = format!("TableStyle{fam}{i}");
@@ -1325,8 +1333,9 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
         ),
         ("Number Format", &["Comma", "Comma [0]", "Currency", "Currency [0]", "Percent"]),
     ];
+    let lang = app.ui.language;
     for (g, names) in groups {
-        ui.label(egui::RichText::new(*g).strong());
+        ui.label(egui::RichText::new(lang.tr(g)).strong());
         egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
@@ -1387,8 +1396,9 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     anchor_keytip(app, ui, &pic, &["insert.picture"]);
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Pictures"));
     egui::Popup::menu(&pic).show(|ui| {
+        let lang = app.ui.language;
         for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 app.open_dialog("insertPicture", json!({"placement": placement}));
                 ui.close();
             }
@@ -1397,6 +1407,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let shapes = big_button(ui, Icon::Shapes, "Shapes", "Shapes", true);
     anchor_keytip(app, ui, &shapes, &["insert.shape"]);
     egui::Popup::menu(&shapes).show(|ui| {
+        let lang = app.ui.language;
         for (label, kind) in [
             ("Rectangle", "rectangle"),
             ("Rounded Rectangle", "roundedRectangle"),
@@ -1406,7 +1417,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "insert.shape", json!({"kind": kind}));
             }
         }
@@ -1477,8 +1488,9 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 control_keytip(app, ui, &r, cid);
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
+                    let lang = app.ui.language;
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if ui.button(lang.tr(label)).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -1513,8 +1525,9 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 control_keytip(app, ui, &r, cid);
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
+                    let lang = app.ui.language;
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if ui.button(lang.tr(label)).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -1530,8 +1543,9 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
+        let lang = app.ui.language;
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 app.open_dialog("sparkline", json!({"type": kind}));
             }
         }
@@ -1664,7 +1678,7 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     control_keytip(app, ui, &s, "pageLayout.size");
     egui::Popup::menu(&s).show(|ui| {
         for p in ["Letter", "Legal", "Tabloid", "Executive", "A3", "A4", "A5"] {
-            if ui.button(p).clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr(p)).clicked() {
                 act(app, "pageLayout.size", json!({"paper": p}));
             }
         }
@@ -2383,7 +2397,7 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Funnel", "funnel", ""),
             ("Treemap", "treemap", ""),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr(label)).clicked() {
                 act(app, "chart.set", json!({"chart": id, "type": k, "subtype": s}));
             }
         }

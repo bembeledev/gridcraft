@@ -265,6 +265,10 @@ pub struct SheetApp {
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
+    /// The language the last frame drew in. A change refreshes the whole window: fonts are
+    /// rebuilt when the script differs and every panel, tab, pane, dialog and menu is repainted
+    /// from the new catalog.
+    draw_language: Option<i18n::Language>,
     effective_dark: bool,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
@@ -319,6 +323,7 @@ impl SheetApp {
             fonts_seen: (0, 0),
             fonts_rebind: false,
             fonts_han: None,
+            draw_language: None,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
@@ -654,7 +659,10 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    None => {
+                        let codes: Vec<String> = i18n::Language::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect();
+                        Err(format!("unknown language {code:?} (use {})", codes.join(", ")))
+                    }
                 }
             }
             "app.language.english" => {
@@ -1031,10 +1039,16 @@ impl SheetApp {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
-        if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
-            self.fonts_ready = false;
-            self.fonts_set = false;
+        // A language switch refreshes the entire window: the next frame is drawn from the new
+        // catalog after the fonts are rebuilt when the script changes.
+        if self.draw_language.is_some_and(|drawn| drawn != self.ui.language) {
+            if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
+                self.fonts_ready = false;
+                self.fonts_set = false;
+            }
+            ctx.request_repaint();
         }
+        self.draw_language = Some(self.ui.language);
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {

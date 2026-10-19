@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (French covers every menu item, dialog title and the Format Cells labels; a language switch repaints the whole window and reloads the fonts when the script changes; defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -9,18 +9,19 @@ right-to-left sheets and full complex-script support. Part of
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
-- **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
-  #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
-  system language (closes #20) and a View-tab switcher, with English-keyed lookup tables:
-  Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
-  each. The tables are used by
-  the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
-  context menus, task panes, status messages, command labels and function descriptions are still
-  English literals. Untranslated labels fall back to English.
+- **A catalog exists, past the ribbon.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
+  #31, #104, #82; German added 10-11, French and Serbian 10-11–10-19) adds an interface-language
+  preference that defaults to the system language (closes #20) and a View-tab switcher, with
+  English-keyed lookup tables: Brazilian Portuguese 943 labels, French 644, Czech 518, Spanish
+  428, German 409, Simplified Chinese, Korean, Russian and Serbian 398 each, Japanese 268. The
+  tables are used by the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`),
+  the Format Cells dialog, the shared OK/Cancel buttons and every dialog title (French: all of
+  them); the other dialogs, menus, context menus, task panes, status messages, command labels and
+  function descriptions are still English literals. Untranslated labels fall back to English.
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
-  strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
-  count / estimated total).
+  strings plus ~500 function descriptions), so shipped languages cover **12–43%** (measured
+  count / estimated total). A language switch refreshes the whole window: the font set is rebuilt
+  when the script changes and the next frame redraws every panel from the new catalog.
 - **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
@@ -49,19 +50,20 @@ separators, number/date formats, machine translation with agent review, and scri
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
-| Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| Simplified Chinese (Mandarin) | zh-Hans | 398 (~18%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
+| Spanish | es | 428 (~19%) | no | Latin: yes | no | menus only | 4–7 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
+| French | fr | 644 (~29%) | every menu, plus dialog titles and Format Cells labels | Latin: yes | no | menus and dialog titles | 3–5 h |
+| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
-| German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
+| German | de | 409 (~19%) | no | Latin: yes | no | menus only | 4–8 h |
+| Korean | ko | 398 (~18%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
+Other shipped languages: Czech (cs, 518 labels), Russian (ru) and Serbian (sr) (398 each), menus
+only (~18–24%).
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every

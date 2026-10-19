@@ -364,6 +364,9 @@ fn language_switch_translates_the_ribbon_and_persists() {
         (Language::Ru, "Данные"),
         (Language::PtBr, "Dados"),
         (Language::De, "Daten"),
+        (Language::Es, "Datos"),
+        (Language::Fr, "Données"),
+        (Language::Sr, "Podaci"),
     ] {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
         h.run_steps(2); // every locale renders the ribbon without panicking
@@ -384,6 +387,24 @@ fn language_switch_translates_the_ribbon_and_persists() {
 }
 
 #[test]
+fn language_switch_refreshes_the_whole_window() {
+    // An open dialog and the ribbon follow a language switch on the next frame, without a restart.
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "View".into();
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Number"}));
+    h.run_steps(2);
+    assert!(h.query_by_label("Alignment").is_some(), "the English dialog is open");
+    assert!(h.query_by_label("Interface language").is_some(), "the English ribbon is drawn");
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Langue de l'interface").is_some(), "the ribbon refreshed in French");
+    assert!(h.query_by_label("Interface language").is_none(), "no English label is left");
+    assert!(h.query_by_label("Alignement").is_some(), "the open dialog refreshed in French");
+    assert!(h.query_by_label("Alignment").is_none(), "no English dialog tab is left");
+    assert!(h.query_by_label("Police").is_some(), "the dialog's Font tab is translated");
+}
+
+#[test]
 fn pivot_fields_pane_follows_the_interface_language() {
     // #858: the PivotTable Fields pane and its field menus stayed in English after switching to Spanish.
     let mut h = harness(blank());
@@ -398,6 +419,24 @@ fn pivot_fields_pane_follows_the_interface_language() {
     h.get_by_label("Region ▾").click();
     h.run_steps(2);
     for label in ["Mover a rótulos de columna", "Agrupar por años", "Quitar campo"] {
+        assert!(h.query_by_label(label).is_some(), "the field menu shows `{label}`");
+    }
+    assert!(h.query_by_label("Remove Field").is_none());
+}
+
+#[test]
+fn french_pivot_field_menu_is_translated() {
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["North", 10], ["South", 20]]})).unwrap();
+    h.state_mut().run("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "rows": ["Region"]})).unwrap();
+    h.state_mut().run("app.language.set", json!({"language": "fr"})).unwrap();
+    h.run_steps(4);
+    for label in ["Champs de tableau croisé dynamique", "Lignes", "Valeurs", "Actualiser", "Champ calculé…"] {
+        assert!(h.query_by_label(label).is_some(), "the pane shows `{label}`");
+    }
+    h.get_by_label("Region ▾").click();
+    h.run_steps(2);
+    for label in ["Déplacer vers les étiquettes de colonne", "Grouper par années", "Supprimer le champ"] {
         assert!(h.query_by_label(label).is_some(), "the field menu shows `{label}`");
     }
     assert!(h.query_by_label("Remove Field").is_none());

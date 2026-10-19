@@ -367,6 +367,7 @@ fn sample() -> Workbook {
             text_outline: Some((Color::Rgb(0xFF0000), 1.5)),
             align: Some(ShapeTextAlign::Right),
             anchor: Some(ShapeTextAnchor::Bottom),
+            rtl: true,
         },
         rotation: 0.0,
     });

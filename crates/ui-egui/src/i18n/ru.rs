@@ -981,6 +981,34 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "AutoSave: save after every change (workbooks saved to a file)" => {
             "Автосохранение: сохранять после каждого изменения (для книг, сохранённых в файл)"
         }
+        // PivotTable field list.
+        "PivotTable Fields" => "Поля сводной таблицы",
+        "Choose fields to add to report:" => "Выберите поля для отчёта:",
+        "Use a field's menu to move it between areas:" => "Чтобы переместить поле в другую область, откройте его меню:",
+        "Filters" => "Фильтры",
+        "Values" => "Значения",
+        "Move to Row Labels" => "Переместить в названия строк",
+        "Move to Column Labels" => "Переместить в названия столбцов",
+        "Move to Report Filter" => "Переместить в фильтр отчёта",
+        "Move to Values" => "Переместить в значения",
+        "Summarize by Sum" => "Итоги по сумме",
+        "Summarize by Count" => "Итоги по количеству",
+        "Summarize by Average" => "Итоги по среднему",
+        "Summarize by Max" => "Итоги по максимуму",
+        "Summarize by Min" => "Итоги по минимуму",
+        "Show as No Calculation" => "Показать без вычислений",
+        "Show as % of Grand Total" => "Показать как % от общего итога",
+        "Show as Running Total" => "Показать как нарастающий итог",
+        "Show as Rank" => "Показать как ранг",
+        "Group by Years" => "Группировать по годам",
+        "Group by Quarters" => "Группировать по кварталам",
+        "Group by Months" => "Группировать по месяцам",
+        "Remove Field" => "Удалить поле",
+        "Refresh" => "Обновить",
+        "Calculated Field…" => "Вычисляемое поле…",
+        "Report Layout" => "Макет отчёта",
+        "Compact" => "Сжатый",
+        "Tabular" => "Табличный",
         _ => return None,
     })
 }

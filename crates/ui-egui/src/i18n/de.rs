@@ -415,6 +415,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "AutoSave: save after every change (workbooks saved to a file)" => {
             "Automatisch speichern: nach jeder Änderung speichern (Arbeitsmappen, die in einer Datei gespeichert sind)"
         }
+        // grid.rs cell and row/column header context menus.
+        "Cut" => "Ausschneiden",
+        "Copy" => "Kopieren",
+        "Insert…" => "Einfügen…",
+        "Delete…" => "Löschen…",
+        "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
+        "New Comment" => "Neuer Kommentar",
+        "Pick From Drop-down List…" => "Aus Dropdownliste auswählen…",
+        "Define Name…" => "Namen definieren…",
+        "Link…" => "Link…",
+        "Hide" => "Ausblenden",
+        "Unhide" => "Einblenden",
         _ => return None,
     })
 }

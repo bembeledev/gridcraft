@@ -1,5 +1,19 @@
 # Decisions
 
+## Validate conditional-format formulas before creating rules (#1999)
+
+Use the existing formula parser before `home.conditionalFormat` changes the workbook. Reject
+malformed expression rules, either comparison bound, and either data-bar formula threshold;
+keep literal comparisons, syntactically valid unknown functions and error references valid.
+The existing dialog error path keeps the entered formula available for correction. This is
+entry validation, not evaluation or a repair pass over imported workbooks.
+
+The related work remains separate: #1458 fixes sheet-name quoting; #1848/#1885 change threshold
+types and rendering; #1165/#1822 add the rule editor. Current main's `home.manageRules` only
+lists, deletes and reorders rules. When #1822 adds editing and colour-scale formula stops, its
+shared rule builder must retain this validation; #1885's new formula-bearing threshold types
+also need the same check.
+
 ## Formula localization uses the existing interface preference
 
 PR #98 builds on the persisted `UiState.language` introduced by #31 and extended by #104.

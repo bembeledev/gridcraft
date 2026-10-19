@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
+use gridcraft_core::{Array, CellError, CellRef, Collation, MAX_COLS, MAX_ROWS, RangeRef, Value, compare_with};
 use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
 use gridcraft_model::Workbook;
@@ -101,6 +101,9 @@ struct FnCtx<'a, 'h> {
 impl Ctx for FnCtx<'_, '_> {
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
+    }
+    fn collation(&self) -> Collation {
+        self.ev.host.workbook().collation
     }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
@@ -532,7 +535,8 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let wb = self.host.workbook();
+                    acc = binary_values(o, &acc, &y, wb.date_system, wb.collation);
                 }
                 Ev::V(acc)
             }
@@ -670,7 +674,10 @@ impl<'h> Evaluator<'h> {
                 let mut i = 0;
                 while i + 1 < rest.len() {
                     let cand = self.value(&rest[i]).scalar();
-                    if !cand.is_error() && compare(&v, &cand) == std::cmp::Ordering::Equal && same_kind(&v, &cand) {
+                    // Equality is the same in every collation; the workbook's is passed so that
+                    // every comparison in a formula goes through one relation.
+                    let coll = self.host.workbook().collation;
+                    if !cand.is_error() && compare_with(&v, &cand, coll) == std::cmp::Ordering::Equal && same_kind(&v, &cand) {
                         return self.eval(&rest[i + 1]);
                     }
                     i += 2;
@@ -1763,11 +1770,12 @@ fn single(v: Value) -> Option<Value> {
     }
 }
 
-pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
-    zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+/// Applies a binary operator element-wise. Text comparisons (`<`, `>`…) order by `coll`.
+pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem, coll: Collation) -> Value {
+    zip2(x, y, |a, b| binary_scalar(op, a, b, sys, coll))
 }
 
-fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem, coll: Collation) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
     }
@@ -1803,12 +1811,12 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
             }
             (Err(e), _) | (_, Err(e)) => Value::Error(e),
         },
-        BinOp::Eq => Value::Bool(compare(a, b) == Equal),
-        BinOp::Ne => Value::Bool(compare(a, b) != Equal),
-        BinOp::Lt => Value::Bool(compare(a, b) == Less),
-        BinOp::Gt => Value::Bool(compare(a, b) == Greater),
-        BinOp::Le => Value::Bool(compare(a, b) != Greater),
-        BinOp::Ge => Value::Bool(compare(a, b) != Less),
+        BinOp::Eq => Value::Bool(compare_with(a, b, coll) == Equal),
+        BinOp::Ne => Value::Bool(compare_with(a, b, coll) != Equal),
+        BinOp::Lt => Value::Bool(compare_with(a, b, coll) == Less),
+        BinOp::Gt => Value::Bool(compare_with(a, b, coll) == Greater),
+        BinOp::Le => Value::Bool(compare_with(a, b, coll) != Greater),
+        BinOp::Ge => Value::Bool(compare_with(a, b, coll) != Less),
         BinOp::Range | BinOp::Union | BinOp::Intersect => Value::Error(CellError::Value),
     }
 }

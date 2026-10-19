@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text, fold_key, text_eq_prefolded};
+use gridcraft_core::{CellError, Collation, Value, compare_numbers, compare_text, compare_text_with, fold_key, text_eq_prefolded};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -127,8 +127,9 @@ impl Criterion {
         Criterion { op, operand, bare_empty: false }
     }
 
-    /// Whether a cell value satisfies the criterion.
-    pub(crate) fn matches(&self, v: &Value) -> bool {
+    /// Whether a cell value satisfies the criterion. `<`, `<=`, `>` and `>=` order text by `coll`
+    /// (the workbook's collation); `=`, `<>` and wildcards do not depend on it.
+    pub(crate) fn matches(&self, v: &Value, coll: Collation) -> bool {
         let v = match v {
             Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
             other => other.clone(),
@@ -145,7 +146,7 @@ impl Criterion {
                     // "<" / ">" with nothing: Excel compares against "" for text cells, but an
                     // empty string never matches ("<=" and ">=" count it in neither).
                     _ => match &v {
-                        Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text(t, "")),
+                        Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text_with(t, "", coll)),
                         _ => false,
                     },
                 }
@@ -185,15 +186,15 @@ impl Criterion {
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {
-                    Value::Text(t) => cmp_op(self.op, compare_text(t, pat)),
+                    Value::Text(t) => cmp_op(self.op, compare_text_with(t, pat, coll)),
                     _ => false,
                 },
             },
             Operand::CutText(kept) => match self.op {
                 Op::Eq => false,
                 Op::Ne => true,
-                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if compare_text(t, kept) != Ordering::Greater),
-                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if compare_text(t, kept) == Ordering::Greater),
+                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if compare_text_with(t, kept, coll) != Ordering::Greater),
+                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if compare_text_with(t, kept, coll) == Ordering::Greater),
             },
         }
     }
@@ -345,7 +346,7 @@ mod tests {
     use super::*;
 
     fn m(c: &str, v: Value) -> bool {
-        Criterion::parse(&Value::from(c)).matches(&v)
+        Criterion::parse(&Value::from(c)).matches(&v, Collation::Root)
     }
 
     #[test]
@@ -376,8 +377,8 @@ mod tests {
         assert!(m("<b", Value::from("apple")));
         assert!(!m("<b", Value::Number(1.0)));
         assert!(m("#N/A", Value::Error(CellError::NA)));
-        assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
-        assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
+        assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0), Collation::Root));
+        assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2), Collation::Root));
         assert!(lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
         assert!(m("<>a*", Value::from("bcd")));
         assert!(m(">1/1/2020", Value::Number(44000.0)));

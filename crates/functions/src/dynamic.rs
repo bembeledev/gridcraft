@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use gridcraft_core::{Array, CellError, Value, fold_key, sort_compare};
+use gridcraft_core::{Array, CellError, Collation, TextKey, Value, fold_key, sort_compare_with, text_key};
 
 use crate::util::{A, MAX_CELLS, R, arg, array_val, as_array, has, num, opt_bool, scalar};
 use crate::{Arg, Ctx, FnSpec, VAR};
@@ -132,11 +132,17 @@ fn filter(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     from_rows(out, &Value::Empty)
 }
 
-/// Compares two key vectors with per-key orders (1 ascending, -1 descending).
-fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
+/// Compares two key vectors with per-key orders (1 ascending, -1 descending), text ordered by
+/// `coll`. `ka` and `kb` hold the precomputed collation keys of the text in `a` and `b` (see
+/// [`sort_keyed`]); where both have one it decides, otherwise the values are compared.
+fn cmp_keys(a: &[Value], b: &[Value], ka: &[Option<TextKey>], kb: &[Option<TextKey>], orders: &[i64], coll: Collation) -> Ordering {
     for (i, ord) in orders.iter().enumerate() {
         let (Some(x), Some(y)) = (a.get(i), b.get(i)) else { continue };
-        let o = sort_compare(x, y);
+        let o = match (ka.get(i), kb.get(i)) {
+            // Both are text (only text gets a key), and key order is `compare_text_with`'s.
+            (Some(Some(p)), Some(Some(q))) => p.cmp(q),
+            _ => sort_compare_with(x, y, coll),
+        };
         let o = if *ord < 0 {
             // Blanks stay last even when descending.
             match (x, y) {
@@ -155,6 +161,37 @@ fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     Ordering::Equal
 }
 
+/// Sorts `items` stably by their key rows (`keys[i]` is the key row of `items[i]`) with per-key
+/// orders (1 ascending, -1 descending; blanks last either way) and text ordered by `coll`.
+///
+/// A key column that holds non-ASCII text gets a collation key for each of its text cells, built
+/// once here instead of on every comparison (building one costs far more than comparing two). A
+/// column of ASCII text, numbers and the like gets none: its comparisons are cheap already.
+fn sort_keyed<T>(items: Vec<T>, keys: Vec<Vec<Value>>, orders: &[i64], coll: Collation) -> Vec<T> {
+    let keyed: Vec<bool> = (0..orders.len()).map(|i| keys.iter().any(|k| matches!(k.get(i), Some(Value::Text(t)) if !t.is_ascii()))).collect();
+    let any_keyed = keyed.contains(&true);
+    let mut lines: Vec<(Vec<Value>, Vec<Option<TextKey>>, T)> = keys
+        .into_iter()
+        .zip(items)
+        .map(|(k, item)| {
+            let tk = if any_keyed {
+                k.iter()
+                    .enumerate()
+                    .map(|(i, v)| match v {
+                        Value::Text(t) if keyed.get(i).copied().unwrap_or(false) => Some(text_key(t, coll)),
+                        _ => None,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (k, tk, item)
+        })
+        .collect();
+    lines.sort_by(|x, y| cmp_keys(&x.0, &y.0, &x.1, &y.1, orders, coll));
+    lines.into_iter().map(|(_, _, item)| item).collect()
+}
+
 fn int_list(v: &Value) -> R<Vec<i64>> {
     let a = as_array(v);
     a.data
@@ -166,7 +203,7 @@ fn int_list(v: &Value) -> R<Vec<i64>> {
         .collect()
 }
 
-fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn sort(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let by_col = opt_bool(args, 3, false)?;
     let a = if by_col { a.transpose() } else { a };
@@ -179,14 +216,14 @@ fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Value);
     }
     let orders: Vec<i64> = (0..idx.len()).map(|i| *ord.get(i).or(ord.first()).unwrap_or(&1)).collect();
-    let mut lines: Vec<(Vec<Value>, Vec<Value>)> =
-        rows_of(&a).into_iter().map(|r| (idx.iter().map(|&i| r.get(i as usize - 1).cloned().unwrap_or(Value::Empty)).collect(), r)).collect();
-    lines.sort_by(|x, y| cmp_keys(&x.0, &y.0, &orders));
-    let out = Array::new(a.rows, a.cols, lines.into_iter().flat_map(|(_, r)| r).collect()).ok_or(CellError::Calc)?;
+    let rows = rows_of(&a);
+    let keys: Vec<Vec<Value>> = rows.iter().map(|r| idx.iter().map(|&i| r.get(i as usize - 1).cloned().unwrap_or(Value::Empty)).collect()).collect();
+    let rows = sort_keyed(rows, keys, &orders, c.collation());
+    let out = Array::new(a.rows, a.cols, rows.into_iter().flatten().collect()).ok_or(CellError::Calc)?;
     Ok(Value::from(if by_col { out.transpose() } else { out }))
 }
 
-fn sortby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn sortby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let mut keys: Vec<Array> = Vec::new();
     let mut orders: Vec<i64> = Vec::new();
@@ -213,13 +250,10 @@ fn sortby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         }
     }
     let base = if by_rows { a } else { a.transpose() };
-    let mut lines: Vec<(Vec<Value>, Vec<Value>)> = rows_of(&base)
-        .into_iter()
-        .enumerate()
-        .map(|(r, row)| (keys.iter().map(|k| k.data.get(r).cloned().unwrap_or(Value::Empty)).collect(), row))
-        .collect();
-    lines.sort_by(|x, y| cmp_keys(&x.0, &y.0, &orders));
-    let out = Array::new(base.rows, base.cols, lines.into_iter().flat_map(|(_, r)| r).collect()).ok_or(CellError::Calc)?;
+    let rows = rows_of(&base);
+    let key_rows: Vec<Vec<Value>> = (0..rows.len()).map(|r| keys.iter().map(|k| k.data.get(r).cloned().unwrap_or(Value::Empty)).collect()).collect();
+    let rows = sort_keyed(rows, key_rows, &orders, c.collation());
+    let out = Array::new(base.rows, base.cols, rows.into_iter().flatten().collect()).ok_or(CellError::Calc)?;
     Ok(Value::from(if by_rows { out } else { out.transpose() }))
 }
 
@@ -719,8 +753,8 @@ fn key_row(a: &Array, r: usize) -> Vec<Value> {
 }
 
 /// Distinct keys in first-seen order, then sorted (by `sort` = ±column index within the key; 0
-/// keeps all keys ascending).
-fn distinct_keys(keys: &[Vec<Value>], sort: i64) -> Vec<Vec<Value>> {
+/// keeps all keys ascending), text ordered by `coll`.
+fn distinct_keys(keys: &[Vec<Value>], sort: i64, coll: Collation) -> Vec<Vec<Value>> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for k in keys {
@@ -729,24 +763,16 @@ fn distinct_keys(keys: &[Vec<Value>], sort: i64) -> Vec<Vec<Value>> {
         }
     }
     let width = out.first().map_or(0, Vec::len);
-    let mut orders = vec![1i64; width];
-    if sort != 0 {
-        let i = sort.unsigned_abs() as usize;
-        if i >= 1 && i <= width {
-            if let Some(o) = orders.get_mut(i - 1) {
-                *o = sort.signum();
-            }
-            // Sort key column first.
-            out.sort_by(|a, b| {
-                let ka = vec![a.get(i - 1).cloned().unwrap_or(Value::Empty)];
-                let kb = vec![b.get(i - 1).cloned().unwrap_or(Value::Empty)];
-                cmp_keys(&ka, &kb, &[sort.signum()]).then_with(|| cmp_keys(a, b, &vec![1; width]))
-            });
-            return out;
-        }
+    let i = sort.unsigned_abs() as usize;
+    if sort != 0 && i >= 1 && i <= width {
+        // The sort key column first (in its direction), then every column ascending.
+        let sort_keys: Vec<Vec<Value>> =
+            out.iter().map(|k| std::iter::once(k.get(i - 1).cloned().unwrap_or(Value::Empty)).chain(k.iter().cloned()).collect()).collect();
+        let orders: Vec<i64> = std::iter::once(sort.signum()).chain(std::iter::repeat_n(1, width)).collect();
+        return sort_keyed(out, sort_keys, &orders, coll);
     }
-    out.sort_by(|a, b| cmp_keys(a, b, &orders));
-    out
+    let sort_keys = out.clone();
+    sort_keyed(out, sort_keys, &vec![1i64; width], coll)
 }
 
 fn opt_arr(args: &[Arg], i: usize) -> R<Option<Array>> {
@@ -754,6 +780,7 @@ fn opt_arr(args: &[Arg], i: usize) -> R<Option<Array>> {
 }
 
 fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let coll = c.collation();
     let rf = arr_arg(args, 0)?;
     let vals = arr_arg(args, 1)?;
     let f = agg_arg(args, 2, c)?;
@@ -768,7 +795,7 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         groups.entry(row_key(k)).or_default().push(r);
     }
     let sort_in_keys = if sort.unsigned_abs() as usize <= rf.cols { sort } else { 0 };
-    let mut ordered = distinct_keys(&keys, sort_in_keys);
+    let mut ordered = distinct_keys(&keys, sort_in_keys, coll);
     let mut agg_row = |rows: &[usize]| -> Vec<Value> {
         (0..vals.cols)
             .map(|col| {
@@ -777,7 +804,7 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             })
             .collect()
     };
-    let mut lines: Vec<Vec<Value>> = ordered
+    let lines: Vec<Vec<Value>> = ordered
         .drain(..)
         .map(|k| {
             let rows = groups.get(&row_key(&k)).cloned().unwrap_or_default();
@@ -787,11 +814,13 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         })
         .collect();
     // Sorting by a value column.
-    if sort.unsigned_abs() as usize > rf.cols {
+    let lines = if sort.unsigned_abs() as usize > rf.cols {
         let ci = sort.unsigned_abs() as usize - 1;
+        let sort_keys: Vec<Vec<Value>> = lines.iter().map(|l| vec![l.get(ci).cloned().unwrap_or(Value::Empty)]).collect();
+        sort_keyed(lines, sort_keys, &[sort.signum()], coll)
+    } else {
         lines
-            .sort_by(|a, b| cmp_keys(&[a.get(ci).cloned().unwrap_or(Value::Empty)], &[b.get(ci).cloned().unwrap_or(Value::Empty)], &[sort.signum()]));
-    }
+    };
     let mut out = Vec::new();
     if p.show_headers {
         let mut h = p.field_headers.clone();
@@ -820,6 +849,7 @@ fn pivot_dims(header_rows: usize, body_rows: usize, col_keys: usize, value_cols:
 }
 
 fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+    let coll = ctx.collation();
     let rf = arr_arg(args, 0)?;
     let cf = arr_arg(args, 1)?;
     let vals = arr_arg(args, 2)?;
@@ -833,8 +863,8 @@ fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let p = prepare(&[&rf, &cf], &vals, fh, filter.as_ref())?;
     let rkeys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&rf, r)).collect();
     let ckeys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&cf, r)).collect();
-    let rk = distinct_keys(&rkeys, if row_sort.unsigned_abs() as usize <= rf.cols { row_sort } else { 0 });
-    let ck = distinct_keys(&ckeys, if col_sort.unsigned_abs() as usize <= cf.cols { col_sort } else { 0 });
+    let rk = distinct_keys(&rkeys, if row_sort.unsigned_abs() as usize <= rf.cols { row_sort } else { 0 }, coll);
+    let ck = distinct_keys(&ckeys, if col_sort.unsigned_abs() as usize <= cf.cols { col_sort } else { 0 }, coll);
     let mut cell: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for ((r, c), &i) in rkeys.iter().zip(ckeys.iter()).zip(p.rows.iter()) {
         cell.entry((row_key(r), row_key(c))).or_default().push(i);
@@ -1075,6 +1105,79 @@ mod tests {
 
     fn grid() -> Value {
         arr(vec![vec![tv("b"), nv(2.0), nv(20.0)], vec![tv("a"), nv(3.0), nv(10.0)], vec![tv("c"), nv(1.0), nv(30.0)]])
+    }
+
+    /// `sort_keyed` (collation keys built once per text cell, only in columns with non-ASCII
+    /// text) gives exactly the stable sort by `sort_compare_with`, blanks last when descending,
+    /// for mixed columns and both collations.
+    #[test]
+    fn sort_keyed_matches_value_comparison() {
+        use gridcraft_core::{Collation, sort_compare_with};
+        use std::cmp::Ordering;
+        let pool = [
+            tv("Dương"),
+            tv("Đào"),
+            tv("duong"),
+            tv("DƯƠNG"),
+            tv("Duo\u{31b}\u{31b}ng"),
+            tv("Ư"),
+            tv("Uz"),
+            tv("abc"),
+            tv("ABC"),
+            tv(""),
+            nv(2.0),
+            nv(-1.0),
+            Value::Bool(true),
+            Value::Error(CellError::NA),
+            Value::Empty,
+        ];
+        // Deterministic pseudo-random rows of two key columns: column 0 from the whole pool,
+        // column 1 without non-ASCII text (so one column is keyed and the other is not).
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = |m: usize| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x % m as u64) as usize
+        };
+        let ascii = [7usize, 8, 2, 6, 10, 14];
+        let keys: Vec<Vec<Value>> = (0..200).map(|_| vec![pool[next(pool.len())].clone(), pool[ascii[next(ascii.len())]].clone()]).collect();
+        for coll in [Collation::Root, Collation::Vi] {
+            for orders in [[1i64, 1], [-1, 1], [1, -1], [-1, -1]] {
+                let items: Vec<usize> = (0..keys.len()).collect();
+                let got = super::sort_keyed(items.clone(), keys.clone(), &orders, coll);
+                let mut want = items;
+                want.sort_by(|&a, &b| {
+                    for (i, o) in orders.iter().enumerate() {
+                        let (x, y) = (&keys[a][i], &keys[b][i]);
+                        let c = match (x, y, *o < 0) {
+                            (Value::Empty, Value::Empty, _) => Ordering::Equal,
+                            (Value::Empty, _, true) => Ordering::Greater,
+                            (_, Value::Empty, true) => Ordering::Less,
+                            (_, _, true) => sort_compare_with(x, y, coll).reverse(),
+                            _ => sort_compare_with(x, y, coll),
+                        };
+                        if c != Ordering::Equal {
+                            return c;
+                        }
+                    }
+                    Ordering::Equal
+                });
+                assert_eq!(got, want, "{coll:?} {orders:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sort_follows_the_ctx_collation() {
+        use gridcraft_core::Collation;
+        let col = arr(vec![vec![tv("Đào")], vec![tv("Dương")], vec![tv("Ưng")], vec![tv("Uyên")]]);
+        let spec = crate::lookup("SORT").unwrap();
+        let mut vi = TestCtx { collation: Collation::Vi, ..TestCtx::default() };
+        let r = crate::call(spec, &[rf(col.clone())], &mut vi);
+        assert_eq!(r, arr(vec![vec![tv("Dương")], vec![tv("Đào")], vec![tv("Uyên")], vec![tv("Ưng")]]));
+        let r = crate::call(spec, &[rf(col)], &mut TestCtx::default());
+        assert_eq!(r, arr(vec![vec![tv("Đào")], vec![tv("Dương")], vec![tv("Ưng")], vec![tv("Uyên")]]));
     }
 
     #[test]

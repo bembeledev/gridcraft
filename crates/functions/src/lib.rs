@@ -120,6 +120,11 @@ pub trait Ctx {
     fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
         None
     }
+    /// The text order of this evaluation (the workbook's collation): `<`/`>` on text, approximate
+    /// lookups, relational criteria, SORT/SORTBY and grouping. Equality never depends on it.
+    fn collation(&self) -> gridcraft_core::Collation {
+        gridcraft_core::Collation::Root
+    }
 }
 
 pub type FnImpl = fn(&[Arg], &mut dyn Ctx) -> Value;

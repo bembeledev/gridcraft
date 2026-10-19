@@ -85,12 +85,13 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
         rows.push((r, conds));
     }
     let all_match = rows.is_empty();
+    let coll = ctx.collation();
     (1..db.rows)
         .filter(|&rec| {
             all_match
                 || rows.iter().any(|(r, conds)| {
                     conds.iter().all(|(c, col, cr)| match col {
-                        Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
+                        Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty), coll),
                         // Under a label that names no field, only a formula (a computed
                         // criterion) can hold.
                         None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),

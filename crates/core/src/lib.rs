@@ -14,6 +14,9 @@ pub use addr::{
     CategoryLevels, CellRef, MAX_COLS, MAX_ROWS, RangeRef, category_levels, col_to_letters, letters_to_col, quote_sheet, sheet_needs_quotes,
     split_sheet, unquote_sheet,
 };
-pub use collate::{canonical, contains_folded, ends_with_folded, fold_key, starts_with_folded, text_eq};
+pub use collate::{
+    TextKey, canonical, contains_folded, contains_prefolded, ends_with_folded, ends_with_prefolded, fold_key, starts_with_folded,
+    starts_with_prefolded, text_eq, text_key,
+};
 pub use date::DateSystem;
 pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};

@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef, Value, compare_text, fold_key, sort_compare, text_eq};
+use gridcraft_core::{CellRef, RangeRef, TextKey, Value, fold_key, sort_compare, text_eq, text_key};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -610,8 +610,9 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
-/// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
-fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
+/// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)? `folded` is `fold_key(crit)`,
+/// computed once per criterion for the begins/ends/contains tests.
+fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, folded: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
     let cmp = match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
@@ -640,10 +641,10 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
         ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
         "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
         // Case- and encoding-blind, matching whole letters (`e` is not in `Nguyễn`).
-        "beginsWith" => gridcraft_core::starts_with_folded(text, crit),
-        "endsWith" => gridcraft_core::ends_with_folded(text, crit),
-        "contains" => gridcraft_core::contains_folded(text, crit),
-        "notContains" => !gridcraft_core::contains_folded(text, crit),
+        "beginsWith" => gridcraft_core::starts_with_prefolded(text, folded),
+        "endsWith" => gridcraft_core::ends_with_prefolded(text, folded),
+        "contains" => gridcraft_core::contains_prefolded(text, folded),
+        "notContains" => !gridcraft_core::contains_prefolded(text, folded),
         _ => true,
     }
 }
@@ -678,6 +679,15 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
+    // Custom criteria folded once (for begins/ends/contains), not once per row.
+    let folded: Vec<(String, String)> = af
+        .criteria
+        .iter()
+        .map(|(_, c)| match c {
+            FilterCriterion::Custom { a, b, .. } => (fold_key(&a.1), b.as_ref().map(|b| fold_key(&b.1)).unwrap_or_default()),
+            _ => (String::new(), String::new()),
+        })
+        .collect();
     for row in r.start.row + 1..=r.end.row {
         let mut visible = true;
         for (i, (off, crit)) in af.criteria.iter().enumerate() {
@@ -693,10 +703,11 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
+                    let (fa, fb) = folded.get(i).map_or(("", ""), |(x, y)| (x.as_str(), y.as_str()));
+                    let x = custom_ok(&v, &text, &a.0, &a.1, fa);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
+                            let y = custom_ok(&v, &text, &b.0, &b.1, fb);
                             if *and { x && y } else { x || y }
                         }
                         None => x,
@@ -772,7 +783,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     // One entry per group key, showing the first text met. Text is grouped by `fold_key`, so
     // "Abc", "abc" and an NFD spelling are one entry; other values by their key and shown text.
     let mut seen: std::collections::HashSet<(u8, i64, String, String)> = std::collections::HashSet::new();
-    let mut entries: Vec<((u8, i64, String, String), String, bool)> = Vec::new();
+    let mut entries: Vec<((u8, i64, String, String), Option<TextKey>, String, bool)> = Vec::new();
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
@@ -791,14 +802,17 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         let (class, num, k) = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
         let key = if !blank && v.is_text() { (class, num, fold_key(&t), String::new()) } else { (class, num, k, t.clone()) };
         if seen.insert(key.clone()) {
-            entries.push((key, t, on));
+            // The sort key is built once per entry, not per comparison (the list is rebuilt
+            // every frame while the filter menu is open).
+            let tk = v.is_text().then(|| text_key(&t));
+            entries.push((key, tk, t, on));
         }
     }
-    // Numbers, then text in the Root order, then booleans, errors and blanks.
-    entries.sort_by(|(a, ta, _), (b, tb, _)| {
-        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| if a.0 == 1 { compare_text(ta, tb) } else { (&a.2, &a.3).cmp(&(&b.2, &b.3)) })
-    });
-    entries.into_iter().map(|(_, t, on)| (t, on)).collect()
+    // Numbers, then text in the Root order, then booleans, errors and blanks. Text entries are
+    // ordered by their `TextKey` (`None` for the other classes, so it only breaks ties in text).
+    entries
+        .sort_by(|(a, ka, ..), (b, kb, ..)| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| ka.cmp(kb)).then_with(|| (&a.2, &a.3).cmp(&(&b.2, &b.3))));
+    entries.into_iter().map(|(_, _, t, on)| (t, on)).collect()
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
@@ -808,7 +822,7 @@ fn case_order(a: &str, b: &str) -> Ordering {
 }
 
 /// Class, number and text of a filter-list value. Text gets no key here: `filter_values` groups
-/// it by the `fold_key` of the text shown and orders it with `compare_text`.
+/// it by the `fold_key` of the text shown and orders it by its `TextKey`.
 fn sort_key(v: &Value) -> (u8, i64, String) {
     match v {
         Value::Number(n) => (0, (n * 1e6) as i64, String::new()),

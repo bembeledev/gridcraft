@@ -59,8 +59,10 @@ fn label(v: &Value) -> String {
     }
 }
 
+/// Names and item labels match ignoring case and encoding (NFC equals NFD), the same relation
+/// the engine groups pivot items by.
 fn same(a: &str, b: &str) -> bool {
-    a.to_lowercase() == b.to_lowercase()
+    gridcraft_core::text_eq(a, b)
 }
 
 fn func_name(f: PivotFunc) -> &'static str {
@@ -148,7 +150,8 @@ fn mdy(sys: DateSystem, serial: f64) -> String {
 
 // ================================================================ writing
 
-/// Identity of a shared item (text items match case-insensitively, as in Excel).
+/// Identity of a shared item (text items match ignoring case, as in Excel, and encoding: one
+/// shared item per `fold_key`, as the engine shows one pivot item).
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Key {
     Blank,
@@ -162,7 +165,7 @@ fn key(v: &Value) -> Key {
     match v {
         Value::Empty => Key::Blank,
         Value::Number(n) => Key::Num(if *n == 0.0 { 0 } else { n.to_bits() }),
-        Value::Text(t) => Key::Text(t.to_lowercase()),
+        Value::Text(t) => Key::Text(gridcraft_core::fold_key(t)),
         Value::Bool(b) => Key::Bool(*b),
         Value::Error(e) => Key::Err(e.as_str()),
         Value::Array(_) => key(&v.scalar()),

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use gridcraft_core::{CellRef, RangeRef, Value, compare, contains_folded, ends_with_folded, fold_key, starts_with_folded};
+use gridcraft_core::{CellRef, RangeRef, Value, compare, contains_prefolded, ends_with_prefolded, fold_key, starts_with_prefolded};
 use gridcraft_model::*;
 
 /// The conditional look of one cell.
@@ -24,6 +24,8 @@ pub struct CfLook {
 #[derive(Default)]
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    /// `fold_key` of a text rule's text (contains, begins, ends), folded once per rule.
+    needles: HashMap<usize, String>,
 }
 
 #[derive(Default, Clone)]
@@ -161,6 +163,13 @@ impl CfCache {
                 Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
                 None => &no_stats,
             };
+            let needle: &str = match &cf.rule {
+                CfRule::ContainsText { text, .. }
+                | CfRule::NotContainsText { text, .. }
+                | CfRule::BeginsWith { text, .. }
+                | CfRule::EndsWith { text, .. } => self.needles.entry(idx).or_insert_with(|| fold_key(text)),
+                _ => "",
+            };
             let text = v.display();
             let matched_style: Option<&Style> = match &cf.rule {
                 CfRule::CellIs { op, a, b, style } => {
@@ -189,10 +198,10 @@ impl CfCache {
                 // As in Excel, an error value never contains, begins or ends with anything (its rule
                 // formulas SEARCH/LEFT/RIGHT fail on it), so it always "does not contain" (#1162).
                 // Otherwise case- and encoding-blind, matching whole letters (`e` is not in `Nguyễn`).
-                CfRule::ContainsText { text: t, style } => (!v.is_error() && contains_folded(&text, t)).then_some(style.as_ref()),
-                CfRule::NotContainsText { text: t, style } => (v.is_error() || !contains_folded(&text, t)).then_some(style.as_ref()),
-                CfRule::BeginsWith { text: t, style } => (!v.is_error() && starts_with_folded(&text, t)).then_some(style.as_ref()),
-                CfRule::EndsWith { text: t, style } => (!v.is_error() && ends_with_folded(&text, t)).then_some(style.as_ref()),
+                CfRule::ContainsText { style, .. } => (!v.is_error() && contains_prefolded(&text, needle)).then_some(style.as_ref()),
+                CfRule::NotContainsText { style, .. } => (v.is_error() || !contains_prefolded(&text, needle)).then_some(style.as_ref()),
+                CfRule::BeginsWith { style, .. } => (!v.is_error() && starts_with_prefolded(&text, needle)).then_some(style.as_ref()),
+                CfRule::EndsWith { style, .. } => (!v.is_error() && ends_with_prefolded(&text, needle)).then_some(style.as_ref()),
                 CfRule::Blanks { style } => (v.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::NoBlanks { style } => (!v.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::Errors { style } => v.is_error().then_some(style.as_ref()),
@@ -447,7 +456,7 @@ mod tests {
                     nums.push(n);
                 }
                 if !v.is_empty() {
-                    *counts.entry(v.display().to_lowercase()).or_insert(0) += 1;
+                    *counts.entry(fold_key(&v.display())).or_insert(0) += 1;
                 }
             }
         }

@@ -830,7 +830,7 @@ pub fn text_eq(a: &str, b: &str) -> bool {
 ///   element, not a sum, so different mark sets never collide (`ấ` is `[34, 33]`, `ä` is `[40]`).
 ///   A mark with no element before it is dropped here and survives in `text`.
 /// - `text`: the whole [`fold_key`], so only equal text compares equal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Root {
     primary: Vec<u32>,
     secondary: Vec<u16>,
@@ -895,6 +895,19 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
     Root::new(a).cmp(&Root::new(b))
 }
 
+/// A precomputed sort key for text: `text_key(a).cmp(&text_key(b)) == compare_text(a, b)` for
+/// every pair, and two keys are equal exactly when [`text_eq`] holds. Build it once per string
+/// and compare keys (`sort_by_cached_key`, a field of a sorted item) instead of calling
+/// [`compare_text`], which builds both keys on every comparison. Opaque: what it holds may
+/// change (a later collation choice), only its order is the contract.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TextKey(Root);
+
+/// The [`TextKey`] of `s` (the Root order of [`compare_text`]).
+pub fn text_key(s: &str) -> TextKey {
+    TextKey(Root::new(s))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Searching folded text: "contains", "begins with", "ends with".
 // ---------------------------------------------------------------------------------------------
@@ -909,14 +922,24 @@ fn mark_at(s: &str, at: usize) -> bool {
 /// U+0300..=U+036F is not a match, so `e` is not found in `Nguyễn` while `ễ` and `nguyễn` are.
 /// Every occurrence is tried, overlapping ones too, so a rejected one never hides a later match.
 /// A needle that starts with a mark is taken as given. An empty needle is always found.
+///
+/// [`ends_with_folded`] differs for a needle that starts with a mark: there the match must begin
+/// on a letter boundary, so `◌́` ends only text that starts with it.
 pub fn contains_folded(haystack: &str, needle: &str) -> bool {
-    let (hay, needle) = (fold_key(haystack), fold_key(needle));
+    contains_prefolded(haystack, &fold_key(needle))
+}
+
+/// [`contains_folded`] with the needle already folded (`folded_needle == fold_key(needle)`), so
+/// a criterion tested against many cells is folded once.
+pub fn contains_prefolded(haystack: &str, folded_needle: &str) -> bool {
+    let needle = folded_needle;
     if needle.is_empty() {
         return true;
     }
+    let hay = fold_key(haystack);
     let mut start = 0;
     while let Some(rest) = hay.get(start..) {
-        let Some(at) = rest.find(needle.as_str()) else { return false };
+        let Some(at) = rest.find(needle) else { return false };
         let at = start.saturating_add(at);
         if !mark_at(&hay, at.saturating_add(needle.len())) {
             return true;
@@ -931,8 +954,16 @@ pub fn contains_folded(haystack: &str, needle: &str) -> bool {
 /// The prefix must end on a whole letter: `a` does not begin `Ánh`, `á` does. An empty needle
 /// begins everything.
 pub fn starts_with_folded(haystack: &str, needle: &str) -> bool {
-    let (hay, needle) = (fold_key(haystack), fold_key(needle));
-    needle.is_empty() || (hay.starts_with(needle.as_str()) && !mark_at(&hay, needle.len()))
+    starts_with_prefolded(haystack, &fold_key(needle))
+}
+
+/// [`starts_with_folded`] with the needle already folded (`folded_needle == fold_key(needle)`).
+pub fn starts_with_prefolded(haystack: &str, folded_needle: &str) -> bool {
+    if folded_needle.is_empty() {
+        return true;
+    }
+    let hay = fold_key(haystack);
+    hay.starts_with(folded_needle) && !mark_at(&hay, folded_needle.len())
 }
 
 /// Whether `haystack` ends with `needle`, ignoring case and encoding like [`contains_folded`].
@@ -940,11 +971,17 @@ pub fn starts_with_folded(haystack: &str, needle: &str) -> bool {
 /// is not a combining mark. So `nh` ends `Ánh`, but a needle that starts with a mark (`◌̃n`) does
 /// not end `ễn`, because it would begin inside the marks of `ễ`. An empty needle ends everything.
 pub fn ends_with_folded(haystack: &str, needle: &str) -> bool {
-    let (hay, needle) = (fold_key(haystack), fold_key(needle));
+    ends_with_prefolded(haystack, &fold_key(needle))
+}
+
+/// [`ends_with_folded`] with the needle already folded (`folded_needle == fold_key(needle)`).
+pub fn ends_with_prefolded(haystack: &str, folded_needle: &str) -> bool {
+    let needle = folded_needle;
     if needle.is_empty() {
         return true;
     }
-    if !hay.ends_with(needle.as_str()) {
+    let hay = fold_key(haystack);
+    if !hay.ends_with(needle) {
         return false;
     }
     let at = hay.len().saturating_sub(needle.len());
@@ -1408,6 +1445,53 @@ mod tests {
                 assert_eq!(contains_folded(a, b), contains_folded(h, n), "{a:?} {b:?}");
                 assert_eq!(starts_with_folded(a, b), starts_with_folded(h, n), "{a:?} {b:?}");
                 assert_eq!(ends_with_folded(a, b), ends_with_folded(h, n), "{a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_key_orders_exactly_like_compare_text() {
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let alphabet: Vec<char> = " -_.,'0123456789abcXYZ~[]ABCdefgzZ".chars().collect();
+        let ascii = |rng: &mut Rng| -> String { (0..rng.below(8)).map(|_| alphabet[rng.below(alphabet.len())]).collect() };
+        for i in 0..20_000 {
+            // ASCII against ASCII (compare_text's fast path), mixed, and fully random text.
+            let (a, b) = match i % 3 {
+                0 => (ascii(&mut rng), ascii(&mut rng)),
+                1 => (ascii(&mut rng), random_text(&mut rng)),
+                _ => {
+                    let a = random_text(&mut rng);
+                    let b = if rng.below(4) == 0 { reencode(&mut rng, &a) } else { random_text(&mut rng) };
+                    (a, b)
+                }
+            };
+            let (ka, kb) = (text_key(&a), text_key(&b));
+            assert_eq!(ka.cmp(&kb), compare_text(&a, &b), "{a:?} {b:?}");
+            assert_eq!(ka == kb, text_eq(&a, &b), "{a:?} {b:?}");
+        }
+        // Case and encoding give equal keys; the hostile strings still order consistently.
+        assert_eq!(text_key("NGUYỄN"), text_key("nguye\u{302}\u{303}n"));
+        let big = "Nguyễn Văn ".repeat(100_000);
+        let cases = ["", "\u{301}", "\u{10FFFF}", "İ", "ẞ", "Zebra", "ấm", &big];
+        for a in cases {
+            for b in cases {
+                assert_eq!(text_key(a).cmp(&text_key(b)), compare_text(a, b), "{a:.20?} {b:.20?}");
+            }
+        }
+        let mut words = vec!["Zebra", "ấm", "bàn", "Ánh", "Anh", "Ấn"];
+        words.sort_by_cached_key(|w| text_key(w));
+        assert_eq!(words, ["ấm", "Ấn", "Anh", "Ánh", "bàn", "Zebra"]);
+    }
+
+    #[test]
+    fn prefolded_search_equals_folded_search() {
+        let cases = ["", "\u{301}", "e", "ễ", "Nguyễn", "NGUYE\u{302}\u{303}N", "ánh", "\u{303}n", "Đà Nẵng", "đà"];
+        for h in cases {
+            for n in cases {
+                let k = fold_key(n);
+                assert_eq!(contains_prefolded(h, &k), contains_folded(h, n), "{h:?} {n:?}");
+                assert_eq!(starts_with_prefolded(h, &k), starts_with_folded(h, n), "{h:?} {n:?}");
+                assert_eq!(ends_with_prefolded(h, &k), ends_with_folded(h, n), "{h:?} {n:?}");
             }
         }
     }

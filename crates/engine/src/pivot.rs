@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, TextKey, Value, split_sheet, text_key};
 use gridcraft_model::*;
 
 use crate::pivot_calc::CalcSet;
@@ -176,6 +176,9 @@ struct Item {
     label: String,
     class: u8,
     num: f64,
+    /// Sort key of the label, built once when [`FieldItems::intern`] adds the item (`None` on the
+    /// throwaway items `make_item` returns for every record).
+    key: Option<TextKey>,
     first: usize,
     /// The value is a number shown with the source format.
     formatted: bool,
@@ -190,12 +193,12 @@ struct FieldItems {
 /// Item order: class (numbers and date groups, text, booleans, errors, blank), then number, then
 /// label in the Root text order (`Đà Nẵng` next to `Da`, not after `z`).
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.label, &b.label))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.key.cmp(&b.key))
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
 fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
-    let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item { value, label, class, num, first, formatted };
+    let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item { key: None, value, label, class, num, first, formatted };
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
         Value::Number(n) => {
@@ -231,10 +234,11 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
 
 impl FieldItems {
     fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> u32 {
-        let (key, item) = make_item(wb, v, group, fmt, first);
+        let (key, mut item) = make_item(wb, v, group, fmt, first);
         if let Some(i) = self.index.get(&key) {
             return *i;
         }
+        item.key = Some(text_key(&item.label));
         let i = self.items.len() as u32;
         self.items.push(item);
         self.index.insert(key, i);

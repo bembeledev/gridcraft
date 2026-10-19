@@ -381,3 +381,61 @@ fn user_text_is_never_normalized() {
     let kept: Vec<Value> = (2..=5).map(|r| v(&s, &format!("A{r}"))).collect();
     assert_eq!(kept, vec![Value::from("bàn"), Value::from(nfd("Đà Nẵng").as_str()), Value::from(nfd(NFC).as_str()), Value::from("Zebra")]);
 }
+
+/// The shared items written for the `name` cache field of a saved workbook.
+fn shared_items(bytes: &[u8], name: &str) -> usize {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut xml = String::new();
+    zip.by_name("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let field = xml.split("<cacheField ").find(|f| f.contains(&format!("name=\"{name}\""))).unwrap();
+    let shared = field.split("</sharedItems>").next().unwrap();
+    shared.matches("<s ").count()
+}
+
+/// Saves the workbook to XLSX and reopens it: the bytes, the reopened workbook, the pivot's
+/// sheet and the PivotTable.
+fn save_and_reopen(s: &Session) -> (Vec<u8>, gridcraft_model::Workbook, usize, gridcraft_model::PivotTable) {
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let si = back.sheets.iter().position(|sh| !sh.pivots.is_empty()).unwrap();
+    let pt = back.sheet(si).unwrap().pivots[0].clone();
+    (bytes, back, si, pt)
+}
+
+/// The first column of a recomputed PivotTable (its row labels).
+fn computed_labels(wb: &gridcraft_model::Workbook, si: usize, pt: &gridcraft_model::PivotTable) -> Vec<String> {
+    let out = crate::pivot::compute(wb, pt, si).unwrap();
+    out.grid.iter().skip(out.body_offset as usize).filter_map(|r| r.first()).map(|c| c.value.display()).collect()
+}
+
+#[test]
+fn xlsx_pivot_filter_named_in_nfd_round_trips_on_one_item() {
+    let mut s = people(&[]);
+    s.execute("insert.pivotTable", json!({"rows": ["Tên"], "values": ["Qty"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Tên", "selected": [nfd("đà nẵng")]})).unwrap();
+    let (bytes, back, si, pt) = save_and_reopen(&s);
+    // One shared item per text: NFC, NFD and uppercase spellings are one item in the cache.
+    assert_eq!(shared_items(&bytes, "Tên"), 2);
+    // The NFC name item is hidden, "Đà Nẵng" is not: the filter survives the save.
+    let f = pt.filters.iter().find(|f| f.source_col == "Tên").expect("the filter is saved");
+    assert_eq!(f.selected, Some(vec!["Đà Nẵng".to_string()]));
+    let labels = computed_labels(&back, si, &pt);
+    assert_eq!(labels.iter().filter(|l| l.as_str() == "Đà Nẵng").count(), 1, "{labels:?}");
+    assert!(!labels.iter().any(|l| gridcraft_core::text_eq(l, NFC)), "{labels:?}");
+}
+
+#[test]
+fn xlsx_pivot_collapsed_item_named_in_nfd_round_trips() {
+    let mut s = people(&[]);
+    s.execute("insert.pivotTable", json!({"rows": ["Tên", "Kho"], "values": ["Qty"]})).unwrap();
+    s.execute("pivot.collapse", json!({"field": "Tên", "items": [nfd("NGUYỄN THỊ NGỌC ÁNH")]})).unwrap();
+    let collapsed_height = pivot_height(&s);
+    let (bytes, back, si, pt) = save_and_reopen(&s);
+    assert_eq!(shared_items(&bytes, "Tên"), 2);
+    let f = pt.rows.iter().find(|f| f.source_col == "Tên").unwrap();
+    // The saved flag sits on the one item (labelled by the first spelling).
+    assert_eq!(f.collapsed_items, vec![NFC.to_string()]);
+    let labels = computed_labels(&back, si, &pt);
+    assert_eq!(labels.len() as u32, collapsed_height, "{labels:?}");
+}

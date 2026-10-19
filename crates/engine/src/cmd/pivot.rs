@@ -463,7 +463,7 @@ fn add_to_area(
             let f = func.unwrap_or(if numeric { PivotFunc::Sum } else { PivotFunc::Count });
             let base = match name {
                 Some(n) if !n.trim().is_empty() => {
-                    if src.col(n).is_some() {
+                    if src.headers.iter().any(|h| h.eq_ignore_ascii_case(n)) {
                         return Err(other("PivotTable field name already exists."));
                     }
                     n.to_string()
@@ -1073,7 +1073,7 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             if n.is_empty() {
                 return Err(other("The name isn't valid."));
             }
-            if src.col(n).is_some() {
+            if src.headers.iter().any(|h| h.eq_ignore_ascii_case(n)) {
                 return Err(other("PivotTable field name already exists."));
             }
             if pt.values.iter().enumerate().any(|(j, x)| j != i && x.name.eq_ignore_ascii_case(n)) {

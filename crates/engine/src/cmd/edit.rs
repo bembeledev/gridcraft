@@ -262,7 +262,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                         return Ok(Json::Null);
                     }
                     let src = crate::pivot::read_source(&cx.wb, &pt.source, sheet).map_err(EngineError::Other)?;
-                    if src.col(&input).is_some() {
+                    if src.headers.iter().any(|h| h.eq_ignore_ascii_case(&input)) {
                         return Err(EngineError::Other("PivotTable field name already exists.".into()));
                     }
                     if pt.values.iter().enumerate().any(|(j, x)| j != vi && x.name.eq_ignore_ascii_case(&input)) {

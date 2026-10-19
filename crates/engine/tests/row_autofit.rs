@@ -150,6 +150,14 @@ fn wrapped_rows_refit_when_the_measurer_changes() {
 
     set_text_measurer(Some(Rc::new(|_: &TextMeasure<'_>| Some((40.0, 2)))));
     s.refit_wrapped_rows();
-    set_text_measurer(None);
     assert_eq!(row(&s, 0), 305.0, "a refit never shrinks a row");
+
+    // Every open workbook is refitted, not only the active one: one opened earlier may become
+    // active later with no font change to refit it then.
+    s.new_workbook();
+    set_text_measurer(Some(Rc::new(|_: &TextMeasure<'_>| Some((400.0, 20)))));
+    s.refit_wrapped_rows();
+    set_text_measurer(None);
+    s.set_active(0);
+    assert_eq!(row(&s, 0), 405.0, "a workbook that isn't active is refitted too");
 }

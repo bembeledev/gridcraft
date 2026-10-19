@@ -169,7 +169,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             col_width
         ),
-        cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{rows?}", has_doc, autofit_rows),
+        cmd!(
+            "home.autofitRowHeight",
+            "AutoFit Row Height",
+            ["Home", "Cells", "Format"],
+            None,
+            "{rows?, measured?: {\"7\": px} height measured by the UI}",
+            has_doc,
+            autofit_rows
+        ),
         cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{cols?}", has_doc, autofit_cols),
         cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{width: 64}", has_doc, default_width),
         cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{rows?}", has_doc, |s, p| hide(
@@ -1019,6 +1027,11 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
             c if c.is_ascii_uppercase() => 0.65,
             c if c.is_ascii_digit() => 0.56,
             c if c.is_ascii() => 0.52,
+            // Arabic letters join and are narrow (about half an em); combining marks take none.
+            '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{06D6}'..='\u{06ED}' => 0.0,
+            '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}' => 0.45,
+            // Hebrew, accented Latin, Greek and Cyrillic are about as wide as ASCII letters.
+            '\u{0590}'..='\u{05FF}' | '\u{00C0}'..='\u{04FF}' => 0.55,
             _ => 1.0,
         };
     }
@@ -1066,19 +1079,41 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn autofit_rows(s: &mut Session, p: &Json) -> Result<Json> {
     let lines = line_targets(s, p, true)?;
+    // A UI with font metrics passes the height it measured per row (`{"7": 64}`, 1-based row
+    // numbers, in pixels); those rows use it instead of the per-character estimate.
+    let measured: std::collections::HashMap<u32, f32> = p
+        .get("measured")
+        .and_then(Json::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.trim().parse::<u32>().ok()?.checked_sub(1)?, v.as_f64()? as f32)))
+                .filter(|(_, h)| h.is_finite() && *h > 0.0)
+                .collect()
+        })
+        .unwrap_or_default();
     edit(s, |cx| {
         let si = cx.sheet_index();
         for (a, b) in lines {
             let b = b.min(a + 100_000);
             if let Some(sh) = cx.wb.sheet_mut(si) {
+                let default = sh.default_row_height;
                 for r in a..=b {
                     if let Some(e) = sh.rows.get_mut(&r) {
                         e.custom = false;
                         e.hidden = false;
                     }
+                    if let Some(&h) = measured.get(&r) {
+                        // Never shorter than the default height, at most Excel's 409 pt.
+                        let h = h.ceil().clamp(default, 546.0);
+                        let e = sh.rows.entry(r).or_default();
+                        e.size = if (h - default).abs() < 0.5 { None } else { Some(h) };
+                        if *e == gridcraft_model::LineInfo::default() {
+                            sh.rows.remove(&r);
+                        }
+                    }
                 }
             }
-            cx.fit_rows.extend((a..=b).map(|r| (si, r)));
+            cx.fit_rows.extend((a..=b).filter(|r| !measured.contains_key(r)).map(|r| (si, r)));
         }
         cx.structural = true; // autofit reveals hidden rows: SUBTOTAL(10x) depends on it
         Ok(Json::Null)
@@ -1123,6 +1158,25 @@ fn hide(s: &mut Session, p: &Json, rows: bool, on: bool) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autofit_rows_takes_measured_heights_and_estimates_arabic_narrowly() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A2", "input": "x"})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "2:3", "height": 200})).unwrap();
+        // Row 2 is measured by the UI; row 3 has no text and goes back to the default.
+        s.execute("home.autofitRowHeight", json!({"rows": "2:3", "measured": {"2": 61.4}})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap().clone();
+        assert_eq!(sh.row_height(1), 62.0);
+        assert_eq!(sh.row_height(2), sh.default_row_height);
+        assert!(!sh.rows.get(&1).is_some_and(|r| r.custom), "a fitted row is automatic again");
+        // Joined Arabic letters are about half an em; harakat take no width.
+        let latin = approx_text_width("abcdefghij", 11.0, false);
+        let arabic = approx_text_width("لاتلاتاتله", 11.0, false);
+        assert!(arabic < latin, "{arabic} < {latin}");
+        assert_eq!(approx_text_width("بَ", 11.0, false), approx_text_width("ب", 11.0, false));
+    }
 
     #[test]
     fn merge_across_keeps_the_first_value_of_each_row() {

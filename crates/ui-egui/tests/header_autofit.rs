@@ -19,7 +19,8 @@ fn harness(selection: &str) -> egui_kittest::Harness<'static, SheetApp> {
         )
         .unwrap();
     session.execute("home.columnWidth", json!({"cols": "A:D", "width": 100})).unwrap();
-    session.execute("home.rowHeight", json!({"rows": "1:4", "height": 60})).unwrap();
+    // Taller than any of the text needs, so every fitted row changes (three lines fit in 60 px).
+    session.execute("home.rowHeight", json!({"rows": "1:4", "height": 90})).unwrap();
     session.execute("selection.set", json!({"range": selection})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -190,4 +191,28 @@ fn table_filter_autofit_works_through_command_and_header_double_click() {
             assert_eq!(sizes(&h, false)[0], 100.0);
         }
     }
+}
+
+/// A tall row of wrapped Arabic text shrinks to its lines when its boundary is double-clicked: the
+/// text is measured with the font that draws it, not estimated one em per letter.
+#[test]
+fn row_double_click_fits_wrapped_arabic_text() {
+    let mut h = harness("A1");
+    let arabic = "لاتلاتا تلهخبتخلتبهخلتب رةميبةرمنيبة";
+    h.state_mut().run("cell.set", json!({"cell": "B4", "input": arabic})).unwrap();
+    h.state_mut().run("home.wrapText", json!({"range": "B4"})).unwrap();
+    h.state_mut().run("home.rowHeight", json!({"rows": "4:4", "height": 150})).unwrap();
+    h.run_steps(2);
+    let (pos, _) = edge(&h, true, 3);
+    button(&mut h, pos, true);
+    button(&mut h, pos, false);
+    h.step();
+    button(&mut h, pos, true);
+    button(&mut h, pos, false);
+    h.run_steps(2);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    let fitted = sheet.row_height(3);
+    assert!(fitted < 150.0, "the row shrank: {fitted}");
+    // One 11 pt line is about 20 px; a 100 px column holds the text on two or three lines.
+    assert!((35.0..=80.0).contains(&fitted), "the row fits the wrapped lines: {fitted}");
 }

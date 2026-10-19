@@ -1964,7 +1964,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if let Some((command, params)) = autofit {
             app.grid.drag = Drag::None;
             app.grid.drag_select = false;
-            app.run_or_alert(command, params);
+            if command == "home.autofitRowHeight" {
+                // Measure the rows' text with the fonts that draw it instead of the engine's
+                // per-character estimate.
+                autofit_rows_measured(app, ui.ctx(), wb, sh, params);
+            } else {
+                app.run_or_alert(command, params);
+            }
             resp.request_focus();
             return;
         }
@@ -3334,6 +3340,53 @@ mod selection_fill_tests {
             }
         }
     }
+}
+
+/// AutoFit Row Height with measured text: each row's tallest cell, its text laid out with the
+/// font that draws it and wrapped at the column's width as the grid wraps it (2.5 px padding on
+/// each side, the indent and the filter button). Rows with no text are left to the engine, which
+/// sizes them by font.
+fn autofit_rows_measured(app: &mut SheetApp, ctx: &egui::Context, wb: &Workbook, sh: &Sheet, params: serde_json::Value) {
+    let rows: Vec<u32> = match params.get("rows").and_then(serde_json::Value::as_str).and_then(RangeRef::parse) {
+        Some(r) => (r.start.row..=r.end.row).take(100_000).collect(),
+        None => app
+            .session
+            .active()
+            .map(|d| d.selection.ranges.iter().filter(|r| r.is_full_rows()).flat_map(|r| r.start.row..=r.end.row).take(100_000).collect())
+            .unwrap_or_default(),
+    };
+    let mut measured = serde_json::Map::new();
+    for &row in &rows {
+        let mut max: f32 = 0.0;
+        for (col, _) in sh.cells.row(row, 0, MAX_COLS - 1) {
+            let cell = CellRef::new(row, col);
+            if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
+                continue;
+            }
+            let st = wb.styles.get(sh.style_id(cell));
+            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
+            if text.is_empty() {
+                continue;
+            }
+            let font = FontId::new(st.font.size * 96.0 / 72.0, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
+            let wrap = if st.align.wrap || st.align.h == HAlign::Justify {
+                (sh.col_width(col) - 5.0 - st.align.indent as f32 * 9.0 - sh.filter_button_space(cell)).max(4.0)
+            } else {
+                f32::INFINITY
+            };
+            let job = egui::text::LayoutJob::simple(text, font, Color32::PLACEHOLDER, wrap);
+            let h = ctx.fonts_mut(|f| f.layout_job(job).size().y);
+            max = max.max(h + 6.0);
+        }
+        if max > 0.0 {
+            measured.insert((row + 1).to_string(), json!(max.ceil()));
+        }
+    }
+    let mut params = params;
+    if let Some(m) = params.as_object_mut() {
+        m.insert("measured".into(), serde_json::Value::Object(measured));
+    }
+    app.run_or_alert("home.autofitRowHeight", params);
 }
 
 #[cfg(test)]

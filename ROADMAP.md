@@ -89,29 +89,31 @@ collaboration, mobile, AI).
 
 ## Languages
 
-The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
-and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
-added 10-11), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
-Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
+The interface is translated into ten languages, from 268 labels (Japanese) to 943 (Brazilian
+Portuguese) of ~2,200 strings; French, Serbian, Spanish and Czech joined the 10-10–10-19 catalogs,
+French translates every menu and dialog title and Portuguese the dialogs. The interface follows the system language,
+and CJK, Thai and Hebrew text falls back to system fonts (#38). Other menus, dialogs and messages
+are English; formulas and number formats are en-US only. Localized German formulas and numbers
+are in PR #163. A language switch repaints the whole window. Detail:
+[localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
-| Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
+| Simplified Chinese | zh-Hans | menus only | ~18% |
+| Spanish | es | menus only | ~19% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
-| Portuguese | pt-BR | menus only | ~12% |
+| French | fr | menus and dialog titles | ~29% |
+| Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus only | ~12% |
-| German | de | menus only | ~12% |
-| Korean | ko | menus only | ~12% |
+| German | de | menus only | ~19% |
+| Korean | ko | menus only | ~18% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: 2 (Russian and German, menus only, ~12%).
+Other shipped languages: Czech (cs, 518 labels), Russian (ru) and Serbian (sr) (398 each), menus
+only.
 
 ## Upcoming
 
@@ -132,6 +134,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-19 | Automatic percent entry: typing `3` into a cell already formatted as Percentage stores `0.03` and shows `3%`, as Excel does; input with its own format (`3%`, `$3`, dates, fractions) and formulas are unchanged (#1967) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
@@ -193,6 +196,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | French covers every menu item (context, ribbon, filter, sheet-tab, pivot and conditional-formatting menus), every dialog title and the Format Cells labels; a language switch refreshes the whole window and reloads fonts when the script changes; language codes listed in the control protocol |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

@@ -191,6 +191,21 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     Ok(Some(Cell { value: parsed.value, formula: None, style }))
 }
 
+/// Excel's automatic percent entry: a plain number typed into a cell already formatted as a
+/// percentage is read as that percentage, so 3 becomes 0.03 and shows as 3% (#1967). Input that
+/// carries its own format (3%, $3, a date or a fraction) keeps the value it parsed to. Only entry
+/// paths call this: paste, replace and programmatic values are not rescaled.
+fn percent_entry(cell: &mut Cell, input: &str, wb: &gridcraft_model::Workbook) {
+    if gridcraft_core::parse::parse_input(input, wb.date_system).format.is_some() {
+        return;
+    }
+    if let Value::Number(n) = cell.value
+        && gridcraft_numfmt::NumberFormat::parse(wb.styles.get(cell.style).num_fmt.as_str()).is_percent()
+    {
+        cell.value = Value::number(n / 100.0);
+    }
+}
+
 /// Like Excel, a formula that calls a built-in function with too few or too many arguments is
 /// refused when it's entered, rather than stored to show `#VALUE!`. Functions the registry doesn't
 /// hold (special forms like LET, LAMBDA, OFFSET, INDIRECT, SUBTOTAL), defined LAMBDA names and
@@ -242,6 +257,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
             let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            percent_entry(&mut cell, &input, &cx.wb);
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -257,7 +273,10 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let mut cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        if let Some(c) = cell.as_mut() {
+            percent_entry(c, &input, &cx.wb);
+        }
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -351,7 +370,10 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let mut c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        if let Some(cell) = c.as_mut() {
+                            percent_entry(cell, &input, &cx.wb);
+                        }
                         by_style.insert(style, c.clone());
                         c
                     }

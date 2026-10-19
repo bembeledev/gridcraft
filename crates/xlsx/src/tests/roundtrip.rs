@@ -366,6 +366,7 @@ fn sample() -> Workbook {
             text_shadow: Some(Color::Rgb(0x445566)),
             align: Some(ShapeTextAlign::Right),
             anchor: Some(ShapeTextAnchor::Bottom),
+            rtl: true,
         },
     });
     let base_chart = Chart {

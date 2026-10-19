@@ -895,6 +895,62 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
     Root::new(a).cmp(&Root::new(b))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Searching folded text: "contains", "begins with", "ends with".
+// ---------------------------------------------------------------------------------------------
+
+/// Whether the char at byte offset `at` of `s` is a combining mark.
+fn mark_at(s: &str, at: usize) -> bool {
+    s.get(at..).and_then(|t| t.chars().next()).is_some_and(is_mark)
+}
+
+/// Whether `haystack` contains `needle` as text, ignoring case and encoding (both sides go
+/// through [`fold_key`]), matching whole letters: an occurrence followed by a combining mark
+/// U+0300..=U+036F is not a match, so `e` is not found in `Nguyễn` while `ễ` and `nguyễn` are.
+/// Every occurrence is tried, overlapping ones too, so a rejected one never hides a later match.
+/// A needle that starts with a mark is taken as given. An empty needle is always found.
+pub fn contains_folded(haystack: &str, needle: &str) -> bool {
+    let (hay, needle) = (fold_key(haystack), fold_key(needle));
+    if needle.is_empty() {
+        return true;
+    }
+    let mut start = 0;
+    while let Some(rest) = hay.get(start..) {
+        let Some(at) = rest.find(needle.as_str()) else { return false };
+        let at = start.saturating_add(at);
+        if !mark_at(&hay, at.saturating_add(needle.len())) {
+            return true;
+        }
+        // Resume one character after this occurrence's start.
+        start = at.saturating_add(hay.get(at..).and_then(|t| t.chars().next()).map_or(1, char::len_utf8));
+    }
+    false
+}
+
+/// Whether `haystack` begins with `needle`, ignoring case and encoding like [`contains_folded`].
+/// The prefix must end on a whole letter: `a` does not begin `Ánh`, `á` does. An empty needle
+/// begins everything.
+pub fn starts_with_folded(haystack: &str, needle: &str) -> bool {
+    let (hay, needle) = (fold_key(haystack), fold_key(needle));
+    needle.is_empty() || (hay.starts_with(needle.as_str()) && !mark_at(&hay, needle.len()))
+}
+
+/// Whether `haystack` ends with `needle`, ignoring case and encoding like [`contains_folded`].
+/// The suffix must start at a letter boundary: at the start of the text or on a character that
+/// is not a combining mark. So `nh` ends `Ánh`, but a needle that starts with a mark (`◌̃n`) does
+/// not end `ễn`, because it would begin inside the marks of `ễ`. An empty needle ends everything.
+pub fn ends_with_folded(haystack: &str, needle: &str) -> bool {
+    let (hay, needle) = (fold_key(haystack), fold_key(needle));
+    if needle.is_empty() {
+        return true;
+    }
+    if !hay.ends_with(needle.as_str()) {
+        return false;
+    }
+    let at = hay.len().saturating_sub(needle.len());
+    at == 0 || !mark_at(&hay, at)
+}
+
 #[cfg(test)]
 mod tables {
     use super::*;
@@ -1261,5 +1317,98 @@ mod tests {
         let m33 = format!("a{}\u{302}", "\u{302}\u{323}".repeat(16));
         let m33b = format!("a\u{323}{}", "\u{302}\u{323}".repeat(16));
         assert_eq!(compare_text(&m33, &m33b), compare_text(&m33b, &m33).reverse());
+    }
+
+    #[test]
+    fn contains_folded_matches_whole_letters() {
+        // A base letter or a letter with fewer marks never matches inside a marked letter.
+        assert!(!contains_folded("Nguyễn", "e"));
+        assert!(contains_folded("Nguyễn", "ễ"));
+        assert!(contains_folded("Nguye\u{302}\u{303}n", "nguyễn"));
+        assert!(contains_folded("NGUYE\u{302}\u{303}N", "Nguyễn"));
+        assert!(contains_folded("Nguyễn", "NGUYE\u{302}\u{303}N"));
+        assert!(!contains_folded("Ánh", "a"));
+        assert!(contains_folded("Ánh", "á"));
+        assert!(contains_folded("A\u{301}nh", "Á"));
+        assert!(!contains_folded("ế", "é"));
+        assert!(!contains_folded("ễ", "ê"));
+        assert!(contains_folded("Hà Nội và Hà Giang", "giang"));
+        assert!(contains_folded("ậ", "a\u{302}\u{323}")); // marks typed in the other order
+        assert!(contains_folded("abc", ""));
+        assert!(contains_folded("", ""));
+        assert!(!contains_folded("", "a"));
+        // A rejected occurrence does not hide a later whole-letter one.
+        assert!(contains_folded("ễ e", "e"));
+        assert!(contains_folded("Ánh Anh", "anh"));
+        // A needle that starts with a mark is taken as given.
+        assert!(contains_folded("ễ", "\u{303}"));
+        assert!(!contains_folded("abc", "abcd"));
+        // An overlapping later occurrence is found after a rejected one.
+        assert!(contains_folded("e\u{302}e\u{302}e", "e\u{302}e"));
+        // ASCII is plain case-insensitive substring search.
+        assert!(contains_folded("Hello World", "O W"));
+        assert!(!contains_folded("Hello", "xyz"));
+    }
+
+    #[test]
+    fn starts_with_folded_ends_on_a_whole_letter() {
+        assert!(starts_with_folded("Nguyễn Văn", "nguyễn"));
+        assert!(starts_with_folded("NGUYE\u{302}\u{303}N", "Nguyễn"));
+        assert!(starts_with_folded("Ánh", "A\u{301}"));
+        // The prefix must not stop before the marks of its last letter.
+        assert!(!starts_with_folded("Ánh", "a"));
+        assert!(!starts_with_folded("ễn", "ê"));
+        assert!(starts_with_folded("Anh", "a"));
+        assert!(starts_with_folded("Đà Nẵng", "đà"));
+        assert!(!starts_with_folded("Đà Nẵng", "da"));
+        assert!(starts_with_folded("abc", ""));
+        assert!(starts_with_folded("\u{301}a", ""));
+        assert!(starts_with_folded("", ""));
+        assert!(!starts_with_folded("ab", "abc"));
+        assert!(starts_with_folded("Hello", "HE"));
+    }
+
+    #[test]
+    fn ends_with_folded_starts_on_a_base_letter() {
+        assert!(ends_with_folded("Nguyễn", "ễn"));
+        assert!(ends_with_folded("Nguye\u{302}\u{303}n", "YỄN"));
+        assert!(ends_with_folded("Ngọc Ánh", "ánh"));
+        assert!(ends_with_folded("Ánh", "nh"));
+        assert!(!ends_with_folded("Ánh", "anh"));
+        assert!(!ends_with_folded("Anh", "ánh"));
+        // The suffix has to start at a base character, not inside a letter's marks: a needle
+        // that starts with a mark matches only text that itself starts with that mark.
+        assert!(!ends_with_folded("ễn", "\u{303}n"));
+        assert!(!ends_with_folded("é", "\u{301}"));
+        assert!(ends_with_folded("\u{301}", "\u{301}"));
+        assert!(ends_with_folded("\u{301}x", "\u{301}X"));
+        assert!(ends_with_folded("abc", ""));
+        assert!(ends_with_folded("", ""));
+        assert!(!ends_with_folded("bc", "abc"));
+        assert!(ends_with_folded("Hello", "LO"));
+    }
+
+    #[test]
+    fn folded_search_is_encoding_blind_and_never_panics() {
+        let marks = "a".to_string() + &"\u{323}\u{302}".repeat(5_000);
+        let big = "Nguyễn Văn ".repeat(100_000);
+        let cases: [&str; 10] = ["", "\u{301}", "a\u{301}\u{301}", "\u{10FFFF}", "İ", "ẞ", "ss", &marks, &big, "e\u{302}"];
+        for h in cases {
+            for n in cases {
+                let _ = (contains_folded(h, n), starts_with_folded(h, n), ends_with_folded(h, n));
+            }
+        }
+        assert!(contains_folded(&big, "VĂN NGUYỄN"));
+        assert!(!contains_folded(&big, "van"));
+        assert!(!contains_folded(&marks, "\u{323}\u{302}a"));
+        // NFC and NFD haystacks and needles give the same answers.
+        for (h, n) in [("Nguyễn", "ễ"), ("Nguyễn", "e"), ("Ánh", "á"), ("Đà Nẵng", "nẵng"), ("Đà Nẵng", "nang")] {
+            let (hd, nd) = (canonical(h), canonical(n));
+            for (a, b) in [(h, n), (hd.as_str(), n), (h, nd.as_str()), (hd.as_str(), nd.as_str())] {
+                assert_eq!(contains_folded(a, b), contains_folded(h, n), "{a:?} {b:?}");
+                assert_eq!(starts_with_folded(a, b), starts_with_folded(h, n), "{a:?} {b:?}");
+                assert_eq!(ends_with_folded(a, b), ends_with_folded(h, n), "{a:?} {b:?}");
+            }
+        }
     }
 }

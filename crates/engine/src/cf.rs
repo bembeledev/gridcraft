@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use gridcraft_core::{CellRef, RangeRef, Value, compare};
+use gridcraft_core::{CellRef, RangeRef, Value, compare, contains_folded, ends_with_folded, fold_key, starts_with_folded};
 use gridcraft_model::*;
 
 /// The conditional look of one cell.
@@ -90,7 +90,8 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
                 }
                 StatsNeed::Counts => {
                     if !v.is_empty() {
-                        *counts.entry(v.display().to_lowercase()).or_insert(0) += 1;
+                        // Counted by `fold_key`: case and NFC/NFD spellings are duplicates.
+                        *counts.entry(fold_key(&v.display())).or_insert(0) += 1;
                     }
                 }
             }
@@ -187,26 +188,17 @@ impl CfCache {
                 }
                 // As in Excel, an error value never contains, begins or ends with anything (its rule
                 // formulas SEARCH/LEFT/RIGHT fail on it), so it always "does not contain" (#1162).
-                CfRule::ContainsText { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::NotContainsText { text: t, style } => {
-                    (v.is_error() || !text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::BeginsWith { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().starts_with(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::EndsWith { text: t, style } => (!v.is_error() && text.to_lowercase().ends_with(&t.to_lowercase())).then_some(style.as_ref()),
+                // Otherwise case- and encoding-blind, matching whole letters (`e` is not in `Nguyễn`).
+                CfRule::ContainsText { text: t, style } => (!v.is_error() && contains_folded(&text, t)).then_some(style.as_ref()),
+                CfRule::NotContainsText { text: t, style } => (v.is_error() || !contains_folded(&text, t)).then_some(style.as_ref()),
+                CfRule::BeginsWith { text: t, style } => (!v.is_error() && starts_with_folded(&text, t)).then_some(style.as_ref()),
+                CfRule::EndsWith { text: t, style } => (!v.is_error() && ends_with_folded(&text, t)).then_some(style.as_ref()),
                 CfRule::Blanks { style } => (v.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::NoBlanks { style } => (!v.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::Errors { style } => v.is_error().then_some(style.as_ref()),
                 CfRule::NoErrors { style } => (!v.is_error()).then_some(style.as_ref()),
-                CfRule::Duplicate { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) > 1).then_some(style.as_ref())
-                }
-                CfRule::Unique { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) == 1).then_some(style.as_ref())
-                }
+                CfRule::Duplicate { style } => (!v.is_empty() && st.counts.get(&fold_key(&text)).copied().unwrap_or(0) > 1).then_some(style.as_ref()),
+                CfRule::Unique { style } => (!v.is_empty() && st.counts.get(&fold_key(&text)).copied().unwrap_or(0) == 1).then_some(style.as_ref()),
                 CfRule::Top10 { bottom, percent, rank, style } => match v.as_f64() {
                     Some(n) if !st.sorted.is_empty() => {
                         let k = if *percent { ((st.sorted.len() as f64) * (*rank as f64) / 100.0).floor().max(1.0) as usize } else { *rank as usize };

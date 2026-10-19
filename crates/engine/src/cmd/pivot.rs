@@ -1209,14 +1209,14 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
         let f = axis_field(C, pt, &field)?;
         if on {
             for it in all {
-                if !f.collapsed_items.iter().any(|x| x.eq_ignore_ascii_case(&it)) {
+                if !f.collapsed_items.iter().any(|x| gridcraft_core::text_eq(x, &it)) {
                     f.collapsed_items.push(it);
                 }
             }
         } else if items.is_none() {
             f.collapsed_items.clear();
         } else {
-            f.collapsed_items.retain(|x| !all.iter().any(|a| a.eq_ignore_ascii_case(x)));
+            f.collapsed_items.retain(|x| !all.iter().any(|a| gridcraft_core::text_eq(a, x)));
         }
         Ok(json!({"collapsed": f.collapsed_items}))
     })

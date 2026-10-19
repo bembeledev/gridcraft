@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
+use gridcraft_core::{CellRef, RangeRef, Value, compare_text, fold_key, sort_compare, text_eq};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -310,7 +310,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 let o = if k.by != "values" {
                     ca.cmp(cb)
                 } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t))).unwrap_or(usize::MAX);
+                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| text_eq(x, t))).unwrap_or(usize::MAX);
                     pos(va).cmp(&pos(vb))
                 } else if case && va.is_text() && vb.is_text() {
                     sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
@@ -639,10 +639,11 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
         "<" => cmp == Some(Ordering::Less),
         ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
         "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
-        "beginsWith" => text.to_lowercase().starts_with(&crit.to_lowercase()),
-        "endsWith" => text.to_lowercase().ends_with(&crit.to_lowercase()),
-        "contains" => text.to_lowercase().contains(&crit.to_lowercase()),
-        "notContains" => !text.to_lowercase().contains(&crit.to_lowercase()),
+        // Case- and encoding-blind, matching whole letters (`e` is not in `Nguyễn`).
+        "beginsWith" => gridcraft_core::starts_with_folded(text, crit),
+        "endsWith" => gridcraft_core::ends_with_folded(text, crit),
+        "contains" => gridcraft_core::contains_folded(text, crit),
+        "notContains" => !gridcraft_core::contains_folded(text, crit),
         _ => true,
     }
 }
@@ -688,7 +689,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        values.iter().any(|x| text_eq(x, &text) || text_eq(x, &v.display()))
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -768,7 +769,10 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
-    let mut seen = std::collections::BTreeMap::new();
+    // One entry per group key, showing the first text met. Text is grouped by `fold_key`, so
+    // "Abc", "abc" and an NFD spelling are one entry; other values by their key and shown text.
+    let mut seen: std::collections::HashSet<(u8, i64, String, String)> = std::collections::HashSet::new();
+    let mut entries: Vec<((u8, i64, String, String), String, bool)> = Vec::new();
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
@@ -779,15 +783,22 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
                 if blank {
                     *blanks
                 } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    values.iter().any(|x| text_eq(x, &t))
                 }
             }
             _ => true,
         };
-        let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        let (class, num, k) = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
+        let key = if !blank && v.is_text() { (class, num, fold_key(&t), String::new()) } else { (class, num, k, t.clone()) };
+        if seen.insert(key.clone()) {
+            entries.push((key, t, on));
+        }
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    // Numbers, then text in the Root order, then booleans, errors and blanks.
+    entries.sort_by(|(a, ta, _), (b, tb, _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| if a.0 == 1 { compare_text(ta, tb) } else { (&a.2, &a.3).cmp(&(&b.2, &b.3)) })
+    });
+    entries.into_iter().map(|(_, t, on)| (t, on)).collect()
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
@@ -796,10 +807,12 @@ fn case_order(a: &str, b: &str) -> Ordering {
     a.chars().zip(b.chars()).find(|(x, y)| x != y).map_or(Ordering::Equal, |(x, y)| y.is_lowercase().cmp(&x.is_lowercase()))
 }
 
+/// Class, number and text of a filter-list value. Text gets no key here: `filter_values` groups
+/// it by the `fold_key` of the text shown and orders it with `compare_text`.
 fn sort_key(v: &Value) -> (u8, i64, String) {
     match v {
         Value::Number(n) => (0, (n * 1e6) as i64, String::new()),
-        Value::Text(t) => (1, 0, t.to_lowercase()),
+        Value::Text(_) => (1, 0, String::new()),
         Value::Bool(b) => (2, *b as i64, String::new()),
         Value::Empty => (9, 0, String::new()),
         _ => (3, 0, v.display()),
@@ -837,7 +850,7 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         // isn't a duplicate, while 1.01 and 1.02 shown as 1.0 are.
         let shown = |c: CellRef| crate::display::format(&sh.value(c), cx.wb.styles.get(sh.style_id(c)).num_fmt.as_str(), &cx.wb).text;
         for row in start..=r.end.row {
-            let key: Vec<String> = cols.iter().map(|c| shown(CellRef::new(row, *c)).to_lowercase()).collect();
+            let key: Vec<String> = cols.iter().map(|c| fold_key(&shown(CellRef::new(row, *c)))).collect();
             if seen.insert(key) {
                 keep.push(row);
             } else {
@@ -1185,7 +1198,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| text_eq(x, input)),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;

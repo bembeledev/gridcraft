@@ -5,7 +5,7 @@
 //! [`super::data::apply_filter`] hides the rows. Creating a slicer (`insert.slicer` /
 //! `table.insertSlicer`) selects everything, i.e. applies no filter.
 
-use gridcraft_core::CellRef;
+use gridcraft_core::{CellRef, fold_key, text_eq};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -46,14 +46,15 @@ pub fn column_values(wb: &Workbook, sheet: usize, table: &str, column: &str) -> 
     let Some(ci) = t.column_index(column) else { return vec![] };
     let Some(dr) = t.data_range() else { return vec![] };
     let col = dr.start.col + ci as u32;
-    let mut seen = std::collections::BTreeSet::new();
+    // One tile per `fold_key`: case and NFC/NFD spellings are one tile, labelled by the first.
+    let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for row in dr.start.row..=dr.end.row {
         let text = crate::display::cell_text(wb, sh, CellRef::new(row, col));
         if text.is_empty() {
             continue;
         }
-        if seen.insert(text.to_lowercase()) {
+        if seen.insert(fold_key(&text)) {
             out.push(text);
         }
     }
@@ -68,7 +69,7 @@ pub fn slicer_items(wb: &Workbook, sheet: usize, sl: &Slicer) -> Vec<(String, bo
         .map(|v| {
             let on = match &sl.selected {
                 None => true,
-                Some(set) => set.iter().any(|x| x.eq_ignore_ascii_case(&v)),
+                Some(set) => set.iter().any(|x| text_eq(x, &v)),
             };
             (v, on)
         })
@@ -172,23 +173,23 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
         (sl.table.clone(), sl.column.clone(), sl.selected.clone())
     };
     let all = column_values(&s.doc()?.wb, sheet, &table, &column);
-    if !all.iter().any(|v| v.eq_ignore_ascii_case(&value)) {
+    if !all.iter().any(|v| text_eq(v, &value)) {
         return Err(bad("slicer.toggle", "value is not in the column"));
     }
     let new_selected: Option<Vec<String>> = if multi {
         let mut set: Vec<String> = current.unwrap_or_else(|| all.clone());
-        match set.iter().position(|x| x.eq_ignore_ascii_case(&value)) {
+        match set.iter().position(|x| text_eq(x, &value)) {
             Some(pos) => {
                 set.remove(pos);
             }
             None => set.push(value.clone()),
         }
         // Everything selected is the same as no filter.
-        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.eq_ignore_ascii_case(a))) { None } else { Some(set) }
+        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| text_eq(x, a))) { None } else { Some(set) }
     } else {
         // Single click: show only this value; clicking the sole selected value clears the filter.
         match &current {
-            Some(set) if set.len() == 1 && set.iter().any(|x| x.eq_ignore_ascii_case(&value)) => None,
+            Some(set) if set.len() == 1 && set.iter().any(|x| text_eq(x, &value)) => None,
             _ => Some(vec![value.clone()]),
         }
     };

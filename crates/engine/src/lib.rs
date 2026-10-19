@@ -485,3 +485,5 @@ pub fn cell(r: u32, c: u32) -> CellRef {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_collation;

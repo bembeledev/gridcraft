@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_calc::Calc;
-use gridcraft_core::{CellRef, RangeRef, Value};
+use gridcraft_core::{CellRef, RangeRef, Value, fold_key, text_eq};
 use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -764,7 +764,7 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
             if num.is_none() && operand.contains(['*', '?']) {
                 wild(&lower_op)
             } else if num.is_none() {
-                lower_text == lower_op
+                text_eq(text, operand)
             } else {
                 cmp == Some(Ordering::Equal)
             }
@@ -773,7 +773,7 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
             if num.is_none() && operand.contains(['*', '?']) {
                 !wild(&lower_op)
             } else if num.is_none() {
-                lower_text != lower_op
+                !text_eq(text, operand)
             } else {
                 cmp != Some(Ordering::Equal)
             }
@@ -814,7 +814,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let wb = &d.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let headers: Vec<String> =
-        (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim().to_lowercase()).collect();
+        (list.start.col..=list.end.col).map(|c| fold_key(crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim())).collect();
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.
     let mut rows: Vec<Vec<Cond>> = Vec::new();
@@ -830,8 +830,10 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 if v.is_empty() && formula.is_none() {
                     continue;
                 }
-                let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_lowercase();
-                match headers.iter().position(|h| !head.is_empty() && *h == head) {
+                // Labels match ignoring case and encoding (an NFD `Tên` criteria label finds the NFC column).
+                let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_string();
+                let key = fold_key(&head);
+                match headers.iter().position(|h| !key.is_empty() && *h == key) {
                     Some(off) => conds.push(Cond::Compare(off as u32, v)),
                     None => match formula.and_then(|f| f.expr()) {
                         Some(e) => conds.push(Cond::Computed(e, at)),
@@ -869,7 +871,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         let mut ok = matches_row(row);
         if ok && unique {
             let key: Vec<String> =
-                (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(row, c)).to_lowercase()).collect();
+                (list.start.col..=list.end.col).map(|c| fold_key(&crate::display::cell_text(wb, sh, CellRef::new(row, c)))).collect();
             ok = seen.insert(key);
         }
         keep.push((row, ok));
@@ -1062,7 +1064,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
                 if l.is_empty() {
                     continue;
                 }
-                let k = Key::Label(l.to_lowercase());
+                let k = Key::Label(fold_key(&l));
                 col_label.entry(k.clone()).or_insert(l);
                 k
             } else {
@@ -1076,7 +1078,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
                 if l.is_empty() {
                     continue;
                 }
-                let k = Key::Label(l.to_lowercase());
+                let k = Key::Label(fold_key(&l));
                 row_label.entry(k.clone()).or_insert(l);
                 k
             } else {

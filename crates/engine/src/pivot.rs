@@ -176,7 +176,6 @@ struct Item {
     label: String,
     class: u8,
     num: f64,
-    text: String,
     first: usize,
     /// The value is a number shown with the source format.
     formatted: bool,
@@ -188,21 +187,15 @@ struct FieldItems {
     index: HashMap<String, u32>,
 }
 
+/// Item order: class (numbers and date groups, text, booleans, errors, blank), then number, then
+/// label in the Root text order (`Đà Nẵng` next to `Da`, not after `z`).
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.label, &b.label))
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
 fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
-    let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
-        text: label.to_lowercase(),
-        value,
-        label,
-        class,
-        num,
-        first,
-        formatted,
-    };
+    let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item { value, label, class, num, first, formatted };
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
         Value::Number(n) => {
@@ -224,7 +217,9 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
             let label = crate::display::format(v, fmt, wb).text;
             (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true))
         }
-        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), t.to_string(), 1, 0.0, false)),
+        // Text items are one item per `fold_key`: case and NFC/NFD spellings merge, and the
+        // first spelling met labels the item.
+        Value::Text(t) => (format!("t{}", gridcraft_core::fold_key(t)), it(v.clone(), t.to_string(), 1, 0.0, false)),
         Value::Bool(b) => {
             let l = if *b { "TRUE" } else { "FALSE" };
             (format!("l{l}"), it(Value::Bool(*b), l.into(), 2, *b as u8 as f64, false))
@@ -423,7 +418,7 @@ fn build_tree(paths: &[&[u32]], depth: usize, fields: &[&PivotField], items: &[F
 }
 
 fn is_collapsed(field: &PivotField, label: &str) -> bool {
-    field.collapsed_items.iter().any(|c| c.eq_ignore_ascii_case(label))
+    field.collapsed_items.iter().any(|c| gridcraft_core::text_eq(c, label))
 }
 
 fn collect_siblings(nodes: &[Node], prefix: &mut Vec<u32>, out: &mut HashMap<Vec<u32>, Vec<u32>>) {
@@ -875,7 +870,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
             if let Some(sel) = &f.selected {
                 let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
-                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
+                if !sel.iter().any(|s| gridcraft_core::text_eq(s, &label)) {
                     continue 'rec;
                 }
             }

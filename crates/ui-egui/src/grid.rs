@@ -2590,9 +2590,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     });
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
+    // Space on a checkbox cell is such a shortcut too: it toggles the box (#1951).
+    let space_toggles = is_checkbox(sh, app);
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
-            if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
+            if !m.alt && (m.ctrl || m.command || (*key == egui::Key::Space && (m.shift || space_toggles))))
     });
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
     for ev in events {

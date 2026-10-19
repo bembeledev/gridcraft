@@ -174,9 +174,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
             let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
             // Backspace or Delete takes back the AutoComplete proposal (Excel's selected rest), not a typed character.
-            if ed.completion.is_some()
-                && (i.consume_key(egui::Modifiers::NONE, Key::Backspace)
-                    || i.consume_key(egui::Modifiers::NONE, Key::Delete))
+            if ed.completion.is_some() && (i.consume_key(egui::Modifiers::NONE, Key::Backspace) || i.consume_key(egui::Modifiers::NONE, Key::Delete))
             {
                 ed.completion = None;
             }

@@ -108,6 +108,7 @@ pub struct GridState {
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
     pub reveal_moving_end: bool,
     pub last_title: Option<String>,
+    pub last_titles: std::collections::HashMap<u64, String>,
     pub drag_select: bool,
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,

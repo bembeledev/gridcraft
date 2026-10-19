@@ -271,6 +271,11 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
+    if let (Some(doc_uid), Some(active_uid)) = (app.message_doc, app.session.active().map(|d| d.uid)) {
+        if doc_uid != active_uid {
+            return;
+        }
+    }
     let Some((title, msg)) = app.message.clone() else { return };
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {

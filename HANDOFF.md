@@ -28,7 +28,7 @@
 
 ## Remaining
 
-- Local branch: `codex/validate-cf-formulas-1999`, based on upstream `23829d8`. Public PR submission has not occurred.
+- Published [PR #2008](https://github.com/storytold/gridcraft/pull/2008) from `codex/validate-cf-formulas-1999`, based on upstream `23829d8`. GitHub CI and automated review were pending at publication.
 - Shared `craftrules` instructions and local-only `plan/` files were unavailable; checked-in GridCraft instructions were followed.
 
 ## Review First

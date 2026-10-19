@@ -55,6 +55,8 @@ zeros, keep first 15 digits of long numbers, convert digits around "E"; Excel's 
 continuous letters and numbers to a date, has no counterpart because GridCraft never makes that
 conversion). The options apply to typing, pasting and opening CSV/text files, as in Excel, and are
 an application preference (`Prefs::data_conversion`, `app.dataConversion`), not workbook state.
+`app.dataConversion` is journaled but not undoable: it changes what later typing gives, so a
+replayed journal needs it, and Undo takes back edits, not settings.
 All default on, so nothing changes until someone opts out.
 
 One deliberate difference: with "Keep first 15 digits of long numbers and display in scientific
@@ -72,8 +74,9 @@ Paste also reads the clipboard's HTML, where a spreadsheet records the number be
 (`x:num`, `sdval`; #257). That number doesn't override the options: a field they keep as text
 (`0042`, `990000000000000019`) stays text even when the source recorded it as a number, which for
 a long code may already have lost digits. The HTML still supplies the number for text the options
-don't cover, like pasted currency (`Rp10,000.00`). JSON numbers in `range.setValues` are different:
-they're numbers the caller typed, not text, so the options don't apply to them.
+don't cover, like pasted currency (`Rp10,000.00`). JSON numbers and booleans are different, in
+`range.setValues`, in `cell.set` and in the values a scenario stores: they're values, not text, so
+the options don't apply to them.
 
 ## Ctrl+wheel zoom steps along its own ladder, not Excel's 15-point steps
 

@@ -1,4 +1,4 @@
-//! Hungarian interface translations. Formula syntax and document content stay unchanged.
+//! Hungarian interface translations. Document content stays unchanged; formula localization is handled separately.
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {

@@ -101,15 +101,74 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
 ];
 
+/// Original Hungarian help for common functions; other functions keep English help.
+const HUNGARIAN_HELP: &[(&str, &str, &str)] = &[
+    ("SUM", "SZUM(szám1; [szám2]; ...)", "Összeadja a megadott számokat."),
+    ("AVERAGE", "ÁTLAG(szám1; [szám2]; ...)", "Kiszámítja a számok számtani átlagát."),
+    ("IF", "HA(logikai_vizsgálat; [érték_ha_igaz]; [érték_ha_hamis])", "A feltétel eredményétől függően adja vissza az egyik értéket."),
+    ("COUNT", "DARAB(érték1; [érték2]; ...)", "Megszámolja a számértékeket."),
+    ("COUNTA", "DARAB2(érték1; [érték2]; ...)", "Megszámolja a nem üres értékeket."),
+    ("COUNTBLANK", "DARABÜRES(tartomány)", "Megszámolja a tartomány üres celláit."),
+    ("SUMIF", "SZUMHA(tartomány; feltétel; [összegtartomány])", "Összeadja a megadott feltételnek megfelelő cellák értékeit."),
+    ("SUMIFS", "SZUMHATÖBB(összegtartomány; feltételtartomány1; feltétel1; ...)", "Összeadja a minden megadott feltételnek megfelelő értékeket."),
+    ("COUNTIF", "DARABTELI(tartomány; feltétel)", "Megszámolja a feltételnek megfelelő cellákat."),
+    ("COUNTIFS", "DARABHATÖBB(feltételtartomány1; feltétel1; ...)", "Megszámolja a minden megadott feltételnek megfelelő cellákat."),
+    ("MIN", "MIN(szám1; [szám2]; ...)", "Visszaadja a legkisebb számot."),
+    ("MAX", "MAX(szám1; [szám2]; ...)", "Visszaadja a legnagyobb számot."),
+    ("ROUND", "KEREKÍTÉS(szám; számjegyek)", "A megadott számú számjegyre kerekít; félértéknél a nullától távolodva."),
+    ("ROUNDUP", "KEREK.FEL(szám; számjegyek)", "A nullától távolodva kerekít a megadott számú számjegyre."),
+    ("ROUNDDOWN", "KEREK.LE(szám; számjegyek)", "A nulla felé kerekít a megadott számú számjegyre."),
+    ("ABS", "ABS(szám)", "Visszaadja a szám abszolút értékét."),
+    ("IFERROR", "HAHIBA(érték; érték_ha_hiba)", "Hiba esetén a helyettesítő értéket, egyébként az eredeti értéket adja vissza."),
+    ("AND", "ÉS(logikai1; [logikai2]; ...)", "IGAZ, ha minden megadott feltétel igaz."),
+    ("OR", "VAGY(logikai1; [logikai2]; ...)", "IGAZ, ha legalább egy megadott feltétel igaz."),
+    ("NOT", "NEM(logikai)", "Megfordítja a logikai értéket."),
+    ("TRUE", "IGAZ()", "Az IGAZ logikai értéket adja vissza."),
+    ("FALSE", "HAMIS()", "A HAMIS logikai értéket adja vissza."),
+    ("TODAY", "MA()", "Visszaadja az aktuális dátumot."),
+    ("NOW", "MOST()", "Visszaadja az aktuális dátumot és időt."),
+    ("DATE", "DÁTUM(év; hónap; nap)", "A megadott évből, hónapból és napból dátumértéket állít elő."),
+    ("YEAR", "ÉV(dátumérték)", "Visszaadja a dátum évét."),
+    ("MONTH", "HÓNAP(dátumérték)", "Visszaadja a dátum hónapját 1 és 12 között."),
+    ("DAY", "NAP(dátumérték)", "Visszaadja a dátum hónapon belüli napját."),
+    ("LEFT", "BAL(szöveg; [karakterszám])", "Visszaadja a szöveg első karaktereit."),
+    ("RIGHT", "JOBB(szöveg; [karakterszám])", "Visszaadja a szöveg utolsó karaktereit."),
+    ("MID", "KÖZÉP(szöveg; kezdőpozíció; karakterszám)", "A megadott kezdőpozíciótól ad vissza karaktereket a szövegből."),
+    ("LEN", "HOSSZ(szöveg)", "Visszaadja a szöveg karaktereinek számát."),
+    ("TRIM", "KIMETSZ(szöveg)", "Eltávolítja a szélső szóközöket, és a szavak között egy szóközt hagy."),
+    (
+        "VLOOKUP",
+        "FKERES(keresett_érték; tábla; oszlopszám; [közelítő_keresés])",
+        "A tábla első oszlopában keres, és a megadott oszlop azonos sorából ad vissza értéket.",
+    ),
+    (
+        "HLOOKUP",
+        "VKERES(keresett_érték; tábla; sorszám; [közelítő_keresés])",
+        "A tábla első sorában keres, és a megadott sor azonos oszlopából ad vissza értéket.",
+    ),
+    ("MATCH", "HOL.VAN(keresett_érték; keresési_tömb; [egyezés_típusa])", "Visszaadja a keresett érték tömbön belüli relatív helyét."),
+    ("INDEX", "INDEX(tömb; sorszám; [oszlopszám]; [területszám])", "Visszaadja a megadott helyen található értéket vagy hivatkozást."),
+    ("VAR.S", "VAR.M(szám1; [szám2]; ...)", "Minta alapján becsüli a sokaság varianciáját."),
+    ("VAR.P", "VAR.S(szám1; [szám2]; ...)", "Kiszámítja a teljes sokaság varianciáját."),
+];
+
+/// Select help by UI locale without changing the canonical function identity.
+fn localized_help(locale: FormulaLocale) -> &'static [(&'static str, &'static str, &'static str)] {
+    match locale {
+        FormulaLocale::Es => SPANISH_HELP,
+        FormulaLocale::Hu => HUNGARIAN_HELP,
+        _ => &[],
+    }
+}
+
+/// Signature for a name typed in the selected formula language.
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     canonical_signature(locale.canonical_name(name), locale)
 }
 
 /// Help for a canonical catalog name, without interpreting it as a localized alias.
 pub(crate) fn canonical_signature(canonical: &str, locale: FormulaLocale) -> Option<String> {
-    if locale == FormulaLocale::Es
-        && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, signature, _)) = localized_help(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*signature).into());
     }
     crate::formula_bar::function_signature(canonical).map(|s| {
@@ -118,14 +177,14 @@ pub(crate) fn canonical_signature(canonical: &str, locale: FormulaLocale) -> Opt
     })
 }
 
+/// Description for a name typed in the selected formula language.
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
     canonical_description(locale.canonical_name(name), locale)
 }
 
+/// Description for a canonical catalog name, with an English fallback.
 pub(crate) fn canonical_description(canonical: &str, locale: FormulaLocale) -> Option<String> {
-    if locale == FormulaLocale::Es
-        && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, _, description)) = localized_help(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*description).into());
     }
     crate::formula_bar::function_description(canonical)
@@ -154,12 +213,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hungarian_help_covers_registered_functions_and_preserves_fallbacks() {
+        for (name, signature, description) in HUNGARIAN_HELP {
+            assert!(crate::formula_bar::function_signature(name).is_some(), "{name}");
+            assert!(signature.starts_with(&format!("{}(", FormulaLocale::Hu.function_name(name))));
+            assert!(!description.is_empty());
+            assert_eq!(canonical_signature(name, FormulaLocale::Hu).as_deref(), Some(*signature));
+            assert_eq!(canonical_description(name, FormulaLocale::Hu).as_deref(), Some(*description));
+            assert_eq!(canonical_description(name, FormulaLocale::En), crate::formula_bar::function_description(name));
+        }
+        assert_eq!(canonical_description("SIN", FormulaLocale::Hu), crate::formula_bar::function_description("SIN"));
+        assert_eq!(canonical_signature("NOT_A_FUNCTION", FormulaLocale::Hu), None);
+    }
+
+    #[test]
     fn hungarian_help_distinguishes_catalog_names_from_typed_aliases() {
         let locale = FormulaLocale::Hu;
         assert_eq!(signature("VAR.S", locale), canonical_signature("VAR.P", locale));
         assert_eq!(description("VAR.S", locale), canonical_description("VAR.P", locale));
         assert!(canonical_signature("VAR.S", locale).unwrap().starts_with("VAR.M("));
         assert!(canonical_signature("VAR.P", locale).unwrap().starts_with("VAR.S("));
-        assert_eq!(canonical_description("VAR.S", locale), crate::formula_bar::function_description("VAR.S"));
+        assert!(canonical_description("VAR.S", locale).unwrap().starts_with("Minta"));
+        assert!(description("VAR.S", locale).unwrap().contains("teljes sokaság"));
     }
 }

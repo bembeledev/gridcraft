@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian formula names and entry) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian function help and catalog coverage) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -48,8 +48,9 @@ semicolon arguments, decimal commas and backslash array-column separators. Accen
 names work in entry, autocomplete and Insert Function search. English names remain available
 where they do not collide with a Hungarian alias. XLSX and engine/API formulas retain canonical
 English syntax; defined names, text and references are preserved. Some recent function names
-remain canonical where public documentation is inconsistent. Function descriptions and parameter
-labels still fall back to English; number/date display formats are unchanged. Catalog coverage is not complete UI coverage:
+remain canonical where public documentation is inconsistent. 39 common functions now have original Hungarian descriptions and parameter
+labels, including arithmetic, conditional aggregation, logic, dates, text, lookups and variance.
+Other functions still fall back to English; number/date display formats are unchanged. Catalog coverage is not complete UI coverage:
 strings that do not use the translation lookup, including engine/import warnings and parts
 of dialogs and task panes, still appear in English. Native-speaker review remains pending.
 
@@ -97,6 +98,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Add Hungarian help and parameter labels for 39 functions; test catalog-key union and canonical/alias help collisions |
 | 2026-10-19 | minor | Hungarian formula table, Unicode entry/completion/search, localized separators and XLSX round-trip regression coverage |
 | 2026-10-18 | minor | Add Hungarian selection, locale detection and 971 catalog entries; localize the Macros dialog; keep formula syntax unchanged |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |

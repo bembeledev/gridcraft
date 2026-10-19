@@ -606,6 +606,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hungarian_covers_all_catalog_keys() {
+        let mut keys: std::collections::BTreeSet<String> = JAPANESE.iter().map(|(key, _)| (*key).to_string()).collect();
+        // The other catalogs are match tables. Read their literal keys so additions to any
+        // catalog automatically extend this regression test, including non-Japanese keys.
+        for source in [
+            include_str!("i18n/cs.rs"),
+            include_str!("i18n/de.rs"),
+            include_str!("i18n/es.rs"),
+            include_str!("i18n/fr.rs"),
+            include_str!("i18n/ko.rs"),
+            include_str!("i18n/pt.rs"),
+            include_str!("i18n/ru.rs"),
+            include_str!("i18n/sr.rs"),
+            include_str!("i18n/zh.rs"),
+        ] {
+            for line in source.lines() {
+                if let Some((key, _)) = line.trim().strip_prefix('"').and_then(|line| line.split_once("\" =>")) {
+                    // Decode escaped newlines and quotes in the Rust string literal.
+                    let key: String = serde_json::from_str(&format!("\"{key}\"")).unwrap();
+                    keys.insert(key);
+                }
+            }
+        }
+        assert!(keys.contains("Add Chart Element"));
+        for key in keys {
+            assert!(hu::translate(&key).is_some_and(|text| !text.is_empty()), "missing Hungarian: {key}");
+        }
+    }
+
+    #[test]
     fn translations_are_unique_and_preserve_unknown_text() {
         for (i, (en, ja)) in JAPANESE.iter().enumerate() {
             assert!(!ja.is_empty());

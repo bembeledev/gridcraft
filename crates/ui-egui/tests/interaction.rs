@@ -207,6 +207,64 @@ fn space_toggles_the_active_checkbox_without_clicking_the_hovered_cell() {
     assert!(h.state().editor.is_none());
 }
 
+/// Space as a real keyboard sends it: the key press and the " " it types, in either order.
+fn space_with_its_text(h: &mut egui_kittest::Harness<'static, SheetApp>, text_first: bool) {
+    let space = |pressed| Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed, repeat: false, modifiers: Modifiers::NONE };
+    let typed = Event::Text(" ".into());
+    let events = if text_first { [typed, space(true), space(false)] } else { [space(true), typed, space(false)] };
+    h.input_mut().events.extend(events);
+    h.run_steps(2);
+}
+
+fn num_fmt(h: &egui_kittest::Harness<'static, SheetApp>, a: &str) -> String {
+    let d = h.state().session.active().unwrap();
+    let sheet = d.wb.active().unwrap();
+    d.wb.styles.get(sheet.style_id(CellRef::parse(a).unwrap())).num_fmt.as_str().to_string()
+}
+
+#[test]
+fn space_on_a_checkbox_toggles_it_without_starting_an_edit() {
+    // #1951: the " " Space types started an edit, and Enter then replaced the box with it.
+    let after_space_and_enter = |text_first| {
+        let mut session = blank();
+        session.execute("insert.checkbox", json!({"range": "A1"})).unwrap();
+        let mut h = harness(session);
+        space_with_its_text(&mut h, text_first);
+        let after_space = (value(&h, "A1"), h.state().editor.is_some());
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        let active = h.state().session.active().unwrap().selection.active.a1();
+        (after_space, (value(&h, "A1"), num_fmt(&h, "A1"), active))
+    };
+    // Checked once (twice would leave it unchecked), no editor; Enter just moves down.
+    let want = ((Value::Bool(true), false), (Value::Bool(true), "checkbox".to_string(), "A2".to_string()));
+    assert_eq!([after_space_and_enter(false), after_space_and_enter(true)], [want.clone(), want], "[key first, text first]");
+}
+
+#[test]
+fn space_toggles_the_checkboxes_of_a_selection_whose_active_cell_is_one() {
+    for text_first in [false, true] {
+        let mut session = blank();
+        session.execute("cell.set", json!({"cell": "B1", "input": "hi"})).unwrap();
+        session.execute("insert.checkbox", json!({"range": "A1:A2"})).unwrap();
+        session.execute("selection.set", json!({"range": "A1:B2", "active": "A1"})).unwrap();
+        let mut h = harness(session);
+        space_with_its_text(&mut h, text_first);
+        assert!(h.state().editor.is_none(), "text first: {text_first}");
+        assert_eq!([value(&h, "A1"), value(&h, "A2"), value(&h, "B1")], [Value::Bool(true), Value::Bool(true), Value::from("hi")]);
+        let selection = &h.state().session.active().unwrap().selection;
+        assert_eq!((selection.ranges[0].a1(), selection.active.a1()), ("A1:B2".to_string(), "A1".to_string()));
+    }
+}
+
+#[test]
+fn space_on_a_plain_cell_still_starts_an_edit() {
+    for text_first in [false, true] {
+        let mut h = harness(blank());
+        space_with_its_text(&mut h, text_first);
+        assert_eq!(h.state().editor.as_ref().map(|ed| ed.text.as_str()), Some(" "), "text first: {text_first}");
+    }
+}
+
 #[test]
 fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
     // #247: typing A1 in the Name Box and pressing Enter selected A2; the grid replayed the Enter.

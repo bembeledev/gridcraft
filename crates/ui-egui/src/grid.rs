@@ -2594,6 +2594,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
             if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
     });
+    // Nor may the " " of the Space that toggles the active checkbox, in either order (#1951).
+    let space_pressed = events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Space, pressed: true, .. }));
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
     for ev in events {
         match ev {
@@ -2604,7 +2606,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            egui::Event::Text(_) if shortcut_pressed => {}
+            egui::Event::Text(_) if shortcut_pressed || (space_pressed && is_checkbox(sh, app)) => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {

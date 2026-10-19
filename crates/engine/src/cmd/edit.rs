@@ -227,7 +227,8 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.selection.active,
     };
     // Both spellings take a string, number or boolean, as typed (#697).
-    let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let raw = p.get("input").or_else(|| p.get("value")).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let input = json_to_input(raw);
     let array = bool_param(p, "array").unwrap_or(false);
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
@@ -237,7 +238,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(m));
     }
-    let conv = s.prefs.data_conversion;
+    let conv = conversion_for(raw, &s.prefs.data_conversion);
     let active_sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         if array {
@@ -293,6 +294,16 @@ pub(crate) fn json_to_input(v: &Json) -> String {
         Json::Number(n) => n.to_string(),
         Json::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// The conversion options for a JSON value read through [`json_to_input`]. They decide how text
+/// reads; a JSON number or boolean is already a value, so it reads with the defaults, as before the
+/// options existed. Otherwise `serde_json`'s spelling (`1e-5`, `100.0`) would decide its type.
+pub(crate) fn conversion_for(v: &Json, conv: &gridcraft_core::parse::DataConversion) -> gridcraft_core::parse::DataConversion {
+    match v {
+        Json::Number(_) | Json::Bool(_) => gridcraft_core::parse::DataConversion::default(),
+        _ => *conv,
     }
 }
 

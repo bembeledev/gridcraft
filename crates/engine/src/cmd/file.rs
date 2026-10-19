@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
             options
         ),
         cmd!(
-            query "app.dataConversion",
+            noundo "app.dataConversion",
             "Automatic Data Conversion",
             [],
             None,

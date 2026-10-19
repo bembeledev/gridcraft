@@ -3226,11 +3226,6 @@ fn space_toggles(sh: &Sheet, app: &SheetApp) -> bool {
     }
 }
 
-fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
-    let Some(d) = app.session.active() else { return false };
-    d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
-}
-
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet);

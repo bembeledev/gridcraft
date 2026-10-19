@@ -2147,15 +2147,39 @@ mod tests {
         s.execute("data.refreshAll", json!({})).unwrap();
         s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
         assert_eq!(val(&s, "G1"), Value::Number(1160.0));
-        // Opening a saved workbook rebuilds the index (files don't carry it).
+        // Opening a saved workbook starts without an index (files don't carry it); the first
+        // GETPIVOTDATA builds it.
         let wb = (*s.doc().unwrap().wb).clone();
         let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
         s.add_document(crate::DocState::new(back, None, "Reopened".into()));
         let d = s.doc().unwrap();
         let sh = d.wb.sheet(d.wb.sheet_index("Sheet2").unwrap()).unwrap();
-        assert!(!sh.pivots.first().unwrap().data_cells.is_empty());
+        assert!(sh.pivots.first().unwrap().data_index.cells().is_some());
         assert_eq!(sh.value(CellRef::parse("G1").unwrap()), Value::Number(1160.0));
         assert_eq!(sh.value(CellRef::parse("G3").unwrap()), Value::Number(TOTAL + 1000.0));
+    }
+
+    #[test]
+    fn getpivotdata_reads_the_displayed_report() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        // The source changes after the last refresh, then the workbook is saved and reopened:
+        // the report still shows the old numbers, and the formula agrees with the cell.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "1100"})).unwrap();
+        let wb = (*s.doc().unwrap().wb).clone();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into()));
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        let r = pt(&s).last_range.unwrap();
+        let at = r.start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","East")"#)})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index("Sheet2").unwrap()).unwrap();
+        let east = (r.start.row..=r.end.row).find(|row| sh.value(CellRef::new(*row, r.start.col)) == Value::Text("East".into())).unwrap();
+        let shown = sh.value(CellRef::new(east, r.start.col + 1));
+        assert_eq!(shown, Value::Number(415.0));
+        assert_eq!(val(&s, "K1"), shown);
     }
 
     #[test]

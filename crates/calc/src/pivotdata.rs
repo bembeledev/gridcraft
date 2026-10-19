@@ -1,10 +1,11 @@
 //! GETPIVOTDATA: a value from a PivotTable report, found by its value field and the row and
-//! column items that locate it (Excel's documented semantics). The engine keeps each
-//! PivotTable's computed value cells in `PivotTable::data_cells`.
+//! column items that locate it (Excel's documented semantics). Each PivotTable's value cells are
+//! indexed in `PivotTable::data_index` (set on refresh, built from the source on first use after
+//! opening a workbook); the result is read from the report cell the sheet shows.
 
-use gridcraft_core::{CellError, Value};
+use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_formula::Expr;
-use gridcraft_model::{PivotDataCell, PivotItemRef, PivotTable};
+use gridcraft_model::{PIVOT_INDEXER, PivotDataCell, PivotItemRef, PivotLookup, PivotTable};
 
 use crate::eval::{Ev, Evaluator};
 
@@ -33,9 +34,20 @@ fn is_axis_field(pt: &PivotTable, field: &str) -> bool {
     pt.rows.iter().chain(pt.columns.iter()).any(|f| same_text(&f.source_col, field))
 }
 
-/// The value cell whose value field and items are exactly those asked for.
-fn find<'a>(pt: &'a PivotTable, data_field: &str, pairs: &[(String, Value)]) -> Option<&'a PivotDataCell> {
-    pt.data_cells.iter().find(|cell| {
+/// The value cell whose value field and items are exactly those asked for. Text items hit the
+/// hash index; numbers and booleans also match by value, which a miss falls back to scanning for.
+fn find<'a>(cells: &'a PivotLookup, data_field: &str, pairs: &[(String, Value)]) -> Option<&'a PivotDataCell> {
+    let labels: Option<Vec<(&str, String)>> = pairs.iter().map(|(f, v)| v.to_text().ok().map(|t| (f.as_str(), t))).collect();
+    if let Some(labels) = &labels {
+        let refs: Vec<(&str, &str)> = labels.iter().map(|(f, t)| (*f, t.as_str())).collect();
+        if let Some(c) = cells.find(data_field, &refs) {
+            return Some(c);
+        }
+    }
+    if pairs.iter().all(|(_, v)| matches!(v, Value::Text(_))) {
+        return None;
+    }
+    cells.cells()?.iter().find(|cell| {
         (same_text(&cell.data_field, data_field) || same_text(&cell.source_col, data_field))
             && cell.items.len() == pairs.len()
             && pairs.iter().all(|(f, v)| cell.items.iter().any(|it| same_text(&it.field, f) && item_matches(it, v)))
@@ -44,8 +56,6 @@ fn find<'a>(pt: &'a PivotTable, data_field: &str, pairs: &[(String, Value)]) -> 
 
 impl Evaluator<'_> {
     pub(crate) fn getpivotdata(&mut self, args: &[Expr]) -> Ev {
-        // A refresh changes the report without touching the formula's references.
-        self.host.note_volatile();
         match self.pivot_value(args) {
             Ok(v) => Ev::V(v),
             Err(e) => Ev::V(Value::Error(e)),
@@ -100,6 +110,18 @@ impl Evaluator<'_> {
                 return Err(CellError::Ref);
             }
         }
-        find(pt, &data_field, &axis_pairs).map(|c| c.value.clone()).ok_or(CellError::Ref)
+        // The report's value cells; built from the source on first use when a refresh didn't set them.
+        if pt.data_index.cells().is_none() {
+            let build = PIVOT_INDEXER.get().ok_or(CellError::Ref)?;
+            pt.data_index.set_cells(build(wb, area.sheet, pt).map_err(|_| CellError::Ref)?);
+        }
+        let cell = find(&pt.data_index, &data_field, &axis_pairs).ok_or(CellError::Ref)?;
+        // The value is the one the sheet shows, so the formula and the report cell always agree.
+        let report = pt.last_range.ok_or(CellError::Ref)?;
+        let at = CellRef::new(report.start.row.saturating_add(cell.row), report.start.col.saturating_add(cell.col));
+        if !report.contains(at) {
+            return Err(CellError::Ref);
+        }
+        Ok(sheet.value(at))
     }
 }

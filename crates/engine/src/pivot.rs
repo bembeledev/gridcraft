@@ -1315,7 +1315,13 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             if data.len() < MAX_INDEXED_CELLS {
                 let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
                 items.extend(item_refs(&col_fields, &col_items, cp));
-                data.push(PivotDataCell { data_field: vdef.name.clone(), source_col: vdef.source_col.clone(), items, value: shown.clone() });
+                data.push(PivotDataCell {
+                    data_field: vdef.name.clone(),
+                    source_col: vdef.source_col.clone(),
+                    items,
+                    row: u32::try_from(r).unwrap_or(u32::MAX),
+                    col: u32::try_from(l + j).unwrap_or(u32::MAX),
+                });
             }
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
@@ -1512,8 +1518,11 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
+    // The index of the new report; its lookup hash is built on the first GETPIVOTDATA.
     if let Some(p) = wb.sheet_mut(sheet).and_then(|s| s.pivots.get_mut(idx)) {
-        p.data_cells = out.data;
+        let index = PivotLookup::default();
+        index.set_cells(out.data);
+        p.data_index = index;
     }
     Ok(area)
 }
@@ -1613,24 +1622,10 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     }
 }
 
-/// Rebuilds every PivotTable's GETPIVOTDATA index from its source without rewriting the
-/// report (after opening a workbook, whose files don't carry the index).
-pub fn index_all(wb: &mut Workbook) {
-    let mut found: Vec<(usize, usize, Vec<PivotDataCell>)> = Vec::new();
-    for (si, sh) in wb.sheets.iter().enumerate() {
-        for (pi, pt) in sh.pivots.iter().enumerate() {
-            if pt.last_range.is_none() {
-                continue;
-            }
-            let data = compute(wb, pt, si).map(|o| o.data).unwrap_or_default();
-            found.push((si, pi, data));
-        }
-    }
-    for (si, pi, data) in found {
-        if let Some(p) = wb.sheet_mut(si).and_then(|s| s.pivots.get_mut(pi)) {
-            p.data_cells = data;
-        }
-    }
+/// The value cells of a PivotTable's report, computed from its source. GETPIVOTDATA calls this
+/// the first time it reads a pivot whose index was not set by a refresh (a workbook just opened).
+pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, String> {
+    compute(wb, pt, sheet).map(|o| o.data)
 }
 
 /// Clears a pivot's last output area.
@@ -1640,7 +1635,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
-        p.data_cells.clear();
+        p.data_index = PivotLookup::default();
     }
 }
 

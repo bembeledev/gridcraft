@@ -1003,10 +1003,10 @@ pub struct PivotTable {
     pub last_range: Option<RangeRef>,
     /// Calculated fields, usable in the Values area by name.
     pub calculated_fields: Vec<PivotCalcField>,
-    /// Every value cell of the last computed report, for GETPIVOTDATA. Rebuilt on refresh and
-    /// when a workbook is opened; not saved.
+    /// Where GETPIVOTDATA finds the report's value cells. Shared between workbook clones (so
+    /// editing the pivot's sheet doesn't copy it), reset on refresh, built on first use; not saved.
     #[serde(skip)]
-    pub data_cells: Vec<PivotDataCell>,
+    pub data_index: PivotLookup,
     /// The Σ Values pseudo-field (it exists with two or more value fields) sits in Rows rather
     /// than Columns (Excel's "values on rows").
     pub values_on_rows: bool,
@@ -1026,7 +1026,7 @@ pub struct PivotCalcField {
 }
 
 /// One value cell of a computed PivotTable report: the value field, the row and column items
-/// that locate it (fewer for subtotals, none for the grand total) and the value shown.
+/// that locate it (fewer for subtotals, none for the grand total) and where the report shows it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PivotDataCell {
     /// The value field's caption ("Sum of Sales").
@@ -1034,7 +1034,77 @@ pub struct PivotDataCell {
     /// The value field's source column ("Sales").
     pub source_col: String,
     pub items: Vec<PivotItemRef>,
-    pub value: Value,
+    /// Row and column of the cell, counted from the report's top-left cell.
+    pub row: u32,
+    pub col: u32,
+}
+
+/// Builds a PivotTable's value cells from its source (`sheet` is the pivot's sheet). The engine
+/// sets it; the model can't compute reports.
+pub type PivotIndexer = fn(&crate::Workbook, usize, &PivotTable) -> Result<Vec<PivotDataCell>, String>;
+pub static PIVOT_INDEXER: std::sync::OnceLock<PivotIndexer> = std::sync::OnceLock::new();
+
+fn norm(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+/// The lookup key of a value field with field/item labels (names ignore case and outer blanks).
+pub fn pivot_key(data_field: &str, items: &[(&str, &str)]) -> String {
+    let mut parts: Vec<String> = items.iter().map(|(f, l)| format!("{}\u{2}{}", norm(f), norm(l))).collect();
+    parts.sort_unstable();
+    format!("{}\u{1}{}", norm(data_field), parts.join("\u{1}"))
+}
+
+#[derive(Default)]
+struct LookupInner {
+    cells: std::sync::OnceLock<Vec<PivotDataCell>>,
+    keys: std::sync::OnceLock<std::collections::HashMap<String, usize>>,
+}
+
+/// A PivotTable's GETPIVOTDATA index. Clones share it, so `Workbook` clones per command stay
+/// cheap however large the report is. The cells are set on refresh or on first use; the hash of
+/// them is built on the first lookup.
+#[derive(Clone, Default)]
+pub struct PivotLookup(std::sync::Arc<LookupInner>);
+
+impl PivotLookup {
+    /// The value cells, if they were set.
+    pub fn cells(&self) -> Option<&[PivotDataCell]> {
+        self.0.cells.get().map(Vec::as_slice)
+    }
+
+    /// Sets the value cells (the first set wins) and returns them.
+    pub fn set_cells(&self, cells: Vec<PivotDataCell>) -> &[PivotDataCell] {
+        self.0.cells.get_or_init(|| cells)
+    }
+
+    /// The cell with this value field and exactly these items, by hash.
+    pub fn find(&self, data_field: &str, items: &[(&str, &str)]) -> Option<&PivotDataCell> {
+        let cells = self.0.cells.get()?;
+        let keys = self.0.keys.get_or_init(|| {
+            let mut m = std::collections::HashMap::with_capacity(cells.len());
+            for (i, c) in cells.iter().enumerate() {
+                let items: Vec<(&str, &str)> = c.items.iter().map(|it| (it.field.as_str(), it.label.as_str())).collect();
+                m.entry(pivot_key(&c.data_field, &items)).or_insert(i);
+                m.entry(pivot_key(&c.source_col, &items)).or_insert(i);
+            }
+            m
+        });
+        keys.get(&pivot_key(data_field, items)).and_then(|i| cells.get(*i))
+    }
+}
+
+impl std::fmt::Debug for PivotLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PivotLookup({} cells)", self.cells().map_or(0, <[PivotDataCell]>::len))
+    }
+}
+
+/// The index is a cache, not part of a PivotTable's identity.
+impl PartialEq for PivotLookup {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// A row or column field item: the field's source column, the item's label and its value.
@@ -1065,7 +1135,7 @@ impl Default for PivotTable {
             show_headers: true,
             last_range: None,
             calculated_fields: vec![],
-            data_cells: vec![],
+            data_index: PivotLookup::default(),
             values_on_rows: false,
             values_position: None,
         }

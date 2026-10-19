@@ -1764,11 +1764,26 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
             _ => dynamic = true,
         },
+        // GETPIVOTDATA reads the report cells, so it depends on the whole report its reference
+        // points into (pivot commands recalculate everything). Any other reference is dynamic.
+        Expr::Call(n, args) if n == "GETPIVOTDATA" => match args.get(1) {
+            Some(Expr::Ref(r)) => {
+                let si = match &r.sheet {
+                    SheetSel::Current => Some(sheet),
+                    SheetSel::Named(name) => wb.sheet_index(name),
+                    SheetSel::Span(..) => None,
+                };
+                let report =
+                    si.and_then(|i| wb.sheet(i)).and_then(|sh| sh.pivots.iter().find_map(|p| p.last_range.filter(|lr| lr.intersects(&r.range()))));
+                match report {
+                    Some(lr) => push(&mut out, r, lr),
+                    None => dynamic = true,
+                }
+            }
+            _ => dynamic = true,
+        },
         Expr::Call(n, _)
-            if matches!(
-                n.as_str(),
-                "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO" | "GETPIVOTDATA"
-            ) =>
+            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
         {
             dynamic = true
         }

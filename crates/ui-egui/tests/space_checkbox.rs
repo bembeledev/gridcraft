@@ -118,3 +118,19 @@ fn checkbox_cell_holding_text_still_edits() {
     assert_eq!(value(&h, "A1").display(), "hello", "text is untouched");
     assert!(h.state().editor.is_some(), "Space starts an edit when the toggle cannot apply");
 }
+
+#[test]
+fn space_on_a_checkbox_swallows_only_its_own_space() {
+    // One frame: Space (+release) on a checkbox types " ", then the user's next keystroke
+    // arrives. Only the checkbox's own " " may be swallowed — the following character must
+    // still start an edit (#1951 review).
+    let mut h = harness(checkbox_book());
+    push(&mut h, Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    push(&mut h, Event::Text(" ".to_string()));
+    push(&mut h, Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    push(&mut h, Event::Text("x".to_string()));
+    h.run_steps(2);
+    assert_eq!(value(&h, "A1"), gridcraft_engine::core::Value::Bool(true), "the checkbox toggled");
+    let ed = h.state().editor.clone().expect("the following letter starts an edit");
+    assert!(ed.text.starts_with('x'), "the first character after the checkbox's space survives: {:?}", ed.text);
+}

@@ -2607,7 +2607,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            egui::Event::Text(_) if shortcut_pressed || space_consumed => {}
+            // The Space that toggled a checkbox types exactly one " "; consume that one and
+            // re-open the edit path, so a character typed later in the same frame (after an
+            // arrow to the next cell) still starts its edit (#1951 review).
+            egui::Event::Text(t) if space_consumed && t == " " => space_consumed = false,
+            egui::Event::Text(_) if shortcut_pressed => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {

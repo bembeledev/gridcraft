@@ -161,19 +161,22 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 // Measure the dirty marker separately so it is never consumed by the ellipsis.
                 let marker_galley = dirty.then(|| ui.fonts_mut(|f| f.layout_no_wrap(" •".into(), theme::ui_bold(13.0), t.text)));
                 let marker_w = marker_galley.as_ref().map(|g| g.size().x).unwrap_or(0.0);
-                let title_w = (gap - marker_w).max(0.0);
-                let mut job = egui::text::LayoutJob::simple_singleline(title, theme::ui_bold(13.0), t.text);
-                job.wrap.max_width = title_w;
-                job.wrap.max_rows = 1;
-                job.wrap.break_anywhere = true;
-                job.wrap.overflow_character = Some('…');
-                let title_galley = ui.fonts_mut(|f| f.layout_job(job));
-                let total_w = title_galley.size().x + marker_w;
-                let center = pos2((left_end + right_start) / 2.0, rect.center().y);
-                let top_left = center - vec2(total_w * 0.5, title_galley.size().y * 0.5);
-                ui.painter().galley(top_left, title_galley, t.text);
-                if let Some(mg) = marker_galley {
-                    ui.painter().galley(top_left + vec2(total_w - marker_w, 0.0), mg, t.text);
+                // Skip painting entirely when the gap is too narrow to show even the marker.
+                if gap > marker_w {
+                    let title_w = gap - marker_w;
+                    let mut job = egui::text::LayoutJob::simple_singleline(title, theme::ui_bold(13.0), t.text);
+                    job.wrap.max_width = title_w;
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    job.wrap.overflow_character = Some('…');
+                    let title_galley = ui.fonts_mut(|f| f.layout_job(job));
+                    let total_w = title_galley.size().x + marker_w;
+                    let center = pos2((left_end + right_start) / 2.0, rect.center().y);
+                    let top_left = center - vec2(total_w * 0.5, title_galley.size().y * 0.5);
+                    ui.painter().galley(top_left, title_galley, t.text);
+                    if let Some(mg) = marker_galley {
+                        ui.painter().galley(top_left + vec2(total_w - marker_w, 0.0), mg, t.text);
+                    }
                 }
             }
         });

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian function help and review fixes) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian variance hint rendering) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -140,6 +140,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-19 | Hungarian variance hints keep their correct function name instead of localizing it twice |
 | 2026-10-19 | Hungarian help: original descriptions and parameter labels for 39 common functions; full catalog-key coverage regression and corrected control-language documentation |
 | 2026-10-19 | Hungarian formulas: 520 name entries (447 translated), localized separators, accented autocomplete and canonical XLSX storage |
 | 2026-10-18 | Hungarian interface: language selector, saved preference and system-locale detection; 971 catalog entries and translated Macros dialog |
@@ -204,6 +205,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Preserve already-localized signature names in formula hints; rendered regression distinguishes population VAR.S from sample VAR.M |
 | 2026-10-19 | minor | Add Hungarian help for 39 common functions and address localization review findings |
 | 2026-10-19 | minor | Hungarian formula entry, display and completion; localized separators |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |

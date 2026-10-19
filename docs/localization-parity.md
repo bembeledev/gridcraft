@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian function help and catalog coverage) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Hungarian variance hint rendering) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -98,6 +98,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Preserve already-localized signature names in formula hints; rendered regression distinguishes population VAR.S from sample VAR.M |
 | 2026-10-19 | minor | Add Hungarian help and parameter labels for 39 functions; test catalog-key union and canonical/alias help collisions |
 | 2026-10-19 | minor | Hungarian formula table, Unicode entry/completion/search, localized separators and XLSX round-trip regression coverage |
 | 2026-10-18 | minor | Add Hungarian selection, locale detection and 971 catalog entries; localize the Macros dialog; keep formula syntax unchanged |

@@ -275,3 +275,36 @@ fn hungarian_formulas_calculate_and_survive_xlsx_and_language_switching() {
     app.begin_edit(None, false);
     assert_eq!(app.editor.as_ref().unwrap().text, "=IF(TRUE,AVERAGE(1.5,2.5),0)");
 }
+
+#[test]
+fn hungarian_variance_hint_keeps_the_localized_function_identity() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"hu"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    for (name, other, description) in
+        [("VAR.S", "VAR.M", "Kiszámítja a teljes sokaság varianciáját."), ("VAR.M", "VAR.S", "Minta alapján becsüli a sokaság varianciáját.")]
+    {
+        h.state_mut().begin_edit(Some(format!("={name}(1;")), true);
+        h.run_steps(4);
+        h.get_by_label(&format!("{name}("));
+        assert!(h.query_by_label(&format!("{other}(")).is_none());
+        h.get_by_label(description);
+        if name == "VAR.S"
+            && let Ok(path) = std::env::var("GRIDCRAFT_HU_VARIANCE_SCREENSHOT")
+        {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.state_mut().cancel_edit();
+        h.run_steps(4);
+    }
+}

@@ -385,7 +385,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{}(", ed.locale.function_name(head))).font(theme::ui_font(12.0)));
+                        // The signature already contains its localized function name. Translating
+                        // again would turn Hungarian VAR.S (population) into VAR.M (sample).
+                        ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
                         let inner = rest.trim_end_matches(')');
                         let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
                         for (i, part) in parts.iter().enumerate() {

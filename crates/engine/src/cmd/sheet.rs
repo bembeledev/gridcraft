@@ -55,6 +55,16 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("sheet.hide", "Hide Sheet", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet?}", has_doc, hide_sheet),
         cmd!("sheet.unhide", "Unhide Sheet…", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet}", has_doc, unhide_sheet),
         cmd!(noundo "sheet.activate", "Activate Sheet", [], None, "{sheet: index | name}", has_doc, activate),
+        cmd!(
+            noundo "sheet.group",
+            "Group Sheets",
+            [],
+            None,
+            "{sheets: [index, ...]} — edits on the active sheet repeat on every grouped sheet; the active sheet joins the group",
+            has_doc,
+            group_sheets
+        ),
+        cmd!(noundo "sheet.ungroup", "Ungroup Sheets", [], None, "{}", has_doc, ungroup_sheets),
         cmd!(noundo "sheet.next", "Next Sheet", [], Some("Ctrl+PageDown"), "{}", has_doc, |s, _| step_sheet(s, 1)),
         cmd!(noundo "sheet.previous", "Previous Sheet", [], Some("Ctrl+PageUp"), "{}", has_doc, |s, _| step_sheet(s, -1)),
     ]
@@ -1075,4 +1085,30 @@ pub(crate) fn check_table_shift(sh: &Sheet, e: &Edit) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn group_sheets(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.active_mut().ok_or_else(|| bad("sheet.group", "no workbook"))?;
+    let n = d.wb.sheets.len();
+    let mut g: Vec<usize> = p
+        .get("sheets")
+        .and_then(Json::as_array)
+        .ok_or_else(|| bad("sheet.group", "missing `sheets`"))?
+        .iter()
+        .filter_map(Json::as_u64)
+        .map(|v| v as usize)
+        .filter(|i| *i < n && d.wb.sheets[*i].visibility == gridcraft_model::Visibility::Visible)
+        .collect();
+    g.push(d.wb.active_sheet);
+    g.sort_unstable();
+    g.dedup();
+    d.grouped = if g.len() > 1 { g } else { vec![] };
+    Ok(json!({"grouped": d.grouped}))
+}
+
+fn ungroup_sheets(s: &mut Session, _p: &Json) -> Result<Json> {
+    if let Some(d) = s.active_mut() {
+        d.grouped.clear();
+    }
+    Ok(json!({"grouped": []}))
 }

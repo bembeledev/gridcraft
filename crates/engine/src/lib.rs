@@ -112,6 +112,10 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// Grouped sheets (Shift/Ctrl+click on tabs): indices in workbook order, the active sheet
+    /// among them. Edits and formatting on the active sheet are repeated on the others. Empty (or
+    /// a single sheet) means no group.
+    pub grouped: Vec<usize>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,6 +141,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            grouped: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -321,6 +326,7 @@ impl Session {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        let names_before: Vec<String> = self.active().map(|d| d.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         let result = match result {
@@ -339,6 +345,11 @@ impl Session {
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };
+        if result.is_ok()
+            && let Some((uid, _, sel)) = &before
+        {
+            self.after_command_group(id, spec, &params, *uid, sel, &names_before);
+        }
         if spec.journal && result.is_ok() {
             self.journal.push((id.to_string(), cmd::journal_params(&params)));
             if self.journal.len() > 10_000 {
@@ -358,6 +369,40 @@ impl Session {
             d.revision += 1;
         }
         result
+    }
+
+    /// Repeats a grouped edit on the other grouped sheets, and drops a group the command made
+    /// stale (sheets added, removed, renamed or moved, or a sheet outside the group activated).
+    fn after_command_group(&mut self, id: &str, spec: &cmd::CommandSpec, params: &Json, uid: u64, sel: &Selection, names_before: &[String]) {
+        let Some(di) = self.docs.iter().position(|d| d.uid == uid) else { return };
+        let d = &mut self.docs[di];
+        if d.grouped.len() < 2 {
+            d.grouped.clear();
+            return;
+        }
+        let names: Vec<&str> = d.wb.sheets.iter().map(|s| s.name.as_str()).collect();
+        if names != names_before || !d.grouped.contains(&d.wb.active_sheet) {
+            d.grouped.clear();
+            return;
+        }
+        if !spec.undoable || !groupable(id) || params.get("sheet").is_some() {
+            return;
+        }
+        let home = d.wb.active_sheet;
+        let others: Vec<usize> = d.grouped.iter().copied().filter(|g| *g != home && *g < d.wb.sheets.len()).collect();
+        let after_sel = d.selection.clone();
+        let saved_active = self.active;
+        for g in others {
+            self.active = di;
+            let d = &mut self.docs[di];
+            Arc::make_mut(&mut d.wb).active_sheet = g;
+            d.selection = sel.clone();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, params)));
+        }
+        self.active = saved_active;
+        let d = &mut self.docs[di];
+        Arc::make_mut(&mut d.wb).active_sheet = home;
+        d.selection = after_sel;
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
@@ -386,6 +431,27 @@ impl Session {
         }
         r
     }
+}
+
+/// Commands that a sheet group repeats on every grouped sheet: cell entry, clearing, filling,
+/// pasting, and cell, row and column formatting and structure (as desktop spreadsheets do).
+fn groupable(id: &str) -> bool {
+    const NOT: [&str; 12] = [
+        "edit.undo",
+        "edit.redo",
+        "home.insertSheet",
+        "home.deleteSheet",
+        "home.formatAsTable",
+        "home.manageRules",
+        "home.newCellStyle",
+        "home.conditionalFormat",
+        "home.clearRules",
+        "edit.flashFill",
+        "edit.formatPainter",
+        "edit.replace",
+    ];
+    let family = ["cell.", "range.", "edit.", "home."].iter().any(|f| id.starts_with(f));
+    family && !NOT.contains(&id)
 }
 
 /// Convenience: the active workbook's active sheet.

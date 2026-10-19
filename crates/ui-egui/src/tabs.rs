@@ -68,6 +68,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     .filter(|(_, s)| s.visibility == Visibility::Visible)
                     .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet))
                     .collect();
+            let grouped = d.grouped.clone();
+            let active_index = d.wb.active_sheet;
+            let visible: Vec<usize> = sheets.iter().map(|s| s.0).collect();
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
             // tabs get 60% of the bar and the grid's horizontal scrollbar the rest.
             let tabs_width = (ui.available_width() * 0.6).max(100.0);
@@ -112,6 +115,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     resp.scroll_to_me(None);
                                 }
                                 let r = r.shrink2(vec2(0.0, 1.0));
+                                let in_group = grouped.contains(&i);
                                 if active {
                                     ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max), 4.0, t.tab_active);
                                     ui.painter().rect_stroke(
@@ -120,6 +124,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         Stroke::new(1.0, t.ribbon_border),
                                         StrokeKind::Inside,
                                     );
+                                } else if in_group {
+                                    // A grouped sheet's tab is white like the active one.
+                                    ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max), 4.0, t.tab_active);
                                 } else if resp.hovered() {
                                     ui.painter().rect_filled(r, 4.0, t.hover);
                                 }
@@ -148,8 +155,10 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 } else {
                                     ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
                                 }
+                                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active || in_group, &name));
                                 if resp.clicked() {
-                                    activate_sheet(app, i);
+                                    let m = ui.input(|inp| inp.modifiers);
+                                    click_tab(app, i, m, &visible, &grouped, active_index);
                                 }
                                 if resp.double_clicked() {
                                     app.grid.renaming_tab = Some(i);
@@ -203,7 +212,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     if ui.button(if protected { "Unprotect Sheet…" } else { "Protect Sheet…" }).clicked() {
                                         app.open_dialog(if protected { "unprotectSheet" } else { "protectSheet" }, json!({}));
                                     }
-                                    if ui.button("Select All Sheets").clicked() {
+                                    if grouped.len() > 1 {
+                                        if ui.button("Ungroup Sheets").clicked() {
+                                            app.run_or_alert("sheet.ungroup", json!({}));
+                                            ui.close();
+                                        }
+                                    } else if ui.button("Select All Sheets").clicked() {
+                                        app.run_or_alert("sheet.group", json!({"sheets": visible.clone()}));
                                         ui.close();
                                     }
                                 });
@@ -222,6 +237,33 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             crate::grid::horizontal_scrollbar(app, ui, track, &t);
         });
     });
+}
+
+/// A click on tab `i`: Shift groups the run of tabs from the active one to it, Ctrl (Cmd on macOS)
+/// adds the tab to the group or takes it out, and a plain click activates the sheet. As in Excel,
+/// a plain click leaves the group when the tab is outside it, or when every sheet is grouped.
+fn click_tab(app: &mut SheetApp, i: usize, m: egui::Modifiers, visible: &[usize], grouped: &[usize], active: usize) {
+    if m.shift {
+        let (a, b) = (active.min(i), active.max(i));
+        let run: Vec<usize> = visible.iter().copied().filter(|j| (a..=b).contains(j)).collect();
+        app.run_or_alert("sheet.group", json!({"sheets": run}));
+    } else if m.command || m.ctrl {
+        if i == active {
+            return;
+        }
+        let mut g: Vec<usize> = if grouped.is_empty() { vec![active] } else { grouped.to_vec() };
+        if let Some(k) = g.iter().position(|j| *j == i) {
+            g.remove(k);
+        } else {
+            g.push(i);
+        }
+        app.run_or_alert("sheet.group", json!({"sheets": g}));
+    } else {
+        if !grouped.is_empty() && grouped.len() == visible.len() {
+            app.run_or_alert("sheet.ungroup", json!({}));
+        }
+        activate_sheet(app, i);
+    }
 }
 
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {

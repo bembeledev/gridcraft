@@ -3282,3 +3282,30 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn grouped_sheets_repeat_edits_and_undo_in_one_step() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("sheet.group", json!({"sheets": [0, 2]})).unwrap();
+    assert_eq!(s.doc().unwrap().grouped, vec![0, 2]);
+    s.execute("cell.set", json!({"cell": "B2", "input": "shared"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("home.bold", json!({})).unwrap();
+    let at = |s: &Session, i: usize| s.doc().unwrap().wb.sheets[i].value(CellRef::parse("B2").unwrap());
+    assert_eq!(at(&s, 0), Value::from("shared"));
+    assert_eq!(at(&s, 2), Value::from("shared"));
+    assert!(at(&s, 1).is_empty(), "a sheet outside the group is untouched");
+    let d = s.doc().unwrap();
+    assert!(d.wb.styles.get(d.wb.sheets[2].style_id(CellRef::parse("B2").unwrap())).font.bold);
+    assert_eq!(d.wb.active_sheet, 0, "the active sheet stays put");
+    // One undo step per command covers every grouped sheet.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(at(&s, 0).is_empty() && at(&s, 2).is_empty());
+    // Activating a sheet outside the group ungroups.
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    assert!(s.doc().unwrap().grouped.is_empty());
+}

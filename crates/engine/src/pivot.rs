@@ -536,6 +536,7 @@ impl Grid {
     fn set(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>) {
         self.set_with_target(r, c, value, kind, indent, fmt, PivotCellTarget::Data);
     }
+    /// Sets a cell in the output grid with a specific [`PivotCellTarget`] classification.
     fn set_with_target(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>, target: PivotCellTarget) {
         if let Some(cell) = self.rows.get_mut(r).and_then(|row| row.get_mut(c)) {
             *cell = OutCell { value, kind, indent, num_fmt: fmt, target };
@@ -731,11 +732,12 @@ impl Ctx<'_> {
             if nodes.is_empty() {
                 out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi), value_label });
             } else {
-                self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, out);
+                self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, value_label, out);
             }
         }
     }
 
+    /// Flattens row hierarchy nodes into tabular lines, carrying parent labels and value captions.
     fn flatten_tabular(
         &self,
         nodes: &[Node],
@@ -743,6 +745,7 @@ impl Ctx<'_> {
         vi: Option<usize>,
         prefix: &mut Vec<u32>,
         pending: &[(usize, Value, u8, Option<String>)],
+        value_label: Option<usize>,
         out: &mut Vec<Line>,
     ) {
         if self.values_here(depth, vi) {
@@ -757,15 +760,16 @@ impl Ctx<'_> {
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if i == 0 { pending.to_vec() } else { vec![] };
             labels.push((col, v, 0, fmt));
+            let child_value_label = if i == 0 { value_label } else { None };
             let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
                 } else {
-                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, value_label: None });
+                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, value_label: child_value_label });
                 }
             } else {
-                self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, out);
+                self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, child_value_label, out);
                 if self.pt.subtotals && values_below {
                     self.value_subtotals(col, 0, &label, prefix, out);
                 } else if self.pt.subtotals {
@@ -971,7 +975,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None, value_label: None });
     } else {
         if pt.layout == PivotLayout::Tabular {
-            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut lines);
+            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], None, &mut lines);
         } else {
             ctx.flatten(&row_tree, 0, None, &mut Vec::new(), &mut lines);
         }

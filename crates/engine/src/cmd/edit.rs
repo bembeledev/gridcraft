@@ -332,6 +332,9 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
+            if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&range)))) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
             let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);

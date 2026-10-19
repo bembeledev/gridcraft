@@ -2659,4 +2659,42 @@ mod tests {
         let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
         assert_eq!(err, "Cannot change part of a PivotTable report.");
     }
+
+    #[test]
+    fn tabular_values_between_row_fields_in_cell_rename() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales", "Units"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 1})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+
+        // Row 4 has: A4 = East, B4 = Sum of Sales, C4 = Apples
+        assert_eq!(text(&s, "A4"), "East");
+        assert_eq!(text(&s, "B4"), "Sum of Sales");
+        assert_eq!(text(&s, "C4"), "Apples");
+
+        // Editing A4 ("East") is blocked
+        let err_a4 = s.execute("cell.set", json!({"cell": "A4", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err_a4, "Cannot change part of a PivotTable report.");
+
+        // Editing C4 ("Apples") is blocked
+        let err_c4 = s.execute("cell.set", json!({"cell": "C4", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err_c4, "Cannot change part of a PivotTable report.");
+
+        // Editing B4 ("Sum of Sales") renames the value field
+        s.execute("cell.set", json!({"cell": "B4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s, "B4"), "Revenue");
+        assert_eq!(pt(&s).values[0].name, "Revenue");
+    }
+
+    #[test]
+    fn array_formula_overlapping_pivot_is_blocked() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+
+        // Selection spans from A1 (outside report) into B4 (inside report)
+        s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+        let err = s.execute("cell.set", json!({"cell": "A1", "input": "=1", "array": true})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+    }
 }

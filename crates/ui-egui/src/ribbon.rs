@@ -158,22 +158,34 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             if gap > 0.0 {
                 let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
                 let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+                let font = theme::ui_bold(13.0);
                 // Measure the dirty marker separately so it is never consumed by the ellipsis.
-                let marker_galley = dirty.then(|| ui.fonts_mut(|f| f.layout_no_wrap(" •".into(), theme::ui_bold(13.0), t.text)));
+                let marker_galley = dirty.then(|| ui.fonts_mut(|f| f.layout_no_wrap(" •".into(), font.clone(), t.text)));
                 let marker_w = marker_galley.as_ref().map(|g| g.size().x).unwrap_or(0.0);
+                // epaint places the ellipsis even when it alone exceeds the budget, so the
+                // title only gets a row when the gap fits the marker and at least the ellipsis.
+                let ellipsis_w = ui.fonts_mut(|f| f.layout_no_wrap("…".into(), font.clone(), t.text)).size().x;
                 // Skip painting entirely when the gap is too narrow to show even the marker.
                 if gap > marker_w {
                     let title_w = gap - marker_w;
-                    let mut job = egui::text::LayoutJob::simple_singleline(title, theme::ui_bold(13.0), t.text);
-                    job.wrap.max_width = title_w;
-                    job.wrap.max_rows = 1;
-                    job.wrap.break_anywhere = true;
-                    job.wrap.overflow_character = Some('…');
-                    let title_galley = ui.fonts_mut(|f| f.layout_job(job));
-                    let total_w = title_galley.size().x + marker_w;
-                    let center = pos2((left_end + right_start) / 2.0, rect.center().y);
-                    let top_left = center - vec2(total_w * 0.5, title_galley.size().y * 0.5);
-                    ui.painter().galley(top_left, title_galley, t.text);
+                    let title_galley = (title_w > ellipsis_w && !title.is_empty()).then(|| {
+                        let mut job = egui::text::LayoutJob::simple_singleline(title, font.clone(), t.text);
+                        job.wrap.max_width = title_w;
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        job.wrap.overflow_character = Some('…');
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    });
+                    let title_w_drawn = title_galley.as_ref().map(|g| g.size().x).unwrap_or(0.0);
+                    let total_w = title_w_drawn + marker_w;
+                    let row_h = title_galley.as_ref().or(marker_galley.as_ref()).map(|g| g.size().y).unwrap_or(0.0);
+                    // Center on the window when the title fits there; the controls on the two
+                    // sides differ in width, so centering on the gap would shift a short title.
+                    let center_x = (rect.center().x - total_w * 0.5).clamp(left_end, right_start - total_w) + total_w * 0.5;
+                    let top_left = pos2(center_x, rect.center().y) - vec2(total_w * 0.5, row_h * 0.5);
+                    if let Some(tg) = title_galley {
+                        ui.painter().galley(top_left, tg, t.text);
+                    }
                     if let Some(mg) = marker_galley {
                         ui.painter().galley(top_left + vec2(total_w - marker_w, 0.0), mg, t.text);
                     }

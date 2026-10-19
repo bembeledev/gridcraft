@@ -3386,4 +3386,12 @@ fn a_number_entered_in_a_percent_formatted_cell_is_read_as_a_percentage() {
     s.execute("cell.set", json!({"cell": "D1", "input": "placeholder"})).unwrap();
     s.execute("edit.replace", json!({"what": "placeholder", "with": "3", "all": true})).unwrap();
     assert_eq!(v(&s, "D1").as_f64(), Some(3.0));
+
+    // A mixed format scales only when the entered value lands in a percentage section: `0;0%`
+    // shows positive values as plain numbers and negative ones as percentages.
+    s.execute("home.numberFormat", json!({"range": "E1:E2", "code": "0;0%"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "E1").as_f64(), Some(3.0), "positive in the plain section");
+    s.execute("cell.set", json!({"cell": "E2", "input": "-3"})).unwrap();
+    assert_eq!(v(&s, "E2").as_f64(), Some(-0.03), "negative in the percent section");
 }

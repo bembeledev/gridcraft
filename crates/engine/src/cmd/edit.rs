@@ -200,7 +200,7 @@ fn percent_entry(cell: &mut Cell, input: &str, wb: &gridcraft_model::Workbook) {
         return;
     }
     if let Value::Number(n) = cell.value
-        && gridcraft_numfmt::NumberFormat::parse(wb.styles.get(cell.style).num_fmt.as_str()).is_percent()
+        && gridcraft_numfmt::NumberFormat::parse(wb.styles.get(cell.style).num_fmt.as_str()).is_percent_for(n)
     {
         cell.value = Value::number(n / 100.0);
     }

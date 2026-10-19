@@ -53,6 +53,18 @@ fn scaling_and_percent() {
 }
 
 #[test]
+fn percent_uses_the_selected_section() {
+    let mixed = NumberFormat::parse("0;0%");
+    // Any section is a percentage…
+    assert!(mixed.is_percent());
+    // …but the value's sign decides whether the entered number is scaled.
+    assert!(!mixed.is_percent_for(1234.0));
+    assert!(mixed.is_percent_for(-1234.0));
+    assert!(NumberFormat::parse("0%").is_percent_for(1234.0));
+    assert!(!NumberFormat::parse("0,000").is_percent_for(-1234.0));
+}
+
+#[test]
 fn sections_and_colors() {
     let r = full("#,##0.00;[Red](#,##0.00)", Value::Number(-5.0));
     assert_eq!(r.text, "(5.00)");

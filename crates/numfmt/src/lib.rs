@@ -179,6 +179,13 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Number && s.percent > 0)
     }
 
+    /// True when the section that would actually format `v` is a percentage. Unlike
+    /// [`is_percent`](Self::is_percent), which reports whether *any* section is a percentage, a
+    /// mixed format such as `0;0%` counts only the section the value's sign selects.
+    pub fn is_percent_for(&self, v: f64) -> bool {
+        self.select(v).is_some_and(|(s, _)| s.kind == SecKind::Number && s.percent > 0)
+    }
+
     /// True for a pure text format such as `@`.
     pub fn is_text(&self) -> bool {
         self.inner.num_sections == 0 && self.inner.text_section.is_some()

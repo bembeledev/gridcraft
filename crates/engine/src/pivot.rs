@@ -1533,6 +1533,18 @@ pub fn cell_target(wb: &Workbook, sheet: usize, idx: usize, at: CellRef) -> Opti
     if !r.contains(at) {
         return None;
     }
+    // Preflight: only cells whose displayed text matches a candidate header caption or value
+    // field name can ever be an editable header. Ordinary data cells (numbers, totals, dates,
+    // row labels) can be rejected immediately without expensive report recomputation.
+    let displayed = wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
+    let text = displayed.as_text().unwrap_or("");
+    let is_candidate_header = pt.values.iter().any(|v| v.name == text)
+        || pt.row_header_caption.as_deref().unwrap_or("Row Labels") == text
+        || pt.col_header_caption.as_deref().unwrap_or("Column Labels") == text;
+    if !is_candidate_header {
+        return Some(PivotCellTarget::Data);
+    }
+
     let out = compute(wb, pt, sheet).ok()?;
     let k = out.body_offset;
     let origin_row = if pt.anchor.row >= k { pt.anchor.row - k } else { pt.anchor.row };
@@ -1544,11 +1556,8 @@ pub fn cell_target(wb: &Workbook, sheet: usize, idx: usize, at: CellRef) -> Opti
     let ci = (at.col - origin.col) as usize;
     let oc = out.grid.get(ri).and_then(|row| row.get(ci));
     let target = oc.map(|c| c.target).unwrap_or(PivotCellTarget::Data);
-    if target != PivotCellTarget::Data {
-        let displayed = wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-        if oc.is_none_or(|c| c.value != displayed) {
-            return Some(PivotCellTarget::Data);
-        }
+    if target != PivotCellTarget::Data && oc.is_none_or(|c| c.value != displayed) {
+        return Some(PivotCellTarget::Data);
     }
     Some(target)
 }

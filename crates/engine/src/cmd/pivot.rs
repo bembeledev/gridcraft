@@ -535,6 +535,17 @@ fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
         let mut out = f(&mut new, &src, &cx.wb)?;
+        if new == pt {
+            if out.is_null() {
+                out = json!({});
+            }
+            if let Some(m) = out.as_object_mut()
+                && let Some(area) = pt.last_range
+            {
+                m.insert("range".into(), json!(area.a1()));
+            }
+            return Ok(out);
+        }
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
         }
@@ -2696,5 +2707,31 @@ mod tests {
         s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
         let err = s.execute("cell.set", json!({"cell": "A1", "input": "=1", "array": true})).unwrap_err().to_string();
         assert_eq!(err, "Cannot change part of a PivotTable report.");
+    }
+
+    #[test]
+    fn layout_noop_does_not_push_undo() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let u0 = s.doc().unwrap().undo.len();
+
+        // Clearing already-None caption is a no-op and pushes no undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        s.execute("pivot.layout", json!({"colHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        // Setting a new caption pushes undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Setting same caption again is a no-op
+        s.execute("pivot.layout", json!({"rowHeaderCaption": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Clearing an active caption pushes undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
     }
 }

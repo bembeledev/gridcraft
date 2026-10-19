@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-22 · **Change:** minor (text comparison in lookups, criteria and UNIQUE is canonical-equivalent) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -114,6 +114,17 @@ inputs, so large finite middle values do not become `#NUM!` merely because their
 Sorting, argument coercion and error propagation are unchanged; this is a numerical correction
 under the documented median rule, not an extreme-value comparison against desktop Excel.
 
+Text comparison is canonical-equivalent and accent-aware (`crates/core/src/collate.rs`): `é` typed
+precomposed equals `e` + U+0301, case is ignored, and accents are kept (`Hoà` is not `Hòa`). That
+relation is the one `=`, `<`, `MATCH` and the binary-search lookups, `XLOOKUP`/`XMATCH`, `UNIQUE`,
+`SWITCH`, D-function field labels and the plain-text criteria of `COUNTIF`, `SUMIF`, `COUNTIFS`,
+`AVERAGEIF`, `MAXIFS` and friends use. `EXACT` stays case-sensitive but sees NFC and NFD as the
+same text. Order (`SORT`, `SORTBY`, `<` and approximate lookups) puts accented letters beside their
+base letter. Scope: Latin letters U+00C0–U+024F and U+1E00–U+1EFF with marks U+0300–U+036F.
+Wildcard criteria (`"Nguyễn*"`) and the begins-with criteria of D-functions still match one
+character at a time and do not unify NFC and NFD yet. Not checked against Excel's own order for
+accented text; see [localization-parity.md](localization-parity.md).
+
 Work to close (16–26 h in total): the in-scope missing functions (10–16 h with the table above),
 an oracle corpus of Excel-computed results per function (owner runs Excel on generated
 workbooks; results checked in as data, not Excel files) and fixing what it finds (6–10 h).
@@ -125,6 +136,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-21 | minor | SUBTOTAL and AGGREGATE charge every argument against the evaluator's 16-million-cell limit before scanning; a value in XFD1048576 no longer makes `SUBTOTAL(9,A:XFD)` read the whole sheet (#2175) |
 | 2026-10-19 | minor | LET and LAMBDA names compare case-insensitively in any script, as in Excel: `=LET(dług,100,DŁUG*2)` is 200 (was #NAME?); also LET-bound lambdas called or passed by name (`żar(2)`, `MAP(…,Λ)`), `ISOMITTED`, and formula-bar alias translation (one shared `gridcraft_formula::same_name`, which matches `ß` with `ẞ` and keeps dotless `ı` apart from `i`) |
 | 2026-10-19 | minor | Long flat operator chains (#916): 4,096 operands (Excel's 8,192-character limit) no longer overflow the stack when entered, filled, adjusted or saved; chains past 64 operands are no longer saved as dynamic-array formulas; Spanish entry no longer refuses chains past 256 operands |
+| 2026-10-19 | minor | §Depth: text comparison in lookups, criteria, UNIQUE, SWITCH and EXACT is canonical-equivalent and accent-aware |
 | 2026-10-17 | minor | 15-significant-digit comparison moved from missing to done (#57), and the resolved caveats on the 3-D reference, dynamic-array and legacy-array rows cleared (#140, #133, #139, #156) |
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |

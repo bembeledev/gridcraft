@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (canonical-equivalent, accent-aware text comparison; defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -58,6 +58,26 @@ right-to-left sheets and full complex-script support. Part of
 - **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
   255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
   accepted as in Excel. Sheet names already counted characters (31).
+- **Text comparison is canonical-equivalent and accent-aware.** `compare_text` in
+  `crates/core/src/collate.rs` is case-insensitive, treats a letter typed precomposed and typed as
+  base plus combining marks as the same text (`ế` U+1EBF equals `e` U+0302 U+0301, and marks of
+  different combining classes match in either order), and puts accented letters next to their base
+  letter (`Ánh` beside `Anh`, ties broken by the accent) instead of after `z`. Equality is the
+  same in `=`, `COUNTIF`/`SUMIF`/`COUNTIFS`, `MATCH`/`XMATCH`/`XLOOKUP`/`VLOOKUP`, `UNIQUE`,
+  `SWITCH`, D-function field labels, Remove Duplicates, AutoFilter and Slicer lists, data
+  validation lists, conditional formatting (duplicates, text rules), PivotTable items and
+  Consolidate. `EXACT` stays case-sensitive but sees NFC and NFD as the same text. Nothing
+  rewrites the user's text: the comparison builds keys and leaves the cells alone. Scope: the Latin
+  letters in U+00C0–U+024F and U+1E00–U+1EFF with combining marks in U+0300–U+036F (497
+  precomposed letters; data from Unicode 17.0, checked against ICU4X in a test). Other scripts
+  (Cyrillic й against и + U+0306, Greek ά) still compare as different. Letters with no
+  decomposition (such as ø, ł, æ, ß, ð, ħ, ı) sort by code point, after `z`. A run of more than 32
+  combining marks is left in input order. Not covered yet: wildcard patterns (`*`, `?`) and Find
+  and Replace still match one character at a time, so `COUNTIF(r,"Nguyễn*")` and the begins-with
+  criteria of D-functions do not unify NFC and NFD, and Advanced Filter header labels use
+  canonical equality while the engine's PivotTable source-header lookup and table column names
+  keep ASCII-case matching (the XLSX pivot writer matches field names with canonical equality,
+  `xlsx/src/pivot.rs` `same()`).
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -123,6 +143,7 @@ language (none so far) and of localized function names.
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
+| 2026-10-19 | minor | Text comparison: NFC equals NFD and accented Latin letters sort next to their base letter in functions, filters, Remove Duplicates, PivotTables and validation (scope U+00C0–U+024F, U+1E00–U+1EFF, marks U+0300–U+036F; wildcards and Find / Replace not covered yet) |
 | 2026-10-17 | minor | Vietnamese catalog (`i18n/vi.rs`, every key in the master table); `vi` locale tags resolve to Vietnamese |
 | 2026-10-17 | minor | Lao text falls back to an installed Lao face (`sys-lao`) instead of tofu boxes |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |

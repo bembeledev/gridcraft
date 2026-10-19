@@ -751,7 +751,7 @@ fn reorder_marks(chars: &mut [char]) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Layer 1: the Root text order.
+// The Root text order.
 // ---------------------------------------------------------------------------------------------
 
 /// Most primary elements a key holds: a megabyte paste does not make a megabyte key. The rest of
@@ -881,13 +881,15 @@ impl PartialOrd for Root {
     }
 }
 
-/// Case-insensitive, encoding-insensitive text order (the Root order, layer 1).
+/// Case-insensitive, encoding-insensitive text order (the Root order).
 ///
 /// Letters compare by their base letter first, so `Ánh` sorts next to `Anh` and not after `z`;
-/// accents break ties (`Anh` < `Ảnh` < `Ánh`) and `đ` follows `d` in primary terms. Text that is
+/// accents break ties, ordered by the code point of the mark (`Anh` < `Ánh` < `Ảnh`: acute U+0301
+/// before hook above U+0309), and `đ` counts as `d` first and follows it as the tie-break. Text that is
 /// the same after [`fold_key`] (case, NFC versus NFD, marks of different classes in either order)
-/// compares equal. Characters outside the Latin tables keep code point order. Two ASCII strings
-/// compare by their lowercase bytes, as before.
+/// compares equal. Characters outside the Latin tables keep code point order, including the Latin
+/// letters that have no decomposition (such as `ø`, `ł`, `æ`, `ß`, `ð`, `ħ`, `ı`), which therefore sort
+/// after `z`. Two ASCII strings compare by their lowercase bytes, as before.
 pub fn compare_text(a: &str, b: &str) -> Ordering {
     if a.is_ascii() && b.is_ascii() {
         return a.bytes().map(|x| x.to_ascii_lowercase()).cmp(b.bytes().map(|x| x.to_ascii_lowercase()));
@@ -1102,7 +1104,7 @@ mod tests {
         }
     }
 
-    /// Pairs from vectors.json `canonical_equal`: precomposed versus base letter + marks.
+    /// Pairs of equal text: a precomposed letter versus its base letter + marks.
     const CANONICAL_EQUAL: [(&str, &str); 8] = [
         ("ậ", "a\u{302}\u{323}"),
         ("ặ", "a\u{306}\u{323}"),
@@ -1148,10 +1150,10 @@ mod tests {
     #[test]
     fn accented_letters_sort_next_to_their_base() {
         assert_eq!(sorted(&["Zebra", "ấm", "bàn", "Ánh", "Anh", "Ấn"]), ["ấm", "Ấn", "Anh", "Ánh", "bàn", "Zebra"]);
-        assert_eq!(compare_text("ấ", "ä"), Ordering::Less); // vectors.json collisions.en_less
+        assert_eq!(compare_text("ấ", "ä"), Ordering::Less); // different marks stay different
         assert_eq!(compare_text("ä", "ấ"), Ordering::Greater);
         // Accents break ties between the same base letters; the unaccented letter comes first.
-        // (Layer 1 orders marks by code point: acute U+0301 before hook above U+0309.)
+        // (The Root order ranks marks by code point: acute U+0301 before hook above U+0309.)
         assert_eq!(sorted(&["Ảnh", "Ánh", "Anh"]), ["Anh", "Ánh", "Ảnh"]);
         assert_eq!(sorted(&["Huỳnh", "Hoàng", "Hồ"]), ["Hồ", "Hoàng", "Huỳnh"]);
         // đ sorts with d, after it when the rest is equal: its primary is the d.
@@ -1161,7 +1163,7 @@ mod tests {
         assert_eq!(compare_text("đ", "d"), Ordering::Greater);
         assert_eq!(compare_text("đ", "e"), Ordering::Less);
         assert_eq!(compare_text("Đ", "đ"), Ordering::Equal);
-        // The 23 strings of vectors.json collisions.all_distinct_vi differ pairwise, and the
+        // These 23 strings differ pairwise, and the
         // weights alone (not the text tie-break) tell them apart.
         let words = ["a", "à", "ả", "ã", "á", "ạ", "ă", "ằ", "ẳ", "ẵ", "ắ", "ặ", "â", "ầ", "ẩ", "ẫ", "ấ", "ậ", "ä", "å", "ā", "ą", "ǎ"];
         assert_eq!(words.len(), 23);
@@ -1205,7 +1207,7 @@ mod tests {
         }
     }
 
-    /// A string from the pieces layer 1 has to get right.
+    /// A string from the pieces the Root key has to get right.
     fn random_text(rng: &mut Rng) -> String {
         const PIECES: [&str; 40] = [
             "a",

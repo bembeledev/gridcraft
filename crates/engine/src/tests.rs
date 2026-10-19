@@ -1365,10 +1365,20 @@ fn protection_allows_permitted_row_and_column_edits() {
     s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
     assert_eq!(v(&s, "A2"), Value::Number(1.0));
     s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
-    // Deleting a row with locked cells isn't; deleting an unlocked row is.
-    assert!(s.execute("home.deleteRows", json!({"rows": "2:2"})).is_err());
-    s.execute("home.deleteRows", json!({"rows": "11:11"})).unwrap();
+    // Deleting removes the locked cells it covers: "Delete rows" permits exactly that, as in
+    // Excel (#1766). "Delete columns" isn't granted here, so columns stay refused.
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(2.0));
     assert!(s.execute("home.deleteColumns", json!({"cols": "Z:Z"})).is_err());
+}
+
+#[test]
+fn protection_allows_a_permitted_column_deletion() {
+    let mut s = protected(json!({"deleteColumns": true}));
+    s.execute("home.deleteColumns", json!({"cols": "A:A"})).unwrap();
+    // The unlocked column D moved into C with its values.
+    assert_eq!(v(&s, "C1"), Value::Number(10.0));
+    assert!(s.execute("home.deleteRows", json!({"rows": "2:2"})).is_err());
 }
 
 #[test]

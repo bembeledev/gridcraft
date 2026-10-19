@@ -989,11 +989,20 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
         return f.trim_matches('"').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
-    match gridcraft_calc::evaluate(wb, sheet, at, f) {
+    let items: Vec<String> = match gridcraft_calc::evaluate(wb, sheet, at, f) {
         Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
         v if !v.is_empty() && !v.is_error() => vec![v.display()],
         _ => vec![],
+    };
+    // A range source (e.g. a whole column) drops duplicates, keeping first-seen order (#1932).
+    // A typed literal list keeps the entries as the user wrote them.
+    let mut seen: Vec<String> = Vec::with_capacity(items.len());
+    for it in items {
+        if !seen.iter().any(|s| s.eq_ignore_ascii_case(&it)) {
+            seen.push(it);
+        }
     }
+    seen
 }
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.

@@ -1079,6 +1079,9 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     if shape.kind == ShapeKind::WordArt && text.is_empty() {
         return Err(bad("shape.setText", "WordArt text must not be empty"));
     }
+    if shape.kind == ShapeKind::WordArt && text.chars().nth(super::wordart::MAX_CHARS).is_some() {
+        return Err(bad("shape.setText", format!("`text` is longer than {} characters", super::wordart::MAX_CHARS)));
+    }
     // Sheet protection locks drawing objects (there is no "edit objects" allowance yet).
     if sh.is_protected() {
         return Err(EngineError::Other(PROTECTED.into()));

@@ -531,6 +531,39 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     }
 }
 
+/// Refits the automatic rows holding wrapped or multi-line text, whose height depends on how the
+/// text measures: for after the UI's measurer changed (it bound the workbook's own fonts). As when
+/// a file opens, rows only grow: a taller height already there is kept, and custom heights are
+/// left alone ([`auto_row_height`]). Whether any row changed.
+pub fn refit_wrapped_rows(wb: &mut Workbook) -> bool {
+    let mut changed = false;
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheet(si) else { continue };
+        let mut rows: Vec<u32> = sh
+            .cells
+            .iter()
+            .filter(|(_, cell)| wb.styles.get(cell.style).align.wrap || cell.value.as_text().is_some_and(|t| t.contains('\n')))
+            .map(|(c, _)| c.row)
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        for row in rows {
+            let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            auto_row_height(wb, si, row);
+            let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            if let Some(before) = before
+                && after.is_none_or(|a| before > a + 0.5)
+                && let Some(sh) = wb.sheet_mut(si)
+            {
+                sh.rows.entry(row).or_default().size = Some(before);
+                continue;
+            }
+            changed |= after != before;
+        }
+    }
+    changed
+}
+
 impl Ctx<'_> {
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet

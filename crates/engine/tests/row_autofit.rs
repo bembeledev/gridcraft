@@ -118,3 +118,38 @@ fn wrapped_text_row_uses_the_installed_measurer() {
     assert_eq!(measured, 205.0, "the measured height and the grid's margin");
     assert_eq!(one_line, default_one_line, "a single measured line keeps the line height");
 }
+
+/// When the measurer changes (the UI bound the workbook's own fonts), rows of wrapped text are
+/// refitted: they grow to the new measure, never shrink below a height already there, keep custom
+/// heights, and the refit is no edit (no undo step, a saved workbook stays saved).
+#[test]
+fn wrapped_rows_refit_when_the_measurer_changes() {
+    use gridcraft_engine::measure::{TextMeasure, set_text_measurer};
+    use std::rc::Rc;
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    s.execute("home.wrapText", json!({"range": "A1:A2", "on": true})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1:A2", "values": [["many words that wrap"], ["more words that wrap"]]})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "2:2", "height": 30})).unwrap();
+    {
+        let d = s.active_mut().unwrap();
+        d.saved = d.wb.clone();
+    }
+    let undo = s.doc().unwrap().undo.len();
+    let revision = s.doc().unwrap().revision;
+    let row = |s: &gridcraft_engine::Session, r: u32| s.doc().unwrap().wb.active().unwrap().row_height(r);
+
+    set_text_measurer(Some(Rc::new(|_: &TextMeasure<'_>| Some((300.0, 15)))));
+    s.refit_wrapped_rows();
+    assert_eq!(row(&s, 0), 305.0, "the row grows to the new measure");
+    assert_eq!(row(&s, 1), 30.0, "a custom height is kept");
+    let d = s.doc().unwrap();
+    assert!(!d.is_dirty(), "a saved workbook stays saved");
+    assert_eq!(d.undo.len(), undo, "the refit is no undo step");
+    assert!(d.revision > revision, "views keyed on the revision redraw");
+
+    set_text_measurer(Some(Rc::new(|_: &TextMeasure<'_>| Some((40.0, 2)))));
+    s.refit_wrapped_rows();
+    set_text_measurer(None);
+    assert_eq!(row(&s, 0), 305.0, "a refit never shrinks a row");
+}

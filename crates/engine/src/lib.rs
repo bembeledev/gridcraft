@@ -361,6 +361,23 @@ impl Session {
         result
     }
 
+    /// Refits the active workbook's rows of wrapped or multi-line text after the text measurer
+    /// changed ([`cmd::refit_wrapped_rows`]). Not an edit: no undo step, and a workbook without
+    /// unsaved changes stays without them.
+    pub fn refit_wrapped_rows(&mut self) {
+        let Some(d) = self.active_mut() else { return };
+        let clean = !d.is_dirty();
+        let mut wb = (*d.wb).clone();
+        if !cmd::refit_wrapped_rows(&mut wb) {
+            return;
+        }
+        d.wb = Arc::new(wb);
+        if clean {
+            d.saved = d.wb.clone();
+        }
+        d.revision += 1;
+    }
+
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
     }

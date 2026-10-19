@@ -1006,6 +1006,8 @@ impl SheetApp {
                 self.fonts_ready = true;
             } else {
                 SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
+                // A workbook opened before the measurer existed was sized by estimate.
+                self.session.refit_wrapped_rows();
                 self.fonts_set = true;
                 // The rebuilt set has no workbook fonts yet: bind them again once it is active.
                 self.fonts_bound.clear();
@@ -1028,6 +1030,8 @@ impl SheetApp {
                     let defs = theme::font_definitions_with(self.ui.language, &used);
                     text_measure::install(&defs);
                     ctx.set_fonts(defs);
+                    // Rows of wrapped text were measured with the fallback font until now.
+                    self.session.refit_wrapped_rows();
                     self.fonts_bound = used;
                     self.fonts_rebind = true;
                     ctx.request_repaint();

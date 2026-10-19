@@ -281,7 +281,7 @@ fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str) -> bool {
     paint_glyph(ui, t, item.glyph, art);
     let galley = ui.painter().layout(label.to_string(), theme::ui_font(11.0), t.text, TILE.x - 4.0);
     let at = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 34.0);
-    ui.painter().galley(at, galley, t.text);
+    ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(at, galley, t.text);
     resp.clicked()
 }
 

@@ -89,14 +89,14 @@ impl Block {
     }
 }
 
-fn block(s: &Session, p: &Json, by_rows: bool) -> Result<Block> {
+fn block(s: &Session, p: &Json, by_rows: bool, cmd: &str) -> Result<Block> {
     let sheet = target_sheet(s, p)?;
     let sel = match str_param(p, "range") {
         Some(_) => target_range(s, p)?,
         None => s.doc()?.selection.current(),
     };
     if sel.is_single() {
-        return Err(bad(CMD, "select at least two cells"));
+        return Err(bad(cmd, "select at least two cells"));
     }
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
@@ -104,7 +104,7 @@ fn block(s: &Session, p: &Json, by_rows: bool) -> Result<Block> {
     let used = sh.cells.used_range().ok_or_else(|| EngineError::Other("There is no data to analyse.".into()))?;
     let r = sel.intersection(&used).ok_or_else(|| EngineError::Other("There is no data to analyse in the selection.".into()))?;
     if r.count() > MAX_SCAN_CELLS {
-        return Err(bad(CMD, "selection too large to analyse"));
+        return Err(bad(cmd, "selection too large to analyse"));
     }
     let is_num = |c: CellRef| sh.value(c).is_number();
     let is_text = |c: CellRef| sh.value(c).is_text();
@@ -141,7 +141,7 @@ fn add_total(s: &mut Session, p: &Json) -> Result<Json> {
         Some(other) => return Err(bad(CMD, format!("direction must be columns or rows, not `{other}`"))),
     };
     let overwrite = bool_param(p, "overwrite").unwrap_or(false);
-    let b = block(s, p, by_rows)?;
+    let b = block(s, p, by_rows, CMD)?;
     let (r, sheet) = (b.range, b.sheet);
     let (lo, hi) = b.span_of_line();
     let out_cells = match func {
@@ -233,7 +233,7 @@ fn add_sparklines(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let markers = bool_param(p, "markers").unwrap_or(false);
     let overwrite = bool_param(p, "overwrite").unwrap_or(false);
-    let b = block(s, p, by_rows)?;
+    let b = block(s, p, by_rows, SPARK)?;
     if b.lines.len() as u64 > MAX_SPARKLINES {
         return Err(bad(SPARK, "selection too large for this result"));
     }

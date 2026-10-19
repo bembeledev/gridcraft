@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use gridcraft_core::{CellRef, RangeRef, Value, compare, contains_prefolded, ends_with_prefolded, fold_key, starts_with_prefolded};
+use gridcraft_core::{CellRef, RangeRef, Value, compare_with, contains_prefolded, ends_with_prefolded, fold_key, starts_with_prefolded};
 use gridcraft_model::*;
 
 /// The conditional look of one cell.
@@ -175,6 +175,8 @@ impl CfCache {
                 CfRule::CellIs { op, a, b, style } => {
                     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, c, &relative(f, first, c));
                     let av = eval(a);
+                    // The `<`/`>` of formulas: text in the workbook's order.
+                    let compare = |x: &Value, y: &Value| compare_with(x, y, wb.collation);
                     let ok = match op {
                         CfOperator::Between | CfOperator::NotBetween => {
                             let bv = b.as_deref().map(eval).unwrap_or_default();

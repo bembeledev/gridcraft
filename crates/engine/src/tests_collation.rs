@@ -619,3 +619,319 @@ fn match_case_tie_break_reads_letters_in_canonical_form() {
         assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::from(lower.as_str()), Value::from(upper.as_str())), "{upper:?} {lower:?}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The session's sorting language (`data.sortLanguage`): Data › Sort, the AutoFilter list, Pivot,
+// conditional formatting and formulas all order text by it, in every open workbook.
+
+/// Vietnamese names in input order (the oracle's V1 input; same as `gridcraft_calc` tests).
+const V1_INPUT: &[&str] = &[
+    "Yến", "Ưng", "Uyên", "Út", "Phan", "Phạm", "Ơn", "Ông", "Oanh", "Nguyễn", "Ngô", "Huỳnh", "Hồ", "Hoàng", "Ê-đê", "Em", "Đỗ", "Đinh", "Đặng",
+    "Đào", "Dương", "Duy", "Dũng", "Bùi", "Bình", "Âu", "Ấn", "Ân", "Ăn", "Ắc", "Ánh", "Ảnh", "Anh", "An",
+];
+
+/// V1 sorted in the CLDR `vi` order (ICU oracle).
+const V1_EXPECTED: &[&str] = &[
+    "An", "Anh", "Ảnh", "Ánh", "Ắc", "Ăn", "Ân", "Ấn", "Âu", "Bình", "Bùi", "Dũng", "Duy", "Dương", "Đào", "Đặng", "Đinh", "Đỗ", "Em", "Ê-đê",
+    "Hoàng", "Hồ", "Huỳnh", "Ngô", "Nguyễn", "Oanh", "Ông", "Ơn", "Phạm", "Phan", "Út", "Uyên", "Ưng", "Yến",
+];
+
+fn lang(s: &mut Session, l: &str) -> serde_json::Value {
+    s.execute("data.sortLanguage", json!({"lang": l})).unwrap()
+}
+
+fn coll(s: &Session) -> gridcraft_core::Collation {
+    s.doc().unwrap().wb.collation
+}
+
+fn column(s: &Session, col: &str, n: usize) -> Vec<String> {
+    (1..=n).map(|r| v(s, &format!("{col}{r}")).display()).collect()
+}
+
+fn names_session(words: &[&str]) -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows: Vec<serde_json::Value> = words.iter().map(|w| json!([w])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s
+}
+
+#[test]
+fn sort_language_command_sets_and_reports() {
+    use gridcraft_core::Collation;
+    let mut s = Session::new();
+    // No document needed: it's a session setting.
+    assert_eq!(s.execute("data.sortLanguage", json!({})).unwrap(), json!({"lang": ""}));
+    s.new_workbook();
+    s.new_workbook();
+    assert_eq!(s.execute("data.sortLanguage", json!({})).unwrap(), json!({"lang": ""}));
+    assert_eq!(coll(&s), Collation::Root);
+    let undo_before = s.doc().unwrap().undo.len();
+    assert_eq!(lang(&mut s, "vi-VN"), json!({"lang": "vi"}));
+    assert_eq!(s.prefs.sort_language, "vi");
+    // Every open workbook follows it, and it's not an undo step.
+    assert!(s.documents().iter().all(|d| d.wb.collation == Collation::Vi));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before);
+    assert_eq!(s.execute("data.sortLanguage", json!({})).unwrap(), json!({"lang": "vi"}));
+    assert_eq!(lang(&mut s, "zz"), json!({"lang": ""}));
+    assert_eq!(s.prefs.sort_language, "");
+    assert!(s.documents().iter().all(|d| d.wb.collation == Collation::Root));
+    // Junk parameters: an error or no change, never a panic.
+    lang(&mut s, "vi");
+    assert!(s.execute("data.sortLanguage", json!({"lang": 5})).is_err());
+    assert_eq!(s.prefs.sort_language, "vi");
+    let r = s.execute("data.sortLanguage", json!([1]));
+    assert!(r.is_err() || r.unwrap() == json!({"lang": "vi"}));
+    assert_eq!(s.prefs.sort_language, "vi");
+    assert!(s.documents().iter().all(|d| d.wb.collation == Collation::Vi));
+    // A new workbook starts in the session's language.
+    s.new_workbook();
+    assert_eq!(coll(&s), Collation::Vi);
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    assert_eq!(coll(&s), Collation::Vi);
+    s.execute("view.newWindow", json!({})).unwrap();
+    assert_eq!(coll(&s), Collation::Vi);
+    // A document built outside the session (as the UI's tests do) gets it when added.
+    s.add_document(crate::DocState::new(gridcraft_model::Workbook::new(), None, "Outside".into()));
+    assert_eq!(coll(&s), Collation::Vi);
+    // Preferences loaded after documents were opened (the desktop app's start-up order).
+    let mut prefs = s.prefs.clone();
+    prefs.sort_language = String::new();
+    s.prefs = prefs;
+    s.apply_sort_language();
+    assert!(s.documents().iter().all(|d| d.wb.collation == Collation::Root));
+}
+
+#[test]
+fn data_sort_follows_vi() {
+    let n = V1_INPUT.len();
+    let mut s = names_session(V1_INPUT);
+    lang(&mut s, "vi");
+    s.execute("data.sort", json!({"range": format!("A1:A{n}"), "header": false, "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(column(&s, "A", n), V1_EXPECTED);
+    // Root: accented letters by their base letter, `Đ` with `D`.
+    lang(&mut s, "");
+    s.execute("data.sort", json!({"range": format!("A1:A{n}"), "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let root = column(&s, "A", n);
+    let at = |w: &str| root.iter().position(|x| x == w).unwrap();
+    assert_eq!(&root[at("Đặng")..=at("Duy")], ["Đặng", "Đào", "Đinh", "Đỗ", "Dũng", "Dương", "Duy"]);
+    assert_eq!(&root[..9], ["Ắc", "An", "Ân", "Ấn", "Ăn", "Anh", "Ánh", "Ảnh", "Âu"]);
+    // Descending under vi is the exact reverse.
+    lang(&mut s, "vi");
+    s.execute("data.sort", json!({"range": format!("A1:A{n}"), "header": false, "keys": [{"column": "A", "order": "desc"}]})).unwrap();
+    let mut rev = V1_EXPECTED.to_vec();
+    rev.reverse();
+    assert_eq!(column(&s, "A", n), rev);
+}
+
+#[test]
+fn data_sort_vi_keeps_value_classes_and_case_order() {
+    let mut s = Session::new();
+    s.new_workbook();
+    lang(&mut s, "vi");
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], ["Đặng"], [""], ["Em"], [true], ["#N/A"], ["Dương"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A7", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    // Numbers < text < booleans < errors, blanks last; only the order inside text follows vi.
+    assert_eq!(column(&s, "A", 7), ["3", "Dương", "Đặng", "Em", "TRUE", "#N/A", ""]);
+    lang(&mut s, "");
+    s.execute("data.sort", json!({"range": "A1:A7", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(column(&s, "A", 7), ["3", "Đặng", "Dương", "Em", "TRUE", "#N/A", ""]);
+    // Match case: equal ignoring case, lowercase first; the vi order still decides the rest.
+    lang(&mut s, "vi");
+    s.execute("range.setValues", json!({"range": "B1", "values": [["ĐÀ"], ["đà"], ["Da"], ["da"], ["Dz"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "B1:B5", "header": false, "matchCase": true, "keys": [{"column": "B"}]})).unwrap();
+    assert_eq!(column(&s, "B", 5), ["da", "Da", "Dz", "đà", "ĐÀ"]);
+}
+
+#[test]
+fn pivot_and_autofilter_follow_vi() {
+    let provinces = ["Đắk Lắk", "Hà Nội", "Đà Nẵng", "Hà Nội", "Huế"];
+    let build = |extra: &[&str], l: &str| {
+        let mut s = Session::new();
+        s.new_workbook();
+        lang(&mut s, l);
+        let mut rows = vec![json!(["Tỉnh", "Qty"])];
+        rows.extend(provinces.iter().chain(extra).enumerate().map(|(i, p)| json!([p, i + 1])));
+        let n = rows.len();
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("data.filter", json!({"range": format!("A1:B{n}")})).unwrap();
+        let list: Vec<String> = crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0).into_iter().map(|(t, _)| t).collect();
+        s.execute("selection.set", json!({"range": format!("A1:B{n}")})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Tỉnh"], "values": ["Qty"]})).unwrap();
+        let col = pivot_column(&s);
+        let items = col.get(1..col.len().saturating_sub(1)).unwrap_or_default().to_vec();
+        let f = s.execute("pivot.fields", json!({})).unwrap();
+        let samples = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Tỉnh").unwrap()["samples"].clone();
+        (list, items, samples)
+    };
+    let want = ["Đà Nẵng", "Đắk Lắk", "Hà Nội", "Huế"];
+    let (list, items, samples) = build(&[], "vi");
+    assert_eq!(items, want);
+    assert_eq!(list, want);
+    assert_eq!(samples, json!(want));
+    // `Dĩ An` tells the two orders apart: vi puts `d` before `đ`, Root sorts `đ` as `d`.
+    let (list, items, samples) = build(&["Dĩ An"], "vi");
+    let want_vi = ["Dĩ An", "Đà Nẵng", "Đắk Lắk", "Hà Nội", "Huế"];
+    assert_eq!((list, items), (want_vi.map(String::from).to_vec(), want_vi.map(String::from).to_vec()));
+    assert_eq!(samples, json!(want_vi));
+    let (list, items, _) = build(&["Dĩ An"], "");
+    let want_root = ["Đà Nẵng", "Đắk Lắk", "Dĩ An", "Hà Nội", "Huế"];
+    assert_eq!((list, items), (want_root.map(String::from).to_vec(), want_root.map(String::from).to_vec()));
+}
+
+#[test]
+fn custom_filter_advanced_filter_and_cf_follow_vi() {
+    let words = ["Tên", "Dương", "Đặng", "Em"];
+    // A custom AutoFilter `<Đ`: Root sorts `Dương` after `Đ` (`đ` is `d` plus a stroke), vi
+    // puts every `d` word before `đ`.
+    let mut s = names_session(&words);
+    s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "custom": {"op": "<", "value": "Đ"}})).unwrap();
+    assert_eq!(hidden_rows(&s), vec![1, 2, 3]);
+    lang(&mut s, "vi");
+    s.execute("data.reapply", json!({})).unwrap();
+    assert_eq!(hidden_rows(&s), vec![2, 3]);
+    // Advanced Filter with a `<Đ` criterion.
+    let mut s = names_session(&words);
+    s.execute("range.setValues", json!({"range": "C1", "values": [["Tên"], ["<Đ"]]})).unwrap();
+    s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "C1:C2", "copyTo": "E1"})).unwrap();
+    assert_eq!(column(&s, "E", 2), ["Tên", ""]);
+    lang(&mut s, "vi");
+    s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "C1:C2", "copyTo": "E1"})).unwrap();
+    assert_eq!(column(&s, "E", 3), ["Tên", "Dương", ""]);
+    // Conditional formatting "Cell Value less than Đ" is the `<` operator outside a formula.
+    lang(&mut s, "");
+    s.execute("home.conditionalFormat", json!({"range": "A2:A4", "rule": {"type": "cellIs", "operator": "less", "value": "Đ"}})).unwrap();
+    assert!(!cf_hit(&s, "A2"));
+    lang(&mut s, "vi");
+    assert!(cf_hit(&s, "A2"));
+    assert!(!cf_hit(&s, "A3"));
+}
+
+#[test]
+fn changing_language_recalculates() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Dương", "=A1<A2", "=COUNTIF(A1:A2,\"<Đ\")"], ["Đặng", "", ""]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "x"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Bool(false));
+    assert_eq!(v(&s, "C1"), Value::Number(0.0));
+    lang(&mut s, "vi");
+    // Right away, without editing a cell.
+    assert_eq!(v(&s, "B1"), Value::Bool(true));
+    assert_eq!(v(&s, "C1"), Value::Number(1.0));
+    // Undo and redo of other commands don't bring the old order back, even to a state recorded
+    // before the change.
+    s.execute("cell.set", json!({"cell": "D2", "input": "y"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::Bool(true), Value::Number(1.0)));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Empty);
+    assert_eq!(coll(&s), gridcraft_core::Collation::Vi);
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::Bool(true), Value::Number(1.0)));
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::from("y"));
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::Bool(true), Value::Number(1.0)));
+    lang(&mut s, "");
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::Bool(false), Value::Number(0.0)));
+    s.execute("edit.undo", json!({"steps": 3})).unwrap();
+    s.execute("edit.redo", json!({"steps": 3})).unwrap();
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::Bool(false), Value::Number(0.0)));
+}
+
+#[test]
+fn undo_and_open_keep_the_session_sort_language() {
+    use gridcraft_core::Collation;
+    // A file saved from a Root session.
+    let bytes = {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Dương", "=A1<A2"], ["Đặng", ""]]})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Bool(false));
+        gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()
+    };
+    let mut s = Session::new();
+    s.new_workbook();
+    lang(&mut s, "vi");
+    s.execute("cell.set", json!({"cell": "A1", "input": "Dương"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Đặng"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1<A2"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(coll(&s), Collation::Vi);
+    assert_eq!(v(&s, "B1"), Value::Bool(true));
+    // File › Open of an XLSX (no language in the file): the session's vi applies.
+    s.execute("file.open", json!({"name": "root.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(s.doc().unwrap().display_title(), "root.xlsx");
+    assert_eq!(coll(&s), Collation::Vi);
+    assert_eq!(v(&s, "B1"), Value::Bool(true));
+    // Opening a file in vi doesn't make it dirty.
+    assert!(!s.doc().unwrap().is_dirty());
+    // CSV too.
+    s.execute("file.open", json!({"name": "names.csv", "base64": crate::io::base64_encode("Dương\nĐặng\n".as_bytes())})).unwrap();
+    assert_eq!(s.doc().unwrap().display_title(), "names.csv");
+    assert_eq!(coll(&s), Collation::Vi);
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1<A2"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Bool(true));
+    // The language is not written into the file.
+    let saved = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    assert_eq!(back.collation, Collation::Root);
+    // A clean document stays clean when the language changes.
+    s.execute("file.open", json!({"name": "again.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    lang(&mut s, "");
+    assert!(!s.doc().unwrap().is_dirty());
+    assert_eq!(v(&s, "B1"), Value::Bool(false));
+}
+
+#[test]
+fn hostile_sort_language_params_never_panic() {
+    use gridcraft_core::Collation;
+    let marks = format!("a{}", "\u{301}".repeat(10_000));
+    let big = "Đ".repeat(500_000);
+    let cells = [marks.as_str(), "\u{301}\u{300}x", "\u{10FFFF}", "İ", big.as_str(), "Đặng", "Dương", "", "-"];
+    let mut s = names_session(&cells);
+    s.execute("range.setValues", json!({"range": "B1", "values": [["=MATCH(\"Đ\",A1:A9,1)", "=COUNTIF(A1:A9,\"<Đ\")", "=A1<A5"]]})).unwrap();
+    let long = "v".repeat(1 << 20);
+    let params = [
+        json!({"lang": ""}),
+        json!({"lang": "-"}),
+        json!({"lang": "VI_vn"}),
+        json!({"lang": "zz"}),
+        json!({"lang": "\u{10FFFF}"}),
+        json!({"lang": "İ"}),
+        json!({"lang": long}),
+        json!({"lang": marks}),
+        json!({"lang": 5}),
+        json!({"lang": [1]}),
+        json!({"lang": {"x": 1}}),
+        json!({"lang": null}),
+        json!({"lang": true}),
+        json!([1]),
+        json!(5),
+        json!("vi"),
+        json!(null),
+    ];
+    for p in params {
+        let before = s.prefs.sort_language.clone();
+        let vi_tag = p == json!({"lang": "VI_vn"});
+        match s.execute("data.sortLanguage", p.clone()) {
+            Ok(r) => {
+                let tag = r["lang"].as_str().unwrap();
+                assert!(tag.is_empty() || tag == "vi", "{p}: {r}");
+                assert_eq!(s.prefs.sort_language, tag);
+                assert_eq!(coll(&s), Collation::from_tag(tag));
+                assert!(!vi_tag || tag == "vi", "VI_vn is Vietnamese");
+            }
+            Err(e) => {
+                assert!(!matches!(e, crate::EngineError::Internal(..)), "{p}: {e}");
+                assert_eq!(s.prefs.sort_language, before, "{p}: an error changes nothing");
+            }
+        }
+        let r = s.execute("data.sort", json!({"range": "A1:A9", "header": false, "keys": [{"column": "A"}]}));
+        assert!(!matches!(r, Err(crate::EngineError::Internal(..))), "{p}: {r:?}");
+    }
+    assert_eq!(s.prefs.sort_language, "", "the last tag set (a long non-vi string) is Root; junk after it changed nothing");
+    // Sort only moves cells: every combining mark is still there.
+    assert_eq!(sheet_marks(&s), 10_000 + 2);
+}

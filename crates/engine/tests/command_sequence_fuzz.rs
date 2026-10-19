@@ -63,7 +63,15 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
+    (
+        "data.sortLanguage",
+        "injected by `run_seed` from a random stream of its own (`LANGUAGE_PERCENT`), so adding it changes no other command's sequence",
+    ),
 ];
+
+/// Chance, in percent, that a step is a `data.sortLanguage` change (the session's sorting
+/// language), drawn from its own random stream.
+const LANGUAGE_PERCENT: u64 = 3;
 
 // ---------------------------------------------------------------- deterministic randomness
 
@@ -166,10 +174,15 @@ fn report(seed: u64, steps: usize, sample: &str, sequence: &[Step], f: &Failure)
 fn run_seed(seed: u64, steps: usize) -> (&'static str, Vec<Step>, Option<Failure>) {
     let mut rng = Rng(seed.wrapping_mul(0xA24B_AED4_963E_E407) ^ 0x5EED);
     let sample = SAMPLES[(seed % SAMPLES.len() as u64) as usize];
+    let mut language = Rng(seed ^ 0x1A46_0A6E);
     let mut h = Harness::new(sample);
     let mut sequence = Vec::new();
     for i in 0..steps {
-        let (id, params) = generate(&mut rng, &h.s);
+        let (id, params) = if language.chance(LANGUAGE_PERCENT) {
+            ("data.sortLanguage".to_string(), json!({"lang": language.pick(&["vi", "en", "vi-VN", ""])}))
+        } else {
+            generate(&mut rng, &h.s)
+        };
         sequence.push((id.clone(), params.clone()));
         if let Err(f) = h.step(i, &id, &params) {
             return (sample, sequence, Some(f));
@@ -251,6 +264,15 @@ impl Harness {
     }
 
     fn step(&mut self, i: usize, id: &str, params: &Json) -> Result<(), Failure> {
+        // The sorting language is a session setting, not an edit: it recalculates the workbook in
+        // the new text order without an undo step, so undoing past it can't give back the
+        // starting workbook (its order, and a `<` between non-ASCII texts, belong to the old
+        // language). Close the episode before it (undo, redo and reload checked in the old
+        // language) and start the next one from its result.
+        let language = id == "data.sortLanguage";
+        if language {
+            self.end_episode(i)?;
+        }
         let before = self.wb();
         let r = self.s.execute(id, params.clone());
         self.s.take_ui_requests();
@@ -261,6 +283,9 @@ impl Harness {
             return Err(fail(i, "documents", format!("`{id}` changed the number of open documents; exclude it in EXCLUDED")));
         }
         let after = self.wb();
+        if language {
+            self.base = after.clone();
+        }
         let spec = find_command(id).expect("generated ids are registered");
         if !spec.undoable
             && !matches!(id, "edit.undo" | "edit.redo")
@@ -460,6 +485,8 @@ fn normalized_formula(f: &Formula) -> String {
 fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
     let bytes = io::save_bytes(wb, "fuzz.xlsx").map_err(|e| format!("save failed: {e}"))?;
     let (mut back, _) = io::open_bytes("fuzz.xlsx", &bytes).map_err(|e| format!("reload failed: {e}"))?;
+    // The file has no sorting language: reopened in the same session, the session's applies.
+    back.collation = wb.collation;
     Calc::new().recalc_all(&mut back);
     let names = |wb: &Workbook| wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
     if names(wb) != names(&back) {
@@ -1068,6 +1095,26 @@ fn hint_value(rng: &mut Rng, wb: &Workbook, hint: &str) -> Json {
         1 => json!(rng.int(0, 5)),
         2 => json!(near_range(rng).a1()),
         _ => json!(literal(rng)),
+    }
+}
+
+/// The sorting language changes values (`<` between Vietnamese texts) without an undo step: the
+/// episode checks still hold around it, and a reload uses the session's language.
+#[test]
+fn sorting_language_steps_keep_the_checks_meaningful() {
+    let steps: Vec<Step> = vec![
+        ("range.setValues".into(), json!({"range": "T1", "values": [["Dương", "=T1<T2", "=COUNTIF(T1:T2,\"<Đ\")"], ["Đặng", "", ""]]})),
+        ("data.sortLanguage".into(), json!({"lang": "vi"})),
+        ("cell.set".into(), json!({"cell": "T3", "input": "Em"})),
+        ("edit.undo".into(), json!({})),
+        ("edit.redo".into(), json!({})),
+        ("data.sortLanguage".into(), json!({"lang": "en"})),
+        ("cell.set".into(), json!({"cell": "T4", "input": "Ê-đê"})),
+        ("data.sortLanguage".into(), json!({"lang": "vi"})),
+        ("cell.set".into(), json!({"cell": "T5", "input": "=T4>T3"})),
+    ];
+    if let Some(f) = replay("sales", &steps) {
+        panic!("step {}: [{}] {}", f.step, f.kind, f.what);
     }
 }
 

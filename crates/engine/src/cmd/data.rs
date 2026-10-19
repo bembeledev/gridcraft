@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, Collation, RangeRef, TextKey, TextSet, Value, fold_key, sort_compare, text_eq, text_eq_prefolded, text_key};
+use gridcraft_core::{CellRef, Collation, RangeRef, TextKey, TextSet, Value, fold_key, sort_compare_with, text_eq, text_eq_prefolded, text_key};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -25,6 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..]}], orientation?: rows|columns, matchCase?}",
             has_doc,
             sort
+        ),
+        cmd!(
+            noundo "data.sortLanguage",
+            "Sorting Language",
+            ["Data", "Sort & Filter"],
+            None,
+            "{lang?: vi|vi-VN|en (a BCP 47 tag: vi… is Vietnamese, any other language the language-neutral order, reported as an empty tag)} → {lang}. Without `lang`, reports the current one. A session setting for every open workbook (Sort, AutoFilter, PivotTables, `<` in formulas and rules, approximate lookups); not an undo step, not saved in the file",
+            always,
+            sort_language
         ),
         cmd!(
             "data.filter",
@@ -265,6 +274,20 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     do_sort(s, sheet, r, header, keys, by_cols, case)
 }
 
+/// Data › Sort & Filter › Sorting Language: reports or sets the session's text order and applies
+/// it to every open workbook (each recalculated, so `=A1<A2` follows at once).
+fn sort_language(s: &mut Session, p: &Json) -> Result<Json> {
+    match p.get("lang") {
+        None | Some(Json::Null) => {}
+        Some(Json::String(tag)) => {
+            s.prefs.sort_language = Collation::from_tag(tag).tag().to_string();
+            s.apply_sort_language();
+        }
+        Some(_) => return Err(bad("data.sortLanguage", "`lang` must be a language tag such as \"vi\"")),
+    }
+    Ok(json!({"lang": s.collation().tag()}))
+}
+
 fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<SortKey>, by_cols: bool, case: bool) -> Result<Json> {
     // Protect Sheet ▸ Sort. Both Sort… and the A-to-Z buttons come through here.
     super::refuse_unless_allowed(s, sheet, "Sorting", |p| p.sort)?;
@@ -318,18 +341,47 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             };
             (v, rank)
         };
+        // Text is ordered by the workbook's collation (the session's sorting language). A key
+        // whose column holds non-ASCII text gets a `TextKey` per text cell, built once here and
+        // not on every comparison; one collation for the whole list, so the keys compare.
+        let coll = cx.wb.collation;
         let mut order: Vec<u32> = (0..n).collect();
-        let keyed: Vec<Vec<(Value, u32)>> = (0..n).map(|i| keys.iter().enumerate().map(|(ki, k)| key_val(i, ki, k)).collect()).collect();
+        let mut keyed: Vec<Vec<(Value, u32, Option<TextKey>)>> = (0..n)
+            .map(|i| {
+                keys.iter()
+                    .enumerate()
+                    .map(|(ki, k)| {
+                        let (v, rank) = key_val(i, ki, k);
+                        (v, rank, None)
+                    })
+                    .collect()
+            })
+            .collect();
+        for (ki, k) in keys.iter().enumerate() {
+            let by_text = k.by == "values" && k.list.is_none();
+            if by_text && keyed.iter().any(|line| matches!(line.get(ki), Some((Value::Text(t), ..)) if !t.is_ascii())) {
+                for line in keyed.iter_mut() {
+                    if let Some((Value::Text(t), _, tk)) = line.get_mut(ki) {
+                        *tk = Some(text_key(t, coll));
+                    }
+                }
+            }
+        }
+        let empty = (Value::Empty, 0, None);
         order.sort_by(|&a, &b| {
             for (ki, k) in keys.iter().enumerate() {
-                let (va, ca) = &keyed[a as usize][ki];
-                let (vb, cb) = &keyed[b as usize][ki];
+                let (va, ca, ta) = keyed.get(a as usize).and_then(|l| l.get(ki)).unwrap_or(&empty);
+                let (vb, cb, tb) = keyed.get(b as usize).and_then(|l| l.get(ki)).unwrap_or(&empty);
+                let text_order = || match (ta, tb) {
+                    (Some(x), Some(y)) => x.cmp(y),
+                    _ => sort_compare_with(va, vb, coll),
+                };
                 let o = if k.by != "values" || k.list.is_some() {
                     ca.cmp(cb)
                 } else if case && va.is_text() && vb.is_text() {
-                    sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    text_order().then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
                 } else {
-                    sort_compare(va, vb)
+                    text_order()
                 };
                 // Blanks always sort last, whatever the order.
                 let o = if k.desc && !(va.is_empty() || vb.is_empty()) { o.reverse() } else { o };
@@ -626,17 +678,18 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)? `folded` is `fold_key(crit)`,
 /// computed once per criterion for the equality and begins/ends/contains tests. Only what `op`
-/// needs is computed: text is ordered (a key per side) for `<`, `<=`, `>` and `>=` alone.
-fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, folded: &str) -> bool {
+/// needs is computed: text is ordered in `coll` (a key per side) for `<`, `<=`, `>` and `>=` alone.
+fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, folded: &str, coll: Collation) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
     let nums = v.as_f64().zip(num);
     let cmp = || match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
         // A numeric ordering comparison only matches numbers; blanks and text never do.
         (None, Some(_)) if matches!(op, "<" | "<=" | ">" | ">=") => None,
-        _ => Some(gridcraft_core::compare_text(text, crit)),
+        _ => Some(gridcraft_core::compare_text_with(text, crit, coll)),
     };
-    // `compare_text(text, crit) == Equal` exactly when `text_eq(text, crit)`.
+    // `compare_text_with(text, crit, coll) == Equal` exactly when `text_eq(text, crit)`, in every
+    // collation.
     let eq = || match nums {
         Some((a, b)) => a.partial_cmp(&b) == Some(Ordering::Equal),
         None => text_eq_prefolded(text, folded),
@@ -735,10 +788,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                 }
                 FilterCriterion::Custom { a, b, and } => {
                     let (fa, fb) = folded.get(i).map_or(("", ""), |(x, y)| (x.as_str(), y.as_str()));
-                    let x = custom_ok(&v, &text, &a.0, &a.1, fa);
+                    let x = custom_ok(&v, &text, &a.0, &a.1, fa, wb.collation);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1, fb);
+                            let y = custom_ok(&v, &text, &b.0, &b.1, fb, wb.collation);
                             if *and { x && y } else { x || y }
                         }
                         None => x,
@@ -840,12 +893,13 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         if seen.insert(key.clone()) {
             // The sort key is built once per entry, not per comparison (the list is rebuilt
             // every frame while the filter menu is open).
-            let tk = (!blank && v.is_text()).then(|| text_key(&t, Collation::Root));
+            let tk = (!blank && v.is_text()).then(|| text_key(&t, wb.collation));
             entries.push((key, tk, t, on));
         }
     }
-    // Numbers, then text in the Root order, then booleans, errors and blanks. Text entries are
-    // ordered by their `TextKey` (`None` for the other classes, so it only breaks ties in text).
+    // Numbers, then text in the workbook's order (the session's sorting language), then booleans,
+    // errors and blanks. Text entries are ordered by their `TextKey` (`None` for the other
+    // classes, so it only breaks ties in text); all of them built with the same collation.
     entries
         .sort_by(|(a, ka, ..), (b, kb, ..)| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| ka.cmp(kb)).then_with(|| (&a.2, &a.3).cmp(&(&b.2, &b.3))));
     entries.into_iter().map(|(_, _, t, on)| (t, on)).collect()

@@ -26,7 +26,7 @@ pub mod tables;
 use std::sync::Arc;
 
 use gridcraft_calc::Calc;
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, Collation, RangeRef};
 use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
@@ -189,6 +189,26 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// Gives the workbook `c` as its text order and recalculates it when that changes it (a
+    /// formula like `=A1<A2` may change value). The order is the session's sorting language,
+    /// not a document edit: no undo step, and a clean document stays clean. Returns whether it
+    /// changed.
+    pub fn set_collation(&mut self, c: Collation) -> bool {
+        if self.wb.collation == c {
+            return false;
+        }
+        let clean = !self.is_dirty();
+        let mut wb = (*self.wb).clone();
+        wb.collation = c;
+        self.calc.recalc_all(&mut wb);
+        self.wb = Arc::new(wb);
+        if clean {
+            self.saved = self.wb.clone();
+        }
+        // Values changed: views cached per revision (print preview, page layout) refresh.
+        self.revision += 1;
+        true
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet
     }
@@ -246,6 +266,12 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// Data › Sort & Filter › Sorting Language (`data.sortLanguage`): the text order every open
+    /// workbook sorts, filters, groups and compares text by, as the tag
+    /// [`Collation::tag`](gridcraft_core::Collation::tag) gives: `""` is the language-neutral
+    /// Root order, `"vi"` Vietnamese. A session setting, like Excel's: never read from the
+    /// system locale and never saved in the file.
+    pub sort_language: String,
 }
 
 impl Default for Prefs {
@@ -260,6 +286,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            sort_language: String::new(),
         }
     }
 }
@@ -345,7 +372,28 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    /// The text order of the session's sorting language ([`Prefs::sort_language`]).
+    pub fn collation(&self) -> Collation {
+        Collation::from_tag(&self.prefs.sort_language)
+    }
+    /// Applies [`Prefs::sort_language`] to every open workbook, recalculating those whose order
+    /// changes. Call it after replacing `prefs` (loading saved preferences).
+    pub fn apply_sort_language(&mut self) {
+        let c = self.collation();
+        for d in &mut self.docs {
+            d.set_collation(c);
+        }
+    }
+    /// A document for `wb` in the session's sorting language, set before its first
+    /// recalculation (a file never carries one: the order is a session setting).
+    pub fn new_doc_state(&self, mut wb: Workbook, path: Option<String>, title: String) -> DocState {
+        wb.collation = self.collation();
+        DocState::new(wb, path, title)
+    }
+    /// Adds a document and makes it active. A workbook built elsewhere gets the session's
+    /// sorting language here (and is recalculated if that changes its order).
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        d.set_collation(self.collation());
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -366,7 +414,8 @@ impl Session {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}")))
+        let d = self.new_doc_state(wb, None, format!("Book{n}"));
+        self.add_document(d)
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
@@ -428,6 +477,9 @@ impl Session {
                     d.selection = sel.clone();
                     d.calc.rebuild(&d.wb);
                 }
+                // Every workbook in the session's sorting language, whatever the command had
+                // changed before it failed.
+                self.apply_sort_language();
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };

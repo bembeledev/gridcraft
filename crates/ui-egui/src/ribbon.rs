@@ -121,6 +121,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let max_title_w = (rect.width() - 600.0).max(80.0);
             let mut job = egui::text::LayoutJob::simple_singleline(title_str, theme::ui_bold(13.0), t.text);
             job.wrap.max_width = max_title_w;
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
             job.wrap.overflow_character = Some('…');
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             ui.painter().galley(rect.center() - vec2(galley.size().x * 0.5, galley.size().y * 0.5), galley, t.text);

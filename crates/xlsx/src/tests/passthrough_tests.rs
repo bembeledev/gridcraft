@@ -819,7 +819,8 @@ fn file_version_and_calc_features_survive_a_save() {
         assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
     }
 
-    // A workbook that had neither gets neither.
+    // A workbook that had neither gets GridCraft's own fileVersion, and still no extLst.
     let plain = Unpacked::new(&write_xlsx(&gridcraft_model::Workbook::new()).unwrap()).text("xl/workbook.xml");
-    assert!(!plain.contains("fileVersion") && !plain.contains("extLst"), "{plain}");
+    assert!(plain.contains(r#"<fileVersion appName="gridcraft"/>"#), "{plain}");
+    assert!(!plain.contains("extLst"), "{plain}");
 }

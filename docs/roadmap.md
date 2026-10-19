@@ -77,7 +77,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M12 | Performance, accessibility, i18n | partial; ten interface languages besides English with Spanish formulas; multi-threaded recalc and an accessible grid tree remain |
 | M13 | Release & polish | releases shipping (tags v0.1.0, v0.3.0, v0.4.0, v0.5.0, v0.6.1; signed) |
 | M14 | **Beta gates** (table above) | not started as a milestone; parts landed (see the status column) |
-| M15 | Localization infrastructure and the twelve languages | started: catalogs for ja, zh, ko, pt-BR, ru, de, cs, es, fr (#31, #104, #82, #271, #335, #242, #413); Spanish formulas (#98); more languages in open PRs |
+| M15 | Localization infrastructure and the twelve languages | started: catalogs for ja, zh, ko, pt-BR, ru, de, cs, es, fr, sr (#31, #104, #82, #271, #335, #242, #413, #453); Spanish formulas (#98); more languages in open PRs |
 | M16 | Get & Transform, data model | not started |
 
 ## After beta (ranked)

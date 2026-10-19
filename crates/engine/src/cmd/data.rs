@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef, TextKey, TextSet, Value, fold_key, sort_compare, text_eq, text_eq_prefolded, text_key};
+use gridcraft_core::{CellRef, Collation, RangeRef, TextKey, TextSet, Value, fold_key, sort_compare, text_eq, text_eq_prefolded, text_key};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
@@ -840,7 +840,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         if seen.insert(key.clone()) {
             // The sort key is built once per entry, not per comparison (the list is rebuilt
             // every frame while the filter menu is open).
-            let tk = (!blank && v.is_text()).then(|| text_key(&t));
+            let tk = (!blank && v.is_text()).then(|| text_key(&t, Collation::Root));
             entries.push((key, tk, t, on));
         }
     }

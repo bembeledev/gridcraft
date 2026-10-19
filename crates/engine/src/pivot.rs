@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, TextKey, Value, split_sheet, text_key};
+use gridcraft_core::{CellError, CellRef, Collation, MAX_COLS, MAX_ROWS, RangeRef, TextKey, Value, split_sheet, text_key};
 use gridcraft_model::*;
 
 use crate::pivot_calc::CalcSet;
@@ -238,7 +238,7 @@ impl FieldItems {
         if let Some(i) = self.index.get(&key) {
             return *i;
         }
-        item.key = Some(text_key(&item.label));
+        item.key = Some(text_key(&item.label, Collation::Root));
         let i = self.items.len() as u32;
         self.items.push(item);
         self.index.insert(key, i);

@@ -16,5 +16,7 @@ thiserror = { workspace = true }
 js-sys = "0.3"
 
 [dev-dependencies]
+icu_collator = { workspace = true }
+icu_locale_core = { workspace = true }
 icu_normalizer = { workspace = true }
 serde_json = { workspace = true }

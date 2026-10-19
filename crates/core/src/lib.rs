@@ -15,8 +15,10 @@ pub use addr::{
     split_sheet, unquote_sheet,
 };
 pub use collate::{
-    TextKey, TextSet, canonical, contains_folded, contains_prefolded, ends_with_folded, ends_with_prefolded, fold_key, starts_with_folded,
+    Collation, TextKey, TextSet, canonical, contains_folded, contains_prefolded, ends_with_folded, ends_with_prefolded, fold_key, starts_with_folded,
     starts_with_prefolded, text_eq, text_eq_prefolded, text_key,
 };
 pub use date::DateSystem;
-pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};
+pub use value::{
+    Array, CellError, Value, compare, compare_numbers, compare_text, compare_text_with, compare_with, number_to_text, sort_compare, sort_compare_with,
+};

@@ -634,6 +634,7 @@ struct Look {
     cf: Option<crate::cf::CfLook>,
 }
 
+/// Computes the effective [`Look`] of a cell, accounting for styles, tables, and conditional formats.
 fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
     let mut style = match sh.table_at(c) {
         Some(t) => crate::tables::table_cell_style(wb, si, t, c),
@@ -1105,6 +1106,7 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// Renders cell text onto the PDF page, applying formatting and alignment.
 fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
     let (x, y, w, h) = rect;
     let sh = b.sh;

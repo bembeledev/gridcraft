@@ -47,6 +47,7 @@ fn sorted(mut v: Vec<f64>) -> Vec<f64> {
     v
 }
 
+/// Computes the median of a vector of f64 numbers.
 fn median(v: Vec<f64>) -> R<f64> {
     if v.is_empty() {
         return Err(CellError::Num);

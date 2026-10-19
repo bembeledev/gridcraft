@@ -15,6 +15,7 @@ use serde_json::{Value as Json, json};
 
 const MAX_LINE: usize = 64 * 1024 * 1024;
 
+/// Starts the localhost JSON-lines control server on the given port.
 pub fn start(port: u16, ctx: egui::Context) -> std::io::Result<Receiver<ControlRequest>> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let rx = serve_listener(listener, ctx)?;
@@ -68,6 +69,7 @@ enum Line {
     Reject(String),
 }
 
+/// Parses a raw line buffer into a [`Line`] request, blank line, or rejection.
 fn parse_line(bytes: &[u8]) -> Line {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Line::Reject("not a control request (invalid UTF-8); closing the connection".into());
@@ -103,6 +105,7 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
+/// Handles an incoming TCP connection, reading JSON lines and dispatching control requests.
 fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
     let Ok(read) = stream.try_clone() else { return };
     let mut out = stream;

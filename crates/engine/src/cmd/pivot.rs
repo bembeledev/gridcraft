@@ -622,6 +622,7 @@ fn field_list(v: Option<&Json>) -> Vec<Json> {
     }
 }
 
+/// Inserts a new PivotTable from the given data source onto a new or existing sheet.
 fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure && matches!(str_param(p, "destination"), None | Some("new")) {
         return Err(other("The workbook is protected and cannot be changed."));
@@ -753,6 +754,7 @@ fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- queries
 
+/// Serializes a [`PivotTable`] state into JSON for engine responses and UI task panes.
 fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     json!({
         "id": pt.id,
@@ -1028,6 +1030,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Configures settings for a value field (aggregation function, custom name, number format, showAs).
 fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.valueSettings";
     let field = str_param(p, "field").map(str::to_string);
@@ -1234,6 +1237,7 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Updates layout options (compact/outline/tabular, subtotals, grand totals, headers, captions).
 fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.layout";
     let lay = match str_param(p, "layout").map(|x| x.to_ascii_lowercase()) {

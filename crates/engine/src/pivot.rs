@@ -635,6 +635,7 @@ impl Ctx<'_> {
         }
     }
 
+    /// Recursively flattens row hierarchy nodes into report lines for compact and outline layouts.
     fn flatten(&self, nodes: &[Node], depth: usize, vi: Option<usize>, prefix: &mut Vec<u32>, out: &mut Vec<Line>) {
         if self.values_here(depth, vi) {
             self.flatten_values(nodes, depth, prefix, out);

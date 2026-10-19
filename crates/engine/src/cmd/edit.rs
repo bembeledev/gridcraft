@@ -220,6 +220,7 @@ pub(crate) fn check_arg_counts(expr: &gridcraft_formula::Expr) -> Result<()> {
     }
 }
 
+/// Sets the value, formula, or array formula of a cell, handling PivotTable header renaming and edit protection.
 fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = match cell_param_on(s, p, "cell", sheet)? {
@@ -382,6 +383,7 @@ pub(crate) fn json_to_input(v: &Json) -> String {
     }
 }
 
+/// Sets values across a range of cells from an array of rows, blocking edits into PivotTable reports.
 fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
@@ -429,6 +431,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count}))
 }
 
+/// Fills target ranges with a value, blocking edits into PivotTable reports.
 fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -935,6 +938,7 @@ fn paste(s: &mut Session, p: &Json) -> Result<Json> {
     paste_special(s, &json!({"what": "all", "at": p.get("at").cloned().unwrap_or(Json::Null)}))
 }
 
+/// Pastes tabular text into the worksheet, blocking edits intersecting PivotTable reports.
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
@@ -1049,6 +1053,7 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
+/// Pastes clipboard contents (formulas, values, formats) with PivotTable range protection.
 fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -1492,6 +1497,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
 
 // ---------------------------------------------------------------- fill
 
+/// Directional fill (Down, Right, Up, Left) with PivotTable range protection.
 fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let mut r = target_range(s, p)?;
@@ -1530,6 +1536,7 @@ fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     })
 }
 
+/// Auto-fills target range from source range, blocking edits into PivotTable reports.
 fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let src = str_param(p, "source").and_then(RangeRef::parse).map_or_else(|| target_range(s, p), Ok)?;
@@ -1561,6 +1568,7 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Fills a data series across a range, blocking edits into PivotTable reports.
 fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let r = target_range(s, p)?;

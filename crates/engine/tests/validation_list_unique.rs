@@ -7,8 +7,7 @@ use serde_json::json;
 fn session_with_fruit() -> Session {
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("range.setValues", json!({"range": "A1:A5", "values": [["Apple"], ["Banana"], ["Apple"], ["Apple"], ["Banana"]]}))
-        .unwrap();
+    s.execute("range.setValues", json!({"range": "A1:A5", "values": [["Apple"], ["Banana"], ["Apple"], ["Apple"], ["Banana"]]})).unwrap();
     s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "A1:A5"})).unwrap();
     s
 }

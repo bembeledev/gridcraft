@@ -219,3 +219,92 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "_xludf.EOMONTH()&_xludf.CONCAT(\"_xludf.x\")");
 }
+
+#[test]
+fn hungarian_accented_autocomplete_is_rendered_and_inserts_the_selected_name() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"hu"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    h.state_mut().begin_edit(Some("=át".into()), true);
+    h.run_steps(4);
+    h.input_mut().events.push(egui::Event::Text("l".into()));
+    h.run_steps(4);
+    assert!(h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "ÁTLAG"));
+    assert!(!h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "AVERAGE"));
+    if let Ok(path) = std::env::var("GRIDCRAFT_HU_SCREENSHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    let ed = h.state_mut().editor.as_mut().unwrap();
+    ed.ac_index = ed.autocomplete.iter().position(|n| n == "ÁTLAG").unwrap();
+    assert!(ed.accept_autocomplete());
+    assert_eq!(ed.text, "=ÁTLAG(");
+    h.run_steps(4);
+    h.input_mut().events.push(egui::Event::Text("1,5;".into()));
+    h.run_steps(4);
+    assert_eq!(h.state().editor.as_ref().unwrap().current_function(), Some(("ÁTLAG".into(), 1)));
+    if let Ok(path) = std::env::var("GRIDCRAFT_HU_SCREENSHOT") {
+        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("hungarian-hints.png")).unwrap();
+        h.state_mut().cancel_edit();
+        h.state_mut().ui.ribbon_tab = "View".into();
+        h.run_steps(4);
+        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("hungarian-setting.png")).unwrap();
+    }
+}
+
+#[test]
+fn hungarian_formulas_calculate_and_survive_xlsx_and_language_switching() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"hu"})).unwrap();
+    assert!(enter(&mut app, "=ha(igaz;átlag(1,5;2,5);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,AVERAGE(1.5,2.5),0)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(2.0));
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"magyar.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=HA(IGAZ;ÁTLAG(1,5;2,5);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=IF(TRUE,AVERAGE(1.5,2.5),0)");
+}
+
+#[test]
+fn hungarian_variance_hint_keeps_the_localized_function_identity() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"hu"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    for (name, other, description) in
+        [("VAR.S", "VAR.M", "Kiszámítja a teljes sokaság varianciáját."), ("VAR.M", "VAR.S", "Minta alapján becsüli a sokaság varianciáját.")]
+    {
+        h.state_mut().begin_edit(Some(format!("={name}(1;")), true);
+        h.run_steps(4);
+        h.get_by_label(&format!("{name}("));
+        assert!(h.query_by_label(&format!("{other}(")).is_none());
+        h.get_by_label(description);
+        if name == "VAR.S"
+            && let Ok(path) = std::env::var("GRIDCRAFT_HU_VARIANCE_SCREENSHOT")
+        {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.state_mut().cancel_edit();
+        h.run_steps(4);
+    }
+}

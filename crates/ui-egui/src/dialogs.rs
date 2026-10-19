@@ -1497,24 +1497,29 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
 /// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is
 /// preserved and not executed.
 fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
-    ui.label("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed.");
+    let lang = crate::i18n::current(ui.ctx());
+    ui.label(lang.tr("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed."));
     ui.add_space(6.0);
     let items: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
     if items.is_empty() {
-        ui.weak("This workbook has no scripts or macros.");
+        ui.weak(lang.tr("This workbook has no scripts or macros."));
         return;
     }
     egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
         for it in &items {
-            let name = it.get("name").and_then(Json::as_str).unwrap_or("(unnamed)");
+            let name = it.get("name").and_then(Json::as_str).unwrap_or_else(|| lang.tr("(unnamed)"));
             let is_vba = it.get("kind").and_then(Json::as_str) == Some("vba");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(name).strong());
                 if is_vba {
-                    ui.weak("— VBA project (preserved, not run)");
+                    ui.weak(lang.tr("— VBA project (preserved, not run)"));
                 } else {
                     let steps = it.get("steps").and_then(Json::as_u64).unwrap_or(0);
-                    ui.weak(format!("— {steps} step{}", if steps == 1 { "" } else { "s" }));
+                    ui.weak(if steps == 1 {
+                        lang.tr("— 1 step").to_string()
+                    } else {
+                        lang.tr("— {steps} steps").replace("{steps}", &steps.to_string())
+                    });
                 }
             });
         }
@@ -1747,19 +1752,19 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
 
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
+        ui.label(app.ui.language.tr("Search:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(app.ui.language.tr("e.g. lookup, average, date")));
         r.request_focus();
     });
     let locale = app.ui.language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
+    let q = d.search.to_lowercase();
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
             q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_lowercase().contains(&q))
+                || f["description"].as_str().is_some_and(|n| n.to_lowercase().contains(&q))
         })
         .take(300)
         .collect();
@@ -1781,8 +1786,10 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
+        ui.label(
+            egui::RichText::new(crate::formula_locale::canonical_signature(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default()).strong(),
+        );
+        ui.label(crate::formula_locale::canonical_description(f["name"].as_str().unwrap_or(""), locale).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
@@ -2710,6 +2717,31 @@ mod data_validation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hungarian_macros_dialog_translates_labels_but_keeps_script_names() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut dialog = Dialog::custom("macros", "Macros", json!({}));
+        dialog.result = Some(json!([
+            {"name": "Home", "kind": "script", "steps": 2},
+            {"name": "Saját szkript", "kind": "script", "steps": 1},
+            {"name": "(VBA)", "kind": "vba"}
+        ]));
+        let mut harness = egui_kittest::Harness::builder().build_ui_state(
+            |ui, dialog| {
+                crate::i18n::set_current(ui.ctx(), crate::i18n::Language::Hu);
+                macros(ui, dialog);
+            },
+            dialog,
+        );
+        harness.run();
+        harness.get_by_label("Home");
+        harness.get_by_label("Saját szkript");
+        harness.get_by_label("— 1 lépés");
+        harness.get_by_label("— 2 lépés");
+        harness.get_by_label("— VBA-projekt (megőrizve, nem futtatható)");
+    }
 
     #[test]
     fn data_validation_opens_on_the_rule_of_the_active_cell() {

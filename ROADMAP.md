@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (text comparison is canonical-equivalent and accent-aware) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (Data › Sorting Language: Vietnamese order) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -140,6 +140,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
 | 2026-10-19 | Linux: "Use system setting" for the theme keeps following the desktop when the XDG Desktop Portal stops answering: each read gives up after 2 s and the next poll reconnects, where one unanswered call stalled the watcher for the rest of the session |
+| 2026-10-19 | Data › Sort & Filter › Sorting Language (`data.sortLanguage`, command only, no ribbon control yet): with `vi`, text sorts in the CLDR Vietnamese standard order (`a ă â b c d đ e ê … o ô ơ … u ư`, tones as a second-level difference) in Sort, `SORT` / `SORTBY`, `<` and the other comparison operators, approximate `MATCH` / `VLOOKUP` / `XLOOKUP`, AutoFilter lists, Advanced Filter and conditional-formatting comparisons and PivotTable items; a session setting that is not saved in the file, default language-neutral |
 | 2026-10-19 | Text comparison treats NFC and NFD as the same text and keeps accented letters next to their base letter: `COUNTIF`, `MATCH`, `XLOOKUP`, `UNIQUE`, `SWITCH`, `EXACT` (still case-sensitive), Remove Duplicates, AutoFilter, Slicers, data validation lists, conditional formatting, PivotTables and Consolidate agree, and `Ánh` sorts beside `Anh` instead of after `z`; the XLSX pivot writer uses the same equality. Latin letters U+00C0–U+024F and U+1E00–U+1EFF with marks U+0300–U+036F; wildcards and Find / Replace are not covered yet |
 | 2026-10-16 | Memory: undo steps share a sheet's picture bytes and the workbook's VBA project instead of copying them: 50 edits on a sheet with a 20 MB picture keep 22 MB instead of 992 MB |
 | 2026-10-16 | Memory: floating pictures are decoded at about the size they are drawn, with limits, into a cache bounded by bytes and dropped with their workbook, instead of at full size into one that never let go; two open workbooks no longer show each other's picture. 12 large pictures scrolled through keep 40 MB of textures instead of 258 MB, and none once the workbook closes |
@@ -225,6 +226,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
 | 2026-10-19 | trivial | Progress log: desktop theme portal read timeout |
+| 2026-10-19 | minor | Progress log: Sorting Language (`data.sortLanguage`) and the Vietnamese order |
 | 2026-10-19 | minor | Progress log: canonical-equivalent, accent-aware text comparison |
 | 2026-10-16 | minor | Progress log: undo steps share picture and macro bytes |
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |

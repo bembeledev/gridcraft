@@ -3,9 +3,9 @@
 //!
 //! ICU is only an oracle here (a dev-dependency, never shipped). GridCraft's text order has no
 //! case level, so ICU runs at **secondary** strength: letters, then diacritics, case ignored.
-//! Generated names are letters and spaces only: punctuation is ordered by code point and letters
-//! outside the language's alphabet are kept apart by code point, and both differ from ICU on
-//! purpose.
+//! Generated names are letters and spaces only: punctuation is ordered by code point, and the
+//! Latin letters with no decomposition (`ø`, `ł`, `æ`, `ß`…) follow their base letter under
+//! Vietnamese by GridCraft's own rule, so neither is meant to match ICU.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -17,7 +17,7 @@ use icu_locale_core::locale;
 use icu_normalizer::DecomposingNormalizerBorrowed;
 use icu_normalizer::properties::CanonicalCombiningClassMapBorrowed;
 
-/// The syllables the name generator draws from (the list of the M3 collation prototype).
+/// The syllables the name generator draws from (a fixed list of common Vietnamese syllables).
 const SYLL: &[&str] = &[
     "an", "anh", "ang", "ao", "au", "ăn", "ăm", "âu", "ân", "ấp", "ba", "bình", "bùi", "cao", "công", "cường", "chi", "chu", "dũng", "duy", "dương",
     "dung", "đào", "đặng", "đinh", "đỗ", "đức", "em", "ê", "giang", "hà", "hạ", "hải", "hoa", "hoà", "hòa", "hồ", "hồng", "huệ", "huy", "huỳnh",
@@ -244,7 +244,7 @@ const V2_ROWS: &[&[&str]] =
     &[&["ma", "mà", "mả", "mã", "má", "mạ"], &["MA", "MÀ", "MẢ", "MÃ", "MÁ", "MẠ"], &["ă", "ằ", "ẳ", "ẵ", "ắ", "ặ"], &["ơ", "ờ", "ở", "ỡ", "ớ", "ợ"]];
 
 #[test]
-fn agrees_with_icu_vi_on_spec_vectors() {
+fn agrees_with_icu_vi_on_fixed_vectors() {
     let icu = icu_vi();
     for input in [V1_INPUT, V3_INPUT] {
         let mut by_ours: Vec<&str> = input.to_vec();
@@ -253,7 +253,7 @@ fn agrees_with_icu_vi_on_spec_vectors() {
         by_icu.sort_by(|a, b| icu.compare(a, b));
         assert_eq!(by_ours, by_icu);
     }
-    // The tone rows (V2) are strictly increasing in both.
+    // The tone rows (`V2_ROWS`) are strictly increasing in both.
     for row in V2_ROWS {
         for w in row.windows(2) {
             if let [a, b] = w {

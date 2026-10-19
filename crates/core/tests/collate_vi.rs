@@ -1,9 +1,10 @@
 //! Vietnamese collation (CLDR `vi` standard) through the public API: tailored letters, tones as a
 //! secondary difference, canonical equivalence and language-tag handling.
 //!
-//! Expected orders are the `vi` vectors of the M3 collation analysis (ICU 77.1 / CLDR 47 `vi`,
-//! `vectors.json`), copied here as literals. GridCraft has no case level in its text order (Data ›
-//! Sort keeps its own "case sensitive" option), so the case-level vectors are not here.
+//! Expected orders are fixed vectors for the `vi` collation, written out as literals: they were
+//! first checked with ICU 77.1 / CLDR 47 `vi` and are re-checked against ICU4X 2.3.1 in
+//! `collate_icu.rs`, both at secondary strength. GridCraft has no case level in its text order
+//! (Data › Sort keeps its own "case sensitive" option), so case-level vectors are not here.
 
 use std::cmp::Ordering;
 
@@ -162,7 +163,8 @@ fn vi_letters_beat_foreign_diacritics() {
             assert_ne!(vi(a, b), Ordering::Equal, "{a} != {b}");
         }
     }
-    // Foreign letters follow their base letter, as in the other languages' tables.
+    // Latin letters outside the alphabet follow their base letter under `vi`: `ä` and `ö` by their
+    // marks, `ø` (no decomposition) by its base `o`. Under Root `ø` would sort after `z`.
     assert_eq!(sorted(&["zebra", "ö", "øre", "oz", "ä", "b"], Collation::Vi), ["ä", "b", "ö", "øre", "oz", "zebra"]);
 }
 

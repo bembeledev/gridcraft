@@ -907,7 +907,7 @@ impl TextSet {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Layer 2: collations. The Vietnamese order (CLDR `vi` standard).
+// Collations: the Vietnamese order (CLDR `vi` standard) next to the Root order.
 // ---------------------------------------------------------------------------------------------
 
 /// Vietnamese letters with a quality mark: letters of their own, after their base letter
@@ -915,7 +915,8 @@ impl TextSet {
 /// secondary difference ([`TONES`]).
 const VI: &[(char, char, u32)] = &[('ă', 'a', 1), ('â', 'a', 2), ('đ', 'd', 1), ('ê', 'e', 1), ('ô', 'o', 1), ('ơ', 'o', 2), ('ư', 'u', 1)];
 
-/// A base letter and the quality mark that make a Vietnamese letter of their own (rule V1).
+/// A base letter and the quality mark that make a Vietnamese letter of their own (the first step
+/// of the Vietnamese key, in `Key::vi`).
 const QUALITY: &[(char, char, char)] =
     &[('a', '\u{306}', 'ă'), ('a', '\u{302}', 'â'), ('e', '\u{302}', 'ê'), ('o', '\u{302}', 'ô'), ('o', '\u{31b}', 'ơ'), ('u', '\u{31b}', 'ư')];
 
@@ -970,8 +971,10 @@ fn vi_letter(c: char) -> (u32, Option<u32>, u16) {
 /// changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Collation {
-    /// The language-neutral order (layer 1): accented letters sort with their base letter, `đ`
-    /// with `d`, everything else by code point.
+    /// The language-neutral order: accented letters sort with their base letter (`Anh` < `Ánh` <
+    /// `Ảnh`), `đ` with `d`, everything else by code point. That includes the Latin letters with no
+    /// decomposition (`ø`, `ł`, `æ`, `ß`, `ð`, `ħ`, `ı`…), which sort after `z`; [`Collation::Vi`]
+    /// puts them with their base letter.
     #[default]
     Root,
     /// Vietnamese, the CLDR `vi` standard order: `a ă â b c d đ e ê … o ô ơ … u ư …`, tones as a
@@ -1083,7 +1086,7 @@ impl Key {
         Key { primary, secondary, text }
     }
 
-    /// The Root key (layer 1).
+    /// The Root key.
     fn root(s: &str) -> Key {
         let text = fold_key(s);
         let mut primary: Vec<u32> = Vec::new();
@@ -1858,7 +1861,7 @@ mod tests {
         assert_eq!(Key::vi("ß").secondary, [0, 16, 0, 0, 0]);
         assert_eq!(compare_text_with("ss", "ß", Collation::Vi), Ordering::Less);
         assert_eq!(compare_text_with("ß", "st", Collation::Vi), Ordering::Less);
-        // The 23 strings of vectors.json collisions.all_distinct_vi: the weights alone tell them
+        // These 23 strings differ pairwise: the weights alone tell them
         // apart in `vi` too.
         let words = ["a", "à", "ả", "ã", "á", "ạ", "ă", "ằ", "ẳ", "ẵ", "ắ", "ặ", "â", "ầ", "ẩ", "ẫ", "ấ", "ậ", "ä", "å", "ā", "ą", "ǎ"];
         let weights: std::collections::HashSet<(Vec<u32>, Vec<u16>)> = words

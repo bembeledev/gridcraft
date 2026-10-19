@@ -1787,6 +1787,13 @@ fn saving_an_opened_text_file_keeps_its_encoding_and_line_ends() {
     s.execute("cell.set", json!({"cell": "A1", "input": "čaj"})).unwrap();
     s.execute("file.save", json!({"path": dir.join("new.csv")})).unwrap();
     assert_eq!(std::fs::read(dir.join("new.csv")).unwrap(), "čaj\r\n".as_bytes());
+    // Opened with every field as text (#1867), it still saves back as it came.
+    let ids = dir.join("ids.csv");
+    std::fs::write(&ids, utf16("šifra;kom\n0042;7\n")).unwrap();
+    s.execute("file.open", json!({"path": ids, "csvAsText": true})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::text("0042"));
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(std::fs::read(&ids).unwrap(), utf16("šifra;kom\n0042;7\n"));
     std::fs::remove_dir_all(dir).unwrap();
     // In a GridCraft JSON workbook the format is named; workbooks from before it read as None.
     let format = gridcraft_model::TextFormat { encoding: gridcraft_model::TextEncoding::Utf16Le, line_end: gridcraft_model::LineEnd::Lf };

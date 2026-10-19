@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (audit against main: ten translated interface languages, counts re-measured after the 2026-10-13 merges) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-20 · **Change:** minor (defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context; audit against main: ten translated interface languages, counts re-measured after the 2026-10-13 merges) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -32,11 +32,16 @@ right-to-left sheets and full complex-script support. Part of
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
-  (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#310, for #146):
+  (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`, `.xls` WINDOW2 fRightToLeft) mirrors the grid (#310, for #146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
-  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
+  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet.
+  Text boxes and shapes keep their paragraphs' right-to-left direction (`a:pPr rtl`) through XLSX
+  save, though GridCraft still draws that text left to right. IME input goes
   through egui/winit and is unverified for Chinese, Japanese and Korean.
+- **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
+  255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
+  accepted as in Excel. Sheet names already counted characters (31).
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -84,6 +89,12 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
+| 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
+| 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |
+| 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
+| 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
+| 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
 | 2026-10-13 | minor | Re-audit after the 2026-10-12/13 merges: catalogs re-counted (ja 394, es 424, cs 514, pt-BR 939, 393–398 for the others); Serbian (#453), Czech tooltips (#652) and Brazilian Portuguese dialogs (#739) recorded as merged; open language PRs listed again (#650, #663, #713, #743, #721, #778, #676, #669) |
 | 2026-10-12 | minor | Audit against main: re-counted the catalogs (381 entries each, ja 377: about 17% of the ~2,200 estimate, not 12%); recorded Spanish (#242) and French (#413) interface languages and Spanish formulas (#98); #163 was closed unmerged; Czech row added (no estimate); open language PRs listed by number. The ~10% ready and hour estimates are unchanged (not re-scored) |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |

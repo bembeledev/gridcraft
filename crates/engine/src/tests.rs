@@ -3453,6 +3453,9 @@ fn typed_decimal_places_show_as_written() {
     };
     let mut s = s();
     s.execute("app.dataConversion", json!({"removeTrailingZeros": false})).unwrap();
+    // A JSON number isn't typed text: `serde_json` spells 100.0 as "100.0", but it gets no 0.0 format.
+    s.execute("cell.set", json!({"cell": "D1", "input": 100.0})).unwrap();
+    assert_eq!(shown(&s, "D1"), "100");
     for (row, (input, text)) in
         [("720.0", "720.0"), ("3.10", "3.10"), ("-0.50", "-0.50"), (".50", ".50"), ("-.50", "-.50"), ("720.5", "720.5")].into_iter().enumerate()
     {

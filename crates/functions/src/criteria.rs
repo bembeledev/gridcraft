@@ -1,9 +1,10 @@
 //! Excel criteria (COUNTIF, SUMIFS, DCOUNT…) and wildcard matching.
 
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Collation, Value, compare_numbers, compare_text, compare_text_with, fold_key, text_eq_prefolded};
+use gridcraft_core::{CellError, Collation, TextProbe, Value, compare_numbers, compare_text, compare_text_with, fold_key, text_eq_prefolded};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -48,16 +49,20 @@ pub(crate) struct Criterion {
     operand: Operand,
     /// The criterion was a bare `""` (or empty cell text): matches blanks and empty strings.
     bare_empty: bool,
+    /// A text operand prepared for `<`, `<=`, `>` and `>=` (its key built once, on the first
+    /// non-ASCII comparison), so a cell is ordered against it without rebuilding the operand's
+    /// key, and usually without building its own.
+    key: OnceCell<TextProbe>,
 }
 
 impl Criterion {
     /// Parses a criterion value the way COUNTIF does.
     pub(crate) fn parse(v: &Value) -> Criterion {
         match v {
-            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false },
-            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false },
-            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false },
-            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false },
+            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false, key: OnceCell::new() },
+            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false, key: OnceCell::new() },
+            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false, key: OnceCell::new() },
+            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false, key: OnceCell::new() },
             Value::Array(a) => Criterion::parse(a.data.first().unwrap_or(&Value::Empty)),
             Value::Text(t) => Criterion::parse_text(t),
         }
@@ -94,7 +99,7 @@ impl Criterion {
                         }
                         // The cut falls between the two halves of `c`.
                         let (op, rest) = split_op(&t[..i]);
-                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false };
+                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false, key: OnceCell::new() };
                     }
                     units += c.len_utf16();
                 }
@@ -106,7 +111,7 @@ impl Criterion {
 
     fn parse_text(t: &str) -> Criterion {
         if t.is_empty() {
-            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true };
+            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true, key: OnceCell::new() };
         }
         let (op, rest) = split_op(t);
         let operand = if rest.is_empty() {
@@ -124,7 +129,7 @@ impl Criterion {
             let plain = !rest.contains(['*', '?', '~']);
             Operand::Text(rest.to_string(), plain.then(|| fold_key(rest)))
         };
-        Criterion { op, operand, bare_empty: false }
+        Criterion { op, operand, bare_empty: false, key: OnceCell::new() }
     }
 
     /// Whether a cell value satisfies the criterion. `<`, `<=`, `>` and `>=` order text by `coll`
@@ -186,17 +191,28 @@ impl Criterion {
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {
-                    Value::Text(t) => cmp_op(self.op, compare_text_with(t, pat, coll)),
+                    Value::Text(t) => cmp_op(self.op, self.order(t, pat, coll)),
                     _ => false,
                 },
             },
             Operand::CutText(kept) => match self.op {
                 Op::Eq => false,
                 Op::Ne => true,
-                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if compare_text_with(t, kept, coll) != Ordering::Greater),
-                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if compare_text_with(t, kept, coll) == Ordering::Greater),
+                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if self.order(t, kept, coll) != Ordering::Greater),
+                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if self.order(t, kept, coll) == Ordering::Greater),
             },
         }
+    }
+
+    /// `compare_text_with(t, operand, coll)`, where `operand` is this criterion's text: two ASCII
+    /// strings take the byte fast path, otherwise the operand's [`TextProbe`], built once and
+    /// kept (a call in another collation than the probe's compares directly).
+    fn order(&self, t: &str, operand: &str, coll: Collation) -> Ordering {
+        if t.is_ascii() && operand.is_ascii() {
+            return compare_text_with(t, operand, coll);
+        }
+        let probe = self.key.get_or_init(|| TextProbe::new(operand, coll));
+        if probe.collation() == coll { probe.order(t) } else { compare_text_with(t, operand, coll) }
     }
 }
 
@@ -413,6 +429,36 @@ mod tests {
         assert!(!m("a~*", Value::from("ab")));
         // Non-text cells never equal a text criterion.
         assert!(!m("Ánh", Value::Number(1.0)) && m("<>Ánh", Value::Empty));
+    }
+
+    #[test]
+    fn relational_text_criteria_equal_compare_text_with() {
+        // One parsed criterion is reused across cells (its operand key is built once and kept);
+        // every answer must be the one `compare_text_with` gives, in either collation, and even
+        // when the collation changes between calls.
+        let words = ["Dương", "Đặng", "Đ", "D", "Em", "Ánh", "Anh", "Ảnh", "Hoà", "Hòa", "ư", "Uz", "abc", "ABD", "", "İ", "ø", "z"];
+        let spell = |w: &str| {
+            let d = gridcraft_core::canonical(w);
+            [w.to_string(), d.clone(), w.to_uppercase(), d.to_uppercase()]
+        };
+        for op in ["<", "<=", ">", ">="] {
+            for p in words {
+                for pv in spell(p) {
+                    let c = Criterion::parse(&Value::from(format!("{op}{pv}").as_str()));
+                    if !matches!(c.operand, Operand::Text(..)) {
+                        continue;
+                    }
+                    for coll in [Collation::Vi, Collation::Root, Collation::Vi] {
+                        for cell in words {
+                            for cv in spell(cell) {
+                                let want = cmp_op(c.op, compare_text_with(&cv, &pv, coll));
+                                assert_eq!(c.matches(&Value::from(cv.as_str()), coll), want, "{op}{pv:?} {cv:?} {coll:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

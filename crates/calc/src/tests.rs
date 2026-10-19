@@ -1889,11 +1889,18 @@ fn sort_function_follows_vi() {
     // The input cells are untouched (Sort only moves values, it never rewrites them).
     assert_eq!(text_column(&t, "A", n), V1_INPUT.iter().map(|s| s.to_string()).collect::<Vec<_>>());
 
-    // Root sorts the same names differently (Đ… right after D…, Ư… with U…).
+    // Root sorts the same names by base letter: `đ` counts as `d`, `ă`/`â`/`ư` as `a`/`u`, and
+    // accents only break ties, by the mark's code point (`An < Ân < Ấn < Ăn`: circumflex U+0302
+    // before breve U+0306; `Anh < Ánh < Ảnh`: acute U+0301 before hook above U+0309).
     let mut r = with_collation(Collation::Root);
     fill_column(&mut r, "A", V1_INPUT);
     r.set("C1", "=SORT(A1:A34)");
-    assert_ne!(text_column(&r, "C", n), want);
+    let root = [
+        "Ắc", "An", "Ân", "Ấn", "Ăn", "Anh", "Ánh", "Ảnh", "Âu", "Bình", "Bùi", "Đặng", "Đào", "Đinh", "Đỗ", "Dũng", "Dương", "Duy", "Ê-đê", "Em",
+        "Hồ", "Hoàng", "Huỳnh", "Ngô", "Nguyễn", "Oanh", "Ơn", "Ông", "Phạm", "Phan", "Ưng", "Út", "Uyên", "Yến",
+    ];
+    assert_eq!(root.len(), n);
+    assert_eq!(text_column(&r, "C", n), root, "SORT under Root");
 }
 
 #[test]

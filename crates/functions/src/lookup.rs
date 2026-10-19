@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::{Array, CellError, Collation, Value, col_to_letters, compare_with, fold_key, text_eq_prefolded};
+use gridcraft_core::{Array, CellError, Collation, TextProbe, Value, col_to_letters, compare_with, fold_key, text_eq_prefolded};
 
 use crate::criteria::{has_wildcards, lookup_equal};
 use crate::util::{R, arg, array_val, as_array, has, int, num, opt_bool, opt_int, opt_num, text, text_val};
@@ -270,31 +270,57 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64, coll: Co
     if match_mode == 0 || match_mode == 2 {
         return Ok(None);
     }
-    // Best candidate: the largest value below (mode -1) or smallest above (mode 1).
+    // Best candidate: the largest value below (mode -1) or smallest above (mode 1). A text needle
+    // is a `TextProbe` (its key built once), and so is the best candidate so far: an entry is
+    // ordered against them by streaming its base letters, and builds a key only when they tie
+    // (or when it becomes the best), instead of two keys per comparison, two comparisons per entry.
     let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new((0..hay.len()).rev()) } else { Box::new(0..hay.len()) };
-    let mut best: Option<usize> = None;
+    let needle = match x {
+        Value::Text(t) => Some(TextProbe::new(t, coll)),
+        _ => None,
+    };
+    let mut best: Option<(usize, Option<TextProbe>)> = None;
     for i in order {
         let Some(v) = hay.get(i) else { continue };
         if !same_type(x, v) {
             continue;
         }
-        let o = compare_with(v, x, coll);
+        let text = match v {
+            Value::Text(t) => Some(t),
+            _ => None,
+        };
+        let o = match (text, &needle) {
+            (Some(t), Some(n)) => n.order(t),
+            _ => compare_with(v, x, coll),
+        };
         let candidate = if match_mode == -1 { o == Ordering::Less } else { o == Ordering::Greater };
         if !candidate {
             continue;
         }
-        let better = match best.and_then(|b| hay.get(b)) {
+        let better = match &best {
             None => true,
-            Some(bv) => {
-                let c = compare_with(v, bv, coll);
-                if match_mode == -1 { c == Ordering::Greater } else { c == Ordering::Less }
+            Some((b, bp)) => {
+                let c = match (text, bp) {
+                    (Some(t), Some(bp)) => Some(bp.order(t)),
+                    _ => hay.get(*b).map(|bv| compare_with(v, bv, coll)),
+                };
+                match c {
+                    None => true,
+                    Some(c) => {
+                        if match_mode == -1 {
+                            c == Ordering::Greater
+                        } else {
+                            c == Ordering::Less
+                        }
+                    }
+                }
             }
         };
         if better {
-            best = Some(i);
+            best = Some((i, text.map(|t| TextProbe::new(t, coll))));
         }
     }
-    Ok(best)
+    Ok(best.map(|(i, _)| i))
 }
 
 fn bsearch_exact(x: &Value, hay: &[Value], desc: bool, coll: Collation) -> Option<usize> {
@@ -868,6 +894,70 @@ mod tests {
                             h.iter().position(|v| super::lookup_equal(&x, v, eff))
                         };
                         assert_eq!(super::find_exact(&x, &h, wild, rev), want, "round {round}: {x:?} wild={wild} rev={rev}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The next smaller / next larger linear search as it was: `compare_with` for every
+    /// comparison (the oracle for the keyed search).
+    fn xsearch_reference(x: &Value, hay: &[Value], match_mode: i64, reverse: bool, coll: gridcraft_core::Collation) -> Option<usize> {
+        let order: Vec<usize> = if reverse { (0..hay.len()).rev().collect() } else { (0..hay.len()).collect() };
+        // An exact match wins first, as in `xsearch`.
+        if let Some(p) = order.iter().copied().find(|&i| super::lookup_equal(x, &hay[i], false)) {
+            return Some(p);
+        }
+        let mut best: Option<usize> = None;
+        for i in order {
+            let v = &hay[i];
+            if !super::same_type(x, v) {
+                continue;
+            }
+            let o = gridcraft_core::compare_with(v, x, coll);
+            if !(if match_mode == -1 { o == std::cmp::Ordering::Less } else { o == std::cmp::Ordering::Greater }) {
+                continue;
+            }
+            let better = match best.and_then(|b| hay.get(b)) {
+                None => true,
+                Some(bv) => {
+                    let c = gridcraft_core::compare_with(v, bv, coll);
+                    if match_mode == -1 { c == std::cmp::Ordering::Greater } else { c == std::cmp::Ordering::Less }
+                }
+            };
+            if better {
+                best = Some(i);
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn keyed_next_smaller_and_larger_equal_the_pairwise_search() {
+        use gridcraft_core::Collation;
+        let words = [
+            "Yến", "Ưng", "Uyên", "Út", "Đỗ", "Đào", "Dương", "Duy", "Dũng", "Ăn", "Ân", "Ánh", "Ảnh", "Anh", "An", "Hoà", "Hòa", "ma", "mà", "má",
+            "zz", "ab",
+        ];
+        let mut hay: Vec<Value> = Vec::new();
+        for w in words {
+            hay.extend(spellings(w).into_iter().map(Value::from));
+        }
+        hay.extend([Value::Number(3.0), Value::Number(-1.0), Value::Bool(false), Value::Empty]);
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        for round in 0..60 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let mut h = hay.clone();
+            h.rotate_left((state % hay.len() as u64) as usize);
+            for coll in [Collation::Root, Collation::Vi] {
+                for w in words.iter().chain(["Đ", "D", "U", "Ư", "m"].iter()) {
+                    for x in spellings(w).into_iter().map(Value::from).chain([Value::Number(1.0), Value::Bool(true)]) {
+                        for (mm, sm) in [(-1, 1), (1, 1), (-1, -1), (1, -1)] {
+                            let want = xsearch_reference(&x, &h, mm, sm == -1, coll);
+                            assert_eq!(super::xsearch(&x, &h, mm, sm, coll), Ok(want), "round {round} {coll:?}: {x:?} mm={mm} sm={sm}");
+                        }
                     }
                 }
             }

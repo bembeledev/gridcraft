@@ -87,6 +87,11 @@ fn a_word_wider_than_the_column_takes_several_lines() {
     assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count(&"a".repeat(24), 11.0, false, w), 3.0);
     assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("", 11.0, false, w), 1.0);
     assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aa", 11.0, false, 0.0), 2.0, "a zero width can't loop or panic");
+    // A tab is four spaces wide and a break, as the grid draws it: two words that fit with a space
+    // between them don't with a tab.
+    let one_space = gridcraft_engine::cmd::format::approx_text_width("aaaaaaaa aaaaaaaa", 11.0, false) + 1.0;
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aaaaaaaa aaaaaaaa", 11.0, false, one_space), 1.0);
+    assert_eq!(gridcraft_engine::cmd::format::wrapped_line_count("aaaaaaaa\taaaaaaaa", 11.0, false, one_space), 2.0);
 }
 
 /// With a UI's measurer installed, a wrapped row takes the measured height (plus the grid's

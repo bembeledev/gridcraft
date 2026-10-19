@@ -1034,6 +1034,8 @@ pub fn wrapped_line_count(line: &str, size: f32, bold: bool, width: f32) -> f32 
     let space = approx_text_width(" ", size, bold);
     let mut lines = 1.0f32;
     let mut used = 0.0f32;
+    // The grid draws a tab four spaces wide, and may break the line there as at a space.
+    let line = line.replace('\t', "    ");
     for word in line.split(' ') {
         let w = approx_text_width(word, size, bold);
         if used > 0.0 && used + space + w <= width {

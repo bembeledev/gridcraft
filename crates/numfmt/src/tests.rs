@@ -864,3 +864,19 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
+
+#[test]
+fn lempira_currency_codes() {
+    // #1893: L before the amount, dot decimal, comma thousands, two decimals.
+    let f = NumberFormat::parse("[$L-HN] #,##0.00");
+    assert_eq!(f.kind(), FormatKind::Currency);
+    assert_eq!(format_value(&Value::Number(1234.5), &f, S).text, "L 1,234.50");
+    let f2 = NumberFormat::parse("[$L-HN]#,##0.00");
+    assert_eq!(format_value(&Value::Number(1234.5), &f2, S).text, "L1,234.50");
+    // The ISO code form is a literal prefix; the parser must keep it and stay currency.
+    let f3 = NumberFormat::parse("\"HNL\" #,##0.00");
+    assert_eq!(format_value(&Value::Number(1234.5), &f3, S).text, "HNL 1,234.50");
+    // Negative amounts keep the symbol (accounting-style parentheses live in the full code).
+    let f4 = NumberFormat::parse("[$L-HN] #,##0.00");
+    assert_eq!(format_value(&Value::Number(-1234.5), &f4, S).text, "-L 1,234.50");
+}

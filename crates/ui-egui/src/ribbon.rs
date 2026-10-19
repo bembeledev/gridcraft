@@ -119,11 +119,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             // Reserve ~300 px on each side for the toolbar controls (a comfortable heuristic;
             // the exact widths vary with window size).
             let max_title_w = (rect.width() - 600.0).max(80.0);
-            let mut job = egui::text::LayoutJob::simple_singleline(
-                title_str,
-                theme::ui_bold(13.0),
-                t.text,
-            );
+            let mut job = egui::text::LayoutJob::simple_singleline(title_str, theme::ui_bold(13.0), t.text);
             job.wrap.max_width = max_title_w;
             job.wrap.overflow_character = Some('…');
             let galley = ui.fonts_mut(|f| f.layout_job(job));

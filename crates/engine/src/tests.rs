@@ -3303,6 +3303,66 @@ fn data_conversion_applies_to_typing_pasting_and_set_values() {
     assert_eq!((v(&s, "D1"), v(&s, "E1")), (Value::text("114412140641"), Value::Number(114412140641.0)));
 }
 
+/// `cell.set` takes a JSON number as typed (#697), and that number isn't text: `serde_json`'s spelling
+/// of it (`1e-5`, 12 digits, 16 significant digits) mustn't decide its type under the options.
+#[test]
+fn cell_set_json_numbers_ignore_the_conversion_options() {
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"all": false, "longNumberDigits": 11})).unwrap();
+    for (input, number) in [
+        (json!(0.00001), 0.00001),
+        (json!(1e20), 1e20),
+        (json!(124412140710u64), 124412140710.0),
+        (json!(-12345678901i64), -12345678901.0),
+        (json!(1234.56789012345), 1234.56789012345),
+    ] {
+        s.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(number), "{input}");
+        s.execute("cell.set", json!({"cell": "A2", "value": input})).unwrap();
+        assert_eq!(v(&s, "A2"), Value::Number(number), "value: {input}");
+    }
+    s.execute("cell.set", json!({"cell": "A1", "input": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Bool(true));
+    // The same digits as text still follow the options.
+    s.execute("cell.set", json!({"cell": "A1", "input": "124412140710"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("124412140710"));
+}
+
+/// A scenario stores its numbers as numbers, so Show restores them as numbers whatever the options
+/// say; before, a value like `1234.56789012345` came back as text and broke the formulas using it.
+/// Stored text follows the options, so `0123` kept as text comes back as text.
+#[test]
+fn scenarios_restore_stored_numbers_whatever_the_conversion_options() {
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"all": false, "longNumberDigits": 11})).unwrap();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[1234.56789012345], [-12345678901i64], [0.00001], ["0123"]]})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "Base", "changing": "B2:B5"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[1], [2], [3], [4]]})).unwrap();
+    s.execute("data.scenarioShow", json!({"name": "Base"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(1234.56789012345));
+    assert_eq!(v(&s, "B3"), Value::Number(-12345678901.0));
+    assert_eq!(v(&s, "B4"), Value::Number(0.00001));
+    assert_eq!(v(&s, "B5"), Value::text("0123"));
+}
+
+/// The options change what later typing gives, so the journal records them: replayed in a new
+/// session, the same commands give the same cells. Undo leaves the setting alone, as in Excel.
+#[test]
+fn data_conversion_is_journaled_so_a_replay_gives_the_same_cells() {
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": false})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "0123"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("0123"));
+    let mut r = self::s();
+    for (id, p) in s.journal.iter() {
+        r.execute(id, p.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    assert_eq!(v(&r, "A1"), Value::text("0123"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(s.execute("app.dataConversion", json!({})).unwrap()["removeLeadingZeros"], false);
+}
+
 /// The clipboard's HTML (`x:num`, `sdval`) doesn't override the options: a field they keep as text
 /// stays text, even where the source recorded a number (which may have lost digits, as here). Text
 /// the options don't cover, like pasted currency (#257), still takes the number from the HTML.
@@ -3430,6 +3490,9 @@ fn typed_decimal_places_show_as_written() {
     };
     let mut s = s();
     s.execute("app.dataConversion", json!({"removeTrailingZeros": false})).unwrap();
+    // A JSON number isn't typed text: `serde_json` spells 100.0 as "100.0", but it gets no 0.0 format.
+    s.execute("cell.set", json!({"cell": "D1", "input": 100.0})).unwrap();
+    assert_eq!(shown(&s, "D1"), "100");
     for (row, (input, text)) in
         [("720.0", "720.0"), ("3.10", "3.10"), ("-0.50", "-0.50"), (".50", ".50"), ("-.50", "-.50"), ("720.5", "720.5")].into_iter().enumerate()
     {

@@ -489,8 +489,9 @@ fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
+            // A stored number comes back as a number; stored text follows the options like typing.
             let input = super::edit::json_to_input(v);
-            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb, &conv)?;
+            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb, &super::edit::conversion_for(v, &conv))?;
             let sh = cx.sheet_mut(si)?;
             match cell {
                 Some(cell) => sh.set_cell(*c, cell),

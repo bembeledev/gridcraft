@@ -442,6 +442,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Aus: 720.0 wird als 720.0 angezeigt und gespeichert, 3.10 als 3.10 (die Zelle erhält das Zahlenformat 0.0 oder 0.00). Es bleibt eine Zahl. Keine Excel-Option."
         }
+        // grid.rs cell and row/column header context menus.
+        "Cut" => "Ausschneiden",
+        "Copy" => "Kopieren",
+        "Insert…" => "Einfügen…",
+        "Delete…" => "Löschen…",
+        "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
+        "New Comment" => "Neuer Kommentar",
+        "Pick From Drop-down List…" => "Aus Dropdownliste auswählen…",
+        "Define Name…" => "Namen definieren…",
+        "Link…" => "Link…",
+        "Hide" => "Ausblenden",
+        "Unhide" => "Einblenden",
         _ => return None,
     })
 }

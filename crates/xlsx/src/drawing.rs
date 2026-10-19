@@ -224,8 +224,12 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         .unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    let rotation =
-        sp.child("xfrm").and_then(|x| x.attr("rot")).and_then(|r| r.parse::<f64>().ok()).map_or(0.0, |r| ((r / 60000.0).rem_euclid(360.0)) as f32);
+    let rotation = sp
+        .child("xfrm")
+        .and_then(|x| x.attr("rot"))
+        .and_then(|r| r.parse::<f64>().ok())
+        .filter(|r| r.is_finite())
+        .map_or(0.0, |r| ((r / 60000.0).rem_euclid(360.0)) as f32);
     Some(Shape { id: 0, kind, anchor, fill, line, text, format, rotation })
 }
 

@@ -10,9 +10,14 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn fixture() -> (Harness, u32) {
+    fixture_of("rectangle")
+}
+
+fn fixture_of(kind: &str) -> (Harness, u32) {
     let mut session = Session::new();
     session.new_workbook();
-    let shape = session.execute("insert.shape", json!({"kind": "rectangle", "at": "D3", "width": 160, "height": 100})).unwrap();
+    let shape =
+        session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": if kind == "line" { 0 } else { 100 }})).unwrap();
     let id = shape["shape"].as_u64().unwrap() as u32;
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -97,6 +102,10 @@ fn dragging_a_shape_moves_it() {
 
 fn select(h: &mut Harness, id: u32) {
     let c = rect(h, id).center();
+    select_at(h, c);
+}
+
+fn select_at(h: &mut Harness, c: egui::Pos2) {
     h.input_mut().events.push(Event::PointerMoved(c));
     h.run_steps(2);
     button(h, c, true);
@@ -201,7 +210,7 @@ fn arrow_keys_nudge_the_selected_shape_not_the_cell_cursor() {
     select(&mut h, id);
     let before = anchor(&h, id);
     key(&mut h, egui::Key::ArrowRight, Modifiers::NONE);
-    key(&mut h, egui::Key::ArrowDown, Modifiers::CTRL);
+    key(&mut h, egui::Key::ArrowDown, Modifiers { ctrl: true, command: true, ..Default::default() });
     let after = anchor(&h, id);
     let x = |a: &Anchor| h.state().session.doc().unwrap().wb.active().unwrap().col_left(a.cell.col) as f32 + a.dx;
     let y = |a: &Anchor| h.state().session.doc().unwrap().wb.active().unwrap().row_top(a.cell.row) as f32 + a.dy;
@@ -224,4 +233,16 @@ fn the_body_of_a_shape_shows_the_move_cursor() {
     h.input_mut().events.push(Event::PointerMoved(c));
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move);
+}
+
+#[test]
+fn resizing_a_flat_line_keeps_it_flat() {
+    let (mut h, id) = fixture_of("line");
+    select(&mut h, id);
+    let before = rect(&h, id);
+    assert_eq!(before.height(), 0.0, "a new line has no height");
+    drag(&mut h, before.right_bottom(), before.right_bottom() + vec2(50.0, 40.0));
+    let after = rect(&h, id);
+    assert!(after.width() > before.width() + 40.0, "{before:?} -> {after:?}");
+    assert_eq!(after.height(), 0.0, "{before:?} -> {after:?}");
 }

@@ -2315,7 +2315,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 // Sheet coordinates of the object as the drag began.
                 let r0 = Rect::from_min_size(pos2(sh.col_left(cell.col) as f32 + dx, sh.row_top(cell.row) as f32 + dy), vec2(w, h));
                 let r = match grab {
-                    crate::frame::Grab::Resize(h) => crate::frame::resized_turned(r0, deg, h, d, 20.0, mods.shift),
+                    crate::frame::Grab::Resize(h) => {
+                        // A line or arrow can be flat on one axis: keep that axis flat.
+                        let h = crate::frame::Handle { x: if r0.width() < 1.0 { 0 } else { h.x }, y: if r0.height() < 1.0 { 0 } else { h.y } };
+                        crate::frame::resized_turned(r0, deg, h, d, 20.0, mods.shift)
+                    }
                     _ => r0.translate(d),
                 };
                 // Re-anchor at the cell under the new top-left.
@@ -2612,7 +2616,8 @@ fn object_key(app: &mut SheetApp, geo: &Geo, sh: &Sheet, key: egui::Key, m: egui
         }
         _ => return false,
     };
-    if m.shift || m.command {
+    // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
+    if m.shift || m.mac_cmd {
         return false;
     }
     let Some(a) = object_anchor(sh, s.kind, s.id) else { return false };

@@ -3320,6 +3320,14 @@ fn paste_special_validation_moves_relative_references() {
 }
 
 #[test]
+fn object_move_refuses_to_rotate_ink() {
+    let mut s = s();
+    let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
+    assert!(s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": 45})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+}
+
+#[test]
 fn object_move_rotates_shapes_only() {
     let mut s = s();
     let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();

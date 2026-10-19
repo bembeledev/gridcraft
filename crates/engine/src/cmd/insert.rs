@@ -143,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?, rotation?: degrees clockwise (shapes only)}",
+            "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?, rotation?: degrees clockwise (shapes, not ink)}",
             has_doc,
             move_object
         ),
@@ -1121,8 +1121,11 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet;
     let at = cell_param(s, p, "at")?;
     let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
-    if rotation.is_some() && kind != "shape" {
-        return Err(bad("object.move", "only shapes rotate"));
+    if rotation.is_some() {
+        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| x.id == id && x.kind == ShapeKind::Ink));
+        if kind != "shape" || ink {
+            return Err(bad("object.move", "only shapes other than ink rotate"));
+        }
     }
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;

@@ -502,12 +502,26 @@ fn add_to_area(
     Ok(())
 }
 
-/// Removes `field` from an area; returns the source field it referred to.
-fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> Result<String> {
+/// Whether a slicer on any sheet connects to this PivotTable and field.
+fn has_connected_slicer(wb: &Workbook, sheet: usize, pt: &PivotTable, field: &str) -> bool {
+    let Some(sheet_name) = wb.sheet(sheet).map(|sh| sh.name.as_str()) else { return false };
+    wb.sheets.iter().any(|sh| {
+        sh.slicers.iter().any(|sl| match &sl.source {
+            SlicerSource::Pivot { pivots, field: slicer_field, .. } if slicer_field.eq_ignore_ascii_case(field) => {
+                pivots.iter().any(|p| p.sheet.eq_ignore_ascii_case(sheet_name) && p.name.eq_ignore_ascii_case(&pt.name))
+            }
+            _ => false,
+        })
+    })
+}
+
+fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str, keep_slicer: bool) -> Result<String> {
     match area {
         "rows" | "columns" => {
             let rows = area == "rows";
-            let held = pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(field)).map(|x| (x.selected.clone(), pt.filter_group(x)));
+            let held = keep_slicer
+                .then(|| pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(field)).map(|x| (x.selected.clone(), pt.filter_group(x))))
+                .flatten();
             let list = if rows { &mut pt.rows } else { &mut pt.columns };
             let i = list
                 .iter()
@@ -520,8 +534,7 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
             if let Some((selected, date_group)) = held
                 && (selected.is_some() || date_group != PivotDateGroup::None)
             {
-                let hidden = !in_axes(pt, &source);
-                pt.filters.push(PivotFilter { source_col: source.clone(), selected, hidden, date_group });
+                pt.filters.push(PivotFilter { source_col: source.clone(), selected, hidden: true, date_group });
             }
             Ok(source)
         }
@@ -949,15 +962,20 @@ fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
         Some(a) => Some(area_param(C, Some(a))?),
         None => None,
     };
+    let (si, pi) = find_pivot(s, p)?;
+    let keep_slicer = {
+        let d = s.doc()?;
+        d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).is_some_and(|pt| has_connected_slicer(&d.wb, si, pt, &field))
+    };
     update(s, p, |pt, _, _| {
         match area {
             Some(a) => {
-                remove_from_area(C, pt, &field, a)?;
+                remove_from_area(C, pt, &field, a, keep_slicer)?;
             }
             None => {
                 let mut any = false;
                 for a in ["rows", "columns", "values", "filters"] {
-                    any |= remove_from_area(C, pt, &field, a).is_ok();
+                    any |= remove_from_area(C, pt, &field, a, keep_slicer).is_ok();
                 }
                 if !any {
                     return Err(bad(C, format!("`{field}` isn't in the PivotTable")));
@@ -974,6 +992,11 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let from = area_param(C, str_param(p, "from"))?;
     let to = area_param(C, str_param(p, "to"))?;
     let pos = position_param(p);
+    let keep_slicer = {
+        let d = s.doc()?;
+        let (si, pi) = find_pivot(s, p)?;
+        d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).is_some_and(|pt| has_connected_slicer(&d.wb, si, pt, &field))
+    };
     update(s, p, |pt, src, _| {
         if is_values_field(src, &field) {
             return move_values_field(C, pt, from, to, pos);
@@ -1020,9 +1043,9 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
         // the way addField moves it, keeping its axis settings, date grouping and filter
         // selection (`from` is only checked).
         let src_field = if from == "values" || to == "values" {
-            remove_from_area(C, pt, &field, from)?
+            remove_from_area(C, pt, &field, from, keep_slicer)?
         } else {
-            remove_from_area(C, &mut pt.clone(), &field, from)?
+            remove_from_area(C, &mut pt.clone(), &field, from, keep_slicer)?
         };
         add_to_area(C, pt, src, &src_field, to, None, None, pos)?;
         Ok(json!({"field": src_field, "to": to}))
@@ -2445,6 +2468,8 @@ mod tests {
         s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
         add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
         s.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+        let d = s.doc().unwrap();
+        assert!(super::has_connected_slicer(&d.wb, d.wb.active_sheet, &pt(&s), "Date"));
         let before = pt(&s);
         let bf = before.filters.iter().find(|f| f.source_col == "Date").unwrap();
         assert_eq!(before.filter_group(bf), PivotDateGroup::Months);
@@ -2466,6 +2491,15 @@ mod tests {
         assert_eq!(rf.selected, Some(vec!["Jan".to_string()]));
         assert!(rf.hidden);
         assert_eq!(rp.filter_group(rf), PivotDateGroup::Months);
+    }
+
+    #[test]
+    fn move_axis_to_values_drops_manual_axis_filter() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Region", "from": "rows", "to": "values"})).unwrap();
+        assert!(pt(&s).filters.iter().all(|f| f.source_col != "Region"));
     }
     #[test]
     fn pivot_slicer_on_grouped_dates_shows_the_groups() {

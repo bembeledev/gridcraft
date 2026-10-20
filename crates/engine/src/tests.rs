@@ -2751,7 +2751,7 @@ fn arrange_align_rejects_grouped_members() {
     let b = add_image(&mut s, "D4", AnchorMode::MoveAndSize);
     group_objects(&mut s, vec![DrawingRef::Image(a), DrawingRef::Image(b)]);
     let err = s.execute("arrange.align", json!({"kind": "image", "ids": [a, b], "align": "left"})).unwrap_err();
-    assert!(err.to_string().contains("grouped members"), "{err}");
+    assert!(err.to_string().contains("in a group"), "{err}");
 }
 
 /// Groups `members` on sheet 0 as one group with the anchor of the first image; returns its id.

@@ -631,7 +631,7 @@ fn align(s: &mut Session, p: &Json) -> Result<Json> {
             _ => sheet.shapes.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Shape(o.id)).is_some()),
         };
         if grouped {
-            return Err(bad("arrange.align", "grouped members must be aligned as a group"));
+            return Err(bad("arrange.align", "objects in a group can't be aligned yet"));
         }
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
             let shc = sheet.clone();

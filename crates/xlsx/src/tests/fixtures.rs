@@ -565,7 +565,7 @@ fn grouped_shapes_preserve_source_transform_across_sheet_metric_mismatch() {
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
     let body = r#"<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/><sheetData/><drawing r:id="rId1"/>"#;
     let bytes = minimal(body, &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/drawing1.xml", drawing)], "", "");
-    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
     let saved = crate::write_xlsx(&wb).unwrap();
     let mut pkg = crate::package::Package::open(&saved).unwrap();
     let x = pkg.read_xml("xl/drawings/drawing1.xml").unwrap().unwrap();
@@ -577,6 +577,21 @@ fn grouped_shapes_preserve_source_transform_across_sheet_metric_mismatch() {
     assert_eq!(xfrm_at(xf, "chExt"), (3302000, 2857500));
     assert_eq!(xfrm_at(sp_named(g, "Box").path(&["spPr", "xfrm"]).unwrap(), "off"), (1905000, 2349500));
     assert_eq!(xfrm_at(sp_named(g, "Oval").path(&["spPr", "xfrm"]).unwrap(), "off"), (3683000, 2349500));
+
+    // Moved down three rows (the group and its members), the group is recomputed but keeps the
+    // file's scale from child space to sheet, so Excel doesn't squeeze its members.
+    let s = wb.sheet_mut(0).unwrap();
+    s.groups[0].anchor.cell.row += 3;
+    for sh in &mut s.shapes {
+        sh.anchor.cell.row += 3;
+    }
+    let saved = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&saved).unwrap();
+    let x = pkg.read_xml("xl/drawings/drawing1.xml").unwrap().unwrap();
+    let xf = x.children[0].child("grpSp").unwrap().path(&["grpSpPr", "xfrm"]).unwrap();
+    let (ext, ch_ext) = (xfrm_at(xf, "ext"), xfrm_at(xf, "chExt"));
+    assert!((ext.0 - ch_ext.0).abs() <= 1 && (ext.1 - ch_ext.1).abs() <= 1, "{ext:?} vs {ch_ext:?}");
+    assert_eq!(ext.0, 3302000);
 }
 
 #[test]

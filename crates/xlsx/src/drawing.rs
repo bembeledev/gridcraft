@@ -664,9 +664,23 @@ impl DrawingOut<'_> {
         let (group_off, group_ext, ch_off, ch_ext) = source.as_ref().map_or_else(
             || {
                 let (ch_off, ch_ext) = space.place(b, false);
+                // An edited top-level group from a file keeps the file's scale from its child
+                // space to the sheet: `ext` from the sheet's own pixel metrics can disagree with
+                // the child space by the file's column widths, and Excel scales members by
+                // `ext`/`chExt`. A pure move then writes the file's `ext` again.
+                let scale =
+                    |e: i64, ce: i64, ch: i64, fallback: i64| if ce > 0 { (ch as f64 * e as f64 / ce as f64).round() as i64 } else { fallback };
+                let ext = match &g.file {
+                    Some(f) if depth == 0 && f.child_extent == g.child_extent => {
+                        (scale(f.ext.0, f.child_extent.0, ch_ext.0, ext.0), scale(f.ext.1, f.child_extent.1, ch_ext.1, ext.1))
+                    }
+                    _ => ext,
+                };
                 (off, ext, ch_off, ch_ext)
             },
-            |f| (f.off, f.ext, f.child_offset, f.child_extent),
+            // A nested group is placed where its parent put it: from the source too when the
+            // parent is unedited, or in the parent's recomputed child space when it isn't.
+            |f| if depth == 0 { (f.off, f.ext, f.child_offset, f.child_extent) } else { (off, ext, f.child_offset, f.child_extent) },
         );
         let cid = self.take_id();
         let name = if g.name.is_empty() { format!("Group {}", cid - 1) } else { g.name.clone() };
@@ -696,10 +710,16 @@ impl DrawingOut<'_> {
         for m in &g.members {
             let Some(r) = self.rect(*m) else { continue };
             let rot = g.member_rotations.iter().find(|(o, _)| o == m).map_or(0, |&(_, rot)| rot);
-            let (moff, mext) = source
-                .as_ref()
-                .and_then(|f| f.members.iter().find(|fm| fm.reference == *m).map(|fm| (fm.off, fm.ext)))
-                .unwrap_or_else(|| space.place(r, quarter_turn(rot)));
+            let (moff, mext) =
+                source.as_ref().and_then(|f| f.members.iter().find(|fm| fm.reference == *m).map(|fm| (fm.off, fm.ext))).unwrap_or_else(|| {
+                    // An unedited nested group keeps its own child space, which spans its source
+                    // box rather than its members' box: place that box.
+                    let r = match m {
+                        DrawingRef::Group(n) => sheet.drawing_group(*n).and_then(|ng| self.source(ng)).map_or(r, |f| sheet.anchor_rect(&f.anchor)),
+                        _ => r,
+                    };
+                    space.place(r, quarter_turn(rot))
+                });
             match m {
                 DrawingRef::Group(n) => self.group(*n, r, moff, mext, flip, depth + 1),
                 leaf => {

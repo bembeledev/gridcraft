@@ -102,17 +102,33 @@ fn cp1252_byte(c: char) -> Option<u8> {
     }
 }
 
-/// The line end of the first record: the first CR or LF outside a quoted field. A file without
-/// one (a single record) gets CRLF, like a new file.
-fn first_line_end(text: &str, quote: char) -> LineEnd {
-    let mut quoted = false;
+/// The line end of the first record: the first CR or LF outside a quoted field. Quoted fields are
+/// found as [`parse_records`] finds them: a quote opens one only as a field's first character, so
+/// the inch mark in `12" pipe` is data. A file without one (a single record) gets CRLF, like a new file.
+fn first_line_end(text: &str, delim: char, quote: char) -> LineEnd {
+    let mut in_q = false;
+    let mut field_start = true;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
+        if in_q {
+            if c == quote {
+                if chars.peek() == Some(&quote) {
+                    chars.next();
+                } else {
+                    in_q = false;
+                }
+            }
+            continue;
+        }
         match c {
-            _ if c == quote => quoted = !quoted,
-            '\n' if !quoted => return LineEnd::Lf,
-            '\r' if !quoted => return if chars.peek() == Some(&'\n') { LineEnd::CrLf } else { LineEnd::Cr },
-            _ => {}
+            _ if c == quote && field_start => {
+                in_q = true;
+                field_start = false;
+            }
+            _ if c == delim => field_start = true,
+            '\n' => return LineEnd::Lf,
+            '\r' => return if chars.peek() == Some(&'\n') { LineEnd::CrLf } else { LineEnd::Cr },
+            _ => field_start = false,
         }
     }
     LineEnd::CrLf
@@ -217,7 +233,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
     wb.csv_delimiter = u8::try_from(delim).ok();
-    wb.csv_format = Some(TextFormat { encoding, line_end: first_line_end(&text, quote) });
+    wb.csv_format = Some(TextFormat { encoding, line_end: first_line_end(&text, delim, quote) });
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];

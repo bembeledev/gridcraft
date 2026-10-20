@@ -108,6 +108,23 @@ fn text_files_round_trip_their_encoding_and_line_ends() {
     assert_eq!(Workbook::new().csv_format, None);
 }
 
+/// A quote inside an unquoted field is data (the inch mark in `12" pipe`), as the reader treats it,
+/// so the line end after it is still found and the file is saved back with it. Before, the quote
+/// hid every later line end and the file got the CRLF of a new file.
+#[test]
+fn a_quote_inside_a_field_does_not_hide_the_line_end() {
+    for (bytes, line_end) in [
+        (&b"12\" pipe;3\nx;y\n"[..], LineEnd::Lf),
+        (b"12\" pipe;3\rx;y\r", LineEnd::Cr),
+        (b"12\" pipe;3\r\nx;y\r\n", LineEnd::CrLf),
+        // A quoted field with doubled quotes still hides the line break inside it.
+        (b"\"say \"\"hi\"\"\nthere\";1\nx;y\n", LineEnd::Lf),
+    ] {
+        let wb = read_csv(bytes, &CsvOptions { delimiter: b';', parse_values: false, ..Default::default() }).unwrap();
+        assert_eq!(wb.csv_format.map(|f| f.line_end), Some(line_end), "{:?}", String::from_utf8_lossy(bytes));
+    }
+}
+
 #[test]
 fn windows_1252_lists_the_characters_it_cannot_hold() {
     // Each of the 256 bytes decodes to a character that encodes back to it.

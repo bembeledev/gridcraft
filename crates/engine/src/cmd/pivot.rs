@@ -999,7 +999,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                     let i = pt
                         .filters
                         .iter()
-                        .position(|f| f.source_col.eq_ignore_ascii_case(&field))
+                        .position(|f| f.source_col.eq_ignore_ascii_case(&field) && !f.hidden && !in_axes(pt, &f.source_col))
                         .ok_or_else(|| bad(C, format!("`{field}` isn't in the filters area")))?;
                     let f = pt.filters.remove(i);
                     let at = pos.unwrap_or(pt.filters.len()).min(pt.filters.len());
@@ -2415,6 +2415,18 @@ mod tests {
         assert_eq!(tiles(&s, 2), vec![("Apples".into(), true), ("Pears".into(), true), ("Plums".into(), false)]);
         s.execute("slicer.selectAll", json!({"slicer": 2})).unwrap();
         assert!(pt(&s).filters.is_empty());
+    }
+
+    #[test]
+    fn move_field_rejects_hidden_slicer_filter_as_filters_area() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        add_pivot_slicer(&mut s, 1, "Product", &["PivotTable1"]);
+        s.execute("slicer.toggle", json!({"slicer": 1, "value": "Apples"})).unwrap();
+        assert!(s.execute("pivot.moveField", json!({"field": "Product", "from": "filters", "to": "filters"})).is_err());
+        let p = pt(&s);
+        let f = p.filters.iter().find(|f| f.source_col == "Product").unwrap();
+        assert!(f.hidden);
     }
 
     #[test]

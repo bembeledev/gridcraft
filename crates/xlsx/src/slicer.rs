@@ -198,7 +198,11 @@ pub fn resolve(
         // The model's slicer filters a source column; a cache field that isn't one (a coarser date
         // level Excel keeps in its own field, such as "Years" over "Date") can't be filtered or
         // saved.
-        if let Some(other) = tab.cache_id.and_then(|id| caches.slicer_non_source(id, &def.source)) {
+        let Some(cache_id) = tab.cache_id.filter(|id| caches.has_slicer_cache(*id)) else {
+            cx.warn(format!("slicer \"{}\" has no resolvable PivotTable cache; skipped", part.name));
+            continue;
+        };
+        if let Some(other) = caches.slicer_non_source(cache_id, &def.source) {
             cx.warn(match other {
                 crate::pivot::NonSourceField::DateLevel { base } => {
                     format!(
@@ -233,7 +237,7 @@ pub fn resolve(
         // The cache field's items and date grouping. A PivotTable without a filter on the field
         // takes the cache's selection; with everything selected it still keeps the field's
         // grouping (the cache field's, ECMA-376 §18.10.1.33) when no Rows/Columns field has it.
-        let field = tab.cache_id.and_then(|id| caches.slicer_labels(id, &def.source));
+        let field = caches.slicer_labels(cache_id, &def.source);
         let group = field.map(|(_, g)| g).unwrap_or_default();
         let selected: Option<Vec<String>> = field.and_then(|(labels, _)| {
             let sel: Vec<String> = tab.items.iter().filter(|(_, s)| *s).filter_map(|(x, _)| labels.get(*x as usize).cloned()).collect();

@@ -977,3 +977,26 @@ fn hostile_slicer_parts_warn_not_panic() {
         let _ = write_xlsx(&wb).unwrap();
     }
 }
+
+#[test]
+fn unresolved_slicer_cache_is_skipped_and_dropped_on_save() {
+    let bytes = write_xlsx(&slicer_workbook()).unwrap();
+    let cache = "xl/slicerCaches/slicerCache1.xml";
+    for replacement in [
+        ("pivotCacheId=\"", "pivotCacheId=\"77"),
+        (" pivotCacheId=\"1\"", ""),
+    ] {
+        let mut parts = unzip(&bytes);
+        let original = String::from_utf8(parts.remove(cache).unwrap()).unwrap();
+        let edited = original.replace(replacement.0, replacement.1);
+        assert_ne!(original, edited);
+        parts.insert(cache.into(), edited.into_bytes());
+        let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+        let (wb, report) = read_xlsx(&super::make_zip(&refs)).unwrap();
+        assert!(wb.sheet(1).unwrap().slicers.is_empty());
+        assert!(report.warnings.iter().any(|w| w.contains("has no resolvable PivotTable cache; skipped")), "{:?}", report.warnings);
+        let saved = unzip(&write_xlsx(&wb).unwrap());
+        assert!(!saved.keys().any(|k| k.starts_with("xl/slicers/") || k.starts_with("xl/slicerCaches/")));
+        assert!(!saved.values().any(|v| String::from_utf8_lossy(v).contains("x14:slicerList")));
+    }
+}

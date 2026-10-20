@@ -1242,6 +1242,11 @@ impl CachesIn {
         CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
     }
 
+    /// Whether a slicer cache id resolves to a parsed PivotTable cache.
+    pub fn has_slicer_cache(&self, cache_id: u32) -> bool {
+        self.parsed.values().flatten().any(|c| c.slicer_id == Some(cache_id))
+    }
+
     /// Item captions of field `field` in the cache a slicer cache names by `pivotCacheId`, in
     /// shared item order (what the slicer cache's `<i x>` indices refer to), and the field's date
     /// grouping. `None` for a grouping GridCraft can't compute.

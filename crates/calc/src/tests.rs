@@ -240,7 +240,8 @@ fn linked_dynamic_array_keeps_saved_spill_values_after_recalc() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{ExternalBook, ExternalSheet};
     let mut t = T::new();
-    t.wb.external_books = vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
+    t.wb.external_books =
+        vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
     let sh = t.wb.sheet_mut(0).unwrap();
     sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=[1]Data!A1:A2")) });
     sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());

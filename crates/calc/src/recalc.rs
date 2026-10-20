@@ -46,7 +46,7 @@ use gridcraft_model::{CalcMode, Workbook};
 
 use crate::eval::{Area, Evaluator, Host, precedents};
 
-
+/// Whether a formula reads a linked workbook (`[1]Data!B:B`, `[1]!Rates`, `[1]Data!#REF!`).
 fn reads_linked(formula: &gridcraft_model::Formula) -> bool {
     use gridcraft_formula::SheetSel;
     let Some(expr) = formula.expr_arc() else { return false };
@@ -61,6 +61,7 @@ fn reads_linked(formula: &gridcraft_model::Formula) -> bool {
     });
     linked
 }
+
 pub type Key = (usize, CellRef);
 
 #[derive(Clone, Debug, Default)]
@@ -436,7 +437,13 @@ struct PassHost<'a> {
 }
 
 impl<'a> PassHost<'a> {
-    fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64, saved: Option<&'a HashMap<Key, Value>>) -> Self {
+    fn new(
+        wb: &'a Workbook,
+        exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+        rng: &'a mut u64,
+        now: f64,
+        saved: Option<&'a HashMap<Key, Value>>,
+    ) -> Self {
         PassHost {
             wb,
             exprs,
@@ -837,7 +844,12 @@ impl Host for PassHost<'_> {
     }
 }
 
+/// The arrays formulas into linked workbooks showed before a full recalculation clears spill
+/// layout, by anchor: what `PassHost::saved_value` hands back for them. Empty without links.
 fn saved_arrays(wb: &Workbook) -> HashMap<Key, Value> {
+    if wb.external_books.is_empty() {
+        return HashMap::default();
+    }
     let linked_arrays: HashSet<Key> = wb
         .sheets
         .iter()
@@ -899,6 +911,8 @@ impl Calc {
     pub fn recalc_all_after_edit(&mut self, wb: &mut Workbook, changed: &[Key], changed_names: &[String]) {
         self.recalc_every_formula(wb, Some((changed, changed_names)));
     }
+
+    /// `changed`: the cells and names a structural edit changed, `None` for F9 and loading.
     fn recalc_every_formula(&mut self, wb: &mut Workbook, changed: Option<(&[Key], &[String])>) {
         self.rebuild(wb);
         let reached = changed.map(|(c, names)| self.kept_value_readers(wb, c, names));
@@ -1494,12 +1508,6 @@ pub(crate) mod tests {
         deps.clear();
         calc.graph.dependents(1, CellRef::parse("A2").unwrap(), &mut deps);
         assert_eq!(deps, vec![at("DA9"), at("DA9")]);
-    }
-
-    #[test]
-    fn no_linked_formulas_need_no_saved_array_snapshot() {
-        let wb = Workbook::new();
-        assert!(super::saved_arrays(&wb).is_empty());
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the

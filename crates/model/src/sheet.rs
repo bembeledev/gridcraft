@@ -166,6 +166,7 @@ impl Sheet {
             preserved: None,
         }
     }
+
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
     }

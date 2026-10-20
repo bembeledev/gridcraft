@@ -7,11 +7,21 @@ use std::sync::Mutex;
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Slicer, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme;
+
+fn cached_slicer_items<'a>(app: &'a mut SheetApp, wb: &Workbook, si: usize, sl: &Slicer) -> &'a [gridcraft_engine::pivot::SlicerTile] {
+    let rev = app.session.active().map(|d| (d.uid, d.revision)).unwrap_or_default();
+    let cache = app.grid.slicer_tiles.get_or_insert_with(|| (rev, HashMap::new()));
+    if cache.0 != rev {
+        cache.0 = rev;
+        cache.1.clear();
+    }
+    cache.1.entry((si, sl.id)).or_insert_with(|| gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl))
+}
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -258,7 +268,7 @@ pub(crate) struct PaintedObject {
     pub rect: Rect,
 }
 
-pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
+pub(crate) fn paint_objects(app: &mut SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     for sp in &sh.shapes {
@@ -424,14 +434,14 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32, row_height: Opt
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(app: &mut SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
         if !r.intersects(p.clip_rect()) {
             continue;
         }
-        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
+        let items = cached_slicer_items(app, wb, si, sl);
         let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         let radius = 4.0 * geo.z;
         // Card + soft shadow.
@@ -478,7 +488,7 @@ pub enum SlicerAction {
 
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
-pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
+pub fn slicer_click(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
     if !geo.cells.contains(p) {
         return None;
     }
@@ -487,7 +497,7 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
         if !r.contains(p) {
             continue;
         }
-        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
+        let items = cached_slicer_items(app, wb, si, sl);
         let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         if lay.clear.contains(p) {
             return Some((sl.id, SlicerAction::Clear));
@@ -539,4 +549,55 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_engine::model::{Anchor, PivotSort, Slicer, SlicerCrossFilter, SlicerPivot, SlicerSource};
+    use serde_json::json;
+
+    #[test]
+    fn slicer_tile_cache_refreshes_after_source_edit() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session
+            .execute("range.setValues", json!({"range": "A1:B4", "values": [["Region", "Sales"], ["East", 1], ["West", 2], ["North", 3]]}))
+            .unwrap();
+        session.execute("insert.pivotTable", json!({"source": "A1:B4", "destination": "D1", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        {
+            let d = app.session.doc_mut().unwrap();
+            let sheet = d.wb.active_sheet;
+            let name = d.wb.sheet(sheet).unwrap().name.clone();
+            let pivot = d.wb.sheet(sheet).unwrap().pivots[0].name.clone();
+            let slicer = Slicer {
+                id: 100,
+                source: SlicerSource::Pivot {
+                    pivots: vec![SlicerPivot { sheet: name, name: pivot }],
+                    field: "Region".into(),
+                    sort: PivotSort::Asc,
+                    cross_filter: SlicerCrossFilter::default(),
+                    show_missing: true,
+                },
+                caption: "Region".into(),
+                anchor: Anchor::default(),
+                columns: 1,
+                name: String::new(),
+                style: String::new(),
+                row_height: None,
+            };
+            std::sync::Arc::make_mut(&mut d.wb).sheet_mut(sheet).unwrap().slicers.push(slicer);
+        }
+        let wb = app.session.active().unwrap().wb.clone();
+        let slicer = wb.active().unwrap().slicers[0].clone();
+        let before: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        assert_eq!(before, ["East", "North", "West"]);
+
+        app.session.execute("cell.set", json!({"cell": "A2", "input": "South"})).unwrap();
+        let wb = app.session.active().unwrap().wb.clone();
+        let slicer = wb.active().unwrap().slicers[0].clone();
+        let after: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        assert_eq!(after, ["North", "South", "West"]);
+    }
 }

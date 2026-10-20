@@ -39,8 +39,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   icon sets, colour scales and the text rules containsText, notContainsText, beginsWith and
   endsWith), chart details. Pass-through (#330) keeps custom XML, external links, connections,
   sheet query tables, printer settings, form and ActiveX controls, OLE objects and sheet
-  backgrounds; the other Excel 2010 conditional format rules (cross-sheet rules among them) are
-  read and written; never checked in Excel (repair prompts unknown).
+  backgrounds; x14-only colour-scale, data-bar and icon-set rules with cross-sheet `cfvo` are
+  still dropped on read with a warning, while the other Excel 2010 conditional format rules
+  (including cross-sheet cell-value and expression rules) are read and written. In tested
+  synthetic files, Excel for Mac 16.114 stored cross-sheet expression and `cfvo` rules in x14;
+  GridCraft-written main-section cfvo files opened without a repair prompt.
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)

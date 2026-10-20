@@ -366,8 +366,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             *p = rank as u32 + 1;
         }
     }
-    // Rules referring to other sheets go to the Excel 2010 extension, as the one such file seen
-    // (saved by LibreOffice) places them; where Excel itself puts them is unverified.
+    // Cell-value and formula rules referring to another sheet go to the Excel 2010 extension.
+    // Excel for Mac 16.114 also writes cross-sheet expression rules there (the tested synthetic
+    // files opened without a repair prompt), using this URI. It stores cross-sheet cfvo rules for
+    // colour scales, data bars and icon sets only in x14; GridCraft writes those in the main
+    // section, and drops x14-only forms on read with a warning. GridCraft-written test files with
+    // those main-section rules also opened without a repair prompt.
     // A solid data bar is in both sections: the extension holds its fill.
     let mut x14_cf = String::new();
     for (i, cf) in sheet.cond_formats.iter().enumerate() {

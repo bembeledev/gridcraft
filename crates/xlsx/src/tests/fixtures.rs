@@ -553,6 +553,33 @@ fn near_box(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
 }
 
 #[test]
+fn grouped_shapes_preserve_source_transform_across_sheet_metric_mismatch() {
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <xdr:twoCellAnchor><xdr:from><xdr:col>2</xdr:col><xdr:colOff>254000</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>127000</xdr:rowOff></xdr:from><xdr:to><xdr:col>6</xdr:col><xdr:colOff>254000</xdr:colOff><xdr:row>14</xdr:row><xdr:rowOff>139700</xdr:rowOff></xdr:to>
+        <xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="7" name="Metric mismatch"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+          <xdr:grpSpPr><a:xfrm><a:off x="1905000" y="127000"/><a:ext cx="3302000" cy="2857500"/><a:chOff x="1905000" y="127000"/><a:chExt cx="3302000" cy="2857500"/></a:xfrm></xdr:grpSpPr>
+          <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Box"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="1905000" y="2349500"/><a:ext cx="1524000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Box</a:t></a:r></a:p></xdr:txBody></xdr:sp>
+          <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="Oval"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="3683000" y="2349500"/><a:ext cx="1524000" cy="635000"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Oval</a:t></a:r></a:p></xdr:txBody></xdr:sp>
+        </xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor>
+    </xdr:wsDr>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let body = r#"<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/><sheetData/><drawing r:id="rId1"/>"#;
+    let bytes = minimal(body, &[("xl/worksheets/_rels/sheet1.xml.rels", rels), ("xl/drawings/drawing1.xml", drawing)], "", "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let saved = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&saved).unwrap();
+    let x = pkg.read_xml("xl/drawings/drawing1.xml").unwrap().unwrap();
+    let g = x.children[0].child("grpSp").unwrap();
+    let xf = g.path(&["grpSpPr", "xfrm"]).unwrap();
+    assert_eq!(xfrm_at(xf, "off"), (1905000, 127000));
+    assert_eq!(xfrm_at(xf, "ext"), (3302000, 2857500));
+    assert_eq!(xfrm_at(xf, "chOff"), (1905000, 127000));
+    assert_eq!(xfrm_at(xf, "chExt"), (3302000, 2857500));
+    assert_eq!(xfrm_at(sp_named(g, "Box").path(&["spPr", "xfrm"]).unwrap(), "off"), (1905000, 2349500));
+    assert_eq!(xfrm_at(sp_named(g, "Oval").path(&["spPr", "xfrm"]).unwrap(), "off"), (3683000, 2349500));
+}
+
+#[test]
 fn a_group_of_horizontal_lines_maps_each_axis_on_its_own() {
     // The anchor at B2 is 200 px wide and 0 high. The group's child box is 3810000 EMUs wide
     // (200 px: 1 px per 19050 EMUs) and 0 high, and starts at chOff, not at the group's off.

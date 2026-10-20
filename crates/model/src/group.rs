@@ -21,8 +21,27 @@ pub enum DrawingRef {
     Shape(u32),
     Group(u32),
 }
+/// The original DrawingML transform and member anchors, retained for a lossless write when the
+/// group has not been edited. This is transient import metadata, not part of the model's JSON.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupFileMember {
+    pub reference: DrawingRef,
+    pub anchor: Anchor,
+    pub off: (i64, i64),
+    pub ext: (i64, i64),
+}
 
-/// A group of floating objects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupFile {
+    pub anchor: Anchor,
+    pub off: (i64, i64),
+    pub ext: (i64, i64),
+    pub child_offset: (i64, i64),
+    pub child_extent: (i64, i64),
+    pub complete: bool,
+    pub members: Vec<GroupFileMember>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawingGroup {
     pub id: u32,
@@ -50,6 +69,10 @@ pub struct DrawingGroup {
     /// them when it sizes a group.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_rotations: Vec<(DrawingRef, i64)>,
+    /// The source transform and member coordinates, when imported from DrawingML. This is
+    /// transient and is discarded by JSON serialization.
+    #[serde(skip)]
+    pub file: Option<GroupFile>,
     /// Members, back to front (nested groups by [`DrawingRef::Group`]).
     pub members: Vec<DrawingRef>,
 }
@@ -315,6 +338,7 @@ mod tests {
             rotation: 0,
             member_rotations: Vec::new(),
             members: vec![DrawingRef::Shape(3), DrawingRef::Shape(2)],
+            file: None,
         });
         let anchor = sh.rect_anchor(ObjectRect { x: 100.0, y: 50.0, w: 120.0, h: 50.0 }, AnchorMode::MoveOnly);
         sh.groups.push(DrawingGroup {
@@ -327,6 +351,7 @@ mod tests {
             rotation: 0,
             member_rotations: Vec::new(),
             members: vec![DrawingRef::Shape(1), DrawingRef::Group(5)],
+            file: None,
         });
         sh
     }

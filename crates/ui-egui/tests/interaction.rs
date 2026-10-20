@@ -917,6 +917,7 @@ fn the_eraser_erases_a_grouped_ink_stroke_and_leaves_the_rest_of_its_group() {
             rotation: 0,
             member_rotations: Vec::new(),
             members,
+            file: None,
         });
         id
     };

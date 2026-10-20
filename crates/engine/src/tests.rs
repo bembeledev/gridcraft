@@ -2651,6 +2651,7 @@ fn object_commands_on_a_grouped_member_act_on_the_group() {
             rotation: 0,
             member_rotations: Vec::new(),
             members,
+            file: None,
         };
         sh.groups.push(group(inner, "Inner", ba, vec![DrawingRef::Image(b)]));
         sh.groups.push(group(outer, "Outer", aa, vec![DrawingRef::Image(a), DrawingRef::Group(inner)]));
@@ -2723,6 +2724,7 @@ fn group_objects(s: &mut Session, members: Vec<gridcraft_model::DrawingRef>) -> 
         rotation: 0,
         member_rotations: Vec::new(),
         members,
+        file: None,
     });
     id
 }

@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
 use gridcraft_model::{
-    Anchor, AnchorMode, Color, DrawingGroup, DrawingRef, Image, MAX_GROUP_DEPTH, ObjectRect, Shape, ShapeFormat, ShapeKind, ShapeTextAlign,
-    ShapeTextAnchor, Sheet, Theme, rotates,
+    Anchor, AnchorMode, Color, DrawingGroup, DrawingRef, GroupFile, GroupFileMember, Image, MAX_GROUP_DEPTH, ObjectRect, Shape, ShapeFormat,
+    ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme, rotates,
 };
 
 use crate::IoError;
@@ -324,17 +324,35 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
             let id = cx.next_object_id();
             let xf = obj_xfrm(obj);
             let map = GroupMap::new(xf, place);
-            let mut members = Vec::new();
+            let to_i64 = |p: Option<(f64, f64)>| p.map(|(x, y)| (x.round() as i64, y.round() as i64));
+            let file_off = to_i64(xfrm_pair(xf, "off", "x", "y")).unwrap_or((0, 0));
+            let file_ext = to_i64(xfrm_pair(xf, "ext", "cx", "cy")).unwrap_or((0, 0));
+            let file_child_offset = to_i64(xfrm_pair(xf, "chOff", "x", "y"));
+            let file_child_extent = to_i64(xfrm_pair(xf, "chExt", "cx", "cy"));
+            let mut file_members = Vec::new();
+            let mut file_complete = file_child_offset.is_some() && file_child_extent.is_some();
             let mut member_rotations = Vec::new();
+            let mut members = Vec::new();
             for child in drawing_objects(&obj.children) {
+                if !matches!(child.name.as_str(), "pic" | "graphicFrame" | "sp" | "cxnSp" | "grpSp" | "AlternateContent") {
+                    continue;
+                }
                 let cxf = obj_xfrm(child);
                 // A nested group's own rotation is kept on the group; its box isn't swapped.
                 let rot = if child.name == "grpSp" { 0 } else { xfrm_rot(cxf) };
                 let rect = map.child(cxf, quarter_turn(rot));
                 let place = Place { anchor: sheet.rect_anchor(rect, anchor.mode), rect, scale: map.scale, flip: map.flip };
-                let Some(m) = read_object(cx, rels, sheet, child, place, depth + 1)? else { continue };
+                let Some(m) = read_object(cx, rels, sheet, child, place, depth + 1)? else {
+                    file_complete = false;
+                    continue;
+                };
                 if rot != 0 {
                     member_rotations.push((m, rot));
+                }
+                if let (Some(off), Some(ext)) = (to_i64(xfrm_pair(cxf, "off", "x", "y")), to_i64(xfrm_pair(cxf, "ext", "cx", "cy"))) {
+                    file_members.push(GroupFileMember { reference: m, anchor: place.anchor, off, ext });
+                } else {
+                    file_complete = false;
                 }
                 members.push(m);
             }
@@ -354,7 +372,27 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
             if flip.0 || flip.1 {
                 cx.warn("a flipped group was laid out mirrored, but its pictures and shapes aren't drawn mirrored");
             }
-            sheet.groups.push(DrawingGroup { id, name, anchor, child_offset, child_extent, flip, rotation, member_rotations, members });
+            let file = GroupFile {
+                anchor,
+                off: file_off,
+                ext: file_ext,
+                child_offset: file_child_offset.unwrap_or(child_offset),
+                child_extent: file_child_extent.unwrap_or(child_extent),
+                complete: file_complete,
+                members: file_members,
+            };
+            sheet.groups.push(DrawingGroup {
+                id,
+                name,
+                anchor,
+                child_offset,
+                child_extent,
+                flip,
+                rotation,
+                member_rotations,
+                members,
+                file: Some(file),
+            });
             Ok(Some(DrawingRef::Group(id)))
         }
         _ => Ok(None),
@@ -588,6 +626,28 @@ impl DrawingOut<'_> {
             _ => members,
         }
     }
+    fn member_anchor(&self, r: DrawingRef) -> Option<Anchor> {
+        match r {
+            DrawingRef::Group(id) => self.sheet.drawing_group(id).map(|g| g.anchor),
+            _ => self.sheet.object_anchor(r),
+        }
+    }
+
+    fn source(&self, g: &DrawingGroup) -> Option<GroupFile> {
+        let f = g.file.as_ref()?;
+        if !f.complete
+            || f.anchor != g.anchor
+            || f.child_offset != g.child_offset
+            || f.child_extent != g.child_extent
+            || f.members.len() != g.members.len()
+        {
+            return None;
+        }
+        if f.members.iter().zip(&g.members).any(|(m, r)| m.reference != *r || self.member_anchor(*r) != Some(m.anchor)) {
+            return None;
+        }
+        Some(f.clone())
+    }
 
     /// A `grpSp` for group `id` spanning `b`, at `off`/`ext` in its parent's space, with its
     /// members back to front in its own child space. `flip` is the axes enclosing groups flip.
@@ -598,8 +658,16 @@ impl DrawingOut<'_> {
             return;
         }
         let flip = (flip.0 != g.flip.0, flip.1 != g.flip.1);
-        let space = ChildSpace::new(sheet, g, b, off, flip);
-        let (ch_off, ch_ext) = space.place(b, false);
+        let source = self.source(g);
+        let source_b = source.as_ref().map_or(b, |f| sheet.anchor_rect(&f.anchor));
+        let space = ChildSpace::new(sheet, g, source_b, off, flip);
+        let (group_off, group_ext, ch_off, ch_ext) = source.as_ref().map_or_else(
+            || {
+                let (ch_off, ch_ext) = space.place(b, false);
+                (off, ext, ch_off, ch_ext)
+            },
+            |f| (f.off, f.ext, f.child_offset, f.child_extent),
+        );
         let cid = self.take_id();
         let name = if g.name.is_empty() { format!("Group {}", cid - 1) } else { g.name.clone() };
         let mut attrs = String::new();
@@ -616,10 +684,10 @@ impl DrawingOut<'_> {
             self.s,
             "<xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id=\"{cid}\" name=\"{}\"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr><xdr:grpSpPr><a:xfrm{attrs}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/><a:chOff x=\"{}\" y=\"{}\"/><a:chExt cx=\"{}\" cy=\"{}\"/></a:xfrm></xdr:grpSpPr>",
             esc_attr(&name),
-            off.0,
-            off.1,
-            ext.0.max(0),
-            ext.1.max(0),
+            group_off.0,
+            group_off.1,
+            group_ext.0.max(0),
+            group_ext.1.max(0),
             ch_off.0,
             ch_off.1,
             ch_ext.0.max(0),
@@ -628,7 +696,10 @@ impl DrawingOut<'_> {
         for m in &g.members {
             let Some(r) = self.rect(*m) else { continue };
             let rot = g.member_rotations.iter().find(|(o, _)| o == m).map_or(0, |&(_, rot)| rot);
-            let (moff, mext) = space.place(r, quarter_turn(rot));
+            let (moff, mext) = source
+                .as_ref()
+                .and_then(|f| f.members.iter().find(|fm| fm.reference == *m).map(|fm| (fm.off, fm.ext)))
+                .unwrap_or_else(|| space.place(r, quarter_turn(rot)));
             match m {
                 DrawingRef::Group(n) => self.group(*n, r, moff, mext, flip, depth + 1),
                 leaf => {
@@ -671,7 +742,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             && !out.groups_done.contains(&gid)
             && let (Some(g), Some(b)) = (sheet.drawing_group(gid), out.rect(DrawingRef::Group(gid)))
         {
-            let (open, close) = anchor_open(sheet, &sheet.rect_anchor(b, g.anchor.mode));
+            let anchor = out.source(g).map_or_else(|| sheet.rect_anchor(b, g.anchor.mode), |f| f.anchor);
+            let (open, close) = anchor_open(sheet, &anchor);
             out.s.push_str(&open);
             out.group(gid, b, (emu(b.x), emu(b.y)), (emu(b.w), emu(b.h)), (false, false), 0);
             out.s.push_str("<xdr:clientData/>");

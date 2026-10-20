@@ -802,7 +802,7 @@ impl Dialog {
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
 fn validation_defaults(app: &SheetApp) -> Json {
-    let mut v = json!({"type": "list", "operator": "between", "ignoreBlank": true, "dropdown": true, "errorStyle": "stop"});
+    let mut v = json!({"type": "list", "operator": "between", "ignoreBlank": true, "dropdown": true, "errorStyle": "stop", "showInput": true, "showError": true});
     let Some(doc) = app.session.active() else { return v };
     let Some(dv) = doc.wb.active().and_then(|s| s.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(doc.selection.active)))) else {
         return v;
@@ -824,8 +824,10 @@ fn validation_defaults(app: &SheetApp) -> Json {
     v["dropdown"] = json!(dv.in_cell_dropdown);
     v["inputTitle"] = json!(dv.input_title);
     v["inputMessage"] = json!(dv.input_message);
+    v["showInput"] = json!(dv.show_input);
     v["errorTitle"] = json!(dv.error_title);
     v["errorMessage"] = json!(dv.error_message);
+    v["showError"] = json!(dv.show_error);
     v
 }
 
@@ -920,22 +922,160 @@ fn data_validation_fields(kind: &str, operator: &str) -> Vec<Field> {
         }
         _ => {}
     }
-    fields.push(Text { key: "inputMessage", label: "Input message:" });
-    fields.push(Choice {
-        key: "errorStyle",
-        label: "Error style",
-        options: vec![("stop", "Stop"), ("warning", "Warning"), ("information", "Information")],
-    });
-    fields.push(Text { key: "errorMessage", label: "Error message:" });
     fields
 }
 
-fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");
-    let operator = d.values.get("operator").and_then(Json::as_str).unwrap_or("between");
-    d.fields = data_validation_fields(kind, operator);
-    form_fields(ui, d);
-    ok_cancel(ui, confirm, open);
+/// Data Validation as Excel lays it out: Settings, Input Message and Error Alert tabs, with
+/// Clear All beside OK and Cancel. The Settings controls follow `data_validation_fields`.
+fn data_validation_form(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    let t = theme::Tokens::get(ui.ctx());
+    if d.tab.is_empty() {
+        d.tab = "Settings".into();
+    }
+    ui.horizontal(|ui| {
+        for tab in ["Settings", "Input Message", "Error Alert"] {
+            if ui.selectable_label(d.tab == tab, lang.tr(&format!("Data Validation|{tab}"))).clicked() {
+                d.tab = tab.to_string();
+            }
+        }
+    });
+    ui.separator();
+    let get_str = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let check = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
+        let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
+        if ui.checkbox(&mut b, lang.tr(label)).changed() {
+            d.values.insert(key.into(), json!(b));
+        }
+    };
+    let text_box = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, multiline: bool, hint: &str| {
+        let mut s = get_str(d, key);
+        let edit = if multiline { egui::TextEdit::multiline(&mut s).desired_rows(4) } else { egui::TextEdit::singleline(&mut s) };
+        ui.add(edit.hint_text(lang.tr(hint)).desired_width(f32::INFINITY));
+        d.values.insert(key.into(), json!(s));
+    };
+    ui.add_space(4.0);
+    match d.tab.as_str() {
+        "Input Message" => {
+            check(ui, d, "showInput", "Show input message when cell is selected");
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(lang.tr("When cell is selected, show this input message:")).color(t.text_dim));
+            ui.label(lang.tr("Title:"));
+            text_box(ui, d, "inputTitle", false, "");
+            ui.label(lang.tr("Input message:"));
+            text_box(ui, d, "inputMessage", true, "");
+        }
+        "Error Alert" => {
+            check(ui, d, "showError", "Show error alert after invalid data is entered");
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(lang.tr("When user enters invalid data, show this error alert:")).color(t.text_dim));
+            let style = get_str(d, "errorStyle");
+            ui.horizontal(|ui| {
+                ui.label(lang.tr("Style:"));
+                let styles = [("stop", "Stop"), ("warning", "Warning"), ("information", "Information")];
+                let selected = styles.iter().find(|(v, _)| *v == style).map_or("Stop", |(_, l)| *l);
+                egui::ComboBox::from_id_salt(("dataValidation", "errorStyle")).selected_text(lang.tr(selected)).show_ui(ui, |ui| {
+                    for (v, l) in styles {
+                        if ui.selectable_label(style == v, lang.tr(l)).clicked() {
+                            d.set_value("errorStyle", json!(v));
+                        }
+                    }
+                });
+                error_style_icon(ui, &style);
+            });
+            ui.label(lang.tr("Title:"));
+            text_box(ui, d, "errorTitle", false, "");
+            ui.label(lang.tr("Error message:"));
+            text_box(ui, d, "errorMessage", true, "");
+        }
+        _ => {
+            ui.label(egui::RichText::new(lang.tr("Validation criteria")).strong());
+            let kind = get_str(d, "type");
+            let operator = get_str(d, "operator");
+            let fields = data_validation_fields(if kind.is_empty() { "any" } else { &kind }, if operator.is_empty() { "between" } else { &operator });
+            egui::Grid::new("dv_settings").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+                for f in &fields {
+                    match f {
+                        Field::Choice { key, label, options } => {
+                            ui.label(format!("{}:", lang.tr(label)));
+                            let cur = get_str(d, key);
+                            let selected = options.iter().find(|(v, _)| *v == cur).map_or("", |(_, l)| *l);
+                            egui::ComboBox::from_id_salt(("dataValidation", *key)).selected_text(lang.tr(selected)).width(240.0).show_ui(ui, |ui| {
+                                for (v, l) in options {
+                                    if ui.selectable_label(cur == *v, lang.tr(l)).clicked() {
+                                        d.set_value(key, json!(v));
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
+                        Field::Text { key, label } => {
+                            ui.label(lang.tr(label));
+                            let hint = if kind == "list" { "e.g. Yes,No or =$A$1:$A$5" } else { "" };
+                            let mut s = get_str(d, key);
+                            ui.add(egui::TextEdit::singleline(&mut s).hint_text(lang.tr(hint)).desired_width(240.0));
+                            d.values.insert((*key).into(), json!(s));
+                            ui.end_row();
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            for f in &fields {
+                if let Field::Check { key, label } = f {
+                    check(ui, d, key, label);
+                }
+            }
+        }
+    }
+    ui.add_space(10.0);
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button(lang.tr("Clear All")).on_hover_text(lang.tr("Remove validation from the selected cells")).clicked() {
+            app.run_or_alert("data.validation", json!({"clear": true}));
+            *open = false;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE)).fill(t.accent));
+            // Enter confirms, except in a message box, where it starts a new line.
+            let in_multiline = ui.ctx().memory(|m| m.focused()).is_some() && d.tab != "Settings";
+            if ok.clicked() || (!in_multiline && ui.input(|i| i.key_pressed(Key::Enter))) {
+                *confirm = true;
+            }
+            if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
+                *open = false;
+            }
+        });
+    });
+}
+
+/// The icon Excel shows beside the error alert style: stop, warning or information.
+fn error_style_icon(ui: &mut egui::Ui, style: &str) {
+    let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+    let c = r.center();
+    let p = ui.painter();
+    match style {
+        "warning" => {
+            p.add(egui::Shape::convex_polygon(
+                vec![egui::pos2(c.x, r.top() + 1.0), egui::pos2(r.right() - 1.0, r.bottom() - 2.0), egui::pos2(r.left() + 1.0, r.bottom() - 2.0)],
+                Color32::from_rgb(0xF2, 0xB7, 0x05),
+                Stroke::NONE,
+            ));
+            p.text(c + vec2(0.0, 2.0), egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(12.0), Color32::BLACK);
+        }
+        "information" => {
+            p.circle_filled(c, 10.0, Color32::from_rgb(0x1F, 0x6F, 0xC9));
+            p.text(c, egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(13.0), Color32::WHITE);
+        }
+        _ => {
+            p.circle_filled(c, 10.0, Color32::from_rgb(0xC9, 0x2A, 0x2A));
+            let k = 4.0;
+            let white = Stroke::new(2.0, Color32::WHITE);
+            p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], white);
+            p.line_segment([c + vec2(-k, k), c + vec2(k, -k)], white);
+        }
+    }
 }
 
 /// Builds the command params from form values for dialogs that need translation.
@@ -1033,6 +1173,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "dataValidation" => 440.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1047,7 +1188,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
-                "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
+                "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),

@@ -3344,3 +3344,30 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
+
+#[test]
+fn validation_can_turn_off_its_input_message_and_error_alert() {
+    let mut s = s();
+    let rule = |show: bool| json!({"range": "A1", "type": "whole", "operator": "greater", "formula1": "5", "showInput": show, "showError": show});
+    s.execute("data.validation", rule(false)).unwrap();
+    let dv = s.active().unwrap().wb.active().unwrap().validations[0].clone();
+    assert!(!dv.show_input && !dv.show_error);
+    // With the alert off, invalid entries are allowed, as in Excel.
+    assert!(crate::cmd::data::check_validation(&s.active().unwrap().wb, 0, CellRef::new(0, 0), "1").is_none());
+    s.execute("data.validation", rule(true)).unwrap();
+    assert!(crate::cmd::data::check_validation(&s.active().unwrap().wb, 0, CellRef::new(0, 0), "1").is_some());
+    // Omitted, both stay on.
+    s.execute("data.validation", json!({"range": "A2", "type": "list", "formula1": "\"a,b\""})).unwrap();
+    let dv = s
+        .active()
+        .unwrap()
+        .wb
+        .active()
+        .unwrap()
+        .validations
+        .iter()
+        .find(|v| v.ranges.iter().any(|r| r.contains(CellRef::new(1, 0))))
+        .unwrap()
+        .clone();
+    assert!(dv.show_input && dv.show_error);
+}

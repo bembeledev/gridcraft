@@ -46,3 +46,17 @@ fn typed_percent_and_non_numbers_are_untouched() {
     s.execute("cell.set", json!({"cell": "C2", "input": "5%"})).unwrap();
     assert_eq!(value(&mut s, "C2"), 0.05, "typing 5% into a General cell gives 5% once");
 }
+
+#[test]
+fn scenario_replay_does_not_rescale_numbers() {
+    // #1967 review: scenario values are stored numbers; showing a scenario must write them
+    // as-is, not re-run them through the typed-entry rule (which would divide by 100 again).
+    let mut s = session();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0%"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    assert_eq!(value(&mut s, "A1"), 0.05, "typed 5 -> 5%");
+    s.execute("data.scenarioAdd", json!({"name": "Base", "changing": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "9"})).unwrap();
+    s.execute("data.scenarioShow", json!({"name": "Base"})).unwrap();
+    assert_eq!(value(&mut s, "A1"), 0.05, "scenario restores the stored 0.05, not 0.0005");
+}

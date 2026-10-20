@@ -488,8 +488,18 @@ fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
-            let input = super::edit::json_to_input(v);
-            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb)?;
+            // A stored number goes in as that number: replaying it through the text-entry path
+            // would apply entry rules it never went through when saved (#1967 review) — a
+            // percentage-formatted cell would divide it by 100 a second time.
+            let cell = match v.as_f64() {
+                Some(n) => {
+                    Some(Cell { value: Value::Number(n), formula: None, style: cx.wb.sheet(si).map(|sh| sh.style_id(*c)).unwrap_or_default() })
+                }
+                None => {
+                    let input = super::edit::json_to_input(v);
+                    super::edit::input_to_cell(&input, si, *c, &mut cx.wb)?
+                }
+            };
             let sh = cx.sheet_mut(si)?;
             match cell {
                 Some(cell) => sh.set_cell(*c, cell),

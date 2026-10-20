@@ -1,6 +1,6 @@
 //! Reading worksheet parts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
@@ -30,9 +30,9 @@ struct Shared {
 struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
-    /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
-    /// the anchor) are not stored, so the formula can fill them again.
+    /// Dynamic-array spill ranges; legacy linked arrays additionally retain cached non-anchor cells.
     dynamic: Vec<RangeRef>,
+    legacy_linked: Vec<(CellRef, RangeRef)>,
     dropped: u64,
     rows: u64,
 }
@@ -451,7 +451,18 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic)).map(|f| Formula { legacy: !dynamic, ..f });
-    let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
+    let value = if formula.is_none() {
+        if let Some((anchor, range)) = st.legacy_linked.iter().find(|(_, r)| r.contains(pos) && r.start != pos) {
+            sheet.array_cache.entry(*anchor).or_insert_with(|| (*range, BTreeMap::new())).1.insert(pos, value);
+            Value::Empty
+        } else if st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) {
+            Value::Empty
+        } else {
+            value
+        }
+    } else {
+        value
+    };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
@@ -488,6 +499,9 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 st.dynamic.push(range);
+                if !dynamic && crate::external::reads_linked(&fm) {
+                    st.legacy_linked.push((pos, range));
+                }
             }
             if !dynamic {
                 fm.array = Some(range);

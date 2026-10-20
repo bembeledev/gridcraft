@@ -62,6 +62,9 @@ pub struct Sheet {
     /// Anchor → spill range.
     #[serde(skip)]
     pub spill_ranges: BTreeMap<CellRef, RangeRef>,
+    /// Cached non-anchor values for array formulas that read a linked workbook.
+    #[serde(skip)]
+    pub array_cache: BTreeMap<CellRef, (RangeRef, BTreeMap<CellRef, Value>)>,
     pub cols: BTreeMap<u32, LineInfo>,
     pub rows: BTreeMap<u32, LineInfo>,
     /// Default column width and row height in points.
@@ -131,6 +134,7 @@ impl Sheet {
             cell_pictures: BTreeMap::new(),
             spill: BTreeMap::new(),
             spill_ranges: BTreeMap::new(),
+            array_cache: BTreeMap::new(),
             cols: BTreeMap::new(),
             rows: BTreeMap::new(),
             default_col_width: DEFAULT_COL_WIDTH,
@@ -166,7 +170,6 @@ impl Sheet {
             preserved: None,
         }
     }
-
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
     }

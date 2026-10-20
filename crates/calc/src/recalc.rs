@@ -46,6 +46,21 @@ use gridcraft_model::{CalcMode, Workbook};
 
 use crate::eval::{Area, Evaluator, Host, precedents};
 
+
+fn reads_linked(formula: &gridcraft_model::Formula) -> bool {
+    use gridcraft_formula::SheetSel;
+    let Some(expr) = formula.expr_arc() else { return false };
+    let mut linked = false;
+    expr.walk(&mut |e| {
+        linked |= match e {
+            Expr::Ref(r) => matches!(&r.sheet, SheetSel::Named(s) | SheetSel::Span(s, _) if s.starts_with('[')),
+            Expr::Name(n) => n.starts_with('['),
+            Expr::LinkedRefError(_) => true,
+            _ => false,
+        }
+    });
+    linked
+}
 pub type Key = (usize, CellRef);
 
 #[derive(Clone, Debug, Default)]
@@ -867,23 +882,20 @@ impl Calc {
     fn recalc_every_formula(&mut self, wb: &mut Workbook, changed: Option<(&[Key], &[String])>) {
         self.rebuild(wb);
         let reached = changed.map(|(c, names)| self.kept_value_readers(wb, c, names));
-        let mut saved = HashMap::with_capacity_and_hasher(32, Default::default());
-        for (sheet, sh) in wb.sheets.iter().enumerate() {
-            for (&at, &range) in &sh.spill_ranges {
-                let data = range.iter().map(|c| sh.value(c)).collect();
-                if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
-                    saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
-                }
-            }
-        }
-        for (sheet, sh) in wb.sheets.iter().enumerate() {
-            for (at, cell) in sh.cells.iter() {
-                if let Some(range) = cell.formula.as_ref().and_then(|f| f.array).filter(|r| !r.is_single()) {
-                    let data = range.iter().map(|c| sh.value(c)).collect();
-                    if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
-                        saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
-                    }
-                }
+        let linked_arrays: HashSet<Key> = wb
+            .sheets
+            .iter()
+            .enumerate()
+            .flat_map(|(sheet, sh)| sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(f)).map(|_| (sheet, at))))
+            .collect();
+        let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());
+        for &(sheet, at) in &linked_arrays {
+            let Some(sh) = wb.sheet(sheet) else { continue };
+            let block = sh.spill_ranges.get(&at).copied().or_else(|| sh.cell(at).and_then(|c| c.formula.as_ref()?.array));
+            let Some(range) = block.filter(|r| !r.is_single()) else { continue };
+            let data = range.iter().map(|c| sh.array_cache.get(&at).and_then(|(_, values)| values.get(&c)).cloned().unwrap_or_else(|| sh.value(c))).collect();
+            if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
+                saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
             }
         }
         // Spills are laid out again from the formulas where they are now (a structural edit moves

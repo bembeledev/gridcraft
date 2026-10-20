@@ -90,7 +90,6 @@ impl SheetApp {
         self.session.mode = Mode::Ready;
     }
 
-
     pub(crate) fn editing_text_box(&self, id: u32) -> bool {
         self.text_box_editor.as_ref().is_some_and(|ed| ed.id == id && self.view_key() == Some((ed.uid, ed.sheet)))
     }

@@ -43,8 +43,11 @@ fn grouped_fixture() -> (Harness, u32, u32) {
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "B2", "input": "cell stays"})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let id = session.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": ORIGINAL})).unwrap()["shape"].as_u64().unwrap() as u32;
-    let other = session.execute("insert.textBox", json!({"at": "E4", "width": 120, "height": 80, "text": "Other member"})).unwrap()["shape"].as_u64().unwrap() as u32;
+    let id = session.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": ORIGINAL})).unwrap()["shape"].as_u64().unwrap()
+        as u32;
+    let other = session.execute("insert.textBox", json!({"at": "E4", "width": 120, "height": 80, "text": "Other member"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap() as u32;
     let group_id = {
         let d = session.doc_mut().unwrap();
         let wb = std::sync::Arc::make_mut(&mut d.wb);

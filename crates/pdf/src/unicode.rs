@@ -36,6 +36,13 @@ fn sources() -> &'static [Source] {
     })
 }
 
+/// Nonprinting controls have no standalone glyph in this unshaped writer.
+/// Keep tabs as spaces. Contextual shaping and variation-glyph selection remain unsupported.
+pub fn nonprinting(c: char) -> bool {
+    (c.is_control() && c != '\t')
+        || matches!(c, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' | '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+}
+
 pub fn needed(c: char) -> bool {
     win_ansi(c) == b'?' && c != '?'
 }

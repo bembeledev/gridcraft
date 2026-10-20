@@ -120,6 +120,11 @@ impl Font {
 
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if unicode::nonprinting(c) {
+            return 0;
+        }
+        // The content writer encodes a tab as a space; layout must measure the same glyph.
+        let c = if c == '\t' { ' ' } else { c };
         if unicode::needed(c) {
             return unicode::width(c).unwrap_or(1000);
         }
@@ -481,6 +486,9 @@ impl Page {
             let mut offset = 0.0;
             let mut latin = String::new();
             for c in text.chars().map(Some).chain(std::iter::once(None)) {
+                if c.is_some_and(unicode::nonprinting) {
+                    continue;
+                }
                 if let Some(c) = c.filter(|c| !unicode::needed(*c)) {
                     latin.push(c);
                     continue;
@@ -494,8 +502,9 @@ impl Page {
                 match self.unicode.add(font, c) {
                     Ok((bank, code, width)) => {
                         let s = format!(
-                            "BT\n{}\n/U{bank} {} Tf\n{} {} {} {} {} {} Tm\n<{code:02X}> Tj\nET",
+                            "BT\n{}\n{}\n/U{bank} {} Tf\n{} {} {} {} {} {} Tm\n<{code:02X}> Tj\nET",
                             rgb_op(color, false),
+                            rgb_op(color, true),
                             n(size),
                             n(cs),
                             n(-sn),

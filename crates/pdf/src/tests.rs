@@ -41,6 +41,46 @@ fn missing_glyph_is_an_error_instead_of_a_question_mark() {
     assert!(doc.finish().unwrap_err().to_string().contains("U+10FFFF"));
 }
 
+#[test]
+fn unicode_bold_text_uses_its_own_stroke_color() {
+    if unicode::width('中').is_none() {
+        assert!(option_env!("CRAFT_FONTS_DIR").is_none(), "the supplied font input must cover Chinese");
+        return;
+    }
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(200.0, 200.0);
+    page.stroke_line(0.0, 0.0, 100.0, 0.0, 1.0, [0, 0, 255]);
+    page.text_rotated(20.0, 40.0, 20.0, Font::HelveticaBold, [255, 0, 0], "中", 0.5);
+    let content = page_content(&doc);
+    let glyph = content.find("/U0").unwrap();
+    let before_glyph = &content[..glyph];
+    assert!(before_glyph.rfind("1 0 0 RG") > before_glyph.rfind("0 0 1 RG"), "glyph outline must use red, not the preceding blue border");
+    let bytes = doc.finish().unwrap();
+    check_xref(&bytes);
+    assert!(String::from_utf8_lossy(&bytes).contains("20 w\n"));
+}
+
+#[test]
+fn unicode_nonprinting_characters_do_not_require_glyphs_or_advance_text() {
+    // The current writer is unshaped: selectors and join controls must not become
+    // standalone missing glyphs. This does not claim support for contextual shaping.
+    let controls = "\r\n\0\u{0085}\u{200b}\u{200c}\u{200d}\u{2060}\u{feff}\u{fe0e}\u{fe0f}\u{e0100}";
+    for font in [Font::Helvetica, Font::Courier, Font::TimesBold] {
+        assert_eq!(text_width(font, 12.0, controls), 0.0);
+        assert_eq!(text_width(font, 12.0, "\t"), text_width(font, 12.0, " "));
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 200.0).text_rotated(20.0, 40.0, 12.0, font, [0, 0, 0], &format!("A{controls}B"), 0.5);
+        check_xref(&doc.finish().unwrap());
+    }
+    if unicode::width('中').is_some() {
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 200.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], &format!("中{controls}文"));
+        let bytes = doc.finish().unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("<4E2D>") && text.contains("<6587>"));
+    }
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }

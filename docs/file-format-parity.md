@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-18 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (searchable CJK PDF fallback; bold glyph colors and nonprinting-character handling) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 PDF export embeds searchable Type 3 Unicode outline subsets from optional OFL-licensed craft-fonts input, including the CJK face in the pinned release font revision. Checksums and license files are checked at build time. Missing glyphs fail before replacing an output file. Latin base-font output is unchanged; complex-script shaping and exact font-family fidelity remain unimplemented.
 
@@ -58,7 +58,7 @@ and repair-free opening remain unverified.
 
 | Format | Excel | GridCraft | Notes |
 |---|---|---|---|
-| PDF | Save As / Export | yes (own PDF 1.7 writer) | Only the 14 standard PDF fonts, no embedding: **non-Latin text (CJK, Arabic, Devanagari, Thai) does not export**; web build exports without a file prompt (#141) |
+| PDF | Save As / Export | yes (own PDF 1.7 writer) | Standard PDF fonts plus searchable outline subsets for glyphs covered by the optional licensed font input (including CJK). Missing glyphs fail export; complex-script shaping and exact face fidelity remain unsupported; web build exports without a file prompt (#141) |
 | XPS | Windows | no | Low priority |
 | Print | yes | yes (via PDF, system dialog on desktop; PR #143 for web) | |
 | Images of ranges/charts (Copy as Picture) | yes | chart raster in `crates/chart` | No range-to-image command |
@@ -81,12 +81,13 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
 | CSV/text: encoding choice, `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003 | 4–7 |
-| PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
+| PDF: contextual shaping and wider licensed font coverage; CJK subset embedding is implemented | (counted in [localization](localization-parity.md) script work) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Bold fallback outlines use the text color; controls and variation selectors do not request standalone glyphs or add width. No contextual shaping claim. |
 | 2026-10-18 | maintenance | Refreshed the CJK PDF fallback onto 0.8.0/main; retain the shared FreeBSD workflow and the verified CJK font input. No scope or readiness change. |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-13 | minor | Searchable Unicode PDF outline fallback and explicit missing-glyph errors |

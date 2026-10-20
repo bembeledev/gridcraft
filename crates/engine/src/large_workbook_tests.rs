@@ -187,3 +187,23 @@ fn cancellation_is_an_error_at_every_import_phase_and_keeps_existing_work() {
         assert_eq!(target.doc().unwrap().wb.sheet(0).unwrap().value(cell(0, 0)), Value::Number(91.0));
     }
 }
+
+#[test]
+fn cooperative_import_preserves_csv_as_text_option() {
+    for name in ["identifiers.csv", "identifiers.tsv", "identifiers.txt"] {
+        let bytes: &[u8] = if name.ends_with("csv") { b"00123,TRUE\n" } else { b"00123\tTRUE\n" };
+        let mut session = Session::new();
+        let prepared = gridcraft_core::work::run_ready(crate::cmd::file::prepare_open(
+            name,
+            bytes,
+            &json!({"csvAsText": true}),
+            &mut gridcraft_core::work::Uninterrupted,
+        ))
+        .unwrap()
+        .unwrap();
+        session.finish_import(prepared).unwrap();
+        let sheet = session.doc().unwrap().wb.sheet(0).unwrap();
+        assert_eq!(sheet.value(cell(0, 0)), Value::Text("00123".into()));
+        assert_eq!(sheet.value(cell(0, 1)), Value::Text("TRUE".into()));
+    }
+}

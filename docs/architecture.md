@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -119,3 +119,5 @@ checkpoint. The loading window replays the last workspace paint (ribbon, grid an
 without running background widgets, commands, or formula evaluation. Command-line opens prepare
 a blank workspace once after font initialization if no prior frame exists. Generated light/dark UI checks cover background and
 sheet-label rendering; parser tests verify names stay attached to scoped progress.
+
+- 2026-10-20: Integrated the 0.8.0 mainline while retaining cooperative imports and the painted workspace beneath progress. Host title-bar/File-tab controls remain effective during normal workspace drawing.

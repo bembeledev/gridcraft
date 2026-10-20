@@ -3,7 +3,7 @@
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::{Shape, Workbook};
+use gridcraft_engine::model::{DrawingGroup, DrawingRef, Shape, Workbook};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
@@ -36,6 +36,49 @@ fn fixture() -> (Harness, u32) {
         );
     h.run_steps(4);
     (h, id)
+}
+
+fn grouped_fixture() -> (Harness, u32, u32) {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "B2", "input": "cell stays"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let id = session.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": ORIGINAL})).unwrap()["shape"].as_u64().unwrap() as u32;
+    let other = session.execute("insert.textBox", json!({"at": "E4", "width": 120, "height": 80, "text": "Other member"})).unwrap()["shape"].as_u64().unwrap() as u32;
+    let group_id = {
+        let d = session.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let group_id = wb.next_object_id();
+        let sh = wb.sheet_mut(0).unwrap();
+        let anchor = sh.shapes.iter().find(|s| s.id == id).unwrap().anchor;
+        sh.groups.push(DrawingGroup {
+            id: group_id,
+            name: "Text boxes".into(),
+            anchor,
+            child_offset: (0, 0),
+            child_extent: (100, 100),
+            flip: (false, false),
+            rotation: 0,
+            member_rotations: Vec::new(),
+            members: vec![DrawingRef::Shape(id), DrawingRef::Shape(other)],
+            file: None,
+        });
+        group_id
+    };
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(1200.0, 800.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_os(egui::os::OperatingSystem::Mac)
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
+    h.run_steps(4);
+    (h, id, group_id)
 }
 
 fn shape(h: &Harness, id: u32) -> &Shape {
@@ -131,6 +174,31 @@ fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     click(&mut h, outside);
     assert_eq!(shape(&h, id).text, "New first line\nNew second line");
     assert_cell_unchanged(&h);
+}
+
+#[test]
+fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() {
+    let (mut h, id, group_id) = grouped_fixture();
+    h.run_steps(45);
+    let p = shape_rect(&h, id).center();
+    click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(group_id), "single-click selection is promoted to the group");
+    click(&mut h, p);
+    replace(&mut h, "Updated grouped text");
+    let outside = cell_center(&h, "J15");
+    click(&mut h, outside);
+    let sheet = h.state().session.doc().unwrap().wb.active().unwrap();
+    let members = sheet.drawing_group(group_id).unwrap().members.clone();
+    assert_eq!(sheet.shapes.iter().find(|s| s.id == id).unwrap().text, "Updated grouped text");
+    assert_eq!(members.len(), 2);
+
+    let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = gridcraft_engine::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("grouped.xlsx", &bytes).unwrap();
+    let saved_sheet = reopened.sheet(0).unwrap();
+    let saved_shape = saved_sheet.shapes.iter().find(|s| s.text == "Updated grouped text").unwrap();
+    let saved_group = saved_sheet.groups.iter().find(|g| g.members.len() == members.len()).unwrap();
+    assert!(saved_group.members.contains(&DrawingRef::Shape(saved_shape.id)), "saved group retains the edited member");
 }
 
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {

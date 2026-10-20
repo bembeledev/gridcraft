@@ -1949,11 +1949,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
             app.selected_chart = Some(id);
-            if kind == "shape"
-                && resp.double_clicked()
-                && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
+            if resp.double_clicked()
+                && let Some(("shape", member_id, _)) = crate::chartview::hit_object(geo, sh, p)
+                && sh.shapes.iter().any(|s| s.id == member_id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
             {
-                app.begin_text_box_edit(id);
+                app.begin_text_box_edit(member_id);
                 return;
             }
             if kind == "chart" && resp.double_clicked() {

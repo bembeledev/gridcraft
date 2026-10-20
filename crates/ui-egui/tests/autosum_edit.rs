@@ -77,6 +77,12 @@ fn autosum_on_one_cell_proposes_its_range_in_the_editor() {
     enter(&mut h);
     assert_eq!(input(&h, "A4"), "=SUM(A1:A3)");
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse("A4").unwrap()), Value::Number(6.0));
+
+    // A `range` that isn't text is no range, for the engine and here alike.
+    let mut h = harness("A4");
+    h.state_mut().run_or_alert("formulas.autoSum", json!({"range": null}));
+    h.run_steps(2);
+    assert_eq!(editing(&h).as_deref(), Some("=SUM(A1:A3)"));
 }
 
 #[test]

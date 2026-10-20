@@ -531,7 +531,10 @@ impl SheetApp {
         // Menu-style AutoSum on one cell proposes its formula in the editor with the range
         // pointed and selected, so a click, drag, arrow key or typing replaces it, as in Excel.
         // Programmatic callers use `run` and get the total entered.
-        if id == "formulas.autoSum" && params.get("range").is_none() && self.session.active().is_some_and(|d| d.selection.current().is_single()) {
+        if id == "formulas.autoSum"
+            && params.get("range").and_then(Json::as_str).is_none()
+            && self.session.active().is_some_and(|d| d.selection.current().is_single())
+        {
             return self.auto_sum_in_editor(params);
         }
         if let Err(e) = self.run(id, params) {
@@ -539,6 +542,8 @@ impl SheetApp {
         }
     }
 
+    /// Runs AutoSum on the active cell without entering it (`enter: false`) and points the
+    /// proposed range in the editor that opens.
     fn auto_sum_in_editor(&mut self, params: Json) {
         let mut params = if params.is_object() { params } else { json!({}) };
         if let Some(map) = params.as_object_mut() {

@@ -1221,3 +1221,22 @@ fn existing_rule_format_confirmation_without_changes_is_a_noop() {
     assert_eq!(doc.undo.len(), undo);
     assert_eq!(h.state().dialog.as_ref().unwrap().name(), "manageRules");
 }
+
+#[test]
+fn undo_after_backspace_restores_the_cleared_cell() {
+    // #1855: Backspace clears the cell and opens an empty editor; committing it must not add a
+    // second, empty undo step, so one Ctrl+Z brings the value back and leaves other edits alone.
+    let mut h = harness(blank());
+    text(&mut h, "3200");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "C5");
+    text(&mut h, "11750");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "A1");
+    key(&mut h, Key::Backspace, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Empty);
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::Number(3200.0));
+    assert_eq!(value(&h, "C5"), Value::Number(11750.0));
+}

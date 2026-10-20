@@ -203,6 +203,48 @@ fn enter_values_and_formulas() {
 }
 
 #[test]
+fn a_leading_plus_or_minus_starts_a_formula() {
+    // #2023: like Excel (and Lotus 1-2-3 before it), typing `+5+4` enters the formula `=+5+4`.
+    let mut s = s();
+    let input = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).map(|c| c.input_text());
+    for (cell, typed, value) in
+        [("A1", "+5+4", 9.0), ("A2", "-5+4", -1.0), ("A3", "--5", 5.0), ("A4", "-3/4", -0.75), ("A5", "+A1*2", 18.0), ("A6", "-(A1)", -9.0)]
+    {
+        s.execute("cell.set", json!({"cell": cell, "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(input(&s, cell), Some(format!("={typed}")), "{typed}");
+        assert_eq!(v(&s, cell), Value::Number(value), "{typed}");
+    }
+    // A signed number is a number, a lone sign is text, and an apostrophe keeps the text.
+    for (typed, value) in [
+        ("+5", Value::Number(5.0)),
+        ("-5", Value::Number(-5.0)),
+        ("-12%", Value::Number(-0.12)),
+        ("-$5", Value::Number(-5.0)),
+        ("-", Value::text("-")),
+        ("+", Value::text("+")),
+        ("'+5+4", Value::text("+5+4")),
+    ] {
+        s.execute("cell.set", json!({"cell": "B1", "input": typed})).unwrap();
+        assert_eq!(v(&s, "B1"), value, "{typed}");
+        assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
+    }
+    // Typed, a sign that doesn't start a valid formula is refused like `=--` and the cell keeps
+    // its value; pasted or split by Text to Columns it stays text.
+    s.execute("cell.set", json!({"cell": "C1", "input": "kept"})).unwrap();
+    for typed in ["--", "+5+", "+49 170 1234567"] {
+        let e = s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_err().to_string();
+        assert!(e.contains("problem with this formula"), "{typed}: {e}");
+        assert_eq!(v(&s, "C1"), Value::text("kept"), "{typed}");
+    }
+    s.execute("edit.paste", json!({"at": "D1", "text": "--\t-5+4\n"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::text("--"));
+    assert_eq!(v(&s, "E1"), Value::Number(-1.0));
+    s.execute("cell.set", json!({"cell": "F1", "input": "a,--,b"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "F1", "delimiters": [","]})).unwrap();
+    assert_eq!([v(&s, "F1"), v(&s, "G1"), v(&s, "H1")], [Value::text("a"), Value::text("--"), Value::text("b")]);
+}
+
+#[test]
 fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
     // #363: =DATEDIF(start, end) was stored and showed #VALUE!. Like Excel, entry refuses it and
     // the message gives the signature, so the missing unit argument is visible.

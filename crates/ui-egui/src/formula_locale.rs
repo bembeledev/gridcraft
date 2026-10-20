@@ -20,14 +20,16 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
-    let body = text;
-    if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
-    {
+    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
+    let normalized = text.trim().replace(locale.decimal_separator(), ".");
+    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
+    let is_number = number.parse::<f64>().is_ok_and(f64::is_finite);
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text), except
+    // that a signed number in this locale (`-1,5`) is a number, not a formula.
+    if !is_number && gridcraft_engine::core::parse::starts_formula(text) {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
-        let mut body = body.to_string();
+        let mut body = text.to_string();
         let mut expr = formula::parse_input(&body, locale, known);
         for _ in 0..8 {
             if expr.is_ok() {
@@ -38,10 +40,7 @@ pub(crate) fn canonical(
         }
         return Ok(format!("={}", formula::print(&expr?)));
     }
-    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
-    let normalized = body.trim().replace(locale.decimal_separator(), ".");
-    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
-    if number.parse::<f64>().is_ok_and(f64::is_finite) {
+    if is_number {
         return Ok(normalized);
     }
     Ok(text.to_string())
@@ -137,4 +136,29 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
         return format!("={}(", completion_name(name, locale, wb, sheet));
     }
     display(text, locale, wb, sheet)
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_engine::core::CellRef;
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_engine::model::Workbook;
+
+    use super::canonical;
+
+    #[test]
+    fn a_leading_sign_starts_a_formula_in_spanish_too() {
+        // #2023: `+5+4` is a formula in every formula language; in Spanish `-1,5` stays the
+        // number -1.5 rather than becoming a formula.
+        let wb = Workbook::new();
+        let at = CellRef::parse("A1").unwrap();
+        let entry = |text: &str| canonical(text, FormulaLocale::Es, &wb, 0, at).ok();
+        assert_eq!(entry("+5+4").as_deref(), Some("=+5+4"));
+        assert_eq!(entry("-5+4").as_deref(), Some("=-5+4"));
+        assert_eq!(entry("-SUMA(1;2)").as_deref(), Some("=-SUM(1,2)"));
+        assert_eq!(entry("-1,5").as_deref(), Some("-1.5"));
+        assert_eq!(entry("+2,5%").as_deref(), Some("+2.5%"));
+        assert_eq!(entry("-").as_deref(), Some("-"));
+        assert_eq!(entry("--"), None);
+    }
 }

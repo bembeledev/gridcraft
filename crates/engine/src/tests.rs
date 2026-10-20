@@ -3369,6 +3369,35 @@ fn data_validation_reads_input_with_the_conversion_options() {
     assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A1"]));
 }
 
+/// Circle Invalid Data checks what a cell holds, whatever the options say now: `0123` stored as
+/// text stays circled after "Remove leading zeros" is back on, though typing `0123` now gives 123.
+#[test]
+fn circle_invalid_checks_the_stored_text_after_the_options_change() {
+    let mut s = s();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "between", "formula1": "1", "formula2": "1000"})).unwrap();
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": false})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "0123"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "123"})).unwrap();
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("0123"));
+    assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "0123"})).unwrap()["ok"], true, "typed now, 0123 is 123");
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A1"]));
+}
+
+/// The reverse: a 12-digit number stored with the defaults stays a valid number after "Keep first
+/// 15 digits" is off, though typing it now keeps it as text.
+#[test]
+fn circle_invalid_checks_the_stored_number_after_the_options_change() {
+    let mut s = s();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "greaterOrEqual", "formula1": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "123456789012"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "abc"})).unwrap();
+    s.execute("app.dataConversion", json!({"keepFirst15Digits": false})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(123456789012.0));
+    assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "123456789012"})).unwrap()["ok"], false, "typed now, it stays text");
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A2"]));
+}
+
 /// A scenario stores its numbers as numbers, so Show restores them as numbers whatever the options
 /// say; before, a value like `1234.56789012345` came back as text and broke the formulas using it.
 /// Stored text follows the options, so `0123` kept as text comes back as text.

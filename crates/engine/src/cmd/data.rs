@@ -1008,6 +1008,13 @@ pub fn check_validation(
     input: &str,
     conv: &gridcraft_core::parse::DataConversion,
 ) -> Option<(Validation, String)> {
+    let v = gridcraft_core::parse::parse_input_with(input, wb.date_system, conv).value;
+    check_value(wb, sheet, at, v, input)
+}
+
+/// Checks a value against the validation of a cell; `input` is how it's written (List and Text
+/// length rules read it).
+fn check_value(wb: &Workbook, sheet: usize, at: CellRef, v: Value, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -1016,7 +1023,6 @@ pub fn check_validation(
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input_with(input, wb.date_system, conv).value;
     // The formulas are written for the first cell of the range and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
@@ -1125,7 +1131,15 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text, &s.prefs.data_conversion).is_some() {
+                if text.is_empty() {
+                    continue;
+                }
+                // What the cell holds, whatever the options say now; a formula is still judged by its text.
+                let bad = match sh.cell(c) {
+                    Some(cell) if cell.formula.is_none() => check_value(&d.wb, sheet, c, cell.value.clone(), &text),
+                    _ => check_validation(&d.wb, sheet, c, &text, &s.prefs.data_conversion),
+                };
+                if bad.is_some() {
                     bad_cells.push(c.a1());
                 }
             }

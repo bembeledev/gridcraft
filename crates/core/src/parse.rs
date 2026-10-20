@@ -49,9 +49,10 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
     parse_numeric(s.trim(), sys).map(|(n, _)| n)
 }
 
-/// Whether typed cell input is a formula: it starts with `=`, or, as Lotus 1-2-3 users type it,
-/// with `+` or `-` and isn't a number on its own. `+5+4` is the formula `=+5+4`, `-5` the number
-/// -5, and a lone `+` or `-` is text. A leading space or apostrophe makes the input text.
+/// Whether typed cell input is meant as a formula: it starts with `=`, or, as Lotus 1-2-3 users
+/// type it, with `+` or `-` and isn't a number on its own (`+5+4` is `=+5+4`, `-5` the number -5,
+/// a lone `+` or `-` text). A leading space or apostrophe makes the input text. Callers parse
+/// the formula; a `+` or `-` entry that doesn't parse (`--`) stays text, as in Excel.
 pub fn starts_formula(input: &str) -> bool {
     input.starts_with('=') || (input.len() > 1 && input.starts_with(['+', '-']) && parse_number_text(input).is_none())
 }

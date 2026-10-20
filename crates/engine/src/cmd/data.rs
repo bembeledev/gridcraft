@@ -839,8 +839,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            // A part that isn't a valid formula (`--`) stays text, as it does when pasted.
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(t.as_str()))));
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),

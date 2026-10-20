@@ -131,7 +131,15 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
-    if gridcraft_core::parse::starts_formula(input) {
+    // As in Excel, a `+` or `-` entry is a formula when it reads as one (`+5+4` enters `=+5+4`)
+    // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
+    if !input.starts_with('=')
+        && gridcraft_core::parse::starts_formula(input)
+        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb)
+    {
+        return Ok(cell);
+    }
+    if input.starts_with('=') {
         let body = input.strip_prefix('=').unwrap_or(input);
         // Excel closes missing parentheses for you.
         let mut text = body.to_string();

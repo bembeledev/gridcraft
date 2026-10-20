@@ -25,9 +25,14 @@ pub(crate) fn canonical(
     let normalized = body.trim().replace(locale.decimal_separator(), ".");
     let number = normalized.strip_suffix('%').unwrap_or(&normalized);
     let is_number = number.parse::<f64>().is_ok_and(f64::is_finite);
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text), except
-    // that a signed number in this locale (`-1,5`) is a number, not a formula.
-    if !is_number && gridcraft_engine::core::parse::starts_formula(body) {
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text): a `+`
+    // or `-` entry is a formula when it reads as one and text when it doesn't, and a signed number
+    // in this locale (`-1,5`) is a number. The apostrophe keeps the engine from reading such text
+    // again in English syntax.
+    if !body.starts_with('=') && !is_number && gridcraft_engine::core::parse::starts_formula(body) {
+        return Ok(canonical(&format!("={body}"), locale, wb, sheet, cell).unwrap_or_else(|_| format!("'{body}")));
+    }
+    if body.starts_with('=') {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let mut body = body.to_string();
@@ -160,6 +165,9 @@ mod tests {
         assert_eq!(entry("-1,5").as_deref(), Some("-1.5"));
         assert_eq!(entry("+2,5%").as_deref(), Some("+2.5%"));
         assert_eq!(entry("-").as_deref(), Some("-"));
-        assert_eq!(entry("--"), None);
+        // An entry that doesn't read as a formula stays text; only `=` entries are refused.
+        assert_eq!(entry("--").as_deref(), Some("'--"));
+        assert_eq!(entry("+34 612 345 678").as_deref(), Some("'+34 612 345 678"));
+        assert_eq!(entry("=--"), None);
     }
 }

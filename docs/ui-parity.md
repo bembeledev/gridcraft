@@ -161,7 +161,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-20 | minor | Typing a leading `+` or `-` starts a formula whenever the entry isn't a number on its own, as in Excel: `+5+4` enters `=+5+4` and `-5+4` enters `=-5+4` (they stayed text; only a letter or `(` after the sign started one). `+5`, `-5` and `-$5` stay numbers, a lone `+` or `-` stays text, and an entry like `--` that isn't a valid formula is refused like `=--`; pasted or split by Text to Columns it stays text (#2023) |
+| 2026-10-20 | minor | Typing a leading `+` or `-` starts a formula whenever the entry isn't a number on its own, as in Excel: `+5+4` enters `=+5+4` and `-5+4` enters `=-5+4` (they stayed text; only a letter or `(` after the sign started one). `+5`, `-5` and `-$5` stay numbers, and a lone `+` or `-` and an entry that doesn't read as a formula (`--`, `+49 170 1234567`) stay text, as observed in Excel for the web; only `=` entries are refused (#2023) |
 | 2026-10-19 | minor | Ctrl+Enter (`range.fill`) gives each cell what typing the input there gives: a General cell gets the automatic number format (`5%`, `$5`, `3/4/2026`, `=TODAY()`) even when it already held a value, and a cell with its own format, a formatted row or column, or Text keeps it. Cells that held a value used to keep General (`5%` showed 0.05), and empty cells took the active cell's format |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |

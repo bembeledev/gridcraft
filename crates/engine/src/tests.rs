@@ -228,14 +228,19 @@ fn a_leading_plus_or_minus_starts_a_formula() {
         assert_eq!(v(&s, "B1"), value, "{typed}");
         assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
     }
-    // Typed, a sign that doesn't start a valid formula is refused like `=--` and the cell keeps
-    // its value; pasted or split by Text to Columns it stays text.
-    s.execute("cell.set", json!({"cell": "C1", "input": "kept"})).unwrap();
-    for typed in ["--", "+5+", "+49 170 1234567"] {
-        let e = s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_err().to_string();
-        assert!(e.contains("problem with this formula"), "{typed}: {e}");
-        assert_eq!(v(&s, "C1"), Value::text("kept"), "{typed}");
+    // As observed in Excel for the web, an entry that doesn't read as a formula stays text, and
+    // one that does but names nothing known is #NAME?. Only `=` entries are refused.
+    for typed in ["--", "-----", "+5+", "+49 170 1234567"] {
+        s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(v(&s, "C1"), Value::text(typed), "{typed}");
+        assert_eq!(input(&s, "C1").as_deref(), Some(typed), "{typed}");
     }
+    s.execute("cell.set", json!({"cell": "C2", "input": "- item"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Error(gridcraft_core::CellError::Name));
+    let e = s.execute("cell.set", json!({"cell": "C1", "input": "=--"})).unwrap_err().to_string();
+    assert!(e.contains("problem with this formula"), "{e}");
+    assert_eq!(v(&s, "C1"), Value::text("+49 170 1234567"), "a refused entry keeps the cell");
+    // Pasted or split by Text to Columns, the same rule applies.
     s.execute("edit.paste", json!({"at": "D1", "text": "--\t-5+4\n"})).unwrap();
     assert_eq!(v(&s, "D1"), Value::text("--"));
     assert_eq!(v(&s, "E1"), Value::Number(-1.0));

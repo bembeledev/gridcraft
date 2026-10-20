@@ -1379,12 +1379,12 @@ fn with_calendar_dates(
     }
     let mut converted = args.to_vec();
     for &i in dates {
-        let day = num(args, i)?.trunc();
-        if !(0.0..=gridcraft_core::date::max_serial(DateSystem::D1904) as f64).contains(&day) {
+        let raw_day = num(args, i)?;
+        if !(0.0..gridcraft_core::date::max_serial(DateSystem::D1904) as f64 + 1.0).contains(&raw_day) {
             return Err(CellError::Num);
         }
         let arg = converted.get_mut(i).ok_or(CellError::Value)?;
-        arg.value = Value::Number(day + 1462.0);
+        arg.value = Value::Number(raw_day.trunc() + 1462.0);
     }
     let value = calculate(&converted, ctx)?;
     if date_result {
@@ -1837,9 +1837,22 @@ mod tests {
             close_tol(crate::call(crate::lookup(name).unwrap(), &shifted, &mut ctx), number(expected), 1e-12);
         }
         let mut ctx = TestCtx { sys: DateSystem::D1904, ..Default::default() };
-        for bad in [-1.0, 2_957_004.0, f64::NAN, f64::INFINITY] {
+        for bad in [-0.5, -1.0, 2_957_004.0, f64::NAN, f64::INFINITY] {
             is_err(crate::call(crate::lookup("COUPDAYBS").unwrap(), &[n(bad), n(45_350.0), n(2.0)], &mut ctx), CellError::Num);
         }
+    }
+
+    // Observed in Excel for Mac 16.113.1 with a synthetic date1904 workbook:
+    // valid fractional inputs truncate; a previous coupon before the epoch is -1,
+    // not #NUM!. Only negative input serials are invalid.
+    #[test]
+    fn calendar_financial_dates_keep_excel_epoch_boundary_results() {
+        let mut ctx = TestCtx { sys: DateSystem::D1904, ..Default::default() };
+        close(crate::call(crate::lookup("COUPDAYBS").unwrap(), &[n(10.75), n(45350.9), n(2.0)], &mut ctx), 131.0);
+        close(crate::call(crate::lookup("COUPDAYBS").unwrap(), &[n(0.0), n(45350.0), n(2.0)], &mut ctx), 121.0);
+        let args = [n(1.0), n(serial_from_ymd(ctx.sys, 1905, 6, 30).unwrap()), n(2.0), n(1.0)];
+        close(crate::call(crate::lookup("COUPPCD").unwrap(), &args, &mut ctx), -1.0);
+        close(crate::call(crate::lookup("COUPNCD").unwrap(), &args, &mut ctx), 181.0);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-18 · **Change:** minor (MEDIAN and AGGREGATE median avoid intermediate overflow) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (local clock and 1904 financial date validation; preserves Excel coupon dates before the epoch) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
-NOW/TODAY and yearless date entry use local wall time with the offset at the sampled instant (including daylight saving). Financial calendar functions normalize workbook date arguments to the existing calendar helpers and convert coupon-date results back; 1904 bounds are checked. Coupon/month-end and representative security/odd-period regressions cover both epochs.
+NOW/TODAY and yearless date entry use local wall time with the offset at the sampled instant (including daylight saving). Financial calendar functions normalize workbook date arguments to the existing calendar helpers and convert coupon-date results back; 1904 input bounds are checked before truncation. Excel permits negative previous-coupon results (for example -1 for 1903-12-31); those are retained. Coupon/month-end and representative security/odd-period regressions cover both epochs.
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -116,6 +116,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Reject negative fractional date inputs before truncation; retain valid fractional dates and negative COUPPCD results. Verified with a synthetic workbook in Excel for Mac 16.113.1. |
 | 2026-10-18 | maintenance | Refreshed local-clock and 1904 financial dates on 0.8.0/main; retained upstream median/clear fixes. No scope or readiness change. |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |

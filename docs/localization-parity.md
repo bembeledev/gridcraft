@@ -65,7 +65,9 @@ right-to-left sheets and full complex-script support. Part of
   letter (`Ánh` beside `Anh`, ties broken by the accent) instead of after `z`. Accent-only ties
   are broken by the code point of the combining mark (`hà` < `há`: grave U+0300 before acute
   U+0301; `hâ` < `hă`), which is not ICU's root order (acute before grave): this order is
-  language-neutral, not a tailored one. Equality is the
+  language-neutral, not a tailored one. It is our own order, not CLDR root: the primary key is the
+  code point of the lowercased base letter (`đ` counts as `d`), accents are secondary, and every
+  other character (`ø ł æ ß`, Cyrillic, CJK, digits, punctuation) orders by code point. Equality is the
   same in `=`, `COUNTIF`/`SUMIF`/`COUNTIFS`, `MATCH`/`XMATCH`/`XLOOKUP`/`VLOOKUP`, `UNIQUE`,
   `SWITCH`, D-function field labels, Remove Duplicates, AutoFilter and Slicer lists, data
   validation lists, conditional formatting (duplicates, text rules), PivotTable items and

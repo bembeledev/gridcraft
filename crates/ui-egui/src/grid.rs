@@ -782,12 +782,6 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
         interact(app, ui, &resp, &geo, sh, &wb);
     }
-    if let Some(id) = app.text_box_selection_restore {
-        app.selected_chart = Some(id);
-        if !ui.ctx().input(|i| i.pointer.any_pressed()) {
-            app.text_box_selection_restore = None;
-        }
-    }
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);

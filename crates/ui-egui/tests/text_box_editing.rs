@@ -189,7 +189,7 @@ fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() 
     replace(&mut h, "Updated grouped text");
     let outside = cell_center(&h, "J15");
     click(&mut h, outside);
-    assert_eq!(h.state().selected_chart, Some(group_id), "committing restores the outer group selection");
+    assert_eq!(h.state().selected_chart, None, "clicking a cell clears the group selection");
     let sheet = h.state().session.doc().unwrap().wb.active().unwrap();
     let members = sheet.drawing_group(group_id).unwrap().members.clone();
     assert_eq!(sheet.shapes.iter().find(|s| s.id == id).unwrap().text, "Updated grouped text");

@@ -4,18 +4,22 @@ use gridcraft_core::CellError;
 use gridcraft_formula::FormulaLocale::{self, Es};
 use gridcraft_formula::{parse, parse_input, print, print_input};
 
+/// Reads `src` typed in `locale` and prints it in canonical syntax.
 fn canonical(src: &str, locale: FormulaLocale) -> String {
     print(&parse_input(src, locale, |_| false).unwrap_or_else(|e| panic!("{locale:?} `{src}`: {e}")))
 }
 
+/// Shows a canonical formula the way `locale` writes it.
 fn shown(canonical: &str, locale: FormulaLocale) -> String {
     print_input(&parse(canonical).unwrap(), locale, |_| false).unwrap()
 }
 
+/// Every language with its own formula words (all but English).
 fn localized() -> impl Iterator<Item = FormulaLocale> {
     FormulaLocale::ALL.into_iter().filter(|l| *l != FormulaLocale::En)
 }
 
+/// Errors, booleans and structured-reference specifiers read and show in the language's words.
 #[test]
 fn errors_booleans_and_table_specifiers_are_spelled_in_the_language() {
     for (local, english) in [
@@ -29,6 +33,7 @@ fn errors_booleans_and_table_specifiers_are_spelled_in_the_language() {
     }
 }
 
+/// Showing a canonical formula in any language and reading it back gives the same formula.
 #[test]
 fn every_language_round_trips_canonical_formulas() {
     for formula in [
@@ -53,6 +58,7 @@ fn every_language_round_trips_canonical_formulas() {
     }
 }
 
+/// Local input also accepts English function names, booleans and errors, in any letter case.
 #[test]
 fn english_words_and_any_letter_case_are_accepted() {
     assert_eq!(canonical("SUM(1;2)+suma(3)", Es), "SUM(1,2)+SUM(3)");
@@ -63,6 +69,7 @@ fn english_words_and_any_letter_case_are_accepted() {
     assert!(parse_input("SUMA(1.5;2)", Es, |_| false).is_err());
 }
 
+/// A function passed by name (BYROW(…,SUM)) is translated, unless a defined name takes the spelling.
 #[test]
 fn functions_passed_by_name_are_spelled_in_the_language() {
     // GROUPBY(…,SUM) and BYROW(…,SUM) take a worksheet function by name, saved as `_xleta.SUM`.
@@ -75,6 +82,8 @@ fn functions_passed_by_name_are_spelled_in_the_language() {
     assert_eq!(print_input(&parse("BYROW(A1:B3,SUM)").unwrap(), Es, known).unwrap(), "BYROW(A1:B3;SUM)");
 }
 
+/// Each table is sorted by canonical name, has no two functions sharing a local name, and only
+/// TRUE()/FALSE() share a boolean's spelling.
 #[test]
 fn language_tables_are_sorted_unique_and_unambiguous() {
     for locale in localized() {
@@ -103,6 +112,7 @@ fn language_tables_are_sorted_unique_and_unambiguous() {
     }
 }
 
+/// Malformed local input is a parse error, and deep boolean chains hit the nesting limit.
 #[test]
 fn malformed_localized_input_is_an_error() {
     for bad in ["#¡VALOR", "Tabla1[[#Encabezados];", "SUMA({1\\}", "{SUMA(1)}"] {

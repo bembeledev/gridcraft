@@ -318,6 +318,7 @@ mod tests {
         assert!(!e2.can_point());
     }
 
+    /// Autocomplete lists the names a prefix matches, and the hint finds the function being typed.
     #[test]
     fn autocomplete_and_hints() {
         let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
@@ -330,6 +331,7 @@ mod tests {
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
     }
 
+    /// Local names match in any script and letter case, sorted, and the hint reads `;`-separated input.
     #[test]
     fn autocomplete_and_hints_take_local_names_in_any_script() {
         // Local names arrive in English order (ZÄHLENWENNS is COUNTIFS); the list shows them sorted.

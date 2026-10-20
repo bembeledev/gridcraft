@@ -255,6 +255,8 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// The value of a name: a LET/LAMBDA binding first (any script, any case), then a defined
+    /// name in the sheet's or workbook's scope, `Sheet1!Name` included.
     fn name(&mut self, n: &str) -> Ev {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| same_name(k, n)) {
             return v.clone();
@@ -529,6 +531,8 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Calls a function by canonical name: the lazy built-ins (IF, LET, LAMBDA…) evaluate their
+    /// own arguments here; everything else goes to the function registry.
     fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => {
@@ -949,6 +953,8 @@ impl<'h> Evaluator<'h> {
         r
     }
 
+    /// LET(name, value, …, body): binds each name in order (matched in any case and script), then
+    /// evaluates the body; the bindings go out of scope afterwards.
     fn let_(&mut self, args: &[Expr]) -> Ev {
         if args.len() < 3 || args.len().is_multiple_of(2) {
             return err(CellError::Value);
@@ -1864,6 +1870,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "MAKEARRAY",
 ];
 
+/// Whether the engine has a function by this canonical name (built-in or registry), in any case.
 pub fn is_known_function(n: &str) -> bool {
     is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
 }

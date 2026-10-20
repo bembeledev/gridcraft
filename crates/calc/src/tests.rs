@@ -577,6 +577,7 @@ fn spilled_blank_cells_show_zero() {
     assert_eq!(t.get("F3"), Value::Number(0.0));
 }
 
+/// LET, LAMBDA and the helpers taking a LAMBDA, including a non-ASCII binding called in another case.
 #[test]
 fn let_lambda() {
     let mut t = T::new();
@@ -1270,6 +1271,7 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// Every canonical name in a language table is a function the engine evaluates.
 #[test]
 fn formula_language_tables_only_name_functions_the_engine_knows() {
     // A typo'd canonical name in a language table would turn a valid local name into #NAME?.

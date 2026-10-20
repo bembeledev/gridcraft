@@ -101,6 +101,8 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
 ];
 
+/// The argument hint for a function typed in `locale`: its local name and the language's list
+/// separator (Spanish help text for the functions it covers).
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
     if locale == FormulaLocale::Es
@@ -115,6 +117,7 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     })
 }
 
+/// The description of a function typed in `locale`, in Spanish where the help covers it.
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
     if locale == FormulaLocale::Es

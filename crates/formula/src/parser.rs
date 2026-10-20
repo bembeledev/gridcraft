@@ -28,6 +28,8 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
     parse_syntax(src, crate::FormulaLocale::En)
 }
 
+/// Parses a formula (`=` optional) written in `locale`'s syntax: its separators, decimal mark,
+/// array separators and local booleans. Function names are left as written for the caller.
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
@@ -388,6 +390,8 @@ impl Parser {
         Ok(Expr::Name(w.to_string()))
     }
 
+    /// An array constant after its `{`: numbers, strings, booleans and errors, with the locale's
+    /// column and row separators.
     fn array(&mut self) -> Result<Expr, ParseError> {
         let mut rows = vec![Vec::new()];
         loop {

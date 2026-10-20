@@ -43,6 +43,7 @@ const TABLE_ITEMS: [&str; 5] = ["#All", "#Data", "#Headers", "#Totals", "#This R
 impl FormulaLocale {
     pub const ALL: [Self; 2] = [Self::En, Self::Es];
 
+    /// The language's table; `None` for English, which is the canonical syntax itself.
     fn dialect(self) -> Option<&'static Dialect> {
         match self {
             Self::En => None,
@@ -50,15 +51,19 @@ impl FormulaLocale {
         }
     }
 
+    /// Separates function arguments (`,` in English, `;` in Spanish).
     pub fn list_separator(self) -> char {
         self.dialect().map_or(',', |d| d.list)
     }
+    /// The decimal mark in typed numbers (`.` in English, `,` in Spanish).
     pub fn decimal_separator(self) -> char {
         self.dialect().map_or('.', |d| d.decimal)
     }
+    /// Separates the columns of an array constant (`,` in English, `\` in Spanish).
     pub fn array_column_separator(self) -> char {
         self.dialect().map_or(',', |d| d.array_column)
     }
+    /// Separates the rows of an array constant (`;` in English and Spanish).
     pub fn array_row_separator(self) -> char {
         self.dialect().map_or(';', |d| d.array_row)
     }
@@ -81,6 +86,7 @@ impl FormulaLocale {
         self.dialect().map_or(&[], |d| d.functions)
     }
 
+    /// How this language spells a boolean (`TRUE`, `VERDADERO`).
     pub fn boolean_name(self, value: bool) -> &'static str {
         match (self.dialect(), value) {
             (Some(d), true) => d.bool_true,
@@ -103,6 +109,7 @@ impl FormulaLocale {
         }
     }
 
+    /// How this language spells an error literal (`#VALUE!`, `#¡VALOR!`).
     pub fn error_name(self, error: CellError) -> &'static str {
         self.dialect().and_then(|d| d.errors.iter().find(|(e, _)| *e == error)).map_or_else(|| error.as_str(), |(_, local)| *local)
     }
@@ -135,6 +142,7 @@ impl FormulaLocale {
     }
 }
 
+/// ASCII case-insensitive ordering, the order the language tables are sorted in.
 fn cmp_ascii_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
     a.bytes().map(|c| c.to_ascii_uppercase()).cmp(b.bytes().map(|c| c.to_ascii_uppercase()))
 }
@@ -144,6 +152,7 @@ fn eq_ignore_case(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_uppercase).eq(b.chars().flat_map(char::to_uppercase))
 }
 
+/// Whether `text` starts with `prefix`, compared case-insensitively in any script.
 fn starts_with_ignore_case(text: &str, prefix: &str) -> bool {
     text.chars().take(prefix.chars().count()).flat_map(char::to_uppercase).eq(prefix.chars().flat_map(char::to_uppercase))
 }
@@ -271,6 +280,9 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     Ok(out)
 }
 
+/// Rewrites booleans and function names between the language and canonical syntax, recursively.
+/// `display` goes canonical → local, otherwise local → canonical. LET/LAMBDA bindings and names
+/// `known_name` accepts are never rewritten, so a binding may share a local function's spelling.
 fn normalize(
     expr: &mut Expr,
     locale: FormulaLocale,

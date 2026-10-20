@@ -132,6 +132,18 @@ impl Language {
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
+
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        self.tr(warning).to_owned()
+    }
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
@@ -176,6 +188,30 @@ pub fn set_current(ctx: &egui::Context, language: Language) {
 /// English label → Japanese. Keys are the exact interface strings (command ids, file names and
 /// document text are never translated); anything absent falls back to English.
 const JAPANESE: &[(&str, &str)] = &[
+    ("a linked (not embedded) picture was skipped", "リンクされた画像（埋め込みなし）はスキップされました。"),
+    ("missing picture {target}", "画像 {target} が見つかりません。"),
+    ("chart {target} has no supported plot and was skipped", "グラフ {target} にサポートされているプロットがないため、スキップされました。"),
+    (
+        "a histogram, waterfall, treemap… chart without its chart part was skipped",
+        "グラフパーツがないヒストグラム、ウォーターフォール、ツリーマップなどのグラフはスキップされました。",
+    ),
+    ("an embedded object (SmartArt, OLE…) was skipped", "埋め込みオブジェクト（SmartArt、OLE など）はスキップされました。"),
+    ("grouped shapes are not supported and were skipped", "グループ化された図形はサポートされていないため、スキップされました。"),
+    (
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.",
+        "XLSB はデータのみをインポートします。数式は保存済みの結果に変換され、再計算されません。書式、グラフ、画像、マクロなどの機能はインポートされず、日付、通貨、パーセンテージが数値として表示される場合があります。新しい .xlsx ファイルとして保存してください。XLSB 形式での保存はサポートされていません。",
+    ),
+    ("XLSB module sheets were skipped.", "XLSB のモジュールシートはスキップされました。"),
+    ("XLSB non-worksheet sheets were skipped.", "XLSB のワークシート以外のシートはスキップされました。"),
+    (
+        "Unsupported XLSB future-record and alternate-content blocks were skipped.",
+        "サポートされていない XLSB の将来レコードと代替コンテンツブロックはスキップされました。",
+    ),
+    ("Invalid XLSB merged ranges were skipped.", "無効な XLSB の結合範囲はスキップされました。"),
+    (
+        "{count} items in this file were handled differently. First: {warning}",
+        "このファイルの {count} 項目は通常とは異なる方法で処理されました。最初の項目: {warning}",
+    ),
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
     ("Paste Formulas", "数式の貼り付け"),

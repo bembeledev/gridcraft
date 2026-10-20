@@ -1,6 +1,6 @@
 # GridCraft control protocol
 
-> **Last updated:** 2026-10-20 · Tab closing, worksheet navigation and diagnostics visibility
+> **Last updated:** 2026-10-20 · External patcher validation, tab closing and diagnostic navigation
 
 Start the desktop app with a control port:
 
@@ -119,7 +119,7 @@ GridCraft accepts the existing `file.print` sheet/pagination params on `ui.print
 
 ### CK authoring extension (2026-10-20)
 
-The control command list also exposes `patch.profile`, `patch.refresh`, `patch.version`, `patch.inspect`, `patch.jump`, `patch.apply` and `view.patchData`. Async checks never write files; inspect `loading`, `progress`, `stale`, `report.complete_context` and `notes` before using a result. `patch.validate` is the explicit engine-level single-workbook query. See [CK authoring commands and limits](ck-patch-data.md).
+The control command list exposes `patch.profile`, `patch.configure`, `patch.refresh`, `patch.cancel`, `patch.version`, `patch.inspect`, `patch.jump`, `patch.apply` and `view.patchData`. Configure the external `ck-validator` executable and actual ID-map directory first. Async checks send unsaved overlays and never save inputs. Inspect `loading`, `error`, `stale`, `validator`, `report.valid` and `report.stages`; skipped stages are not successful checks. `patch.jump {index, related?: index}` navigates only to worker-returned locations. `patch.validate {project:"ck", root, config:{...}}` is the synchronous engine-level full-project query using the same worker. No local CK validator remains. See [CK authoring commands and limits](ck-patch-data.md).
 
 ## Revision history
 
@@ -127,4 +127,5 @@ The control command list also exposes `patch.profile`, `patch.refresh`, `patch.v
 |---|---|
 | 2026-10-20 | Tab context-menu close groups with stable document UIDs and cancellable save prompts |
 | 2026-10-20 | File worksheet children, worksheet navigation and independent diagnostics visibility |
+| 2026-10-20 | External patcher configuration/cancellation, exact stage reports and diagnostic indices |
 | 2026-10-20 | Background explorer opens and full-project CK progress fields |

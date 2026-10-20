@@ -195,10 +195,16 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("workspace.openSheet", "Open Explorer Worksheet", "{path, sheet, background?: bool}: open file and activate named worksheet"),
                 ("view.patchDiagnostics", "CK Diagnostics", "{on?: bool}: show or hide validation results"),
                 ("patch.profile", "CK Profile", "{mode: auto|ck|off}: workspace-specific authoring rules"),
-                ("patch.refresh", "Refresh CK Rules", "{}: asynchronous read-only workspace validation"),
+                ("patch.refresh", "Run Patcher Validation", "{}: run ck-validator asynchronously with unsaved overlays"),
+                (
+                    "patch.configure",
+                    "Configure Patcher Validator",
+                    "{executable?, id_map_directory, tc_id_prefix?, build_name?, version_filtering?}: per-folder settings",
+                ),
+                ("patch.cancel", "Cancel Patcher Validation", "{}: stop and reap the validator process"),
                 ("patch.inspect", "Inspect CK Rules", "{}: status, progress, stale flag, report and limitations"),
                 ("patch.version", "CK Version Preview", "{name: version|@build|empty}: revalidate with version filtering"),
-                ("patch.jump", "Go to CK Diagnostic", "{file, sheet, cell}: navigate within indexed files"),
+                ("patch.jump", "Go to Patcher Diagnostic", "{index, related?: index}: navigate to a location returned by the patcher"),
                 (
                     "patch.apply",
                     "Apply CK Editor",

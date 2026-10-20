@@ -118,7 +118,7 @@ explorer and select one to edit it on the right. Expand subfolders as needed, sw
 document tabs without losing unsaved edits, and use **Refresh** after files change on disk.
 **File > Open > Open File…** remains available for individual workbooks.
 
-CK patch-data folders also offer a [CK authoring panel](docs/ck-patch-data.md): column rules, literal value editing, version-aware reference candidates and a paginated diagnostic table. This is local assistance; publication still uses the patcher.
+CK patch-data folders also offer a [CK authoring panel](docs/ck-patch-data.md): literal header/value editing and a paginated diagnostic table supplied exclusively by the patcher’s `ck-validator`. Configure the worker and real ID-map directory in the panel; GridCraft carries no independent CK validation rules.
 
 Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.

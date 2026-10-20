@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (continuous selection animation, folder explorer, document tabs and CK authoring panel) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (external patcher validation, folder explorer and document tabs) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -14,7 +14,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
-| CK patch-data authoring | project-specific add-in workflow | [CK panel](ck-patch-data.md), typed column/value assistance, background checks and paginated diagnostic navigation | GridCraft extension; limited local checks, Korean copy; final conversion/publish remains in patcher |
+| CK patch-data authoring | project-specific add-in workflow | [CK panel](ck-patch-data.md), literal column/value editing, external patcher checks and paginated diagnostic navigation | GridCraft extension; ck-validator required, Korean copy; conversion/publish remains in patcher |
 | Folder workspace and document tabs | file-oriented open | Desktop defaults to a folder picker, with a resizable explorer, lazy subfolders, expandable worksheet children, supported spreadsheet files and document tabs; unsaved edits and undo survive switching; tab context menus close one/others/right/all with save prompts, plus middle-click close | GridCraft extension, 10-19; explicit refresh, no filesystem watcher; browser retains uploads |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
@@ -163,6 +163,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | CK diagnostics use only the external patcher; per-project settings, stage outcomes and cancellation |
 | 2026-10-20 | minor | Continuous selection drag advances before retargeting; read-only AbilityIconData 60-frame drag reduced stationary-outline frames from 30 to 1 across 45 selection changes (CPU harness; not a GPU latency measurement) |
 | 2026-10-20 | minor | Explorer background file opening and cached conditional-format range statistics; CK full-project indexing progress |
 | 2026-10-19 | minor | CK-specific column rules, version preview, cross-file reference candidates and paginated diagnostics; literal edits preserve long integers and support undo |

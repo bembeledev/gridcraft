@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (lookup performance, folder workspace and CK authoring rules) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (external patcher validation, lookup performance and folder workspace) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -51,7 +51,7 @@ including tests, 2026-10-10.
 
 ## Agent control
 
-CK rules live in the engine’s `patch_data` module, without UI dependencies. The UI’s `patch_data` module owns a disk-backed background file index and panel state; edits use normal engine commands. See [CK authoring](ck-patch-data.md) for behavior, evidence, limits and commands.
+CK validation is exclusively delegated to the patcher’s external `ck-validator` executable. The engine’s `patch_data` module contains only bounded JSONL transport and evaluated-workbook overlays; it has no CK rule parser or validator. The UI owns configuration, cancellable background jobs and stale-result guards. Literal edits use ordinary engine commands. The private patcher dependency is not linked into GridCraft. See [CK authoring](ck-patch-data.md) for setup, behavior and verification.
 
 The desktop's folder workspace lives in `ui-egui/workspace.rs`. Bounded background directory
 reads populate a virtualized explorer; subfolders load only when expanded. File disclosure lazily reads worksheet names on bounded background workers (XLSX manifest only). Open models override cached names, reflecting unsaved sheet changes. Worksheet selection carries its target through background file preparation. Selecting a file calls
@@ -86,6 +86,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Delete independent CK checks and use only the external patcher validation pipeline, with exact reports and unsaved overlays |
 | 2026-10-20 | minor | Bounded per-call array MATCH text indices, per-pass constant columns and faster literal criteria/searches reduce formula-heavy opening time without skipping recalculation. Read-only `perf_open` reports decode/recalc times and a cell fingerprint. |
 | 2026-10-20 | minor | Three-pass disk-backed CK index, cached XLSX values, background file decoding and persistent conditional-format statistics |
 | 2026-10-19 | minor | CK engine schema checks, background project index, guarded authoring panel and diagnostics |

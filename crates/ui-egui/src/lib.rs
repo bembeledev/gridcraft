@@ -67,6 +67,8 @@ pub struct UiState {
     pub explorer_visible: bool,
     /// Keep validation results out of the grid until explicitly requested.
     pub patch_diagnostics_visible: bool,
+    /// Per-project external patcher settings, stored only in local UI preferences.
+    pub patch_validators: std::collections::BTreeMap<String, gridcraft_engine::patch_data::Config>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
@@ -112,6 +114,7 @@ impl Default for UiState {
             recent: vec![],
             explorer_visible: true,
             patch_diagnostics_visible: false,
+            patch_validators: Default::default(),
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,

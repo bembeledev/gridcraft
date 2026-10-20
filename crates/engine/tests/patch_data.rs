@@ -1,187 +1,153 @@
 use gridcraft_engine::{
     Session,
     core::{CellRef, Value},
-    patch_data::{
-        self as data,
-        schema::{self, Type},
-        validate::{self, Catalog},
-    },
+    patch_data::{self as data, Config, Request},
 };
-use serde_json::json;
-fn sheet(name: &str, rows: serde_json::Value) -> data::DataSheet {
-    let mut s = Session::new();
-    s.new_workbook();
-    s.execute("sheet.rename", json!({"name": name})).unwrap();
-    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
-    data::extract("TestData.xlsx", &s.active().unwrap().wb).unwrap().remove(0)
-}
-#[test]
-fn ck_headers_and_design_exceptions() {
-    let sh = sheet(
-        "Item",
-        json!([
-            ["All", "All", "Design", "Version;Key"],
-            ["TString<Item.[Id]>", "NullableTString<Item.[Id]>", "designer notes", "String"],
-            ["Id", "Label", "Note", "Version"]
-        ]),
-    );
-    let (report, _) = validate::analyze(&[&sh], None, true);
-    assert_eq!(report.issues.iter().filter(|i| i.code == "ck.tstring").count(), 1);
-    assert!(!report.issues.iter().any(|i| i.code == "schema.type"));
-    assert!(report.issues.iter().any(|i| i.code == "schema.flags" && i.cell == "D1"));
-    assert!(Type::parse("List<List<Int>>").is_err());
-    assert!(Type::parse("IntList").is_err());
-    assert!(Type::parse("List<IntList>").unwrap().matrix);
-    assert!(schema::flag_errors("All;StringIdDefinition;Raw").len() == 1);
-    assert!(schema::flag_errors("All;StringIdDefinition;FKey.Item").len() == 1);
-}
-#[test]
-fn list_grammar_quotes_empty_fields_and_records() {
-    assert_eq!(schema::split_values("1, \n2,\"a,b\"", false), ["1", "2", "\"a,b\""]);
-    assert_eq!(schema::split_values(" , ", false), ["", ""]);
-    assert!(schema::split_values("  ", false).is_empty());
-    assert_eq!(schema::split_values("1,2\n3,4", true), ["1,2", "3,4"]);
-    assert_eq!(schema::split_values("x,\"odd,y", false), ["x,\"odd", "y"]);
-    assert!(validate::value_error(&Type::parse("List<IntList>").unwrap(), &Value::from("1,2\n\n3,4"), &Catalog::default()).is_ok());
-}
-#[test]
-fn version_filters_references_after_merging_and_physical_columns_are_kept() {
-    let version =
-        sheet("ResourceVersion", json!([["All", "All"], ["String", "Int"], ["ResourceVersionName", "ResourceVersionNumber"], ["v1", 1], ["v2", 2]]));
-    let target = sheet("Item_A", json!([["All;Key", "Version"], ["Int", "String"], ["Id", "Version"], [1, "v1"], [2, "v2"]]));
-    let from =
-        sheet("Shop", json!([["", "All;FKey.Item", "All;FKey.Item"], ["", "Int", "List<Int>"], ["", "Item", "Items"], ["unused", 2, "1_0, 2"]]));
-    let (report, _) = validate::analyze(&[&version, &target, &from], Some("v1"), true);
-    assert_eq!(report.excluded_rows, 1);
-    assert!(report.issues.iter().any(|i| i.cell == "B4" && i.code == "fkey.missing"));
-    let (report, _) = validate::analyze(&[&version, &target, &from], Some("v2"), true);
-    assert!(!report.issues.iter().any(|i| i.cell == "B4" && i.code == "fkey.missing"));
-    assert_eq!(report.issues.iter().filter(|i| i.cell == "C4" && i.code == "fkey.missing").count(), 1);
-}
-#[test]
-fn transposed_headers_and_diagnostics_have_physical_addresses() {
-    let sh = sheet("Item_Transpose", json!([["All;Key", "Int", "Id", 1, 1], ["All", "String", "Name", "A", "B"]]));
-    assert_eq!(sh.columns[0].name, "Id");
-    assert_eq!(sh.cell(4, 0), CellRef::new(0, 4));
-    let (report, _) = validate::analyze(&[&sh], None, true);
-    assert!(report.issues.iter().any(|i| i.cell == "E1" && i.code == "key.duplicate"));
-}
-#[test]
-fn aliases_are_single_pass_and_raw_ids_are_not_definitions() {
-    let mut c = Catalog::default();
-    c.aliases.insert("##A##".into(), "##B##".into());
-    c.aliases.insert("##B##".into(), "2".into());
-    assert_eq!(validate::resolve(&Value::from("##A## + ##B##"), &c).display(), "##B## + 2");
-    let sh = sheet("Item", json!([["All;Key;Raw", "All;StringIdReference"], ["String", "String"], ["Id", "Other"], ["[ abc ]", "[abc]"]]));
-    let (report, _) = validate::analyze(&[&sh], None, false);
-    assert!(report.issues.iter().any(|i| i.code == "id.undefined" && i.severity == "warning"));
-    let raw = sheet("RawItem", json!([["All;Raw"], ["List<Long>"], ["Ids"], ["[literal]"]]));
-    let (report, _) = validate::analyze(&[&raw], None, true);
-    assert!(report.issues.iter().any(|i| i.code == "value.type" && i.cell == "A4"));
-}
-#[test]
-fn value_precision_nullable_boolean_and_scaled_numbers() {
-    let c = Catalog::default();
-    let check = |typ: &str, v: Value| validate::value_error(&Type::parse(typ).unwrap(), &v, &c);
-    assert!(check("Long", Value::from("9223372036854775807")).is_ok());
-    assert!(check("Long", Value::from("9223372036854775808")).is_err());
-    assert!(check("Int", Value::Number(1.00000001)).is_ok());
-    assert!(check("Int", Value::Number(1.5)).is_err());
-    assert!(check("NullableLong", Value::from("null")).is_ok());
-    assert!(check("Bool", Value::Number(2.0)).is_ok());
-    assert!(check("Bool", Value::from("2")).is_err());
-    assert!(check("Percentile", Value::from("1.234")).is_err());
-    assert!(check("Json", Value::from("{\"x\":2}")).is_ok());
-    assert!(check("Vector3", Value::from("1,2")).is_err());
-}
-#[test]
-fn duplicate_compound_group_zip_and_schema_merge_are_reported() {
-    let sh = sheet(
-        "Item_A",
-        json!([
-            ["All;CompoundKey;GroupKey", "All;CompoundKey", "All;ZipWith.B", "All"],
-            ["String", "String", "List<Int>", "List<String>"],
-            ["Id", "Name", "A", "B"],
-            ["x", "a", "1,2", "a"],
-            ["y", "b", "", ""],
-            ["x", "a", "", ""]
-        ]),
-    );
-    let other = sheet("Item_B", json!([["All"], ["String"], ["Different"]]));
-    let (r, _) = validate::analyze(&[&sh, &other], None, true);
-    for code in ["key.compound", "key.group", "zip.length", "sheet.merge"] {
-        assert!(r.issues.iter().any(|i| i.code == code), "{code}");
-    }
-}
-#[test]
-fn explicit_command_and_input_bounds() {
-    let mut s = Session::new();
-    s.new_workbook();
-    assert!(s.execute("patch.validate", json!({})).is_err());
-    assert!(s.execute("patch.validate", json!({"project": "ck"})).is_ok());
-    s.execute("cell.set", json!({"cell": "XFD1048576", "input": "1"})).unwrap();
-    assert!(s.execute("patch.validate", json!({"project": "ck"})).is_err());
-    assert!(schema::eligible_file("ItemData.xlsx"));
-    for name in ["ItemData.XLSX", "_ItemData.xlsx", "~ItemData.xlsx", "Data.xlsm"] {
-        assert!(!schema::eligible_file(name));
-    }
-}
-
-#[test]
-fn string_keys_preserve_spaces_and_multiple_fkeys_are_checked() {
-    let target = sheet("Item", json!([["All;Key"], ["String"], ["Id"], ["a"], [" a "]]));
-    let from = sheet("Shop", json!([["All;FKey.Item;FKey.Other"], ["String"], ["Item"], [" a "]]));
-    let (r, _) = validate::analyze(&[&target, &from], None, true);
-    assert!(!r.issues.iter().any(|i| i.code == "key.duplicate" || i.code == "fkey.missing"));
-    assert!(r.issues.iter().any(|i| i.code == "fkey.table" && i.message.contains("Other")));
-}
-
-#[test]
-fn chunked_validation_matches_whole_tables_across_boundaries() {
-    use std::sync::Arc;
-    let mut source = sheet("Item", json!([["All;Key;GroupKey", "All;FKey.Other"], ["Int", "Int"], ["Id", "Other"]]));
-    for row in 3..603 {
-        source.rows.insert(row, vec![Value::Number((row % 299) as f64), Value::Number(7.0)]);
-    }
-    let other = sheet("Other", json!([["All;Key"], ["Int"], ["Id"], [7]]));
-    let (expected, catalog) = validate::analyze(&[&source, &other], None, true);
-    let mut streaming = validate::Validator::new(Arc::new(catalog), None, true);
-    for rows in source.rows.iter().collect::<Vec<_>>().chunks(17) {
-        let mut chunk = source.clone();
-        chunk.rows = rows.iter().map(|(k, v)| (**k, (*v).clone())).collect();
-        streaming.push(&chunk);
-    }
-    streaming.push(&other);
-    assert_eq!(serde_json::to_value(expected).unwrap(), serde_json::to_value(streaming.report).unwrap());
-}
-
-#[test]
-fn chunked_extraction_visits_full_sparse_extents_and_preserves_addresses() {
+use serde_json::{Value as Json, json};
+use std::{collections::BTreeMap, sync::atomic::AtomicBool};
+fn session() -> Session {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("sheet.rename", json!({"name":"Item"})).unwrap();
-    s.execute("range.setValues", json!({"range":"C1","values":[["All;Key"],["Int"],["Id"]]})).unwrap();
-    s.execute("cell.set", json!({"cell":"C3004","input":"1"})).unwrap();
-    s.execute("cell.set", json!({"cell":"XFD3004","input":"unused"})).unwrap();
-    let mut rows = 0;
-    let mut last = 0;
-    data::visit_chunks("LargeData.xlsx", &s.active().unwrap().wb, |chunk| {
-        assert!(chunk.rows.len() <= 256);
-        assert_eq!(chunk.columns.len(), 1);
-        assert_eq!(chunk.columns[0].index, 2);
-        rows += chunk.rows.len();
-        last = chunk.rows.keys().last().copied().unwrap_or(last);
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!((rows, last), (3001, 3003));
-    let mut visited = 0;
-    assert!(
-        data::visit_chunks("LargeData.xlsx", &s.active().unwrap().wb, |_| {
-            visited += 1;
-            Err("cancel".into())
-        })
-        .is_err()
-    );
-    assert_eq!(visited, 1);
+    s
+}
+fn overlay(s: &Session) -> Result<Json, String> {
+    let books = BTreeMap::from([("/project/protobuf/ItemData.xlsx".into(), s.active().unwrap().wb.clone())]);
+    serde_json::to_value(data::overlays("/project", &books, &AtomicBool::new(false))?).map_err(|e| e.to_string())
+}
+#[test]
+fn snapshot_preserves_physical_positions_literal_integers_and_formula_results() {
+    let mut s = session();
+    s.execute("range.setValues", json!({"range":"B3","values":[["'9007199254740993",true],["=2+3","'=literal"]]})).unwrap();
+    let o = overlay(&s).unwrap();
+    assert_eq!(o[0]["file"], "ItemData.xlsx");
+    assert_eq!(o[0]["sheets"][0]["rows"][0][0], json!({"kind":"empty"}));
+    assert_eq!(o[0]["sheets"][0]["rows"][2][1], json!({"kind":"string","value":"9007199254740993"}));
+    assert_eq!(o[0]["sheets"][0]["rows"][2][2], json!({"kind":"bool","value":true}));
+    assert_eq!(o[0]["sheets"][0]["rows"][3][1], json!({"kind":"float","value":5.0}));
+    assert_eq!(o[0]["sheets"][0]["rows"][3][2], json!({"kind":"string","value":"=literal"}));
+    s.execute("sheet.rename", json!({"name":"Item_Transpose"})).unwrap();
+    assert_eq!(overlay(&s).unwrap()[0]["sheets"][0]["rows"], o[0]["sheets"][0]["rows"]);
+}
+#[test]
+fn snapshot_refuses_formula_errors_and_unavailable_results_instead_of_sending_empty() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"C7","input":"=1/0"})).unwrap();
+    assert!(overlay(&s).unwrap_err().contains("C7"));
+    s.execute("cell.set", json!({"cell":"C7","input":"=1"})).unwrap();
+    let doc = s.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut doc.wb).sheet_mut(0).unwrap().cells.get_mut(CellRef::parse("C7").unwrap()).unwrap().value = Value::Empty;
+    assert!(overlay(&s).unwrap_err().contains("수식 결과"));
+}
+#[test]
+fn snapshot_limits_dense_allocation_and_includes_spill_followers() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"C1048576","input":"1"})).unwrap();
+    assert!(overlay(&s).unwrap_err().contains("2,000,000"));
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"B2","input":"=SEQUENCE(2,2)"})).unwrap();
+    let o = overlay(&s).unwrap();
+    assert_eq!(o[0]["sheets"][0]["rows"][2][2], json!({"kind":"float","value":4.0}));
+    s.execute("sheet.rename", json!({"name":"_Ignored"})).unwrap();
+    assert_eq!(overlay(&s).unwrap()[0]["sheets"][0]["rows"], json!([]));
+}
+#[test]
+fn snapshot_keeps_raw_date_serials_including_1904_workbooks() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"B4","input":"45000.5"})).unwrap();
+    s.execute("home.numberFormat", json!({"range":"B4","code":"yyyy-mm-dd hh:mm:ss"})).unwrap();
+    for system in [gridcraft_engine::core::DateSystem::D1900, gridcraft_engine::core::DateSystem::D1904] {
+        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).date_system = system;
+        assert_eq!(overlay(&s).unwrap()[0]["sheets"][0]["rows"][3][1], json!({"kind":"date_time","value":45000.5}));
+    }
+}
+#[test]
+fn navigation_does_not_invent_missing_coordinates_or_allow_path_traversal() {
+    let mut l = data::Location { file: Some("ItemData.xlsx".into()), row: Some(3), ..Default::default() };
+    assert!(l.cell().is_none());
+    l.column = Some(1);
+    assert_eq!(l.cell().unwrap().a1(), "B4");
+    assert_eq!(l.path("/project/protobuf").unwrap(), "/project/protobuf/ItemData.xlsx");
+    l.row = Some(u32::MAX);
+    assert!(l.cell().is_none());
+    for path in ["../secret", "/tmp/secret", "..\\secret", ".."] {
+        l.file = Some(path.into());
+        assert!(l.path("/project").is_none());
+    }
+    assert!(data::workbook_file("/project", "/elsewhere/ItemData.xlsx").is_none());
+    assert!(data::workbook_file("/project", "/project/protobuf/Notes.xlsx").is_none());
+    let cwd = std::env::current_dir().unwrap();
+    assert_eq!(data::workbook_file(cwd.to_str().unwrap(), "protobuf/ItemData.xlsx"), Some("ItemData.xlsx".into()));
+    assert_eq!(data::project_root("."), cwd.canonicalize().unwrap());
+}
+#[test]
+fn missing_id_map_is_an_error_and_programmatic_calls_never_open_dialogs() {
+    let mut s = session();
+    assert!(s.execute("patch.validate", json!({})).is_err());
+    assert!(s.execute("patch.validate", json!({"project":"ck","root":"/project","config":{}})).is_err());
+    assert!(Request::new("/project", &Config::default(), "rev".into(), vec![]).is_err());
+}
+
+#[cfg(unix)]
+mod transport {
+    use super::*;
+    use std::{
+        io::Write,
+        os::unix::fs::PermissionsExt,
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    };
+    fn response() -> Json {
+        json!({"event":"result","request_id":"revision","revision":"revision","validator":{"protocol_version":1,"package_version":"fixture","source_revision":"fixture"},"report":{"valid":false,"stages":[{"stage":"raw","status":"passed"},{"stage":"parse","status":"failed"},{"stage":"versions","status":"skipped"},{"stage":"validation","status":"skipped"}],"diagnostics":[{"code":"from.patcher","severity":"error","message":"exact worker message","location":{"file":"ItemData.xlsx","sheet":"Item","table":null,"row":3,"column":1},"related":[]}],"total_diagnostics":1,"truncated":false,"simulated_new_ids":0,"filtered_rows":0,"effective_build_name":null}})
+    }
+    fn run_response(value: Json, exit: u8) -> Result<data::Checked, String> {
+        let mut executable = tempfile::NamedTempFile::new().unwrap();
+        writeln!(executable, "#!/bin/sh\ncat >/dev/null\ncat <<'RESULT'\n{value}\nRESULT\nexit {exit}").unwrap();
+        executable.as_file().set_permissions(std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = Config { executable: executable.path().to_string_lossy().into(), id_map_directory: "/id-map".into(), ..Default::default() };
+        let req = Request::new("/project", &config, "revision".into(), vec![]).unwrap();
+        data::check(&config, &req, &AtomicBool::new(false), |_| {})
+    }
+    #[test]
+    fn report_is_exactly_the_workers_report_and_protocol_failures_never_fall_back() {
+        let response = response();
+        let checked = run_response(response.clone(), 1).unwrap();
+        assert_eq!(serde_json::to_value(&checked.report).unwrap(), response["report"]);
+        for field in ["request_id", "revision"] {
+            let mut bad = response.clone();
+            bad[field] = json!("stale");
+            assert!(run_response(bad, 1).is_err());
+        }
+        let mut bad = response.clone();
+        bad["validator"]["protocol_version"] = json!(2);
+        assert!(run_response(bad, 1).is_err());
+        let mut bad = response.clone();
+        bad["report"]["valid"] = json!(true);
+        assert!(run_response(bad, 0).is_err());
+        assert!(run_response(response, 0).is_err());
+        assert!(run_response(json!({"broken":true}), 0).is_err());
+    }
+    #[test]
+    fn cancellation_terminates_and_reaps_the_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("worker");
+        let pidfile = dir.path().join("pid");
+        std::fs::write(&script, format!("#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n", pidfile.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = Config { executable: script.to_string_lossy().into(), id_map_directory: "/id-map".into(), ..Default::default() };
+        let req = Request::new("/project", &config, "revision".into(), vec![]).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let other = cancel.clone();
+        let join = std::thread::spawn(move || data::check(&config, &req, &other, |_| {}));
+        for _ in 0..100 {
+            if pidfile.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = std::fs::read_to_string(&pidfile).unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        assert!(join.join().unwrap().unwrap_err().contains("취소"));
+        assert!(!std::process::Command::new("kill").args(["-0", pid.trim()]).stderr(std::process::Stdio::null()).status().unwrap().success());
+    }
 }

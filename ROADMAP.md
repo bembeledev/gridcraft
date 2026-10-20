@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (formula-heavy workbook opening, continuous selection animation and CK folder workspace) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (external patcher validation and CK folder workspace) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-20 | CK validation now uses only the patcher’s `ck-validator`; removed local rules, added per-project settings, unsaved overlays, cancellation and stage-aware diagnostics |
 | 2026-10-20 | Formula-heavy CookieDialogData opening: 143 s → ~6 s locally with full recalculation; bounded MATCH/constant-column indices and faster literal criteria/search. Cell fingerprint unchanged across the second optimization (9 s → 6 s). |
 | 2026-10-20 | Selection outlines keep moving during continuous cell dragging; frame-rate regression tests and real-workbook drag benchmark |
 | 2026-10-20 | Diagnostic location navigation reveals the selected cell in the grid |
@@ -201,6 +202,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Replace GridCraft CK rules with the external patcher validator |
 | 2026-10-20 | minor | Reduce repeated searches and allocations when opening formula-heavy workbooks |
 | 2026-10-20 | minor | Fix animation restarts that stalled the selection outline during continuous dragging |
 | 2026-10-20 | minor | Complete CK project validation and CakeTycoon UI performance verification |

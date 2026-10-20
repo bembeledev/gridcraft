@@ -1578,6 +1578,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -1648,7 +1649,6 @@ dependencies = [
  "serde_json",
  "skrifa",
  "sys-locale",
- "tempfile",
  "toml",
  "web-sys",
  "zbus",

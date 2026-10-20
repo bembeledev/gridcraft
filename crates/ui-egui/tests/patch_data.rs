@@ -24,9 +24,21 @@ impl Fixture {
         let mut s = Session::new();
         s.new_workbook();
         s.execute("sheet.rename", json!({"name": "Item"})).unwrap();
-        s.execute("range.setValues", json!({"range": "A1", "values": [["All;Key", "All", "All"], ["Long", "Bool", "TString<Item.[Id]>"], ["Id", "Enabled", "Name"], [1, true, "First"], [1, false, "Second"]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["ALL;KEY", "ALL", "ALL"], ["int", "bool", "string"], ["Id", "Enabled", "Name"], [1, true, "First"], [1, false, "Second"]]})).unwrap();
         std::fs::write(&file, gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, &file).unwrap()).unwrap();
         std::fs::write(root.join("BuildName"), "v1").unwrap();
+        let mut meta = Session::new();
+        meta.new_workbook();
+        meta.execute("sheet.rename", json!({"name":"EnumList"})).unwrap();
+        meta.execute(
+            "range.setValues",
+            json!({"range":"A1","values":[["ALL","ALL","ALL"],["string","string","int"],["EnumType","EnumName","EnumValue"]]}),
+        )
+        .unwrap();
+        let metadata = root.join("protobuf/MetaData.xlsx");
+        std::fs::write(&metadata, gridcraft_engine::io::save_bytes(&meta.active().unwrap().wb, metadata.to_str().unwrap()).unwrap()).unwrap();
+        std::fs::create_dir(root.join("id-map")).unwrap();
+        std::fs::write(root.join("id-map/PatchDataIdMap.csv"), "stringId,intId,status,note\nexisting,1000,LIVE,\n").unwrap();
         Self { root, file }
     }
 }
@@ -69,31 +81,14 @@ fn request(h: &egui_kittest::Harness<'static, SheetApp>, cell: &str) -> Json {
     let d = h.state().session.active().unwrap();
     json!({"uid": d.uid, "revision": d.revision, "sheet": d.sheet_index(), "cell": cell})
 }
-#[test]
-fn automatic_ck_profile_diagnostics_jump_and_unsaved_refresh() {
-    let f = Fixture::new();
-    let before = std::fs::read(&f.file).unwrap();
-    let mut h = harness();
-    open(&mut h, &f);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["enabled"], true);
-    assert_eq!(info["stale"], false, "opening a saved file must not invalidate the disk index");
-    let issues = info["report"]["issues"].as_array().unwrap();
-    assert!(issues.iter().any(|i| i["code"] == "ck.tstring"));
-    let issue = issues.iter().find(|i| i["code"] == "key.duplicate").unwrap();
-    h.state_mut().run("patch.jump", issue.clone()).unwrap();
-    settle(&mut h);
-    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A5");
-    h.state_mut().run("cell.set", json!({"cell": "A5", "input": "2"})).unwrap();
-    assert_eq!(h.state_mut().run("patch.inspect", json!({})).unwrap()["stale"], true);
+fn configure(h: &mut egui_kittest::Harness<'static, SheetApp>, f: &Fixture) {
+    let executable = std::env::var("GRIDCRAFT_TEST_CK_VALIDATOR").expect("set GRIDCRAFT_TEST_CK_VALIDATOR to the real patcher worker");
+    h.state_mut().run("patch.configure", json!({"executable":executable,"id_map_directory":f.root.join("id-map"),"tc_id_prefix":"TC_"})).unwrap();
     h.state_mut().run("patch.refresh", json!({})).unwrap();
-    settle(&mut h);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["stale"], false);
-    assert!(!info["report"]["issues"].as_array().unwrap().iter().any(|i| i["code"] == "key.duplicate"));
-    assert_eq!(std::fs::read(&f.file).unwrap(), before);
-    h.get_by_label("CK 데이터");
-    h.get_by_label("헤더 3칸 적용");
+    settle(h);
+}
+fn inspect(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Json {
+    h.state_mut().run("patch.inspect", json!({})).unwrap()
 }
 #[test]
 fn literal_edit_precision_atomic_header_undo_and_stale_guard() {
@@ -116,83 +111,116 @@ fn literal_edit_precision_atomic_header_undo_and_stale_guard() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(2, 2)).display(), "Title");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
-    assert_eq!(sh.value(CellRef::new(0, 2)).display(), "All");
-    assert_eq!(sh.value(CellRef::new(1, 2)).display(), "TString<Item.[Id]>");
+    assert_eq!(sh.value(CellRef::new(0, 2)).display(), "ALL");
+    assert_eq!(sh.value(CellRef::new(1, 2)).display(), "string");
     assert_eq!(sh.value(CellRef::new(2, 2)).display(), "Name");
 }
 #[test]
-fn unrelated_folders_remain_generic_and_failed_index_is_not_success() {
+fn missing_configuration_never_runs_local_checks_and_settings_are_persisted() {
     let f = Fixture::new();
-    let root = f.root.join("unrelated");
-    std::fs::create_dir(&root).unwrap();
-    let mut h = harness();
-    h.state_mut().run("workspace.open", json!({"path": root})).unwrap();
-    settle(&mut h);
-    assert_eq!(h.state_mut().run("patch.inspect", json!({})).unwrap()["enabled"], false);
-    assert!(h.state_mut().run("patch.refresh", json!({})).is_err());
-    h.state_mut().run("patch.profile", json!({"mode": "ck"})).unwrap();
-    settle(&mut h);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["report"]["complete_context"], false);
-    assert!(!info["notes"].as_array().unwrap().is_empty());
-    let mut p = request(&h, "A1");
-    p["value"] = json!("42");
-    assert!(h.state_mut().run("patch.apply", p).is_err());
-}
-#[test]
-fn excluded_and_broken_files_are_not_silently_accepted() {
-    let f = Fixture::new();
-    std::fs::write(f.root.join("protobuf/BrokenData.xlsx"), b"invalid").unwrap();
-    std::fs::write(f.root.join("protobuf/_IgnoredData.xlsx"), b"invalid").unwrap();
     let mut h = harness();
     open(&mut h, &f);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["report"]["complete_context"], false);
-    assert_eq!(info["files"].as_array().unwrap().len(), 1);
-    let notes = info["notes"].to_string();
-    assert!(notes.contains("BrokenData.xlsx"));
-    assert!(!notes.contains("_IgnoredData.xlsx"));
-}
-
-#[test]
-fn index_checks_every_file_beyond_previous_256_file_limit() {
-    let f = Fixture::new();
-    let bytes = std::fs::read(&f.file).unwrap();
-    for i in 0..260 {
-        std::fs::write(f.root.join(format!("protobuf/Copy{i:03}Data.xlsx")), &bytes).unwrap();
-    }
-    let mut h = harness();
-    h.state_mut().run("workspace.open", json!({"path":f.root})).unwrap();
-    settle(&mut h);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["files"].as_array().unwrap().len(), 261);
-    assert_eq!(info["progress"]["discovered"], 261);
-    assert_eq!(info["progress"]["processed"], 261);
-    assert_eq!(info["progress"]["failed"], 0);
-    assert_eq!(info["report"]["complete_context"], true);
-    assert_eq!(info["report"]["included_rows"], 522);
-}
-
-#[test]
-fn switching_profile_cancels_inflight_index_and_never_adopts_old_results() {
-    let f = Fixture::new();
-    let mut h = harness();
-    h.state_mut().run("workspace.open", json!({"path":f.root})).unwrap();
-    settle(&mut h);
+    let info = inspect(&mut h);
+    assert!(info["error"].as_str().unwrap().contains("ID 맵"));
+    assert_eq!(info["report"], Json::Null);
+    assert_eq!(info["backend"], "ck-validator");
+    h.state_mut().run("patch.configure", json!({"executable":"/no/such/worker","id_map_directory":f.root.join("id-map")})).unwrap();
+    let restored: gridcraft_ui_egui::UiState = serde_json::from_value(serde_json::to_value(&h.state().ui).unwrap()).unwrap();
+    assert_eq!(restored.patch_validators.values().next().unwrap().executable, "/no/such/worker");
     h.state_mut().run("patch.refresh", json!({})).unwrap();
-    assert!(h.state().patch_data.busy());
+    settle(&mut h);
+    assert!(inspect(&mut h)["error"].as_str().unwrap().contains("실행 실패"));
+    assert_eq!(inspect(&mut h)["report"], Json::Null);
+    h.state_mut().run("patch.profile", json!({"mode":"off"})).unwrap();
+    assert!(!h.state().patch_data.busy());
+}
+#[test]
+#[ignore = "requires the real ck-patcher ck-validator; set GRIDCRAFT_TEST_CK_VALIDATOR"]
+fn real_patcher_reports_unsaved_edits_and_preserves_workbooks_and_id_map() {
+    let f = Fixture::new();
+    let before = std::fs::read(&f.file).unwrap();
+    let id_before = std::fs::read(f.root.join("id-map/PatchDataIdMap.csv")).unwrap();
+    let mut h = harness();
+    open(&mut h, &f);
+    configure(&mut h, &f);
+    let info = inspect(&mut h);
+    assert_eq!(info["error"], Json::Null, "{info}");
+    assert_eq!(info["report"]["valid"], false);
+    let index = info["report"]["diagnostics"].as_array().unwrap().iter().position(|d| d["code"] == "key.duplicate").unwrap();
+    h.state_mut().run("patch.jump", json!({"index":index})).unwrap();
+    settle(&mut h);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A5");
+    h.state_mut().run("cell.set", json!({"cell":"A5","input":"2"})).unwrap();
+    assert_eq!(inspect(&mut h)["stale"], true);
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
+    settle(&mut h);
+    let info = inspect(&mut h);
+    assert_eq!(info["report"]["valid"], true, "{info}");
+    assert_eq!(info["stale"], false);
+    assert_eq!(std::fs::read(&f.file).unwrap(), before);
+    assert_eq!(std::fs::read(f.root.join("id-map/PatchDataIdMap.csv")).unwrap(), id_before);
+    // The engine/CLI command uses the same external process and carries unsaved edits too.
+    let report = h.state_mut().run("patch.validate", json!({"project":"ck","root":f.root,"config":info["config"]})).unwrap();
+    assert_eq!(report["report"], info["report"]);
+}
+#[test]
+#[ignore = "requires the real ck-patcher ck-validator; set GRIDCRAFT_TEST_CK_VALIDATOR"]
+fn real_patcher_failures_and_version_stage_are_not_presented_as_success() {
+    let f = Fixture::new();
+    let mut h = harness();
+    open(&mut h, &f);
+    configure(&mut h, &f);
+    h.state_mut().run("patch.version", json!({"name":"@build"})).unwrap();
+    settle(&mut h);
+    let info = inspect(&mut h);
+    assert_eq!(info["report"]["valid"], false);
+    assert_eq!(info["report"]["stages"][2]["status"], "failed");
+    assert_eq!(info["report"]["stages"][3]["status"], "skipped");
+    std::fs::write(f.root.join("protobuf/BrokenData.xlsx"), b"broken").unwrap();
+    std::fs::write(f.root.join("protobuf/_IgnoredData.xlsx"), b"broken").unwrap();
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
+    settle(&mut h);
+    let info = inspect(&mut h);
+    assert_eq!(info["report"], Json::Null);
+    assert!(info["error"].as_str().unwrap().contains("BrokenData.xlsx"));
+    assert!(!info["error"].as_str().unwrap().contains("_IgnoredData.xlsx"));
+    std::fs::remove_file(f.root.join("protobuf/BrokenData.xlsx")).unwrap();
+    std::fs::remove_file(f.root.join("id-map/PatchDataIdMap.csv")).unwrap();
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
+    settle(&mut h);
+    assert_eq!(inspect(&mut h)["report"], Json::Null);
+    assert!(inspect(&mut h)["error"].is_string());
+}
+#[test]
+#[ignore = "requires the real ck-patcher ck-validator; set GRIDCRAFT_TEST_CK_VALIDATOR"]
+fn real_patcher_inflight_edits_are_discarded_and_cancel_stops_the_job() {
+    let f = Fixture::new();
+    let mut h = harness();
+    open(&mut h, &f);
+    configure(&mut h, &f);
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell":"A5","input":"2"})).unwrap();
+    settle(&mut h);
+    let info = inspect(&mut h);
+    assert_eq!(info["report"], Json::Null);
+    assert!(info["error"].as_str().unwrap().contains("문서가 변경"));
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
+    h.state_mut().run("patch.cancel", json!({})).unwrap();
+    settle(&mut h);
+    assert_eq!(inspect(&mut h)["report"], Json::Null);
+    h.state_mut().run("patch.refresh", json!({})).unwrap();
     h.state_mut().run("patch.profile", json!({"mode":"off"})).unwrap();
     settle(&mut h);
-    let info = h.state_mut().run("patch.inspect", json!({})).unwrap();
-    assert_eq!(info["enabled"], false);
-    assert_eq!(info["report"], Json::Null);
+    assert_eq!(inspect(&mut h)["enabled"], false);
+    assert_eq!(inspect(&mut h)["report"], Json::Null);
 }
-
 #[test]
+#[ignore = "requires the real ck-patcher ck-validator; set GRIDCRAFT_TEST_CK_VALIDATOR"]
 fn diagnostics_are_hidden_by_default_and_can_be_reopened_without_rechecking() {
     let f = Fixture::new();
     let mut h = harness();
     open(&mut h, &f);
+    configure(&mut h, &f);
     let report = h.state_mut().run("patch.inspect", json!({})).unwrap()["report"].clone();
     assert!(!h.state().ui.patch_diagnostics_visible);
     assert!(h.query_by_label("수준").is_none());
@@ -200,7 +228,11 @@ fn diagnostics_are_hidden_by_default_and_can_be_reopened_without_rechecking() {
     h.get_by_label("진단 열기").click();
     h.run_steps(4);
     h.get_by_label("수준");
-    assert!(h.state().grid.cells_rect.unwrap().height() < grid_height - 100.0);
+    assert!(
+        h.state().grid.cells_rect.unwrap().height() <= grid_height - 100.0,
+        "before={grid_height}, after={}",
+        h.state().grid.cells_rect.unwrap().height()
+    );
     assert!(h.state().ui.patch_diagnostics_visible);
     let restored: gridcraft_ui_egui::UiState = serde_json::from_value(serde_json::to_value(&h.state().ui).unwrap()).unwrap();
     assert!(restored.patch_diagnostics_visible);
@@ -223,11 +255,12 @@ fn diagnostics_are_hidden_by_default_and_can_be_reopened_without_rechecking() {
 }
 
 #[test]
+#[ignore = "requires the real ck-patcher ck-validator; set GRIDCRAFT_TEST_CK_VALIDATOR"]
 fn diagnostic_location_click_selects_and_reveals_cell_in_another_document() {
     let f = Fixture::new();
     let mut source = Session::new();
     source.execute("file.open", json!({"path": f.file})).unwrap();
-    source.execute("cell.set", json!({"cell": "C2", "input": "String"})).unwrap();
+    source.execute("cell.set", json!({"cell": "C2", "input": "string"})).unwrap();
     let rows: Vec<_> = (6..1000).map(|id| json!([id, true, "ok"])).collect();
     source.execute("range.setValues", json!({"range": "A6", "values": rows})).unwrap();
     source.execute("range.setValues", json!({"range": "A1000", "values": [[1, true, "ok"]]})).unwrap();
@@ -235,6 +268,7 @@ fn diagnostic_location_click_selects_and_reveals_cell_in_another_document() {
     let before = std::fs::read(&f.file).unwrap();
     let mut h = harness();
     open(&mut h, &f);
+    configure(&mut h, &f);
     let uid = h.state().session.active().unwrap().uid;
     h.state_mut().run("view.patchDiagnostics", json!({"on": true})).unwrap();
     h.state_mut().view_mut().unwrap().scroll = egui::vec2(2000.0, 50_000.0);

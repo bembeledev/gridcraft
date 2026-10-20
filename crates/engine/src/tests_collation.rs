@@ -165,6 +165,82 @@ fn pivot_filter_and_collapse_match_any_spelling() {
 }
 
 #[test]
+fn pivot_collapse_without_items_is_set_based_and_spelling_blind() {
+    let mut s = people(&[]);
+    s.execute("insert.pivotTable", json!({"rows": ["Tên", "Kho"], "values": ["Qty"]})).unwrap();
+    let full = pivot_height(&s);
+    // No `items`: every label of the field, once per item whatever the spelling.
+    let all = s.execute("pivot.collapse", json!({"field": "Tên"})).unwrap();
+    assert_eq!(all["collapsed"].as_array().unwrap().len(), 2, "{all}");
+    let collapsed_all = pivot_height(&s);
+    assert!(collapsed_all < full);
+    // Collapsing again, or naming other spellings, adds nothing.
+    let again = s.execute("pivot.collapse", json!({"field": "Tên"})).unwrap();
+    assert_eq!(again["collapsed"], all["collapsed"]);
+    let spelled = s.execute("pivot.collapse", json!({"field": "Tên", "items": [nfd("đà nẵng"), "NGUYỄN THỊ NGỌC ÁNH"]})).unwrap();
+    assert_eq!(spelled["collapsed"], all["collapsed"]);
+    assert_eq!(pivot_height(&s), collapsed_all);
+    // Expanding by name in another spelling removes exactly that item.
+    let left = s.execute("pivot.collapse", json!({"field": "Tên", "collapse": false, "items": [nfd("ĐÀ NẴNG"), "không có"]})).unwrap();
+    let left = left["collapsed"].as_array().unwrap().clone();
+    assert_eq!(left.len(), 1);
+    assert!(gridcraft_core::text_eq(left[0].as_str().unwrap(), NFC), "{left:?}");
+    // Expanding everything with no `items` clears it.
+    s.execute("pivot.collapse", json!({"field": "Tên", "collapse": false})).unwrap();
+    assert_eq!(pivot_height(&s), full);
+}
+
+#[test]
+fn pivot_collapse_keeps_the_spelling_it_met_first_and_adds_in_order() {
+    let mut s = people(&[]);
+    s.execute("insert.pivotTable", json!({"rows": ["Tên", "Kho"], "values": ["Qty"]})).unwrap();
+    s.execute("pivot.collapse", json!({"field": "Tên", "items": ["đà nẵng"]})).unwrap();
+    let r = s.execute("pivot.collapse", json!({"field": "Tên", "items": [nfd("ĐÀ NẴNG"), "Hà Nội", "HÀ NỘI", nfd("hà nội"), "Huế"]})).unwrap();
+    assert_eq!(r["collapsed"], json!(["đà nẵng", "Hà Nội", "Huế"]));
+}
+
+#[test]
+fn pivot_column_collapse_matches_any_spelling() {
+    let mut s = people(&[]);
+    s.execute("insert.pivotTable", json!({"rows": ["Kho"], "columns": ["Tên", "Qty"], "values": ["Qty"]})).unwrap();
+    let width = |s: &Session| s.doc().unwrap().wb.active().unwrap().pivots.last().unwrap().last_range.unwrap().width();
+    let full = width(&s);
+    s.execute("pivot.collapse", json!({"field": "Tên", "items": [nfd("đà nẵng")]})).unwrap();
+    let nfd_width = width(&s);
+    assert!(nfd_width < full, "{nfd_width} < {full}");
+    s.execute("pivot.collapse", json!({"field": "Tên", "collapse": false})).unwrap();
+    assert_eq!(width(&s), full);
+    s.execute("pivot.collapse", json!({"field": "Tên", "items": ["ĐÀ NẴNG"]})).unwrap();
+    assert_eq!(width(&s), nfd_width, "the uppercase spelling collapses the same item");
+}
+
+#[test]
+fn pivot_collapse_of_many_distinct_non_ascii_labels_completes() {
+    // 20 000 distinct Vietnamese labels: collapsing all of them used to compare every label with
+    // every collapsed item (and fold both each time).
+    const N: usize = 20_000;
+    let rows: Vec<serde_json::Value> = std::iter::once(json!(["Tên", "Qty", "Kho"]))
+        .chain((0..N).map(|i| json!([format!("Đà Nẵng số {i}"), 1, if i % 2 == 0 { "K1" } else { "K2" }])))
+        .collect();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Tên", "Kho"], "values": ["Qty"]})).unwrap();
+    let all = s.execute("pivot.collapse", json!({"field": "Tên"})).unwrap();
+    assert_eq!(all["collapsed"].as_array().unwrap().len(), N);
+    // Header, one line per label, grand total.
+    assert_eq!(pivot_height(&s) as usize, N + 2);
+    // Every item again in another spelling adds none; expanding them all removes them all.
+    let names: Vec<String> = (0..N).map(|i| nfd(&format!("ĐÀ NẴNG SỐ {i}"))).collect();
+    let again = s.execute("pivot.collapse", json!({"field": "Tên", "items": names})).unwrap();
+    assert_eq!(again["collapsed"].as_array().unwrap().len(), N);
+    let names: Vec<String> = (0..N).map(|i| nfd(&format!("Đà Nẵng số {i}"))).collect();
+    let none = s.execute("pivot.collapse", json!({"field": "Tên", "collapse": false, "items": names})).unwrap();
+    assert!(none["collapsed"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn slicer_merges_nfc_nfd() {
     let mut s = people(&[]);
     s.execute("insert.table", json!({"range": "A1:C6", "name": "People"})).unwrap();

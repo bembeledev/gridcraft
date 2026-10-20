@@ -421,8 +421,15 @@ fn build_tree(paths: &[&[u32]], depth: usize, fields: &[&PivotField], items: &[F
     nodes
 }
 
-fn is_collapsed(field: &PivotField, label: &str) -> bool {
-    field.collapsed_items.iter().any(|c| gridcraft_core::text_eq(c, label))
+/// The collapsed items of each field, folded once per compute (`fold_key`), so a label is tested
+/// with one fold and one hash lookup however many items are collapsed.
+fn collapsed_sets(fields: &[&PivotField]) -> Vec<gridcraft_core::TextSet> {
+    fields.iter().map(|f| gridcraft_core::TextSet::new(&f.collapsed_items)).collect()
+}
+
+/// Whether `label` is one of the collapsed items (same relation as `text_eq`).
+fn is_collapsed(set: &gridcraft_core::TextSet, label: &str) -> bool {
+    !set.is_empty() && set.contains(label)
 }
 
 fn collect_siblings(nodes: &[Node], prefix: &mut Vec<u32>, out: &mut HashMap<Vec<u32>, Vec<u32>>) {
@@ -559,6 +566,8 @@ struct ColSpec {
 struct Ctx<'a> {
     pt: &'a PivotTable,
     rows: Vec<&'a PivotField>,
+    /// Collapsed items per row field ([`collapsed_sets`]).
+    row_collapsed: Vec<gridcraft_core::TextSet>,
     row_items: Vec<FieldItems>,
     row_fmts: Vec<String>,
     /// Depth of Σ Values among the row fields when it sits in Rows (two or more value fields).
@@ -624,7 +633,7 @@ impl Ctx<'_> {
         for node in nodes {
             prefix.push(node.item);
             let (v, fmt, label) = self.label_cell(depth, node.item);
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let collapsed = depth + 1 < n && self.row_collapsed.get(depth).is_some_and(|c| is_collapsed(c, &label));
             let leaf = depth + 1 >= n || collapsed || node.children.is_empty();
             if leaf && !values_below {
                 out.push(Line {
@@ -729,7 +738,7 @@ impl Ctx<'_> {
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if i == 0 { pending.to_vec() } else { vec![] };
             labels.push((col, v, 0, fmt));
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let collapsed = depth + 1 < n && self.row_collapsed.get(depth).is_some_and(|c| is_collapsed(c, &label));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
@@ -759,21 +768,21 @@ impl Ctx<'_> {
 fn flatten_cols(
     nodes: &[Node],
     depth: usize,
-    fields: &[&PivotField],
+    collapsed_sets: &[gridcraft_core::TextSet],
     items: &[FieldItems],
     subtotals: bool,
     prefix: &mut Vec<u32>,
     out: &mut Vec<ColSpec>,
 ) {
-    let n = fields.len();
+    let n = collapsed_sets.len();
     for node in nodes {
         prefix.push(node.item);
         let label = items.get(depth).map(|fi| fi.label(node.item)).unwrap_or_default();
-        let collapsed = depth + 1 < n && fields.get(depth).is_some_and(|f| is_collapsed(f, &label));
+        let collapsed = depth + 1 < n && collapsed_sets.get(depth).is_some_and(|c| is_collapsed(c, &label));
         if depth + 1 >= n || collapsed || node.children.is_empty() {
             out.push(ColSpec { kind: ColKind::Leaf, path: prefix.clone() });
         } else {
-            flatten_cols(&node.children, depth + 1, fields, items, subtotals, prefix, out);
+            flatten_cols(&node.children, depth + 1, collapsed_sets, items, subtotals, prefix, out);
             if subtotals {
                 out.push(ColSpec { kind: ColKind::Subtotal, path: prefix.clone() });
             }
@@ -873,6 +882,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     // Page-filter selections folded once: one fold per record label, not one per selected item.
     let filter_sets: Vec<Option<gridcraft_core::TextSet>> =
         filters.iter().map(|(_, f, ..)| f.selected.as_ref().map(gridcraft_core::TextSet::new)).collect();
+    let col_collapsed = collapsed_sets(&cols.iter().map(|(_, f)| *f).collect::<Vec<_>>());
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
         for (((c, _, g, _), fmt), sel) in filters.iter().zip(filter_fmts.iter()).zip(filter_sets.iter()) {
             if let Some(sel) = sel {
@@ -911,7 +921,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             .iter()
             .zip(col_items.iter())
             .zip(cp.iter())
-            .position(|(((_, f), fi), &it)| !f.collapsed_items.is_empty() && is_collapsed(f, &fi.label(it)))
+            .zip(col_collapsed.iter())
+            .position(|((((_, _), fi), &it), set)| is_collapsed(set, &fi.label(it)))
             .map_or(cp.len(), |d| d + 1);
         if !col_leaves.contains(&cp[..shown]) {
             col_leaves.insert(cp[..shown].to_vec());
@@ -930,6 +941,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     // ---- axes
     let row_fields: Vec<&PivotField> = rows.iter().map(|(_, f)| *f).collect();
     let col_fields: Vec<&PivotField> = cols.iter().map(|(_, f)| *f).collect();
+    let row_collapsed = collapsed_sets(&row_fields);
     let row_paths: Vec<&[u32]> = row_set.iter().map(Vec::as_slice).collect();
     let col_paths: Vec<&[u32]> = col_set.iter().map(Vec::as_slice).collect();
     let row_tree = build_tree(&row_paths, 0, &row_fields, &row_items);
@@ -939,7 +951,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     let level0: Vec<u32> = row_tree.iter().map(|n| n.item).collect();
 
     let val_names: Vec<String> = vals.iter().map(|(_, v)| v.name.clone()).collect();
-    let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
+    let ctx = Ctx { pt, rows: row_fields.clone(), row_collapsed, row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
         lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
@@ -970,7 +982,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     if cols.is_empty() {
         specs.push(ColSpec { kind: ColKind::Leaf, path: vec![] });
     } else {
-        flatten_cols(&col_tree, 0, &col_fields, &col_items, pt.subtotals, &mut Vec::new(), &mut specs);
+        flatten_cols(&col_tree, 0, &col_collapsed, &col_items, pt.subtotals, &mut Vec::new(), &mut specs);
         if pt.grand_totals_rows {
             specs.push(ColSpec { kind: ColKind::Grand, path: vec![] });
         }

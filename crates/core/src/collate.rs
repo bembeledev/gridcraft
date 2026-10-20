@@ -879,6 +879,11 @@ impl TextSet {
         TextSet(items.into_iter().map(|t| fold_key(t.as_ref())).collect())
     }
 
+    /// Adds `s`; true when no text [`text_eq`] to it was in the set yet.
+    pub fn insert(&mut self, s: &str) -> bool {
+        self.0.insert(fold_key(s))
+    }
+
     /// Whether some text in the set is [`text_eq`] to `s`.
     pub fn contains(&self, s: &str) -> bool {
         self.0.contains(&fold_key(s))
@@ -1613,6 +1618,16 @@ mod tests {
                 assert_eq!(text_eq_prefolded(a, &fold_key(b)), text_eq(a, b), "{a:.20?} {b:.20?}");
             }
         }
+    }
+
+    #[test]
+    fn text_set_insert_reports_new_texts_only() {
+        let mut set = TextSet::new(["Đà Nẵng"]);
+        assert!(!set.insert(&canonical("ĐÀ NẴNG")), "another spelling of a member is not new");
+        assert!(set.insert("Hà Nội"));
+        assert!(!set.insert("hà nội"));
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&canonical("Hà Nội")));
     }
 
     #[test]

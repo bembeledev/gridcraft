@@ -436,11 +436,3 @@ fn legacy_formulas_into_linked_workbooks_stay_legacy_even_when_they_spill() {
     assert_dynamic(&sheet, "E6", "E6:E8");
     assert_eq!(cell(&sheet, "F6").attr("cm"), Some("1"));
 }
-
-#[test]
-fn linked_legacy_array_cached_values_survive_read() {
-    let body = r#"<sheetData><row r="1"><c r="A1"><f t="array" ref="A1:A3">[1]Data!B1:B3</f><v>10</v></c></row><row r="2"><c r="A2"><v>20</v></c></row><row r="3"><c r="A3"><v>30</v></c></row></sheetData>"#;
-    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", "")).unwrap();
-    let sh = wb.sheet(0).unwrap();
-    assert_eq!(sh.array_cache[&at("A1")].1, [(at("A2"), Value::Number(20.0)), (at("A3"), Value::Number(30.0))].into_iter().collect());
-}

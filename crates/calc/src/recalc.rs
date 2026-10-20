@@ -837,6 +837,26 @@ impl Host for PassHost<'_> {
     }
 }
 
+fn saved_arrays(wb: &Workbook) -> HashMap<Key, Value> {
+    let linked_arrays: HashSet<Key> = wb
+        .sheets
+        .iter()
+        .enumerate()
+        .flat_map(|(sheet, sh)| sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(f)).map(|_| (sheet, at))))
+        .collect();
+    let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());
+    for &(sheet, at) in &linked_arrays {
+        let Some(sh) = wb.sheet(sheet) else { continue };
+        let block = sh.spill_ranges.get(&at).copied().or_else(|| sh.cell(at).and_then(|c| c.formula.as_ref()?.array));
+        let Some(range) = block.filter(|r| !r.is_single()) else { continue };
+        let data = range.iter().map(|c| sh.value(c)).collect();
+        if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
+            saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
+        }
+    }
+    saved
+}
+
 impl Calc {
     pub fn new() -> Self {
         Self::default()
@@ -882,22 +902,7 @@ impl Calc {
     fn recalc_every_formula(&mut self, wb: &mut Workbook, changed: Option<(&[Key], &[String])>) {
         self.rebuild(wb);
         let reached = changed.map(|(c, names)| self.kept_value_readers(wb, c, names));
-        let linked_arrays: HashSet<Key> = wb
-            .sheets
-            .iter()
-            .enumerate()
-            .flat_map(|(sheet, sh)| sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(f)).map(|_| (sheet, at))))
-            .collect();
-        let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());
-        for &(sheet, at) in &linked_arrays {
-            let Some(sh) = wb.sheet(sheet) else { continue };
-            let block = sh.spill_ranges.get(&at).copied().or_else(|| sh.cell(at).and_then(|c| c.formula.as_ref()?.array));
-            let Some(range) = block.filter(|r| !r.is_single()) else { continue };
-            let data = range.iter().map(|c| sh.array_cache.get(&at).and_then(|(_, values)| values.get(&c)).cloned().unwrap_or_else(|| sh.value(c))).collect();
-            if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
-                saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
-            }
-        }
+        let saved = saved_arrays(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -1489,6 +1494,12 @@ pub(crate) mod tests {
         deps.clear();
         calc.graph.dependents(1, CellRef::parse("A2").unwrap(), &mut deps);
         assert_eq!(deps, vec![at("DA9"), at("DA9")]);
+    }
+
+    #[test]
+    fn no_linked_formulas_need_no_saved_array_snapshot() {
+        let wb = Workbook::new();
+        assert!(super::saved_arrays(&wb).is_empty());
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the

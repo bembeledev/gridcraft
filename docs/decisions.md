@@ -58,9 +58,11 @@ files, as in Excel, and are an application preference (`Prefs::data_conversion`,
 `app.dataConversion`), not workbook state. `app.dataConversion` is journaled but not undoable: it
 changes what later typing gives, so a replayed journal needs it, and Undo takes back edits, not
 settings.
-Data validation (typing, `data.validate`, Circle Invalid Data) reads input under the same options,
-so a rule checks what the cell holds: with leading zeros kept, `0123` is text and a whole-number
-rule refuses it.
+Data validation reads typed input (typing, `data.validate`) under the same options, so a rule
+checks what the cell would hold: with leading zeros kept, `0123` is text and a whole-number rule
+refuses it. Circle Invalid Data checks what each cell holds, whatever the options say now, so
+`0123` stored as text stays circled after the option is back on (formula cells are still judged
+by their formula text, as before the options).
 All default on, so nothing changes until someone opts out.
 
 One deliberate difference: with "Keep first 15 digits of long numbers and display in scientific

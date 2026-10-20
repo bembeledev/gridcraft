@@ -2007,6 +2007,27 @@ mod tests {
     }
 
     #[test]
+    fn vi_tone_marks_typed_as_their_singletons_are_the_tones() {
+        // U+0340 and U+0341 decompose to U+0300 (huyền) and U+0301 (sắc).
+        for (single, usual) in [("ma\u{341}", "má"), ("ma\u{340}", "mà"), ("Ă\u{341}", "Ắ"), ("Hoa\u{340}", "Hoà"), ("a\u{344}", "a\u{308}\u{301}")]
+        {
+            assert_eq!(compare_text_with(single, usual, Collation::Vi), Ordering::Equal, "{single:?}");
+            assert_eq!(text_key(single, Collation::Vi), text_key(usual, Collation::Vi), "{single:?}");
+            assert_eq!(text_key(single, Collation::Root), text_key(usual, Collation::Root), "{single:?}");
+            assert_eq!(TextProbe::new(usual, Collation::Vi).order(single), Ordering::Equal, "{single:?}");
+            assert_eq!(TextProbe::new(single, Collation::Vi).order(usual), Ordering::Equal, "{single:?}");
+        }
+        assert_eq!(Key::vi("ma\u{340}").secondary.get(2), Some(&1));
+        assert_eq!(Key::vi("ma\u{341}").secondary.get(2), Some(&4));
+        // They sort exactly where `mà` and `má` do.
+        let row = ["ma", "ma\u{340}", "mả", "mã", "ma\u{341}", "mạ"];
+        let mut v = row;
+        v.reverse();
+        v.sort_by(|a, b| compare_text_with(a, b, Collation::Vi));
+        assert_eq!(v, row);
+    }
+
+    #[test]
     fn prefolded_search_equals_folded_search() {
         let cases = ["", "\u{301}", "e", "ễ", "Nguyễn", "NGUYE\u{302}\u{303}N", "ánh", "\u{303}n", "Đà Nẵng", "đà"];
         for h in cases {

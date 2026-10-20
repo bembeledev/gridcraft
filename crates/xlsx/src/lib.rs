@@ -49,7 +49,7 @@ pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use passthrough::rebase_links;
-pub use xls::read_xls;
+pub use xls::{IMPORT_NOTICE as XLS_IMPORT_NOTICE, read_xls};
 pub use xlsb::read_xlsb;
 pub use xml_table::read_xml_table;
 

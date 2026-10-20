@@ -81,8 +81,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
-    // The decrypted-workbook notice is for the info bar, not a message box.
-    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
+    // The decrypted-workbook and .xls overview notices are for the info bar, not a message box.
+    let shown: Vec<&str> =
+        warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE && *w != gridcraft_xlsx::XLS_IMPORT_NOTICE).collect();
     if !shown.is_empty() {
         let mut message = shown.iter().take(5).copied().collect::<Vec<_>>().join("\n\n");
         if shown.len() > 5 {

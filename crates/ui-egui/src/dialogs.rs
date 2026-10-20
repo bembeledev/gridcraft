@@ -1745,6 +1745,8 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     }
 }
 
+/// Insert Function: searches names (as the formula language spells them) and descriptions, shows
+/// each hit's category and description, and starts editing `=NAME(` (or appends to the formula).
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let language = app.ui.language;
     ui.horizontal(|ui| {

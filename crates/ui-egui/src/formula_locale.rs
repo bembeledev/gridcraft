@@ -160,10 +160,13 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
 mod tests {
     use super::*;
 
+    /// The hint for `name`, empty when there is none.
     fn sig(name: &str, locale: FormulaLocale, language: Language) -> String {
         signature(name, locale, language).unwrap_or_default()
     }
 
+    /// Hints keep the formula syntax's name and separators and translate the argument names
+    /// only when the interface language has them all.
     #[test]
     fn function_help_follows_the_interface_language_and_the_formula_syntax() {
         use FormulaLocale::{En, Es};

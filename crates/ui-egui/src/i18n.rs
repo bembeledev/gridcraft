@@ -160,6 +160,7 @@ impl Language {
 /// English text and its translation, sorted by the English.
 type HelpTable = &'static [(&'static str, &'static str)];
 
+/// The translation of `english` in a help table (binary search, so the table must stay sorted).
 fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
     let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
     table.get(i).map(|(_, translated)| *translated)
@@ -625,6 +626,7 @@ const JAPANESE: &[(&str, &str)] = &[
 mod tests {
     use super::*;
 
+    /// Help tables are sorted, unique, and keyed by text the function catalog still has.
     #[test]
     fn function_help_is_sorted_and_keyed_by_current_catalog_text() {
         // Lookups binary-search the tables. A key that no longer matches the catalog (an English

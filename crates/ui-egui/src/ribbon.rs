@@ -1749,6 +1749,8 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// The Formulas tab: Insert Function, AutoSum, the function-category menus (names in the formula
+/// language, descriptions in the interface language), defined names, auditing and calculation.
 fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::Function, "Insert\nFunction", "Insert Function (⇧F3)", false);
     control_keytip(app, ui, &__k, "dialog:insertFunction");

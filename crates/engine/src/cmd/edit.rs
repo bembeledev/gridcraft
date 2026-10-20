@@ -40,6 +40,11 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.goToSpecial", "Go To Special…", ["Home", "Editing", "Find & Select"], None, "{kind: blanks|constants|formulas|comments|lastCell|currentRegion|visible|conditionalFormats|dataValidation|errors|numbers|text}", has_doc, go_to_special),
         cmd!(noundo "edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{steps?: 1}", can_undo, undo),
         cmd!(noundo "edit.redo", "Redo", ["Edit"], Some("Cmd+Y"), "{steps?: 1}", can_redo, redo),
+        // Not journaled: the command it repeats journals itself and records its own undo step.
+        CommandSpec {
+            journal: false,
+            ..cmd!(noundo "edit.repeat", "Repeat", ["Edit"], Some("F4"), "{} (runs the last menu command again on the selection)", can_repeat, repeat)
+        },
         cmd!(noundo "edit.copy", "Copy", ["Home", "Clipboard"], Some("Cmd+C"), "{range?, html?: bool} → {range, text, html?} (html: a styled HTML table, only when requested and small enough)", has_doc, copy),
         cmd!(noundo "edit.cut", "Cut", ["Home", "Clipboard"], Some("Cmd+X"), "{range?, html?: bool} → {range, text, html?} (html: a styled HTML table, only when requested and small enough)", has_doc, cut),
         cmd!(
@@ -623,6 +628,13 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
+}
+
+/// Repeat (F4, or Ctrl+Y with nothing to redo): the last menu command again, on the current selection.
+fn repeat(s: &mut Session, _: &Json) -> Result<Json> {
+    let Some((id, params)) = s.last_action.clone() else { return Err(bad("edit.repeat", "nothing to repeat")) };
+    let result = s.execute(&id, params)?;
+    Ok(json!({"repeated": id, "result": result}))
 }
 
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {

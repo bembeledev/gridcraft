@@ -2711,6 +2711,13 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         app.open_dialog("macros", json!({}));
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
+                    // Excel: F4 repeats the last action on the selection.
+                    Key::F4 if !cmd && !shift && !m.alt => {
+                        if app.session.last_action.is_some() {
+                            app.run_or_alert("edit.repeat", json!({}));
+                            app.grid.ensure_visible = true;
+                        }
+                    }
                     Key::F4 if !cmd => {}
                     _ if cmd => crate::ribbon::shortcut(app, key, m),
                     _ => {}

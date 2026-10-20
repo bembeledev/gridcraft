@@ -102,6 +102,17 @@ pub fn can_redo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.active().is_some_and(|d| !d.redo.is_empty()) { Ok(()) } else { Err("nothing to redo".into()) }
 }
+pub fn can_repeat(s: &Session) -> std::result::Result<(), String> {
+    has_doc(s)?;
+    if s.last_action.is_some() { Ok(()) } else { Err("nothing to repeat".into()) }
+}
+
+/// Whether Repeat (F4) may run this command again: a menu command that acted on the selection.
+/// A step aimed at a named range, cell, sheet or object stays where it was, as typing does.
+pub(crate) fn repeatable(spec: &CommandSpec, params: &Json) -> bool {
+    const TARGETS: [&str; 12] = ["range", "cell", "cells", "rows", "cols", "at", "target", "sheet", "chart", "id", "slicer", "pivot"];
+    !spec.menu.is_empty() && spec.id != "cell.set" && !params.as_object().is_some_and(|o| TARGETS.iter().any(|k| o.contains_key(*k)))
+}
 pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }

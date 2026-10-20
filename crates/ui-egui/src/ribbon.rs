@@ -2413,6 +2413,8 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::U => Some(("home.underline", json!({}))),
         Key::Z if shift => Some(("edit.redo", json!({}))),
         Key::Z => Some(("edit.undo", json!({}))),
+        // Excel: Ctrl+Y redoes, and with nothing to redo repeats the last action, like F4.
+        Key::Y if app.session.active().is_some_and(|d| d.redo.is_empty()) && app.session.last_action.is_some() => Some(("edit.repeat", json!({}))),
         Key::Y => Some(("edit.redo", json!({}))),
         Key::A => Some(("edit.selectAll", json!({}))),
         Key::D => Some(("edit.fillDown", json!({}))),

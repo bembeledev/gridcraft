@@ -507,6 +507,7 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
     match area {
         "rows" | "columns" => {
             let rows = area == "rows";
+            let held = pt.filters.iter().find(|x| x.source_col.eq_ignore_ascii_case(field)).map(|x| (x.selected.clone(), pt.filter_group(x)));
             let list = if rows { &mut pt.rows } else { &mut pt.columns };
             let i = list
                 .iter()
@@ -514,8 +515,15 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
                 .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the {area} area")))?;
             let f = list.remove(i);
             shift_values(pt, rows, i, false);
-            pt.filters.retain(|x| !x.source_col.eq_ignore_ascii_case(&f.source_col));
-            Ok(f.source_col)
+            let source = f.source_col;
+            pt.filters.retain(|x| !x.source_col.eq_ignore_ascii_case(&source));
+            if let Some((selected, date_group)) = held
+                && (selected.is_some() || date_group != PivotDateGroup::None)
+            {
+                let hidden = !in_axes(pt, &source);
+                pt.filters.push(PivotFilter { source_col: source.clone(), selected, hidden, date_group });
+            }
+            Ok(source)
         }
         "values" => {
             let i = pt
@@ -2429,6 +2437,36 @@ mod tests {
         assert!(f.hidden);
     }
 
+    #[test]
+    fn move_axis_to_values_keeps_slicer_selection_and_grouping() {
+        use gridcraft_model::PivotDateGroup;
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+        add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
+        s.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+        let before = pt(&s);
+        let bf = before.filters.iter().find(|f| f.source_col == "Date").unwrap();
+        assert_eq!(before.filter_group(bf), PivotDateGroup::Months);
+        s.execute("pivot.moveField", json!({"field": "Date", "from": "columns", "to": "values"})).unwrap();
+        let p = pt(&s);
+        let f = p.filters.iter().find(|f| f.source_col == "Date").unwrap();
+        assert_eq!(f.selected, Some(vec!["Jan".to_string()]));
+        assert!(f.hidden);
+        assert_eq!(p.filter_group(f), PivotDateGroup::Months);
+        assert_eq!(slicer_tiles(&s, 1), months_on(&["Jan"]));
+        let mut removed = sales();
+        removed.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+        removed.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+        add_pivot_slicer(&mut removed, 1, "Date", &["PivotTable1"]);
+        removed.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+        removed.execute("pivot.removeField", json!({"field": "Date", "area": "columns"})).unwrap();
+        let rp = pt(&removed);
+        let rf = rp.filters.iter().find(|f| f.source_col == "Date").unwrap();
+        assert_eq!(rf.selected, Some(vec!["Jan".to_string()]));
+        assert!(rf.hidden);
+        assert_eq!(rp.filter_group(rf), PivotDateGroup::Months);
+    }
     #[test]
     fn pivot_slicer_on_grouped_dates_shows_the_groups() {
         let mut s = sales();

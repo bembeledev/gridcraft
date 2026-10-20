@@ -110,23 +110,6 @@ impl EditState {
         self.sync_caret = true;
     }
 
-    /// Points and selects the argument of the call that ends the text, as AutoSum proposes it
-    /// (`=SUM(B1:B3)`): a click, drag, arrow key or typing replaces `B1:B3`. An arrow key moves
-    /// from the range's first cell, as in Excel: ↑ on `=SUM(A2:A4)` gives `=SUM(A1)`. With no
-    /// argument (`=SUM()`) the caret goes between the parentheses.
-    pub fn point_last_argument(&mut self) {
-        let Some(open) = self.text.rfind('(') else { return };
-        let Some(close) = self.text.len().checked_sub(1).filter(|&c| c > open && self.text.ends_with(')')) else { return };
-        let chars = |byte: usize| self.text.get(..byte).map_or(0, |t| t.chars().count());
-        let (start, end) = (open + 1, close);
-        self.caret = chars(end);
-        self.point = (start < end).then_some((start, end));
-        self.select_from = (start < end).then(|| chars(start));
-        self.point_cell = self.text.get(start..end).and_then(RangeRef::parse).map(|r| r.start);
-        self.caret_to_end = false;
-        self.sync_caret = true;
-    }
-
     /// Updates function autocomplete for the word before the caret.
     pub fn update_autocomplete(&mut self, names: &[String]) {
         self.autocomplete.clear();
@@ -210,6 +193,23 @@ impl EditState {
             }
         }
         None
+    }
+
+    /// Points and selects the argument of the call that ends the text, as AutoSum proposes it
+    /// (`=SUM(B1:B3)`): a click, drag, arrow key or typing replaces `B1:B3`. An arrow key moves
+    /// from the range's first cell, as in Excel: ↑ on `=SUM(A2:A4)` gives `=SUM(A1)`. With no
+    /// argument (`=SUM()`) the caret goes between the parentheses.
+    pub fn point_last_argument(&mut self) {
+        let Some(open) = self.text.rfind('(') else { return };
+        let Some(close) = self.text.len().checked_sub(1).filter(|&c| c > open && self.text.ends_with(')')) else { return };
+        let chars = |byte: usize| self.text.get(..byte).map_or(0, |t| t.chars().count());
+        let (start, end) = (open + 1, close);
+        self.caret = chars(end);
+        self.point = (start < end).then_some((start, end));
+        self.select_from = (start < end).then(|| chars(start));
+        self.point_cell = self.text.get(start..end).and_then(RangeRef::parse).map(|r| r.start);
+        self.caret_to_end = false;
+        self.sync_caret = true;
     }
 }
 

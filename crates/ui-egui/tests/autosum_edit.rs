@@ -80,6 +80,18 @@ fn autosum_on_one_cell_proposes_its_range_in_the_editor() {
 }
 
 #[test]
+fn the_autosum_menu_functions_propose_theirs_the_same_way() {
+    // Home › AutoSum ▾ Average (and Formulas › AutoSum ▾ once it has the menu, #658).
+    let mut h = harness("A4");
+    h.state_mut().run_or_alert("formulas.autoSum", json!({"function": "AVERAGE"}));
+    h.run_steps(2);
+    assert_eq!(editing(&h).as_deref(), Some("=AVERAGE(A1:A3)"));
+    pointer(&mut h, "A2", true);
+    pointer(&mut h, "A2", false);
+    assert_eq!(editing(&h).as_deref(), Some("=AVERAGE(A2)"));
+}
+
+#[test]
 fn a_click_or_drag_replaces_the_proposed_range() {
     let mut h = harness("A4");
     auto_sum(&mut h);

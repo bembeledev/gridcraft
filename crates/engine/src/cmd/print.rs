@@ -4,7 +4,7 @@
 //! range plus drawing objects) is split into bands of rows and columns that fit the printable
 //! area at the page scale, honouring manual breaks, repeated title rows/columns, headings, Fit
 //! To and centring. Each page is drawn into a PDF with `gridcraft-pdf`: fills, gridlines,
-//! borders, formatted text (fonts mapped to the standard 14 PDF fonts), merged cells, wrapping,
+//! borders, formatted text (standard PDF fonts with licensed Unicode fallback outlines), merged cells, wrapping,
 //! overflow into empty neighbours, conditional formats, table styles, charts, images, shapes and
 //! sparklines. Headers and footers support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z`
 //! codes.
@@ -1460,7 +1460,7 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
 }
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<(Vec<u8>, usize)> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -1520,7 +1520,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    Ok((doc.finish().map_err(|error| EngineError::Other(error.to_string()))?, n))
 }
 
 // ---------------------------------------------------------------- commands
@@ -1530,7 +1530,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    render_pdf(&d.wb, &lays, &d.display_title(), &path)
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1967,6 +1967,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let r = s.execute("file.print", json!({})).unwrap();
         assert!(r["base64"].as_str().unwrap().len() > 100);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unsupported_pdf_glyph_keeps_the_existing_destination() {
+        let mut session = s();
+        session.execute("cell.set", json!({"cell":"A1", "input":"\u{10ffff}"})).unwrap();
+        let dir = std::env::temp_dir().join(format!("gridcraft-print-font-error-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.pdf");
+        std::fs::write(&path, b"previous PDF").unwrap();
+        let error = session.execute("file.exportPdf", json!({"path":path.to_str().unwrap()})).unwrap_err();
+        assert!(error.to_string().contains("U+10FFFF"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous PDF");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -1,17 +1,19 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text.
+//!   ([`text_width`]) so callers can measure, align and wrap text. Non-WinAnsi glyphs use
+//!   searchable Type 3 outline subsets from the optional licensed craft-fonts build input.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the trivial RunLengthDecode filter).
+//! Unsupported glyphs make [`PdfDoc::finish`] fail rather than silently becoming question marks.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod unicode;
 
 use std::fmt::Write as _;
 
@@ -118,6 +120,14 @@ impl Font {
 
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if unicode::nonprinting(c) {
+            return 0;
+        }
+        // The content writer encodes a tab as a space; layout must measure the same glyph.
+        let c = if c == '\t' { ' ' } else { c };
+        if unicode::needed(c) {
+            return unicode::width(c).unwrap_or(1000);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -268,7 +278,18 @@ pub struct Page {
     fonts: [bool; 12],
     images: Vec<ImageData>,
     depth: u32,
+    unicode: unicode::Subset,
+    error: Option<String>,
 }
+
+#[derive(Debug)]
+pub struct Error(String);
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Error {}
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
 /// exhausting memory).
@@ -459,6 +480,54 @@ impl Page {
         if text.is_empty() || !extent(size) || !finite(&[x, y]) {
             return;
         }
+        if text.chars().any(unicode::needed) {
+            let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+            let size = size.min(10_000.0);
+            let mut offset = 0.0;
+            let mut latin = String::new();
+            for c in text.chars().map(Some).chain(std::iter::once(None)) {
+                if c.is_some_and(unicode::nonprinting) {
+                    continue;
+                }
+                if let Some(c) = c.filter(|c| !unicode::needed(*c)) {
+                    latin.push(c);
+                    continue;
+                }
+                if !latin.is_empty() {
+                    self.text_rotated(x + offset * cs, y + offset * sn, size, font, color, &latin, angle);
+                    offset += text_width(font, size, &latin);
+                    latin.clear();
+                }
+                let Some(c) = c else { continue };
+                match self.unicode.add(font, c) {
+                    Ok((bank, code, width)) => {
+                        let s = format!(
+                            "BT\n{}\n{}\n/U{bank} {} Tf\n{} {} {} {} {} {} Tm\n<{code:02X}> Tj\nET",
+                            rgb_op(color, false),
+                            rgb_op(color, true),
+                            n(size),
+                            n(cs),
+                            n(-sn),
+                            n(sn),
+                            n(cs),
+                            n(x + offset * cs),
+                            n(self.y(y + offset * sn))
+                        );
+                        if self.content.len().saturating_add(s.len() + 1) > MAX_PAGE_CONTENT {
+                            self.error = Some("PDF page content limit exceeded".into());
+                            return;
+                        }
+                        self.op(&s);
+                        offset += f32::from(width) * size / 1000.0;
+                    }
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+            }
+            return;
+        }
         let fi = font.index();
         if let Some(f) = self.fonts.get_mut(fi) {
             *f = true;
@@ -583,7 +652,16 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; 12], images: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; 12],
+            images: Vec::new(),
+            depth: 0,
+            unicode: unicode::Subset::default(),
+            error: None,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -598,7 +676,10 @@ impl PdfDoc {
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
-    pub fn finish(mut self) -> Vec<u8> {
+    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+        if let Some(error) = self.pages.iter().find_map(|page| page.error.as_ref()) {
+            return Err(Error(error.clone()));
+        }
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
         }
@@ -629,6 +710,7 @@ impl PdfDoc {
             }
         }
         for page in &mut self.pages {
+            let unicode_fonts = page.unicode.objects(&mut next, &mut objects);
             while page.depth > 0 {
                 page.restore();
             }
@@ -681,10 +763,9 @@ impl PdfDoc {
             objects.push((
                 page_id,
                 format!(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {font_dict}{unicode_fonts}>>{} >> /Contents {} 0 R >>",
                     n(page.width),
                     n(page.height),
-                    font_dict,
                     xo,
                     content_id
                 )
@@ -725,7 +806,7 @@ impl PdfDoc {
         }
         let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
         out.extend_from_slice(x.as_bytes());
-        out
+        Ok(out)
     }
 }
 

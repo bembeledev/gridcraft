@@ -42,3 +42,14 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/pivot.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/format-chart.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
+
+## Optional PDF font build input
+
+No font files are committed here. `crates/pdf/build.rs` verifies the SHA256 and OFL-1.1
+license-file presence of the first Regular Hans face (and an optional Regular Hant face)
+in [craft-fonts/fonts/manifest.txt](https://github.com/storytold/craft-fonts/blob/main/fonts/manifest.txt).
+That manifest records each face's authors and source. PDF exports subset the used outlines
+and retain Unicode mappings. Release packaging includes the corresponding OFL texts via
+`packaging/env.sh`. Without this input, installed Noto CJK faces may be used where present;
+otherwise unsupported text produces an explicit export error. Proprietary font assets are
+not used by this fallback. Complex-script shaping remains outside this fix.

@@ -39,15 +39,10 @@ pub(crate) fn read(cx: &mut Ctx<'_>, wb_xml: &El, wb_rels: &[Rel]) -> Result<Vec
     Ok(books)
 }
 
-/// Whether a formula is saved as the legacy formula it was read as, whatever it calculates to: it
-/// was read from a file without dynamic-array metadata (and isn't a Ctrl+Shift+Enter array, which
-/// keeps its range), and reads a linked workbook (`[1]Data!B:B`, `[1]!Rates`). Excel reads such a
-/// cell with implicit intersection; writing it as a dynamic array, because a linked range in it
-/// spills here, would change what Excel shows. Formulas typed over a linked workbook are saved
-/// like any other.
-pub(crate) fn saved_as_read(formula: &gridcraft_model::Formula) -> bool {
+/// Whether a formula refers to a linked workbook (`[1]...`).
+pub(crate) fn reads_linked(formula: &gridcraft_model::Formula) -> bool {
     use gridcraft_formula::{Expr, SheetSel};
-    let Some(expr) = formula.expr_arc().filter(|_| formula.legacy && formula.array.is_none()) else { return false };
+    let Some(expr) = formula.expr_arc() else { return false };
     let mut linked = false;
     expr.walk(&mut |e| {
         linked |= match e {
@@ -58,6 +53,16 @@ pub(crate) fn saved_as_read(formula: &gridcraft_model::Formula) -> bool {
         }
     });
     linked
+}
+
+/// Whether a formula is saved as the legacy formula it was read as, whatever it calculates to: it
+/// was read from a file without dynamic-array metadata (and isn't a Ctrl+Shift+Enter array, which
+/// keeps its range), and reads a linked workbook (`[1]Data!B:B`, `[1]!Rates`). Excel reads such a
+/// cell with implicit intersection; writing it as a dynamic array, because a linked range in it
+/// spills here, would change what Excel shows. Formulas typed over a linked workbook are saved
+/// like any other.
+pub(crate) fn saved_as_read(formula: &gridcraft_model::Formula) -> bool {
+    formula.legacy && formula.array.is_none() && reads_linked(formula)
 }
 
 /// The items of a `<ddeLink>` that were saved with values (`<values rows cols>`, row-major): one

@@ -385,6 +385,8 @@ struct PassHost<'a> {
     results: HashMap<Key, Value>,
     pending: HashSet<Key>,
     in_progress: HashSet<Key>,
+    /// Values formulas showed before this pass cleared spill layout.
+    saved: Option<&'a HashMap<Key, Value>>,
     /// New spills found during the pass: anchor → array.
     spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
@@ -419,13 +421,14 @@ struct PassHost<'a> {
 }
 
 impl<'a> PassHost<'a> {
-    fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+    fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64, saved: Option<&'a HashMap<Key, Value>>) -> Self {
         PassHost {
             wb,
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
+            saved,
             spills: HashMap::default(),
             used: HashMap::default(),
             rng,
@@ -556,7 +559,10 @@ impl PassHost<'_> {
     /// calculated to. A spilled array, or a legacy array formula's range, comes back whole. A
     /// blank formula cell has none (a typed formula, or one a structural edit made read other
     /// cells): formulas show 0 for blank.
-    fn saved_value(&self, (sheet, at): Key) -> Option<Value> {
+    fn saved_value(&self, k @ (sheet, at): Key) -> Option<Value> {
+        if let Some(v) = self.saved.and_then(|saved| saved.get(&k)) {
+            return Some(v.clone());
+        }
         let sh = self.wb.sheet(sheet)?;
         if sh.value(at).is_empty() {
             return None;
@@ -858,11 +864,28 @@ impl Calc {
     pub fn recalc_all_after_edit(&mut self, wb: &mut Workbook, changed: &[Key], changed_names: &[String]) {
         self.recalc_every_formula(wb, Some((changed, changed_names)));
     }
-
-    /// `changed`: the cells and names a structural edit changed, `None` for F9 and loading.
     fn recalc_every_formula(&mut self, wb: &mut Workbook, changed: Option<(&[Key], &[String])>) {
         self.rebuild(wb);
         let reached = changed.map(|(c, names)| self.kept_value_readers(wb, c, names));
+        let mut saved = HashMap::with_capacity_and_hasher(32, Default::default());
+        for (sheet, sh) in wb.sheets.iter().enumerate() {
+            for (&at, &range) in &sh.spill_ranges {
+                let data = range.iter().map(|c| sh.value(c)).collect();
+                if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
+                    saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
+                }
+            }
+        }
+        for (sheet, sh) in wb.sheets.iter().enumerate() {
+            for (at, cell) in sh.cells.iter() {
+                if let Some(range) = cell.formula.as_ref().and_then(|f| f.array).filter(|r| !r.is_single()) {
+                    let data = range.iter().map(|c| sh.value(c)).collect();
+                    if let Some(array) = Array::new(range.height() as usize, range.width() as usize, data) {
+                        saved.insert((sheet, at), Value::Array(std::sync::Arc::new(array)));
+                    }
+                }
+            }
+        }
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -874,7 +897,7 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, reached.as_ref());
+        self.run(wb, all, reached.as_ref(), Some(&saved));
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -911,7 +934,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, None);
+            self.run(wb, own, None, None);
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -960,7 +983,7 @@ impl Calc {
         let dirty = self.dirty_closure_from(&reached, &seeds);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, Some(&reached));
+        self.run(wb, dirty, Some(&reached), None);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -1084,7 +1107,7 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back. `reached`: after an edit, the
     /// formulas that read a changed cell (see `PassHost::reached`).
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, reached: Option<&HashSet<Key>>) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, reached: Option<&HashSet<Key>>, saved: Option<&HashMap<Key, Value>>) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
@@ -1102,7 +1125,7 @@ impl Calc {
             let mut rng = self.rng;
             let tp = prof_now();
             let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now);
+                let mut host = PassHost::new(wb, &exprs, &mut rng, now, saved);
                 host.iterate = wb.calc.iterative;
                 host.reached = reached;
                 for k in &dirty {
@@ -1230,7 +1253,7 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
-    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial(), None);
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
 }
@@ -1470,7 +1493,7 @@ pub(crate) mod tests {
         // of a real pass partway through; `visit_range` has to cope with the formulas it reads
         // being calculated under it.
         let mut rng = 1u64;
-        let mut host = PassHost::new(wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(wb, &exprs, &mut rng, 0.0, None);
 
         let mut seen = Vec::new();
         host.visit_range(0, range, &mut |v| {

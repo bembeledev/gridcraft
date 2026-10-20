@@ -236,6 +236,20 @@ fn linked_names_that_cannot_be_calculated_keep_their_saved_value() {
 }
 
 #[test]
+fn linked_dynamic_array_keeps_saved_spill_values_after_recalc() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    t.wb.external_books = vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=[1]Data!A1:A2")) });
+    sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
+    sh.spill.insert(c("A2"), Value::Number(20.0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("A2")), (Value::Number(10.0), Value::Number(20.0)));
+}
+
+#[test]
 fn a_kept_value_gives_way_when_what_the_formula_reads_here_changes() {
     use gridcraft_model::{ExternalBook, ExternalName};
     let mut t = T::new();

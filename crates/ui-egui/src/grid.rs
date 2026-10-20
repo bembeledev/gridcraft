@@ -134,9 +134,9 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
-    /// Pivot and table slicer tiles cached by document identity/revision and slicer identity.
-    /// A new workbook revision replaces the cache, so source edits and undo cannot leave stale tiles.
-    pub slicer_tiles: Option<((u64, u64), HashMap<(usize, u32), Vec<SlicerTile>>)>,
+    /// Slicer tiles by (sheet, slicer id), with the workbook version they were computed from
+    /// (`None` without a document). Any other version, undoable or not, replaces them.
+    pub slicer_tiles: Option<(Option<Arc<Workbook>>, HashMap<(usize, u32), Vec<SlicerTile>>)>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
     pub header_menu: Option<(Pos2, bool)>,

@@ -2,7 +2,7 @@
 //! we paint with egui), pictures and shapes.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -13,14 +13,17 @@ use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme;
 
+/// The slicer's tiles, computed once per workbook version. Every change to a document, undoable or
+/// not (recalculation, refresh), installs a new `Arc<Workbook>`; the cache holds the one it was
+/// built from, so a new version is always told apart (its address can't be reused meanwhile).
 fn cached_slicer_items<'a>(app: &'a mut SheetApp, wb: &Workbook, si: usize, sl: &Slicer) -> &'a [gridcraft_engine::pivot::SlicerTile] {
-    let rev = app.session.active().map(|d| (d.uid, d.revision)).unwrap_or_default();
-    let cache = app.grid.slicer_tiles.get_or_insert_with(|| (rev, HashMap::new()));
-    if cache.0 != rev {
-        cache.0 = rev;
-        cache.1.clear();
+    let cur = app.session.active().map(|d| d.wb.clone());
+    let fresh = matches!((&app.grid.slicer_tiles, &cur), (Some((Some(built), _)), Some(cur)) if Arc::ptr_eq(built, cur));
+    if !fresh {
+        app.grid.slicer_tiles = None;
     }
-    cache.1.entry((si, sl.id)).or_insert_with(|| gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl))
+    let (_, tiles) = app.grid.slicer_tiles.get_or_insert_with(|| (cur, HashMap::new()));
+    tiles.entry((si, sl.id)).or_insert_with(|| gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl))
 }
 
 fn rgba(c: [u8; 4]) -> Color32 {
@@ -599,5 +602,22 @@ mod tests {
         let slicer = wb.active().unwrap().slicers[0].clone();
         let after: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
         assert_eq!(after, ["North", "South", "West"]);
+
+        // A source value that changes only on a manual recalculation (not undoable, so the
+        // document revision stays) still refreshes the tiles.
+        app.session.execute("cell.set", json!({"cell": "F1", "input": "West"})).unwrap();
+        app.session.execute("cell.set", json!({"cell": "A3", "input": "=F1"})).unwrap();
+        app.session.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        app.session.execute("cell.set", json!({"cell": "F1", "input": "Central"})).unwrap();
+        let tiles = |app: &mut SheetApp| {
+            let wb = app.session.active().unwrap().wb.clone();
+            let slicer = wb.active().unwrap().slicers[0].clone();
+            cached_slicer_items(app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(tiles(&mut app), ["North", "South", "West"]);
+        let revision = app.session.active().unwrap().revision;
+        app.session.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(tiles(&mut app), ["Central", "North", "South"]);
     }
 }

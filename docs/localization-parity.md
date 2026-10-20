@@ -74,7 +74,8 @@ right-to-left sheets and full complex-script support. Part of
   Consolidate. `EXACT` stays case-sensitive but sees NFC and NFD as the same text. Nothing
   rewrites the user's text: the comparison builds keys and leaves the cells alone. Scope: the Latin
   letters in U+00C0–U+024F and U+1E00–U+1EFF with combining marks in U+0300–U+036F (497
-  precomposed letters; data from Unicode 17.0, checked against ICU4X in a test). Other scripts
+  precomposed letters, plus the marks U+0340, U+0341, U+0343 and U+0344, which decompose to
+  other marks; data from Unicode 17.0, checked against ICU4X in a test). Other scripts
   (Cyrillic й against и + U+0306, Greek ά) still compare as different. Letters with no
   decomposition (such as ø, ł, æ, ß, ð, ħ, ı) sort by code point, after `z`. A run of more than 32
   combining marks is left in input order. Not covered yet: wildcard patterns (`*`, `?`) and Find
@@ -141,6 +142,7 @@ language (none so far) and of localized function names.
 | 2026-10-20 | minor | Dutch (nl) interface catalog (`i18n/nl.rs`, 518 labels, ~24%): the shared key set every language must cover (ribbon, context menus, File view, dialog titles, Options page), matching the German, French and Czech catalogs; `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-20 | minor | XLSX: a theme's per-script typefaces (`<a:font script="Arab">`, Hebr, Jpan…) are kept through open + save, so Arabic Excel's theme fonts for shapes, charts and theme-font cells survive a GridCraft save |
 | 2026-10-20 | trivial | XLSX: a workbook theme's major/minor East Asian (`<a:ea>`) and complex-script (`<a:cs>`) typefaces are kept through open + save, so a Japanese workbook keeps its theme's East Asian font; rendering does not resolve them yet (follow-up) |
+| 2026-10-20 | trivial | Text comparison: the marks with a decomposition of their own (U+0340 and U+0341, the grave and acute tone marks; U+0343; U+0344) equal the marks they decompose to, so `a` + U+0341 is `á`; the ICU check now covers every mark of U+0300–U+036F |
 | 2026-10-19 | minor | XLSX fonts retain charset and family metadata so systems can select a substitute font with the intended script when the named font is unavailable |
 | 2026-10-19 | minor | Arabic CSV and text imports decode Windows-1256 text; Arabic shaping and bidirectional UI remain unsupported |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |

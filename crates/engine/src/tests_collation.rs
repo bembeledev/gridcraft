@@ -144,6 +144,33 @@ fn pivot_merges_nfc_nfd_items() {
 }
 
 #[test]
+fn tone_marks_typed_as_their_singletons_merge_with_the_usual_marks() {
+    // U+0340 and U+0341 (the grave and acute tone marks) canonically decompose to U+0300 and
+    // U+0301, so `Ma` + U+0341 is `Má` and `MA` + U+0340 is `Mà`.
+    let rows = json!([["Tên", "Qty"], ["Má", 1], ["Ma\u{341}", 2], ["Mà", 4], ["MA\u{340}", 8]]);
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Tên"], "values": ["Qty"]})).unwrap();
+    // Header, two items (Root order: grave U+0300 before acute U+0301), grand total.
+    assert_eq!(pivot_height(&s), 4);
+    let col = pivot_column(&s);
+    assert_eq!(col.get(1).map(String::as_str), Some("Mà"));
+    assert_eq!(col.get(2).map(String::as_str), Some("Má"));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let r = sh.pivots.last().unwrap().last_range.unwrap();
+    assert_eq!(sh.value(CellRef::new(r.start.row + 1, r.start.col + 1)), Value::Number(12.0));
+    assert_eq!(sh.value(CellRef::new(r.start.row + 2, r.start.col + 1)), Value::Number(3.0));
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let r = s.execute("data.removeDuplicates", json!({"range": "A1:B5", "columns": ["A"], "header": true})).unwrap();
+    assert_eq!(r["removed"], 2);
+}
+
+#[test]
 fn pivot_filter_and_collapse_match_any_spelling() {
     let mut s = people(&[]);
     s.execute("insert.pivotTable", json!({"rows": ["Tên", "Kho"], "values": ["Qty"]})).unwrap();

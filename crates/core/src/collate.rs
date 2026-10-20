@@ -52,7 +52,8 @@
 //!
 //! The tables cover the Latin letters in U+00C0..=U+024F and U+1E00..=U+1EFF (497 characters
 //! that decompose) and the 111 combining marks of U+0300..=U+036F that have a nonzero combining
-//! class. Anything outside them is left alone: it has no canonical decomposition here and a
+//! class, four of which decompose to other marks (U+0340 and U+0341, the grave and acute tone
+//! marks, are U+0300 and U+0301; U+0343 is U+0313; U+0344 is U+0308 U+0301). Anything outside them is left alone: it has no canonical decomposition here and a
 //! combining class of 0, so it is a starter. This is not a general NFD; it is the part of NFD
 //! that Vietnamese and the Latin scripts GridCraft sorts need.
 //!
@@ -78,8 +79,9 @@ const MAX_RUN: usize = 32;
 /// First scalar of the first range in [`DECOMPOSITION`].
 const DEC_FIRST: u32 = 0xc0;
 
-/// Canonical (full, flattened) decomposition of each character in U+00C0..=U+024F and
-/// U+1E00..=U+1EFF that has one, sorted by code point. 497 entries.
+/// Canonical (full, flattened) decomposition of each character in U+00C0..=U+024F, U+0300..=U+036F
+/// and U+1E00..=U+1EFF that has one, sorted by code point. 501 entries: 497 letters and the four
+/// marks U+0340, U+0341, U+0343 and U+0344, which decompose to other marks.
 static DECOMPOSITION: &[(char, &str)] = &[
     ('\u{c0}', "A\u{300}"),
     ('\u{c1}', "A\u{301}"),
@@ -333,6 +335,10 @@ static DECOMPOSITION: &[(char, &str)] = &[
     ('\u{231}', "o\u{307}\u{304}"),
     ('\u{232}', "Y\u{304}"),
     ('\u{233}', "y\u{304}"),
+    ('\u{340}', "\u{300}"),
+    ('\u{341}', "\u{301}"),
+    ('\u{343}', "\u{313}"),
+    ('\u{344}', "\u{308}\u{301}"),
     ('\u{1e00}', "A\u{325}"),
     ('\u{1e01}', "a\u{325}"),
     ('\u{1e02}', "B\u{307}"),
@@ -1076,11 +1082,14 @@ mod tables {
     use icu_normalizer::DecomposingNormalizerBorrowed;
     use icu_normalizer::properties::CanonicalCombiningClassMapBorrowed;
 
-    /// The scalar ranges the table covers: Latin-1 Supplement letters to Latin Extended-B, and
-    /// Latin Extended Additional.
+    /// The scalar ranges the table covers: Latin-1 Supplement letters to Latin Extended-B, the
+    /// combining marks, and Latin Extended Additional.
     fn covered() -> impl Iterator<Item = char> {
-        ('\u{c0}'..='\u{24f}').chain('\u{1e00}'..='\u{1eff}')
+        ('\u{c0}'..='\u{24f}').chain('\u{300}'..='\u{36f}').chain('\u{1e00}'..='\u{1eff}')
     }
+
+    /// The marks of U+0300..=U+036F that have a canonical decomposition of their own.
+    const MARKS_THAT_DECOMPOSE: [char; 4] = ['\u{340}', '\u{341}', '\u{343}', '\u{344}'];
 
     #[test]
     fn tables_match_icu_normalizer() {
@@ -1095,6 +1104,36 @@ mod tables {
         }
         assert_eq!(ccc('a'), 0);
         assert_eq!(ccc('\u{10ffff}'), 0);
+        // The marks that decompose, after a letter and next to marks of other classes, in either
+        // order: decomposed, then ordered with their neighbours.
+        for m in MARKS_THAT_DECOMPOSE {
+            for base in ["", "a", "U", "\u{1b0}"] {
+                for other in ["", "\u{323}", "\u{31b}", "\u{302}", "\u{345}"] {
+                    for s in [format!("{base}{m}{other}"), format!("{base}{other}{m}")] {
+                        assert_eq!(canonical(&s), nfd.normalize(&s), "{s:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn marks_that_decompose_equal_their_decomposition() {
+        // U+0340 and U+0341 (the grave and acute tone marks) are U+0300 and U+0301; U+0343 is
+        // U+0313; U+0344 is U+0308 U+0301.
+        assert_eq!(canonical("\u{340}\u{341}\u{343}"), "\u{300}\u{301}\u{313}");
+        assert_eq!(canonical("\u{344}"), "\u{308}\u{301}");
+        assert_eq!(canonical("a\u{344}\u{323}"), "a\u{323}\u{308}\u{301}");
+        assert_eq!(fold_key("\u{341}"), "\u{301}");
+        assert!(text_eq("a\u{341}", "á"));
+        assert!(text_eq("a\u{340}", "à"));
+        assert!(text_eq("U\u{344}", "ǘ"));
+        assert!(text_eq("Ma\u{341}", "MÁ"));
+        assert_eq!(compare_text("ma\u{341}", "má"), Ordering::Equal);
+        assert_eq!(compare_text("ma\u{340}", "mà"), Ordering::Equal);
+        assert!(text_eq_prefolded("ma\u{341}", &fold_key("má")));
+        assert!(text_eq_prefolded("má", &fold_key("ma\u{341}")));
+        assert_eq!(TextSet::new(["má", "ma\u{341}", "MA\u{301}", "mà", "ma\u{340}"]).len(), 2);
     }
 
     #[test]

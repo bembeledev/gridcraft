@@ -46,20 +46,106 @@ use gridcraft_model::{CalcMode, Workbook};
 
 use crate::eval::{Area, Evaluator, Host, precedents};
 
-/// Whether a formula reads a linked workbook (`[1]Data!B:B`, `[1]!Rates`, `[1]Data!#REF!`).
-fn reads_linked(formula: &gridcraft_model::Formula) -> bool {
-    use gridcraft_formula::SheetSel;
+/// Whether a formula reads a linked workbook, directly or through a local defined name.
+fn reads_linked(wb: &Workbook, sheet: usize, formula: &gridcraft_model::Formula) -> bool {
     let Some(expr) = formula.expr_arc() else { return false };
-    let mut linked = false;
-    expr.walk(&mut |e| {
-        linked |= match e {
-            Expr::Ref(r) => matches!(&r.sheet, SheetSel::Named(s) | SheetSel::Span(s, _) if s.starts_with('[')),
-            Expr::Name(n) => n.starts_with('['),
-            Expr::LinkedRefError(_) => true,
-            _ => false,
+    reads_linked_expr(wb, sheet, &expr, &mut Vec::new(), &[])
+}
+
+/// Resolves names with the same sheet-first lookup as the evaluator. `active` prevents a cycle
+/// in workbook or sheet-scoped names from recursing forever; `bound` keeps LET/LAMBDA parameters
+/// from being mistaken for defined names.
+fn reads_linked_expr(
+    wb: &Workbook,
+    sheet: usize,
+    expr: &Expr,
+    active: &mut Vec<(Option<usize>, String)>,
+    bound: &[String],
+) -> bool {
+    use gridcraft_formula::{Expr, SheetSel};
+    match expr {
+        Expr::Ref(r) => matches!(&r.sheet, SheetSel::Named(s) | SheetSel::Span(s, _) if s.starts_with('[')),
+        Expr::LinkedRefError(_) => true,
+        Expr::Name(n) => {
+            if bound.iter().any(|b| b.eq_ignore_ascii_case(n)) {
+                false
+            } else {
+                reads_linked_name(wb, sheet, n, active, bound)
+            }
         }
-    });
-    linked
+        Expr::Call(name, args) => {
+            if name == "LET" {
+                let mut local = bound.to_vec();
+                let mut found = false;
+                if args.len() >= 3 && !args.len().is_multiple_of(2) {
+                    for pair in args[..args.len() - 1].chunks(2) {
+                        if let [Expr::Name(n), value] = pair {
+                            found |= reads_linked_expr(wb, sheet, value, active, &local);
+                            local.push(n.clone());
+                        } else {
+                            found = true;
+                        }
+                    }
+                    if let Some(body) = args.last() {
+                        found |= reads_linked_expr(wb, sheet, body, active, &local);
+                    }
+                }
+                found
+            } else if name == "LAMBDA" {
+                let mut local = bound.to_vec();
+                let mut found = false;
+                for arg in args.iter().take(args.len().saturating_sub(1)) {
+                    if let Expr::Name(n) = arg {
+                        local.push(n.clone());
+                    } else {
+                        found = true;
+                    }
+                }
+                if let Some(body) = args.last() {
+                    found |= reads_linked_expr(wb, sheet, body, active, &local);
+                }
+                found
+            } else {
+                (gridcraft_functions::lookup(name).is_none() && reads_linked_name(wb, sheet, name, active, bound))
+                    || args.iter().any(|arg| reads_linked_expr(wb, sheet, arg, active, bound))
+            }
+        }
+        Expr::Invoke(callee, args) => {
+            reads_linked_expr(wb, sheet, callee, active, bound)
+                || args.iter().any(|arg| reads_linked_expr(wb, sheet, arg, active, bound))
+        }
+        Expr::Array(rows) => rows.iter().flatten().any(|e| reads_linked_expr(wb, sheet, e, active, bound)),
+        Expr::Unary(_, e) | Expr::Paren(e) => reads_linked_expr(wb, sheet, e, active, bound),
+        Expr::Binary(_, a, b) => reads_linked_expr(wb, sheet, a, active, bound) || reads_linked_expr(wb, sheet, b, active, bound),
+        _ => false,
+    }
+}
+
+fn reads_linked_name(
+    wb: &Workbook,
+    sheet: usize,
+    name: &str,
+    active: &mut Vec<(Option<usize>, String)>,
+    bound: &[String],
+) -> bool {
+    let (scope_sheet, bare) = match name.split_once('!') {
+        Some((s, b)) => match wb.sheet_index(s.trim_matches('\'')) {
+            Some(i) => (i, b),
+            None => return false,
+        },
+        None => (sheet, name),
+    };
+    let Some(def) = wb.name(bare, scope_sheet) else { return false };
+    let key = (def.scope, def.name.to_ascii_lowercase());
+    if active.iter().any(|seen| seen == &key) {
+        return false;
+    }
+    let Ok(expr) = gridcraft_formula::parse(&def.formula) else { return false };
+    let scope = def.scope.unwrap_or(sheet);
+    active.push(key);
+    let found = reads_linked_expr(wb, scope, &expr, active, bound);
+    active.pop();
+    found
 }
 
 pub type Key = (usize, CellRef);
@@ -854,7 +940,7 @@ fn saved_arrays(wb: &Workbook) -> HashMap<Key, Value> {
         .sheets
         .iter()
         .enumerate()
-        .flat_map(|(sheet, sh)| sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(f)).map(|_| (sheet, at))))
+        .flat_map(|(sheet, sh)| sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(wb, sheet, f)).map(|_| (sheet, at))))
         .collect();
     let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());
     for &(sheet, at) in &linked_arrays {

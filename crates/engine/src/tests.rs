@@ -372,6 +372,31 @@ fn kept_values_of_uncalculable_linked_names_move_with_their_cells() {
 }
 
 #[test]
+fn linked_dynamic_array_keeps_saved_spill_values_after_row_insert() {
+    let mut s = s();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.external_books = vec![gridcraft_model::ExternalBook {
+        opaque: true,
+        sheets: vec![gridcraft_model::ExternalSheet { name: "Data".into(), ..Default::default() }],
+        ..Default::default()
+    }]
+    .into();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(CellRef::parse("A5").unwrap(), gridcraft_model::Cell {
+        value: Value::Number(10.0),
+        ..gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]Data!A1:A2"))
+    });
+    sh.spill_ranges.insert(CellRef::parse("A5").unwrap(), gridcraft_core::RangeRef::parse("A5:A6").unwrap());
+    sh.spill.insert(CellRef::parse("A6").unwrap(), Value::Number(20.0));
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!((v(&s, "A6"), v(&s, "A7")), (Value::Number(10.0), Value::Number(20.0)));
+}
+#[test]
 fn kept_values_of_uncalculable_linked_names_survive_edits_they_do_not_read() {
     // As read from a file: H11 `=[1]!Broken+G11`, where the link saved `Broken` as #REF!, shows
     // the 22 Excel saved for it.

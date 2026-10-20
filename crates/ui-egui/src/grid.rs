@@ -2721,6 +2721,22 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
 }
 
+/// The in-cell editor's box (#1970). A Wrap Text cell keeps the column's width and grows down,
+/// wrapping the text like the cell does; any other cell grows to the right to fit one line,
+/// clipped at the grid's right edge.
+fn editor_box(ui: &egui::Ui, text: &str, font: &FontId, size: f32, rect: Rect, wrap: bool, grid_right: f32) -> (f32, f32) {
+    if wrap {
+        let avail = (rect.width() - 6.0).max(20.0);
+        let job = egui::text::LayoutJob::simple(text.to_string(), font.clone(), Color32::BLACK, avail);
+        let galley = ui.painter().layout_job(job);
+        (rect.width(), (galley.size().y + 6.0).max(size * 1.3 + 4.0).max(rect.height()))
+    } else {
+        let text_w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), Color32::BLACK).size().x;
+        let lines = text.lines().count().max(1) as f32 + if text.ends_with('\n') { 1.0 } else { 0.0 };
+        ((text_w + 14.0).max(rect.width()).min((grid_right - rect.left()).max(rect.width())), (size * 1.3 * lines + 4.0).max(rect.height()))
+    }
+}
+
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let Some(ed) = app.editor.as_ref() else { return };
     if ed.sheet != wb.active_sheet {
@@ -2734,10 +2750,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
-    let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
-    let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    let (w, h) = editor_box(ui, &ed.text, &font, size, rect, st.align.wrap, geo.cells.right());
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {
@@ -2756,7 +2769,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
-    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+    crate::formula_bar::editor_widget(app, &mut child, id, font, st.align.wrap, erect.width() - 4.0);
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -3300,6 +3313,45 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         );
     }
     p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
+}
+
+#[cfg(test)]
+mod editor_box_tests {
+    use super::*;
+
+    fn box_for(text: &str, wrap: bool, cell_w: f32, cell_h: f32) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let font = FontId::proportional(14.67); // 11pt at 96 dpi
+        let rect = Rect::from_min_size(pos2(64.0, 20.0), vec2(cell_w, cell_h));
+        let out = std::cell::Cell::new((0.0f32, 0.0f32));
+        let mut full = ctx.run_ui(egui::RawInput::default(), |ui| out.set(editor_box(ui, text, &font, 14.67, rect, wrap, 1000.0)));
+        full.textures_delta.clear();
+        out.into_inner()
+    }
+
+    #[test]
+    fn a_wrap_text_editor_keeps_the_column_width_and_grows_down() {
+        let para = "Since the 1960s, NASA has left hardware across the solar system on the Moon, on Mars, and in deep space.";
+        let (w, h) = box_for(para, true, 90.0, 18.0);
+        assert_eq!(w, 90.0, "a wrapped editor keeps the column width");
+        assert!(h > 4.0 * 18.0, "the long paragraph wraps to several lines and the box grows down: h={h}");
+    }
+
+    #[test]
+    fn a_plain_editor_grows_to_the_right_on_one_line() {
+        let (w, h) = box_for("hello world this is a fairly long single line", false, 90.0, 18.0);
+        assert!(w > 90.0, "a plain editor widens past the column: w={w}");
+        assert!(h < 18.0 * 2.0, "one line stays one line tall: h={h}");
+        let (w2, _) = box_for("hi", false, 90.0, 18.0);
+        assert_eq!(w2, 90.0, "short text keeps the column width");
+    }
+
+    #[test]
+    fn the_plain_editor_stops_at_the_grid_edge() {
+        let long = "x".repeat(400);
+        let (w, _) = box_for(&long, false, 90.0, 18.0);
+        assert!(w <= 1000.0 - 64.0 + 0.01, "never wider than the grid: w={w}");
+    }
 }
 
 #[cfg(test)]

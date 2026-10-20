@@ -2672,9 +2672,12 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
                         app.grid.ensure_visible = true;
                     }
+                    // Excel: with frozen columns Home goes to the first unfrozen one, scrolling the
+                    // pane back to it (column A sits in the frozen pane, so selecting it scrolls nothing) (#2044).
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
-                        let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
+                        let c = sh.freeze.map(|f| f.1).unwrap_or(0);
+                        let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, c).a1()}));
                         app.grid.ensure_visible = true;
                     }
                     // Excel: Enter while a copied range is marked pastes it and ends copy mode.

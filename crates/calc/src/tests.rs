@@ -255,21 +255,25 @@ fn linked_dynamic_array_through_defined_name_keeps_saved_spill_values() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{DefinedName, ExternalBook, ExternalSheet};
     let mut t = T::new();
-    t.wb.external_books = vec![ExternalBook {
-        opaque: true,
-        sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }],
-        ..Default::default()
-    }]
-    .into();
-    t.wb.names.push(DefinedName {
-        name: "Price".into(),
-        scope: None,
-        formula: "'[1]Data'!A1:A2".into(),
-        comment: String::new(),
-        hidden: false,
-    });
+    t.wb.external_books =
+        vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
+    t.wb.names.push(DefinedName { name: "Price".into(), scope: None, formula: "'[1]Data'!A1:A2".into(), comment: String::new(), hidden: false });
     let sh = t.wb.sheet_mut(0).unwrap();
     sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=Price")) });
+    sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
+    sh.spill.insert(c("A2"), Value::Number(20.0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("A2")), (Value::Number(10.0), Value::Number(20.0)));
+}
+
+#[test]
+fn linked_dynamic_array_through_an_external_name_keeps_saved_spill_values() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::ExternalBook;
+    let mut t = T::new();
+    t.wb.external_books = vec![ExternalBook { opaque: true, ..Default::default() }].into();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=[1]!Arr")) });
     sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
     sh.spill.insert(c("A2"), Value::Number(20.0));
     t.calc.recalc_all(&mut t.wb);

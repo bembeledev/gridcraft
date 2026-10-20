@@ -382,10 +382,10 @@ fn linked_dynamic_array_keeps_saved_spill_values_after_row_insert() {
     }]
     .into();
     let sh = wb.sheet_mut(0).unwrap();
-    sh.cells.set(CellRef::parse("A5").unwrap(), gridcraft_model::Cell {
-        value: Value::Number(10.0),
-        ..gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]Data!A1:A2"))
-    });
+    sh.cells.set(
+        CellRef::parse("A5").unwrap(),
+        gridcraft_model::Cell { value: Value::Number(10.0), ..gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]Data!A1:A2")) },
+    );
     sh.spill_ranges.insert(CellRef::parse("A5").unwrap(), gridcraft_core::RangeRef::parse("A5:A6").unwrap());
     sh.spill.insert(CellRef::parse("A6").unwrap(), Value::Number(20.0));
     let d = s.doc_mut().unwrap();

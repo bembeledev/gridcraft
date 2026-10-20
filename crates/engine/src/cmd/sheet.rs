@@ -213,10 +213,7 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     // Dynamic-array caches are cell-positioned state too. Move them before recalculation clears
     // the old layout, so a linked formula whose new position cannot be evaluated keeps its spill.
-    sh.spill = std::mem::take(&mut sh.spill)
-        .into_iter()
-        .filter_map(|(c, value)| map_cell(c).map(|c| (c, value)))
-        .collect();
+    sh.spill = std::mem::take(&mut sh.spill).into_iter().filter_map(|(c, value)| map_cell(c).map(|c| (c, value))).collect();
     sh.spill_ranges = std::mem::take(&mut sh.spill_ranges)
         .into_iter()
         .filter_map(|(anchor, range)| map_cell(anchor).and_then(|anchor| map_range(range).map(|range| (anchor, range))))

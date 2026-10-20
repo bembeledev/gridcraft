@@ -289,7 +289,7 @@ impl Value {
 
 /// Excel's comparison for `=`, `<`… operators. Text compares case-insensitively; empty acts as
 /// 0, "" or FALSE depending on the other side. Errors are handled by the caller. Text order is
-/// the Root collation: `compare_with(a, b, Collation::Root)`.
+/// the Root order (ours, language-neutral, not CLDR root): `compare_with(a, b, Collation::Root)`.
 pub fn compare(a: &Value, b: &Value) -> Ordering {
     compare_with(a, b, Collation::Root)
 }
@@ -333,7 +333,7 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
 pub use crate::collate::{Collation, compare_text, compare_text_with};
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
-/// Text order is the Root collation: `sort_compare_with(a, b, Collation::Root)`.
+/// Text order is the Root order (ours, not CLDR root): `sort_compare_with(a, b, Collation::Root)`.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
     sort_compare_with(a, b, Collation::Root)
 }

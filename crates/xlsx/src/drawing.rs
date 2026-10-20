@@ -379,6 +379,9 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
                 child_offset: file_child_offset.unwrap_or(child_offset),
                 child_extent: file_child_extent.unwrap_or(child_extent),
                 complete: file_complete,
+                flip,
+                rotation,
+                member_rotations: member_rotations.clone(),
                 members: file_members,
             };
             sheet.groups.push(DrawingGroup {
@@ -633,12 +636,16 @@ impl DrawingOut<'_> {
         }
     }
 
-    fn source(&self, g: &DrawingGroup) -> Option<GroupFile> {
+    /// The transform group `g` was read with, while nothing it depends on has been edited.
+    fn source<'g>(&self, g: &'g DrawingGroup) -> Option<&'g GroupFile> {
         let f = g.file.as_ref()?;
         if !f.complete
             || f.anchor != g.anchor
             || f.child_offset != g.child_offset
             || f.child_extent != g.child_extent
+            || f.flip != g.flip
+            || f.rotation != g.rotation
+            || f.member_rotations != g.member_rotations
             || f.members.len() != g.members.len()
         {
             return None;
@@ -646,7 +653,7 @@ impl DrawingOut<'_> {
         if f.members.iter().zip(&g.members).any(|(m, r)| m.reference != *r || self.member_anchor(*r) != Some(m.anchor)) {
             return None;
         }
-        Some(f.clone())
+        Some(f)
     }
 
     /// A `grpSp` for group `id` spanning `b`, at `off`/`ext` in its parent's space, with its

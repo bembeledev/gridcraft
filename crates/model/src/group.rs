@@ -31,6 +31,7 @@ pub struct GroupFileMember {
     pub ext: (i64, i64),
 }
 
+/// The transform a group was read with, for an unedited group to be written back exactly.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupFile {
     pub anchor: Anchor,
@@ -38,10 +39,15 @@ pub struct GroupFile {
     pub ext: (i64, i64),
     pub child_offset: (i64, i64),
     pub child_extent: (i64, i64),
+    /// Every member was read and had its own offset and extent.
     pub complete: bool,
+    pub flip: (bool, bool),
+    pub rotation: i64,
+    pub member_rotations: Vec<(DrawingRef, i64)>,
     pub members: Vec<GroupFileMember>,
 }
 
+/// A group of floating objects.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawingGroup {
     pub id: u32,

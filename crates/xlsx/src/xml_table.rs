@@ -37,8 +37,6 @@ struct State {
     index: HashMap<String, usize>,
     /// Lowercased names taken, with the next numeric suffix to try.
     taken: HashMap<String, usize>,
-    /// Cells held by the rows built so far (the budget [`MAX_CELLS`] limits).
-    cells: usize,
     truncated: bool,
 }
 
@@ -172,7 +170,6 @@ fn rows_of(el: &El, path: &str, st: &mut State) -> Vec<Row> {
                 base.push((c, Arc::from(text)));
             }
         }
-        st.cells = st.cells.saturating_add(base.len());
         return vec![base];
     }
 
@@ -196,9 +193,12 @@ fn rows_of(el: &El, path: &str, st: &mut State) -> Vec<Row> {
         if group.is_empty() {
             continue;
         }
+        // The pairings are the only rows kept (the rows they came from are dropped), so the cell
+        // budget bounds what they hold, not a running total over the levels of the document.
         let width = group.iter().map(Vec::len).max().unwrap_or(0).max(1);
-        let room = MAX_CELLS.saturating_sub(st.cells) / (result.first().map_or(0, Vec::len) + width).max(1);
-        let allowed = (MAX_ROWS as usize).min(room / result.len().max(1)).max(1);
+        let held = result.iter().map(Vec::len).max().unwrap_or(0);
+        let max_pairs = (MAX_CELLS / (held + width).max(1)).min(MAX_ROWS as usize);
+        let allowed = (max_pairs / result.len().max(1)).max(1);
         if group.len() > allowed {
             group.truncate(allowed);
             st.truncated = true;
@@ -206,7 +206,7 @@ fn rows_of(el: &El, path: &str, st: &mut State) -> Vec<Row> {
         let mut next: Vec<Row> = Vec::with_capacity(result.len().saturating_mul(group.len()).min(MAX_ROWS as usize));
         'pairs: for a in &result {
             for b in &group {
-                if next.len() >= MAX_ROWS as usize {
+                if next.len() >= max_pairs {
                     st.truncated = true;
                     break 'pairs;
                 }
@@ -215,7 +215,6 @@ fn rows_of(el: &El, path: &str, st: &mut State) -> Vec<Row> {
                 next.push(row);
             }
         }
-        st.cells = st.cells.saturating_add(next.iter().map(Vec::len).sum::<usize>());
         result = next;
         if st.truncated {
             break;

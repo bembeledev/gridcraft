@@ -154,3 +154,19 @@ fn a_huge_cross_product_is_cut_with_a_warning() {
     assert!(!report.warnings.is_empty());
     assert!(wb.sheet(0).unwrap().tables[0].range.end.row < gridcraft_core::MAX_ROWS);
 }
+
+#[test]
+fn a_long_list_of_nested_records_is_not_cut() {
+    // 300k records, 7 values each, nested three levels deep: 2.1 million cells, well inside the
+    // budget. Counting each level's rows again used to cut this down to a single row.
+    let mut xml = String::from("<lote>");
+    for i in 0..300_000 {
+        xml.push_str(&format!(
+            "<nf id=\"{i}\"><ide><n>{i}</n><d>x</d></ide><emit><a>V</a><b>W</b></emit><det><prod><c>{i}</c><q>1</q></prod></det></nf>"
+        ));
+    }
+    xml.push_str("</lote>");
+    let (wb, report) = read_xml_table(xml.as_bytes()).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(wb.sheet(0).unwrap().tables[0].range.end.row, 300_000);
+}

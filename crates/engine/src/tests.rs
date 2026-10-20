@@ -3364,6 +3364,24 @@ fn cell_set_json_numbers_ignore_the_conversion_options() {
     assert_eq!(v(&s, "A1"), Value::text("124412140710"));
 }
 
+/// Data validation reads input the way typing stores it, under the conversion options: with
+/// "Remove leading zeros" off, `0123` is kept as text, so a whole-number rule refuses it and Circle
+/// Invalid Data circles the cell. Before, validation read `0123` with the defaults (the number 123).
+#[test]
+fn data_validation_reads_input_with_the_conversion_options() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "between", "formula1": "1", "formula2": "1000"})).unwrap();
+    assert!(ok(&mut s, "A1", "0123"), "with the defaults, 0123 is the number 123");
+    s.execute("app.dataConversion", json!({"removeLeadingZeros": false})).unwrap();
+    assert!(!ok(&mut s, "A1", "0123"), "kept as text, so not a whole number");
+    assert!(ok(&mut s, "A1", "123"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "0123"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "123"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("0123"));
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!(["A1"]));
+}
+
 /// A scenario stores its numbers as numbers, so Show restores them as numbers whatever the options
 /// say; before, a value like `1234.56789012345` came back as text and broke the formulas using it.
 /// Stored text follows the options, so `0123` kept as text comes back as text.

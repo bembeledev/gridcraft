@@ -982,10 +982,7 @@ fn hostile_slicer_parts_warn_not_panic() {
 fn unresolved_slicer_cache_is_skipped_and_dropped_on_save() {
     let bytes = write_xlsx(&slicer_workbook()).unwrap();
     let cache = "xl/slicerCaches/slicerCache1.xml";
-    for replacement in [
-        ("pivotCacheId=\"", "pivotCacheId=\"77"),
-        (" pivotCacheId=\"1\"", ""),
-    ] {
+    for replacement in [("pivotCacheId=\"", "pivotCacheId=\"77"), (" pivotCacheId=\"1\"", "")] {
         let mut parts = unzip(&bytes);
         let original = String::from_utf8(parts.remove(cache).unwrap()).unwrap();
         let edited = original.replace(replacement.0, replacement.1);

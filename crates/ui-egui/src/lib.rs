@@ -528,8 +528,30 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
+        // Menu-style AutoSum on one cell proposes its formula in the editor with the range
+        // pointed and selected, so a click, drag, arrow key or typing replaces it, as in Excel.
+        // Programmatic callers use `run` and get the total entered.
+        if id == "formulas.autoSum" && params.get("range").is_none() && self.session.active().is_some_and(|d| d.selection.current().is_single()) {
+            return self.auto_sum_in_editor(params);
+        }
         if let Err(e) = self.run(id, params) {
             self.alert(e);
+        }
+    }
+
+    fn auto_sum_in_editor(&mut self, params: Json) {
+        let mut params = if params.is_object() { params } else { json!({}) };
+        if let Some(map) = params.as_object_mut() {
+            map.insert("enter".into(), Json::Bool(false));
+        }
+        if let Err(e) = self.run("formulas.autoSum", params) {
+            return self.alert(e);
+        }
+        if let Some(ed) = self.editor.as_mut() {
+            ed.point_last_argument();
+            if ed.can_point() {
+                self.session.mode = gridcraft_engine::Mode::Point;
+            }
         }
     }
 

@@ -935,3 +935,22 @@ fn the_eraser_erases_a_grouped_ink_stroke_and_leaves_the_rest_of_its_group() {
     assert_eq!(sheet.shapes.iter().map(|sh| sh.id).collect::<Vec<_>>(), vec![kept]);
     assert_eq!(sheet.drawing_group(gid).map(|g| g.members.clone()), Some(vec![DrawingRef::Shape(kept)]));
 }
+
+#[test]
+fn undo_after_backspace_restores_the_cleared_cell() {
+    // #1855: Backspace clears the cell and opens an empty editor; committing it must not add a
+    // second, empty undo step, so one Ctrl+Z brings the value back and leaves other edits alone.
+    let mut h = harness(blank());
+    text(&mut h, "3200");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "C5");
+    text(&mut h, "11750");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "A1");
+    key(&mut h, Key::Backspace, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Empty);
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::Number(3200.0));
+    assert_eq!(value(&h, "C5"), Value::Number(11750.0));
+}

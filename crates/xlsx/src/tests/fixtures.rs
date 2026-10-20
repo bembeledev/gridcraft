@@ -535,6 +535,55 @@ fn grouped_objects_import_as_groups_through_nested_group_transforms() {
     assert!(close(bo.child_offset, (1333500, 952500)) && close(bo.child_extent, (3886200, 2857500)), "{:?}", (bo.child_offset, bo.child_extent));
 }
 
+#[test]
+fn edited_nested_group_keeps_member_scale_on_roundtrip() {
+    use gridcraft_model::DrawingRef;
+
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+        <xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="2" name="Outer"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+          <xdr:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2438400" cy="1905000"/><a:chOff x="952500" y="476250"/><a:chExt cx="4876800" cy="3810000"/></a:xfrm></xdr:grpSpPr>
+          <xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Inner"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+            <xdr:grpSpPr><a:xfrm><a:off x="3390900" y="2381250"/><a:ext cx="2438400" cy="1905000"/><a:chOff x="0" y="0"/><a:chExt cx="12192000" cy="9525000"/></a:xfrm></xdr:grpSpPr>
+            <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="5" name="Keep"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="3048000" y="2381250"/><a:ext cx="6096000" cy="4762500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Keep</a:t></a:r></a:p></xdr:txBody></xdr:sp>
+            <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="6" name="Erase"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="6096000" cy="2381250"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Erase</a:t></a:r></a:p></a:txBody></xdr:sp>
+          </xdr:grpSp>
+        </xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor>
+    </xdr:wsDr>"#;
+    let (mut wb, _) = read_xlsx(&with_drawing(drawing)).unwrap();
+    let before = {
+        let s = wb.sheet(0).unwrap();
+        shape_box(s, "Keep")
+    };
+    let (outer_scale, inner_scale) = {
+        let s = wb.sheet(0).unwrap();
+        let outer = s.groups.iter().find(|g| g.name == "Outer").unwrap();
+        let inner = s.groups.iter().find(|g| g.name == "Inner").unwrap();
+        (outer.child_extent.0 as f64 / outer.anchor.width as f64, inner.child_extent.0 as f64 / inner.anchor.width as f64)
+    };
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        let erased = s.shapes.iter().find(|sh| sh.text == "Erase").unwrap().id;
+        s.remove_from_group(DrawingRef::Shape(erased));
+        s.shapes.retain(|sh| sh.id != erased);
+    }
+    let saved = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&saved).unwrap();
+    let x = pkg.read_xml("xl/drawings/drawing1.xml").unwrap().unwrap();
+    let outer = x.children[0].child("grpSp").unwrap();
+    let inner = outer.child("grpSp").unwrap();
+    let outer_xf = outer.path(&["grpSpPr", "xfrm"]).unwrap();
+    let inner_xf = inner.path(&["grpSpPr", "xfrm"]).unwrap();
+    let inner_ext = xfrm_at(inner_xf, "ext");
+    let inner_child_ext = xfrm_at(inner_xf, "chExt");
+    let actual_scale = inner_ext.0 as f64 / inner_child_ext.0 as f64;
+    let expected_scale = outer_scale / inner_scale;
+    assert!((actual_scale - expected_scale).abs() < 1e-9, "nested scale {actual_scale} != {expected_scale}");
+    assert!(xfrm_at(outer_xf, "ext").0 > 0);
+    let (back, _) = read_xlsx(&saved).unwrap();
+    assert!(near_box(shape_box(back.sheet(0).unwrap(), "Keep"), before));
+}
+
 /// A package whose one sheet has the drawing part `drawing`.
 fn with_drawing(drawing: &str) -> Vec<u8> {
     let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;

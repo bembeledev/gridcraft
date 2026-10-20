@@ -602,6 +602,8 @@ struct DrawingOut<'a> {
     objs: &'a [Obj<'a>],
     /// Where each object is in `objs` (the first, should ids repeat).
     index: HashMap<DrawingRef, usize>,
+    /// The direct parent of each member, built once for the drawing write.
+    member_parent: HashMap<DrawingRef, u32>,
     /// Objects already written, by index in `objs`, and groups already written: each goes out
     /// once.
     done: Vec<bool>,
@@ -610,6 +612,17 @@ struct DrawingOut<'a> {
 }
 
 impl DrawingOut<'_> {
+    fn outer_group(&self, r: DrawingRef) -> Option<u32> {
+        let mut cur = *self.member_parent.get(&r)?;
+        for _ in 0..MAX_GROUP_DEPTH {
+            match self.member_parent.get(&DrawingRef::Group(cur)).copied() {
+                Some(p) if p != cur => cur = p,
+                _ => break,
+            }
+        }
+        Some(cur)
+    }
+
     fn take_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -718,8 +731,17 @@ impl DrawingOut<'_> {
         for m in &g.members {
             let Some(r) = self.rect(*m) else { continue };
             let rot = g.member_rotations.iter().find(|(o, _)| o == m).map_or(0, |&(_, rot)| rot);
-            let (moff, mext) =
-                source.as_ref().and_then(|f| f.members.iter().find(|fm| fm.reference == *m).map(|fm| (fm.off, fm.ext))).unwrap_or_else(|| {
+            // An edited nested group cannot retain its file box: its child box is recomputed
+            // from its remaining members, so place it in the enclosing child space instead.
+            let nested_unedited = match m {
+                DrawingRef::Group(n) => sheet.drawing_group(*n).is_some_and(|ng| self.source(ng).is_some()),
+                _ => true,
+            };
+            let (moff, mext) = source
+                .as_ref()
+                .filter(|_| nested_unedited)
+                .and_then(|f| f.members.iter().find(|fm| fm.reference == *m).map(|fm| (fm.off, fm.ext)))
+                .unwrap_or_else(|| {
                     // An unedited nested group keeps its own child space, which spans its source
                     // box rather than its members' box: place that box.
                     let r = match m {
@@ -753,6 +775,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
     for (i, o) in objs.iter().enumerate() {
         index.entry(o.drawing_ref()).or_insert(i);
     }
+    let mut member_parent = HashMap::new();
+    for g in &sheet.groups {
+        for member in &g.members {
+            member_parent.entry(*member).or_insert(g.id);
+        }
+    }
     let mut out = DrawingOut {
         s: String::from(
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">",
@@ -761,12 +789,13 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
         theme,
         objs,
         index,
+        member_parent,
         done: vec![false; objs.len()],
         groups_done: HashSet::new(),
         next_id: 2,
     };
     for (i, o) in objs.iter().enumerate() {
-        if let Some(gid) = sheet.outer_group(o.drawing_ref())
+        if let Some(gid) = out.outer_group(o.drawing_ref())
             && !out.groups_done.contains(&gid)
             && let (Some(g), Some(b)) = (sheet.drawing_group(gid), out.rect(DrawingRef::Group(gid)))
         {

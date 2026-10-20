@@ -4,6 +4,8 @@
 //! resizing or deleting a member acts on its outermost group.
 
 use gridcraft_core::CellRef;
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Anchor, AnchorMode, Sheet};
@@ -198,11 +200,12 @@ impl Sheet {
     /// Everything inside group `id`, nested groups included (not `id` itself).
     pub fn group_contents(&self, id: u32) -> Vec<DrawingRef> {
         let mut out = Vec::new();
+        let mut seen = HashSet::new();
         let mut stack = vec![(id, 0usize)];
         while let Some((gid, depth)) = stack.pop() {
             let Some(g) = self.drawing_group(gid) else { continue };
             for m in &g.members {
-                if out.contains(m) {
+                if !seen.insert(*m) {
                     continue;
                 }
                 out.push(*m);

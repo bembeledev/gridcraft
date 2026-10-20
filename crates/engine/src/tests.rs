@@ -2743,6 +2743,17 @@ fn object_commands_on_a_grouped_member_act_on_the_group() {
     assert_eq!(after, (down_right(before.0), down_right(before.1), down_right(before.2), down_right(before.3)));
 }
 
+#[test]
+fn arrange_align_rejects_grouped_members() {
+    use gridcraft_model::{AnchorMode, DrawingRef};
+    let mut s = s();
+    let a = add_image(&mut s, "B2", AnchorMode::MoveAndSize);
+    let b = add_image(&mut s, "D4", AnchorMode::MoveAndSize);
+    group_objects(&mut s, vec![DrawingRef::Image(a), DrawingRef::Image(b)]);
+    let err = s.execute("arrange.align", json!({"kind": "image", "ids": [a, b], "align": "left"})).unwrap_err();
+    assert!(err.to_string().contains("grouped members"), "{err}");
+}
+
 /// Groups `members` on sheet 0 as one group with the anchor of the first image; returns its id.
 fn group_objects(s: &mut Session, members: Vec<gridcraft_model::DrawingRef>) -> u32 {
     let d = s.doc_mut().unwrap();

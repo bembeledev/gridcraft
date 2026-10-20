@@ -64,7 +64,6 @@ pub fn start() {
                     if let Some(share) = collabcraft_share::CollabCraft::from_env() {
                         app.share.connect(share.for_app("gridcraft"));
                     }
-                    cloud::start(&mut app);
                     let invited = invite.is_some();
                     if let Some(invitation) = invite.take() {
                         open_invite(&mut app, invitation);

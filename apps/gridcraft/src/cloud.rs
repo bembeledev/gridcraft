@@ -277,6 +277,11 @@ fn token_path() -> Option<PathBuf> {
 fn load_token() -> Option<String> {
     let raw = std::fs::read(token_path()?).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let service = base_url()?;
+    let saved_service = value.get("service")?.as_str()?;
+    if saved_service != service.as_str() {
+        return None;
+    }
     value.get("token")?.as_str().map(str::to_owned).filter(|t| !t.is_empty())
 }
 
@@ -305,11 +310,29 @@ fn remember_account(subject: &str, display: &str) {
 fn write_session(value: serde_json::Value) {
     let Some(path) = token_path() else { return };
     let Ok(text) = serde_json::to_vec(&value) else { return };
-    if let Err(e) = std::fs::write(&path, text) {
-        log::warn!("could not save the cloud session: {e}");
-        return;
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let tmp = path.with_extension(format!("session.{}", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) {
+            Ok(mut file) => {
+                if file.write_all(&text).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+                    return;
+                }
+                let _ = std::fs::remove_file(&tmp);
+            }
+            Err(e) => log::warn!("could not save the cloud session: {e}"),
+        }
     }
-    restrict(&path);
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = std::fs::write(&path, text) {
+            log::warn!("could not save the cloud session: {e}");
+            return;
+        }
+        restrict(&path);
+    }
 }
 
 fn forget_token() {

@@ -762,6 +762,9 @@ impl SheetApp {
             // what the user can see, which keeps a scripted open and a clicked
             // one on the same footing.
             "cloud.openFile" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
                 let id = p.get("id").and_then(Json::as_str);
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 let found = self

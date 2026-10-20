@@ -276,6 +276,8 @@ pub struct SheetApp {
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
+    /// Group selection restored when a text-box editor closes; consumed after grid interaction.
+    pub(crate) text_box_selection_restore: Option<u32>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -326,6 +328,7 @@ impl SheetApp {
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,
+            text_box_selection_restore: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),

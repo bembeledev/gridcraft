@@ -184,9 +184,12 @@ fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() 
     click(&mut h, p);
     assert_eq!(h.state().selected_chart, Some(group_id), "single-click selection is promoted to the group");
     click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(id), "editing selects the member needed by the editor");
+    assert_eq!(h.state().text_box_editor.as_ref().map(|e| e.id), Some(id), "editing targets the raw group member");
     replace(&mut h, "Updated grouped text");
     let outside = cell_center(&h, "J15");
     click(&mut h, outside);
+    assert_eq!(h.state().selected_chart, Some(group_id), "committing restores the outer group selection");
     let sheet = h.state().session.doc().unwrap().wb.active().unwrap();
     let members = sheet.drawing_group(group_id).unwrap().members.clone();
     assert_eq!(sheet.shapes.iter().find(|s| s.id == id).unwrap().text, "Updated grouped text");
@@ -199,6 +202,18 @@ fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() 
     let saved_shape = saved_sheet.shapes.iter().find(|s| s.text == "Updated grouped text").unwrap();
     let saved_group = saved_sheet.groups.iter().find(|g| g.members.len() == members.len()).unwrap();
     assert!(saved_group.members.contains(&DrawingRef::Shape(saved_shape.id)), "saved group retains the edited member");
+}
+
+#[test]
+fn escape_restores_group_selection_after_grouped_text_edit() {
+    let (mut h, id, group_id) = grouped_fixture();
+    h.run_steps(45);
+    let p = shape_rect(&h, id).center();
+    click(&mut h, p);
+    click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(id));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(h.state().selected_chart, Some(group_id));
 }
 
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {

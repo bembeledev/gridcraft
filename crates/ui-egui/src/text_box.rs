@@ -15,6 +15,8 @@ pub struct EditState {
     original: String,
     request_focus: bool,
     rect: Option<Rect>,
+    selection: Option<u32>,
+    restore: Option<u32>,
 }
 
 pub(crate) fn editor_id() -> egui::Id {
@@ -23,6 +25,8 @@ pub(crate) fn editor_id() -> egui::Id {
 
 impl SheetApp {
     pub fn begin_text_box_edit(&mut self, id: u32) -> bool {
+        let selected = self.selected_chart;
+        let restore = selected.and_then(|_| self.session.active()?.wb.active()?.outer_group(gridcraft_engine::model::DrawingRef::Shape(id)));
         if !self.commit_edit(0, 0, false, false) {
             return false;
         }
@@ -48,6 +52,8 @@ impl SheetApp {
             original: shape.text.clone(),
             request_focus: true,
             rect: None,
+            selection: selected,
+            restore,
         });
         self.selected_chart = Some(id);
         self.grid.drag = crate::grid::Drag::None;
@@ -70,6 +76,8 @@ impl SheetApp {
             Ok(()) => {
                 self.session.mode = Mode::Ready;
                 self.after_engine();
+                self.selected_chart = ed.restore.or(ed.selection);
+                self.text_box_selection_restore = ed.restore;
                 Ok(())
             }
             Err(e) => {
@@ -80,7 +88,9 @@ impl SheetApp {
     }
 
     pub fn cancel_text_box_edit(&mut self) {
-        self.text_box_editor = None;
+        let Some(ed) = self.text_box_editor.take() else { return };
+        self.selected_chart = ed.restore.or(ed.selection);
+        self.text_box_selection_restore = ed.restore;
         self.session.mode = Mode::Ready;
     }
 

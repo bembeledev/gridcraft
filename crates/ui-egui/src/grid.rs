@@ -179,6 +179,7 @@ impl WheelZoom {
         w
     }
 
+    /// Visual zoom at `now`, settling at the destination when the glide expires.
     fn shown(&self, now: f64, zoom: u16) -> f32 {
         self.glide.map_or(f32::from(zoom), |(to, from)| {
             let progress = ((now - self.started) / crate::selection_glide::GLIDE_SECS) as f32;
@@ -228,10 +229,12 @@ pub struct Geo {
 }
 
 impl Geo {
+    /// Normal-view geometry at the sheet's committed zoom percentage.
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
         Self::with_zoom(sh, rect, scroll, f32::from(sh.zoom))
     }
 
+    /// Normal-view geometry at a fractional visual zoom during animation.
     fn with_zoom(sh: &Sheet, rect: Rect, scroll: egui::Vec2, percent: f32) -> Geo {
         let zoom = (percent / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
@@ -291,6 +294,7 @@ impl Geo {
         Self::paged_with_zoom(sh, rect, scroll, grid, f32::from(sh.zoom))
     }
 
+    /// Page Layout geometry at a fractional visual zoom, including the print scale.
     fn paged_with_zoom(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>, percent: f32) -> Geo {
         let mut g = Geo::with_zoom(sh, rect, scroll, percent);
         let zoom = (percent / 100.0).clamp(0.1, 4.0);
@@ -574,6 +578,7 @@ fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
+/// Handle grid input and paint the active sheet using the current visual zoom.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -666,6 +671,18 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         if modifiers.shift && delta.x == 0.0 {
             delta = vec2(delta.y, 0.0);
+        }
+        view.scroll -= delta / z;
+    }
+    // A one-finger drag pans without selecting; two fingers keep their pinch zoom.
+    if resp.drag_started() && ui.input(|i| i.any_touches()) {
+        app.grid.touch_pan = true;
+    }
+    if app.grid.touch_pan && resp.dragged() && ui.input(|i| i.multi_touch().is_none()) {
+        let z = if paper { make_geo(app, view.scroll).z } else { shown_zoom / 100.0 * DISPLAY_SCALE };
+        let mut delta = resp.drag_delta();
+        if sh.right_to_left {
+            delta.x = -delta.x;
         }
         view.scroll -= delta / z;
     }
@@ -3415,6 +3432,7 @@ mod tests {
     }
     use super::*;
 
+    /// Wheel notches follow the zoom ladder, preserve 100%, and respect the limits.
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {
         for (from, zoom_in, to) in [
@@ -3445,7 +3463,7 @@ mod tests {
             assert_eq!(wheel_zoom_step(from, zoom_in), to, "{from}% {}", if zoom_in { "in" } else { "out" });
         }
         // Every step on the ladder is 15–25% from the next, and a notch in then out returns.
-        // (The glide between steps is `zoom_glide_moves_by_ratio_and_always_arrives`.)
+        // (The glide between steps is `zoom_glide_keeps_subpercent_motion_and_lands_by_time`.)
         for w in WHEEL_ZOOM_LADDER.windows(2) {
             let ratio = f32::from(w[1]) / f32::from(w[0]);
             assert!((1.15..=1.25).contains(&ratio), "{w:?}");
@@ -3454,6 +3472,7 @@ mod tests {
         }
     }
 
+    /// Fractional zoom keeps moving at high frame rates and settles even with invalid time.
     #[test]
     fn zoom_glide_keeps_subpercent_motion_and_lands_by_time() {
         for (from, to) in [(100.0, 120), (120.0, 100), (10.0, 12), (340.0, 400), (400.0, 10)] {
@@ -3474,6 +3493,7 @@ mod tests {
         assert_eq!(zoom_glide_step(f32::NAN, 120, 0.5), 120.0);
     }
 
+    /// Workbook changes invalidate cached conditional-format statistics.
     #[test]
     fn cached_conditional_statistics_follow_edits_undo_and_recalculation() {
         let mut session = gridcraft_engine::Session::new();

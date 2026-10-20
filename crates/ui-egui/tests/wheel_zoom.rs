@@ -185,6 +185,7 @@ fn from_a_zoom_set_another_way_a_notch_goes_to_the_next_step_or_100() {
     assert_eq!(zoom(&h), 85);
 }
 
+/// A visual zoom glide adds one undo entry and leaves the workbook untouched after settling.
 #[test]
 fn a_zoom_glide_commits_once_and_stops_changing_the_workbook() {
     let mut h = animated();
@@ -200,6 +201,7 @@ fn a_zoom_glide_commits_once_and_stops_changing_the_workbook() {
     assert!(std::sync::Arc::ptr_eq(&wb, &h.state().session.active().unwrap().wb));
 }
 
+/// Copied outlines repaint only when visible and animated, with viewport-bounded geometry.
 #[test]
 fn copied_outlines_stop_repainting_when_hidden_or_disabled() {
     let mut h = animated();

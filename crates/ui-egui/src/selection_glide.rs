@@ -68,6 +68,7 @@ pub struct SelectionGlide {
 }
 
 impl Default for SelectionGlide {
+    /// Start without a previous selection or an active glide.
     fn default() -> Self {
         SelectionGlide { last: None, drawn: Rect::ZERO, target: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
     }
@@ -94,6 +95,7 @@ impl SelectionGlide {
         self.advance(f.now)
     }
 
+    /// Advance the current destination before drawing or retargeting the outline.
     fn advance(&mut self, now: f64) -> Rect {
         // Arrived when the time is up (or the clock went backwards).
         let progress = (now - self.started) / GLIDE_SECS;
@@ -275,6 +277,7 @@ mod tests {
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
     }
 
+    /// Retargeting every frame still advances the outline at each supported frame rate.
     #[test]
     fn a_new_destination_every_frame_keeps_the_outline_moving() {
         for dt in [1.0 / 30.0, 1.0 / 60.0, 1.0 / 240.0] {

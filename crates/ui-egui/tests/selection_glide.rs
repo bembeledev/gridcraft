@@ -202,6 +202,7 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     assert!(a.ui.animations);
 }
 
+/// Repeated arrow input keeps the outline moving until it reaches the selected cell.
 #[test]
 fn consecutive_arrow_keys_keep_the_outline_moving() {
     let mut h = animated();

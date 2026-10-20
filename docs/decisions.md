@@ -57,6 +57,9 @@ conversion). The options apply to typing, pasting and opening CSV/text files, as
 an application preference (`Prefs::data_conversion`, `app.dataConversion`), not workbook state.
 `app.dataConversion` is journaled but not undoable: it changes what later typing gives, so a
 replayed journal needs it, and Undo takes back edits, not settings.
+Data validation (typing, `data.validate`, Circle Invalid Data) reads input under the same options,
+so a rule checks what the cell holds: with leading zeros kept, `0123` is text and a whole-number
+rule refuses it.
 All default on, so nothing changes until someone opts out.
 
 One deliberate difference: with "Keep first 15 digits of long numbers and display in scientific

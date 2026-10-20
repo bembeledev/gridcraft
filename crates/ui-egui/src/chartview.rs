@@ -2,7 +2,7 @@
 //! we paint with egui), pictures and shapes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -14,11 +14,13 @@ use crate::grid::Geo;
 use crate::theme;
 
 /// The slicer's tiles, computed once per workbook version. Every change to a document, undoable or
-/// not (recalculation, refresh), installs a new `Arc<Workbook>`; the cache holds the one it was
-/// built from, so a new version is always told apart (its address can't be reused meanwhile).
+/// not (recalculation, refresh), installs a new `Arc<Workbook>`; the cache holds a `Weak` to the one
+/// it was built from, so a new version is always told apart (the allocation, and so its address,
+/// stays reserved while the `Weak` lives) without a strong reference that would make the next edit's
+/// `Arc::make_mut` copy the whole workbook.
 fn cached_slicer_items<'a>(app: &'a mut SheetApp, wb: &Workbook, si: usize, sl: &Slicer) -> &'a [gridcraft_engine::pivot::SlicerTile] {
-    let cur = app.session.active().map(|d| d.wb.clone());
-    let fresh = matches!((&app.grid.slicer_tiles, &cur), (Some((Some(built), _)), Some(cur)) if Arc::ptr_eq(built, cur));
+    let cur = app.session.active().map(|d| Arc::downgrade(&d.wb));
+    let fresh = matches!((&app.grid.slicer_tiles, &cur), (Some((Some(built), _)), Some(cur)) if Weak::ptr_eq(built, cur));
     if !fresh {
         app.grid.slicer_tiles = None;
     }
@@ -594,8 +596,11 @@ mod tests {
         }
         let wb = app.session.active().unwrap().wb.clone();
         let slicer = wb.active().unwrap().slicers[0].clone();
+        let strong = Arc::strong_count(&wb);
         let before: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
         assert_eq!(before, ["East", "North", "West"]);
+        // The cache holds no strong reference, so the next edit doesn't copy the workbook.
+        assert_eq!(Arc::strong_count(&wb), strong);
 
         app.session.execute("cell.set", json!({"cell": "A2", "input": "South"})).unwrap();
         let wb = app.session.active().unwrap().wb.clone();

@@ -4,7 +4,7 @@
 //! in-cell editor.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use egui::{Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_engine::cf::{CfCache, CfLook};
@@ -136,7 +136,7 @@ pub struct GridState {
     pub ink: Vec<[f32; 2]>,
     /// Slicer tiles by (sheet, slicer id), with the workbook version they were computed from
     /// (`None` without a document). Any other version, undoable or not, replaces them.
-    pub slicer_tiles: Option<(Option<Arc<Workbook>>, HashMap<(usize, u32), Vec<SlicerTile>>)>,
+    pub slicer_tiles: Option<(Option<Weak<Workbook>>, HashMap<(usize, u32), Vec<SlicerTile>>)>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
     pub header_menu: Option<(Pos2, bool)>,

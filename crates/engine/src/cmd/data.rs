@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Text to Columns",
             ["Data", "Data Tools"],
             None,
-            "{range?, delimiters?: [\",\", \"\\t\", \" \", \";\"], other?: \"|\", fixedWidths?: [5, 10], treatConsecutive?: bool, textQualifier?: \"\\\"\", destination?: \"B1\"}",
+            "{range?, delimiters?: [\",\", \"\\t\", \" \", \";\"], other?: \"|\", fixedWidths?: [5, 10], treatConsecutive?: bool, textQualifier?: \"\\\"\" (\"\" for none), destination?: \"B1\"}",
             has_doc,
             text_to_columns
         ),
@@ -801,9 +801,18 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"removed": removed, "remaining": remaining}))
 }
 
-fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = target_range(s, p)?;
-    let sheet = target_sheet(s, p)?;
+/// Splits one cell's text into columns the way `data.textToColumns` does with the same params
+/// (the dialog's preview uses it, so it always matches the result).
+pub fn split_into_columns(text: &str, p: &Json) -> Vec<String> {
+    let fixed: Option<Vec<usize>> =
+        p.get("fixedWidths").and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as usize)).collect());
+    if let Some(w) = fixed {
+        let chars: Vec<char> = text.chars().collect();
+        let mut cuts = vec![0];
+        cuts.extend(w.iter().copied().filter(|x| *x < chars.len()));
+        cuts.push(chars.len());
+        return cuts.windows(2).map(|p| chars.get(p[0]..p[1]).map(|s| s.iter().collect::<String>().trim().to_string()).unwrap_or_default()).collect();
+    }
     let mut delims: Vec<char> = p
         .get("delimiters")
         .and_then(Json::as_array)
@@ -812,28 +821,25 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(o) = str_param(p, "other").and_then(|o| o.chars().next()) {
         delims.push(o);
     }
-    let fixed: Option<Vec<usize>> =
-        p.get("fixedWidths").and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as usize)).collect());
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
-    let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
+    // An empty qualifier means none: quotes are kept as text.
+    let quote = match str_param(p, "textQualifier") {
+        Some(q) => q.chars().next(),
+        None => Some('"'),
+    };
+    split_delimited(text, &delims, consecutive, quote)
+}
+
+fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
+    let r = target_range(s, p)?;
+    let sheet = target_sheet(s, p)?;
     let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
         for (i, row) in (r.start.row..=r.end.row).enumerate() {
             let text = sh.value(CellRef::new(row, r.start.col)).display();
-            let parts: Vec<String> = match &fixed {
-                Some(w) => {
-                    let chars: Vec<char> = text.chars().collect();
-                    let mut cuts = vec![0];
-                    cuts.extend(w.iter().copied().filter(|x| *x < chars.len()));
-                    cuts.push(chars.len());
-                    cuts.windows(2)
-                        .map(|p| chars.get(p[0]..p[1]).map(|s| s.iter().collect::<String>().trim().to_string()).unwrap_or_default())
-                        .collect()
-                }
-                None => split_delimited(&text, &delims, consecutive, quote),
-            };
+            let parts = split_into_columns(&text, p);
             for (j, part) in parts.into_iter().enumerate() {
                 out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
             }
@@ -854,16 +860,16 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     ok()
 }
 
-fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) -> Vec<String> {
+fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: Option<char>) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_q = false;
     let mut last_delim = false;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == quote {
-            if in_q && chars.peek() == Some(&quote) {
-                cur.push(quote);
+        if Some(c) == quote {
+            if in_q && chars.peek() == Some(&c) {
+                cur.push(c);
                 chars.next();
             } else {
                 in_q = !in_q;
@@ -1532,8 +1538,13 @@ mod tests {
 
     #[test]
     fn split() {
-        assert_eq!(split_delimited("a,b,,c", &[','], false, '"'), ["a", "b", "", "c"]);
-        assert_eq!(split_delimited("a,b,,c", &[','], true, '"'), ["a", "b", "c"]);
-        assert_eq!(split_delimited("\"x,y\",z", &[','], false, '"'), ["x,y", "z"]);
+        assert_eq!(split_delimited("a,b,,c", &[','], false, Some('"')), ["a", "b", "", "c"]);
+        assert_eq!(split_delimited("a,b,,c", &[','], true, Some('"')), ["a", "b", "c"]);
+        assert_eq!(split_delimited("\"x,y\",z", &[','], false, Some('"')), ["x,y", "z"]);
+        // No text qualifier: quotes are ordinary characters.
+        assert_eq!(split_delimited("\"x,y\",z", &[','], false, None), ["\"x", "y\"", "z"]);
+        let p = json!({"textQualifier": "", "delimiters": [","]});
+        assert_eq!(split_into_columns("'a',b", &p), ["'a'", "b"]);
+        assert_eq!(split_into_columns("abcdef", &json!({"fixedWidths": [2, 4]})), ["ab", "cd", "ef"]);
     }
 }

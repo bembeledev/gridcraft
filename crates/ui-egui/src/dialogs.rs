@@ -415,21 +415,15 @@ impl Dialog {
                     json!({"left": left, "right": right, "top": top, "bottom": bottom, "header": header, "footer": footer}),
                 )
             }
-            "textToColumns" => Dialog::form(
-                "textToColumns",
-                "Convert Text to Columns",
-                "data.textToColumns",
-                vec![
-                    Check { key: "tab", label: "Tab" },
-                    Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
-                    Check { key: "space", label: "Space" },
-                    Text { key: "other", label: "Other:" },
-                    Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },
-                    Text { key: "destination", label: "Destination:" },
-                ],
-                json!({"tab": true, "comma": true, "destination": active}),
-            ),
+            "textToColumns" => {
+                // Opening params (`ui.dialog`) preset any option.
+                let mut defaults =
+                    json!({"mode": "delimited", "tab": true, "comma": true, "textQualifier": "\"", "widths": "", "destination": active});
+                if let (Some(m), Some(given)) = (defaults.as_object_mut(), params.as_object()) {
+                    m.extend(given.clone());
+                }
+                Dialog::form("textToColumns", "Convert Text to Columns", "data.textToColumns", vec![], defaults)
+            }
             "removeDuplicates" => Dialog::form(
                 "removeDuplicates",
                 "Remove Duplicates",
@@ -968,6 +962,18 @@ fn build_params(d: &Dialog) -> Json {
                 }
             }
             v["delimiters"] = Json::Array(delims);
+            if d.values.get("mode").and_then(Json::as_str) == Some("fixed") {
+                // Break positions typed as "5, 10": sorted, without repeats.
+                let text = d.values.get("widths").and_then(Json::as_str).unwrap_or("");
+                let cuts: std::collections::BTreeSet<u64> =
+                    text.split([',', ';', ' ']).filter_map(|x| x.trim().parse::<u64>().ok()).filter(|x| *x > 0).collect();
+                v["fixedWidths"] = json!(cuts.into_iter().collect::<Vec<_>>());
+            }
+            if let Some(m) = v.as_object_mut() {
+                for k in ["mode", "tab", "semicolon", "comma", "space", "widths"] {
+                    m.remove(k);
+                }
+            }
         }
         "removeDuplicates" | "subtotal" => {
             if let Some(t) = d.values.get("columnsText").and_then(Json::as_str).filter(|t| !t.trim().is_empty()) {
@@ -1033,6 +1039,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "textToColumns" => 540.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1058,6 +1065,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "textToColumns" => text_to_columns(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
@@ -2305,6 +2313,131 @@ fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mu
     if !open {
         *confirm = true;
     }
+}
+
+/// Convert Text to Columns: Excel's wizard on one page. The data type (delimited or fixed width),
+/// its options, a live preview of the first rows split exactly as the command will split them,
+/// and the destination.
+fn text_to_columns(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let get_bool = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let get_str = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let heading = |ui: &mut egui::Ui, text: &str| {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(lang.tr(text)).strong());
+    };
+
+    heading(ui, "Original data type");
+    let mut mode = get_str(d, "mode");
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut mode, "delimited".to_string(), lang.tr("Delimited"))
+            .on_hover_text(lang.tr("Characters such as commas or tabs separate each field."));
+        ui.radio_value(&mut mode, "fixed".to_string(), lang.tr("Fixed width"))
+            .on_hover_text(lang.tr("Fields are aligned in columns with spaces between each field."));
+    });
+    d.values.insert("mode".into(), json!(mode));
+
+    if mode == "fixed" {
+        heading(ui, "Column breaks");
+        let mut widths = get_str(d, "widths");
+        ui.horizontal(|ui| {
+            ui.label(lang.tr("Break after characters:"));
+            ui.add(egui::TextEdit::singleline(&mut widths).hint_text("5, 10").desired_width(160.0));
+        });
+        d.values.insert("widths".into(), json!(widths));
+    } else {
+        heading(ui, "Delimiters");
+        egui::Grid::new("ttc_delims").num_columns(2).spacing(vec2(24.0, 4.0)).show(ui, |ui| {
+            for row in [[("tab", "Tab"), ("comma", "Comma")], [("semicolon", "Semicolon"), ("space", "Space")]] {
+                for (key, label) in row {
+                    let mut on = get_bool(d, key);
+                    if ui.checkbox(&mut on, lang.tr(label)).changed() {
+                        d.values.insert(key.into(), json!(on));
+                    }
+                }
+                ui.end_row();
+            }
+            let mut other = get_str(d, "other");
+            ui.horizontal(|ui| {
+                ui.label(lang.tr("Other:"));
+                ui.add(egui::TextEdit::singleline(&mut other).char_limit(1).desired_width(28.0));
+            });
+            d.values.insert("other".into(), json!(other));
+            ui.end_row();
+        });
+        ui.add_space(4.0);
+        let mut consecutive = get_bool(d, "treatConsecutive");
+        if ui.checkbox(&mut consecutive, lang.tr("Treat consecutive delimiters as one")).changed() {
+            d.values.insert("treatConsecutive".into(), json!(consecutive));
+        }
+        let mut quote = get_str(d, "textQualifier");
+        ui.horizontal(|ui| {
+            ui.label(lang.tr("Text qualifier:"));
+            egui::ComboBox::from_id_salt("ttc_qualifier")
+                .selected_text(if quote.is_empty() { lang.tr("{none}").to_string() } else { quote.clone() })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut quote, "\"".to_string(), "\"");
+                    ui.selectable_value(&mut quote, "'".to_string(), "'");
+                    ui.selectable_value(&mut quote, String::new(), lang.tr("{none}"));
+                });
+        });
+        d.values.insert("textQualifier".into(), json!(quote));
+    }
+
+    // Preview: the first rows of the selection's first column, split as the command will.
+    heading(ui, "Data preview");
+    let params = build_params(d);
+    let source = app.session.active().and_then(|doc| {
+        let sh = doc.wb.active()?;
+        let r = doc.selection.current();
+        let last = sh.used_range().map_or(r.start.row, |u| u.end.row).min(r.end.row);
+        let rows: Vec<Vec<String>> = (r.start.row..=last)
+            .take(8)
+            .map(|row| {
+                gridcraft_engine::cmd::data::split_into_columns(&sh.value(gridcraft_engine::core::CellRef::new(row, r.start.col)).display(), &params)
+            })
+            .collect();
+        Some((rows, r.start.col != r.end.col))
+    });
+    let (rows, several_columns) = source.unwrap_or_default();
+    let dest_col = gridcraft_engine::core::CellRef::parse(&get_str(d, "destination")).map_or(0, |c| c.col);
+    egui::Frame::new().stroke(egui::Stroke::new(1.0, t.separator)).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        egui::ScrollArea::both().max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
+            let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+            if cols == 0 {
+                ui.label(egui::RichText::new(lang.tr("Select the cells that hold the text to split.")).color(t.text_dim));
+                return;
+            }
+            egui::Grid::new("ttc_preview").striped(true).num_columns(cols).spacing(vec2(14.0, 3.0)).show(ui, |ui| {
+                for j in 0..cols {
+                    ui.label(
+                        egui::RichText::new(gridcraft_engine::core::col_to_letters(dest_col.saturating_add(j as u32))).strong().color(t.text_dim),
+                    );
+                }
+                ui.end_row();
+                for row in &rows {
+                    for j in 0..cols {
+                        ui.label(egui::RichText::new(row.get(j).map_or("", String::as_str)).monospace());
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    });
+    if several_columns {
+        ui.label(egui::RichText::new(lang.tr("Only the first column of the selection is split, as in Excel.")).small().color(t.text_dim));
+    }
+
+    ui.add_space(6.0);
+    let mut dest = get_str(d, "destination");
+    ui.horizontal(|ui| {
+        ui.label(lang.tr("Destination:"));
+        ui.add(egui::TextEdit::singleline(&mut dest).desired_width(120.0));
+    });
+    d.values.insert("destination".into(), json!(dest));
+    ok_cancel(ui, confirm, open);
 }
 
 /// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).

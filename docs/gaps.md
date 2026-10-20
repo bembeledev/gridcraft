@@ -34,12 +34,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
-- **Missing:** table slicers and their caches (PivotTable slicers are read and written), timelines, the data model, query tables attached to
+- **Missing:** table and OLAP slicers and their caches (PivotTable slicers are read and written), timelines, the data model, query tables attached to
   tables, unmodelled `extLst` entries, chart details. Pass-through (#330) keeps custom XML,
   external links, connections, sheet query tables, printer settings, form and ActiveX controls,
   OLE objects and sheet backgrounds; never checked in Excel (repair prompts unknown).
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
-- **Impact:** open-edit-save still simplifies workbooks with table slicers, timelines or Power Pivot.
+- **Impact:** open-edit-save still simplifies workbooks with table or OLAP slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
 ### 4. Charts lose type and options on round trip; shallow chart model (F, FF)

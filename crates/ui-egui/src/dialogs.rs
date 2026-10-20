@@ -775,7 +775,7 @@ impl Dialog {
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
-            "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
+            "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "uid": p("uid")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
@@ -1182,6 +1182,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
+                    if d.values.get("uid").and_then(Json::as_u64).is_some_and(|uid| app.session.active().is_none_or(|doc| doc.uid != uid)) {
+                        ui.label("The active workbook changed. Cancel and close the original tab again.");
+                        if ui.button("Cancel").clicked() { open = false; }
+                        return;
+                    }
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     ui.horizontal(|ui| {
                         if ui.button("Don't Save").clicked() {
@@ -1223,7 +1228,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             open = false;
                         }
                     }
-                    if ui.button("Open…").clicked() {
+                    if ui.button(app.ui.language.tr(if app.services.pick_folder.is_some() { "Open Folder…" } else { "Open…" })).clicked() {
                         app.open_dialog("open", json!({}));
                         open = false;
                     }

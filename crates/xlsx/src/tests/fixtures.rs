@@ -577,3 +577,47 @@ fn user_defined_function_prefix_round_trips() {
         assert_eq!(cell.child("f").unwrap().text, f, "written {a}");
     }
 }
+
+#[test]
+fn value_index_keeps_cached_spills_and_types_without_importing_presentation() {
+    let body = r#"<sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is><r><t>rich </t></r><r><t>text</t></r></is></c><c r="C1" t="d"><v>1904-01-02</v></c></row>
+    <row r="2"><c r="A2" cm="1"><f t="array" ref="A2:A3">SEQUENCE(2)</f><v>1</v></c><c r="B2" t="b"><v>1</v></c><c r="C2" t="e"><v>#N/A</v></c></row>
+    <row r="3"><c r="A3"><v>2</v></c><c r="B3" t="str"><f>"cached"</f><v>cached</v></c></row>
+    <row r="4"><c r="A4"><f t="shared" si="0">1+1</f><v>2</v></c></row>
+    <row r="5"><c r="A5"><f t="shared" si="0"/><v>2</v></c></row>
+    <row r="6"><c r="A6"><f>""</f><v/></c></row>
+    </sheetData><conditionalFormatting sqref="A1:A6"><cfRule type="bogus"/></conditionalFormatting>"#;
+    let sst = r#"<sst><si><t>string_x0020_value</t></si></sst>"#;
+    let rel = r#"<Relationship Id="sst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#;
+    let bytes = minimal(body, &[("xl/sharedStrings.xml", sst)], rel, r#"<workbookPr date1904="1"/>"#);
+    let (wb, report) = crate::read_xlsx_values(&bytes, |_| true).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let sh = wb.sheet(0).unwrap();
+    for (cell, value) in [
+        ("A1", Value::text("string value")),
+        ("B1", Value::text("rich text")),
+        ("C1", Value::Number(1.0)),
+        ("A3", Value::Number(2.0)),
+        ("B2", Value::Bool(true)),
+        ("C2", Value::Error(CellError::NA)),
+        ("B3", Value::text("cached")),
+        ("A5", Value::Number(2.0)),
+        ("A6", Value::text("")),
+    ] {
+        assert_eq!(sh.value(at(cell)), value, "{cell}");
+    }
+    assert!(sh.cells.iter().all(|(_, cell)| cell.formula.is_none()));
+    assert!(sh.cond_formats.is_empty());
+    assert!(crate::read_xlsx_values(&bytes, |_| false).unwrap().0.sheets.is_empty());
+    let missing = minimal(r#"<sheetData><row><c><f>1</f></c></row></sheetData>"#, &[], "", "");
+    assert!(!crate::read_xlsx_values(&missing, |_| true).unwrap().1.warnings.is_empty());
+    assert!(crate::read_xlsx_values(&minimal("<sheetData><row>", &[], "", ""), |_| true).is_err());
+}
+
+#[test]
+fn sheet_name_preview_does_not_parse_worksheet_cells() {
+    let bytes = minimal("<sheetData><row>", &[], "", "");
+    assert_eq!(crate::read_sheet_names(&bytes).unwrap(), ["Data"]);
+    assert!(crate::read_sheet_names(b"not a workbook").is_err());
+}

@@ -19,7 +19,9 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             vec![
                 ("New Workbook", "file.new", Some("CMD+N")),
                 ("New from Sample…", "dialog:start", None),
-                ("Open…", "file.open", Some("CMD+O")),
+                ("Open Folder…", "dialog:openFolder", Some("CMD+O")),
+                ("Open File…", "dialog:openFile", None),
+                ("Close Folder", "workspace.close", None),
                 ("-", "", None),
                 ("Close", "file.close", Some("CMD+W")),
                 ("Save", "file.save", Some("CMD+S")),
@@ -72,6 +74,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Formula Bar", "view.formulaBar", None),
                 ("Gridlines", "view.gridlines", None),
                 ("Headings", "view.headings", None),
+                ("Explorer", "view.explorer", None),
                 ("-", "", None),
                 ("Zoom…", "dialog:zoom", None),
                 ("Zoom to Selection", "view.zoomToSelection", None),

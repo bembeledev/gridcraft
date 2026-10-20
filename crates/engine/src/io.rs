@@ -52,6 +52,17 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     open_bytes_with_password(name, bytes, None)
 }
 
+/// Read a file's worksheet names without creating a document or recalculating formulas.
+/// XLSX previews read only the workbook manifest; other formats use their normal importer.
+pub fn sheet_names(path: &str) -> Result<Vec<String>> {
+    let bytes = read_file(path)?;
+    if gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+        return gridcraft_xlsx::read_sheet_names(&bytes).map_err(|e| EngineError::Other(e.to_string()));
+    }
+    let (wb, _) = open_bytes(path, &bytes)?;
+    Ok(wb.sheets.iter().map(|s| s.name.clone()).collect())
+}
+
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {

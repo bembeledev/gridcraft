@@ -108,9 +108,17 @@
 cargo run --release -p gridcraft                              # desktop app
 cargo run --release -p gridcraft -- --sample sales            # open a sample (sales, budget, grades)
 cargo run --release -p gridcraft -- book.xlsx                 # open a workbook
+cargo run --release -p gridcraft -- ./spreadsheets            # open a folder workspace
 cargo run --release -p gridcraft -- --sample sales --control 7979   # + JSON control channel
 cargo xtask ci                                                 # fmt, clippy, tests, assets, layering, wasm
 ```
+
+On desktop, **Open Folder…** (Cmd/Ctrl+O) opens a workspace: browse spreadsheets in the left
+explorer and select one to edit it on the right. Expand subfolders as needed, switch between
+document tabs without losing unsaved edits, and use **Refresh** after files change on disk.
+**File > Open > Open File…** remains available for individual workbooks.
+
+CK patch-data folders also offer a [CK authoring panel](docs/ck-patch-data.md): column rules, literal value editing, version-aware reference candidates and a paginated diagnostic table. This is local assistance; publication still uses the patcher.
 
 Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.

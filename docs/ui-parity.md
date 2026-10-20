@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (continuous selection animation, folder explorer, document tabs and CK authoring panel) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -14,6 +14,8 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
+| CK patch-data authoring | project-specific add-in workflow | [CK panel](ck-patch-data.md), typed column/value assistance, background checks and paginated diagnostic navigation | GridCraft extension; limited local checks, Korean copy; final conversion/publish remains in patcher |
+| Folder workspace and document tabs | file-oriented open | Desktop defaults to a folder picker, with a resizable explorer, lazy subfolders, expandable worksheet children, supported spreadsheet files and document tabs; unsaved edits and undo survive switching; tab context menus close one/others/right/all with save prompts, plus middle-click close | GridCraft extension, 10-19; explicit refresh, no filesystem watcher; browser retains uploads |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
@@ -44,7 +46,7 @@ this logic, with one undo step.
 | Behaviour | Status |
 |---|---|
 | Click/drag/Shift/Ctrl selection, multi-area selection | rectangular drag works in one direction only in some cases (#28) |
-| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
+| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. Continuous drag retargeting consumes elapsed animation time (10-20), preventing a frozen outline when the destination changes every frame; regression coverage at 30/60/120/240 Hz. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series); right-drag menu missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
@@ -161,6 +163,13 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Continuous selection drag advances before retargeting; read-only AbilityIconData 60-frame drag reduced stationary-outline frames from 30 to 1 across 45 selection changes (CPU harness; not a GPU latency measurement) |
+| 2026-10-20 | minor | Explorer background file opening and cached conditional-format range statistics; CK full-project indexing progress |
+| 2026-10-19 | minor | CK-specific column rules, version preview, cross-file reference candidates and paginated diagnostics; literal edits preserve long integers and support undo |
+| 2026-10-20 | minor | CK diagnostic locations select and reveal their target cell across documents and sheets |
+| 2026-10-20 | minor | File-tab context menus and middle-click close; cancellable sequential save prompts for close groups |
+| 2026-10-20 | minor | Per-file worksheet children and direct sheet navigation; diagnostics hidden by default with open/close controls |
+| 2026-10-19 | minor | Desktop folder-first open, resizable explorer, lazy subfolder reads and document tabs; switching retains drafts/undo and reuses imported or encrypted documents; control commands and Korean labels |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|zh|ja|ko|ru|pt|cs]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--folder path] [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -12,6 +12,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut sample = None;
     let mut input = None;
+    let mut folder = None;
     let mut size = (1440.0f32, 900.0f32);
     let mut scale = 2.0f32;
     let mut cmds: Vec<String> = vec![];
@@ -33,6 +34,10 @@ fn main() {
             "--in" => {
                 i += 1;
                 input = args.get(i).cloned();
+            }
+            "--folder" => {
+                i += 1;
+                folder = args.get(i).cloned();
             }
             "--size" => {
                 i += 1;
@@ -87,12 +92,6 @@ fn main() {
     } else {
         session.new_workbook();
     }
-    for c in &cmds {
-        let (id, p) = c.split_once('=').map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.clone(), json!({})));
-        if let Err(e) = session.execute(&id, p) {
-            eprintln!("{id}: {e}");
-        }
-    }
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(size.0, size.1)).with_pixels_per_point(scale).with_max_steps(12).wgpu().build_ui_state(
             move |ui, app: &mut SheetApp| {
@@ -102,6 +101,20 @@ fn main() {
             },
             {
                 let mut app = SheetApp::new(session, Default::default());
+                if let Some(path) = folder {
+                    if let Err(e) = app.run("workspace.open", json!({"path": path})) {
+                        eprintln!("workspace.open: {e}");
+                    }
+                    settle_workspace(&mut app);
+                }
+                for c in &cmds {
+                    let (id, p) =
+                        c.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.as_str(), json!({})));
+                    if let Err(e) = app.run(id, p) {
+                        eprintln!("{id}: {e}");
+                    }
+                    settle_workspace(&mut app);
+                }
                 app.ui.dark = dark;
                 if let Some(code) = &language
                     && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)
@@ -131,4 +144,17 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());
+}
+
+fn settle_workspace(app: &mut SheetApp) {
+    let ctx = egui::Context::default();
+    for _ in 0..1000 {
+        app.workspace.poll(&ctx);
+        gridcraft_ui_egui::patch_data::poll(app, &ctx);
+        if !app.workspace.busy() && !app.patch_data.busy() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("folder is still loading after five seconds");
 }

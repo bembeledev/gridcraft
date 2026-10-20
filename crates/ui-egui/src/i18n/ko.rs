@@ -2,6 +2,20 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Close Tab" => "탭 닫기",
+        "Close Other Tabs" => "다른 탭 닫기",
+        "Close Tabs to the Right" => "오른쪽 탭 닫기",
+        "Close All Tabs" => "모든 탭 닫기",
+        "Explorer" => "탐색기",
+        "Hide Explorer" => "탐색기 숨기기",
+        "Open Folder…" => "폴더 열기…",
+        "Open File…" => "파일 열기…",
+        "Close Folder" => "폴더 닫기",
+        "Open a folder to browse your spreadsheets." => "폴더를 열고 스프레드시트 파일을 선택하세요.",
+        "No spreadsheets in this folder" => "이 폴더에는 스프레드시트가 없습니다",
+        "Folder limit reached; open a smaller folder" => "목록 한도에 도달했습니다. 하위 폴더를 열어주세요",
+        "Loading…" => "불러오는 중…",
+        "Refresh" => "새로 고침",
         "Paste" => "붙여넣기",
         "Paste Values" => "값 붙여넣기",
         "Paste Formulas" => "수식 붙여넣기",

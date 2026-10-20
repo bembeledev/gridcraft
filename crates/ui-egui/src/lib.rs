@@ -25,6 +25,7 @@ pub mod keytips;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
+pub mod patch_data;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
@@ -33,6 +34,7 @@ pub mod tabs;
 pub mod text_box;
 pub mod theme;
 pub mod widgets;
+pub mod workspace;
 
 use std::collections::HashMap;
 
@@ -61,6 +63,10 @@ pub struct UiState {
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
     pub recent: Vec<String>,
+    /// Desktop folder explorer visibility.
+    pub explorer_visible: bool,
+    /// Keep validation results out of the grid until explicitly requested.
+    pub patch_diagnostics_visible: bool,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
@@ -104,6 +110,8 @@ impl Default for UiState {
             animations: true,
             autocomplete: true,
             recent: vec![],
+            explorer_visible: true,
+            patch_diagnostics_visible: false,
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
@@ -169,6 +177,8 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Desktop workspace folder picker. The browser keeps its file upload flow.
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
@@ -223,6 +233,8 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    pub workspace: workspace::Workspace,
+    pub patch_data: patch_data::State,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
@@ -279,6 +291,8 @@ impl SheetApp {
             toast: None,
             notice: None,
             services,
+            workspace: Default::default(),
+            patch_data: Default::default(),
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
@@ -572,6 +586,12 @@ impl SheetApp {
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
+        if let Some(result) = patch_data::command(self, id, p) {
+            return Some(result);
+        }
+        if let Some(result) = workspace::command(self, id, p) {
+            return Some(result);
+        }
         let r = match id {
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
@@ -714,7 +734,21 @@ impl SheetApp {
             return;
         }
         match name {
-            "open" => {
+            "openFolder" => {
+                if !self.commit_edit(0, 0, false, false) {
+                    return;
+                }
+                if let Some(pick) = &self.services.pick_folder
+                    && let Some(path) = pick()
+                {
+                    self.run_or_alert("workspace.open", json!({"path": path}));
+                }
+            }
+            "open" if self.services.pick_folder.is_some() => self.open_dialog("openFolder", params),
+            "open" | "openFile" => {
+                if !self.commit_edit(0, 0, false, false) {
+                    return;
+                }
                 if let Some(start) = &self.services.open_async {
                     start();
                 } else if let Some(pick) = &self.services.pick_open
@@ -762,6 +796,9 @@ impl SheetApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
+        if !self.commit_edit(0, 0, false, false) {
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
@@ -777,6 +814,7 @@ impl SheetApp {
     pub fn after_open(&mut self, path: Option<&str>, r: &Json) {
         self.backstage = None;
         if let Some(path) = path {
+            self.workspace.remember(path, &self.session);
             self.ui.recent.retain(|p| p != path);
             self.ui.recent.insert(0, path.to_string());
             self.ui.recent.truncate(20);
@@ -1056,6 +1094,9 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        self.workspace.poll(ctx);
+        workspace::poll_open(self, ctx);
+        patch_data::poll(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -1111,6 +1152,8 @@ impl SheetApp {
             // File tab: the Backstage view replaces everything below the title bar.
             backstage::show(self, ui);
         } else {
+            workspace::show(self, ui);
+            workspace::document_tabs(self, ui);
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {
@@ -1122,6 +1165,7 @@ impl SheetApp {
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
             panes::show(self, ui);
+            patch_data::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();
                 grid::show(self, ui);

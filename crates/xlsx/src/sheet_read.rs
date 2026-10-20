@@ -28,6 +28,7 @@ struct Shared {
 
 #[derive(Default)]
 struct RowState {
+    values_only: bool,
     next_row: u32,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
@@ -365,7 +366,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     {
         info.style = Some(cx.style(Some(s)));
     }
-    if info != LineInfo::default() {
+    if !st.values_only && info != LineInfo::default() {
         sheet.rows.insert(r, info);
     }
     let mut next_col = 0u32;
@@ -431,6 +432,17 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
     };
+    if st.values_only {
+        if c.child("f").is_some() && c.child("v").is_none() {
+            cx.warn(format!("sheet {}: {} has a formula without a cached value", sheet.name, pos.a1()));
+        }
+        if !value.is_empty() {
+            sheet.set_value(pos, value);
+        } else if c.child("f").is_some() {
+            sheet.set_value(pos, Value::text(""));
+        }
+        return;
+    }
     let picture = c.attr("vm").and_then(|vm| {
         if vm == "0" {
             return None;
@@ -453,6 +465,22 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+}
+
+/// Cached values include array/spill followers, which the editing reader intentionally clears
+/// before recalculation. A data index must retain those saved values instead.
+pub fn read_sheet_values(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
+    let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
+    let mut sheet = Sheet::new(name);
+    let mut st = RowState { values_only: true, ..Default::default() };
+    xml::parse_streaming_strict(&bytes, &["row"], &mut |row| {
+        read_row(cx, &mut sheet, &mut st, &row);
+        Ok(())
+    })?;
+    if st.dropped > 0 {
+        cx.warn(format!("sheet {name}: {} out-of-grid cells/rows were dropped", st.dropped));
+    }
+    Ok(sheet)
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

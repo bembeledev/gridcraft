@@ -34,6 +34,27 @@ impl T {
 }
 
 #[test]
+fn repeated_array_match_recalculates_after_edits() {
+    let mut t = T::new();
+    for row in 1..=64 {
+        t.set(&format!("A{row}"), &format!("key_{}", (row - 1) % 8));
+        t.set(&format!("B{row}"), "suffix");
+    }
+    t.set("C1", "=SUMPRODUCT(--(MATCH(A1:A64&B1:B64,A1:A64&B1:B64,0)=ROW(A1:A64)))");
+    t.set("D1", "=MATCH(A1:A64&B1:B64,A1:A64&B1:B64,0)");
+    assert_eq!(t.num("C1"), 8.0);
+    assert_eq!(t.num("D9"), 1.0);
+    t.set("B9", "different");
+    assert_eq!(t.num("C1"), 9.0);
+    assert_eq!(t.num("D9"), 9.0);
+    t.set("B9", "suffix");
+    assert_eq!(t.num("C1"), 8.0);
+    assert_eq!(t.num("D9"), 1.0);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("C1"), 8.0);
+}
+
+#[test]
 fn spill_range_operator() {
     let mut t = T::new();
     t.set("A1", "3");

@@ -1,5 +1,7 @@
 # GridCraft control protocol
 
+> **Last updated:** 2026-10-20 · Tab closing, worksheet navigation and diagnostics visibility
+
 Start the desktop app with a control port:
 
 ```sh
@@ -70,6 +72,36 @@ the password, and never replaces the encrypted original.
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
 
+### Desktop folder workspaces
+
+The desktop opens folders by default (Cmd/Ctrl+O, or File > Open > Open Folder).
+The resizable explorer lists supported spreadsheet files and subfolders; selecting a file opens
+it beside the explorer. Document tabs retain unsaved edits and undo history when switching files
+or folders. File > Open > Open File still opens individual files. Browser uploads are unchanged.
+
+These UI commands are available through `engine.execute` and connected MCP:
+
+| Command | Params | Result / behavior |
+|---|---|---|
+| `workspace.open` | `{path}` | Starts a background directory read; returns `{loading: true}` without opening a picker |
+| `workspace.inspect` | `{}` | `{root, loading, error, directories}`; wait for `loading: false`, then check `error` |
+| `workspace.toggleFolder` | `{path}` | Expands or collapses a listed subfolder; reads its contents on first expansion |
+| `workspace.closeTabs` | `{uid, scope?: "one" / "others" / "right" / "all", interactive?: bool}` | Closes tabs relative to the stable document UID from `ui.inspect.documents`; dirty targets return an error unless interactive prompting is explicitly requested. Cancel/save failure stops the remaining batch. |
+| `workspace.toggleFile` | `{path}` | Expands/collapses worksheet children; unloaded XLSX files read only their manifest in the background |
+| `workspace.openSheet` | `{path, sheet, background?: bool}` | Opens/reuses a listed file and activates the named sheet; background completion preserves the requested sheet |
+| `view.patchDiagnostics` | `{on?: bool}` | Shows/hides the CK diagnostics table independently of the editor; hidden by default, preference persisted |
+| `workspace.openFile` | `{path, password?, background?: bool}` | Opens a listed spreadsheet or activates its existing document; `background: true` returns loading state immediately (poll `workspace.inspect`); password errors never open dialogs by default |
+| `workspace.refresh` | `{}` | Rereads the root and collapses subfolders; open documents are kept |
+| `workspace.close` | `{}` | Clears the folder listing; open documents are kept |
+| `view.explorer` | `{on?: bool}` | Shows/hides the explorer; toggles when `on` is omitted |
+
+`ui.inspect.workspace` reports the same state. Use paths returned in the listing for file and
+subfolder commands. An unreadable replacement folder leaves the previous folder available.
+Reads stop after 10,000 directory entries, with at most 50,000 cached entries, four concurrent
+subfolder reads and 32 nesting levels. Hidden entries, Excel lock files, symlinks and unsupported
+file types are omitted. Refresh explicitly to see external file additions or deletions; this
+does not reload or overwrite workbooks already open. Folder workspaces require the desktop app.
+
 ### Native printing
 
 Desktop `engine.commands {"search":"print"}` (and connected MCP `list_commands`)
@@ -84,3 +116,15 @@ rejected without changing earlier settings. `ui.printSubmit` explicitly submits 
 print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
 and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
 GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+
+### CK authoring extension (2026-10-20)
+
+The control command list also exposes `patch.profile`, `patch.refresh`, `patch.version`, `patch.inspect`, `patch.jump`, `patch.apply` and `view.patchData`. Async checks never write files; inspect `loading`, `progress`, `stale`, `report.complete_context` and `notes` before using a result. `patch.validate` is the explicit engine-level single-workbook query. See [CK authoring commands and limits](ck-patch-data.md).
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-10-20 | Tab context-menu close groups with stable document UIDs and cancellable save prompts |
+| 2026-10-20 | File worksheet children, worksheet navigation and independent diagnostics visibility |
+| 2026-10-20 | Background explorer opens and full-project CK progress fields |

@@ -201,3 +201,33 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     assert_eq!(set["result"]["animations"], json!(true));
     assert!(a.ui.animations);
 }
+
+#[test]
+fn dragging_across_new_cells_each_frame_never_freezes_the_outline() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut h = animated();
+    let start = cell_rect(&h, "B2").center();
+    h.input_mut().events.extend([
+        Event::PointerMoved(start),
+        Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    let mut previous = outline(&h);
+    for row in 3..=18 {
+        let pos = cell_rect(&h, &format!("D{row}")).center();
+        h.input_mut().events.push(Event::PointerMoved(pos));
+        h.step();
+        if row > 5 {
+            assert!(outline(&h).max.y > previous.max.y, "outline froze while dragging to row {row}");
+        }
+        previous = outline(&h);
+    }
+    let pos = cell_rect(&h, "D18").center();
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    steps(&mut h, 40);
+    let selection = h.state().session.active().unwrap().selection.current();
+    assert_eq!(selection.a1(), "B2:D18");
+    let target = cell_rect(&h, "B2").union(cell_rect(&h, "D18"));
+    assert_eq!(outline(&h), target);
+    assert!(!gliding(&h));
+}

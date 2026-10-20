@@ -390,6 +390,12 @@ struct PassHost<'a> {
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
+    /// Sparse constant columns, indexed once per immutable calculation pass. Growing prefix
+    /// ranges (COUNTIF / MATCH / SEARCH idioms) otherwise walk the row B-trees repeatedly.
+    /// None remembers an ineligible column; formulas and all spill reads use the normal path.
+    constant_columns: HashMap<(usize, u32), Option<Vec<(u32, Value)>>>,
+    column_candidates: HashSet<(usize, u32)>,
+    constant_column_cells: usize,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -420,6 +426,9 @@ impl<'a> PassHost<'a> {
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             used: HashMap::default(),
+            constant_columns: HashMap::default(),
+            column_candidates: HashSet::default(),
+            constant_column_cells: 0,
             rng,
             now,
             cycle: false,
@@ -432,6 +441,53 @@ impl<'a> PassHost<'a> {
             tainted: HashSet::default(),
             taint: false,
         }
+    }
+
+    fn read_constant_column(&mut self, sheet: usize, range: RangeRef, out: &mut [Value]) -> bool {
+        if range.width() != 1 || range.height() < 32 || !self.spills.is_empty() {
+            return false;
+        }
+        let Some(sh) = self.wb.sheet(sheet) else { return false };
+        if !sh.spill.is_empty() {
+            return false;
+        }
+        let key = (sheet, range.start.col);
+        if !self.constant_columns.contains_key(&key) {
+            // Only index a reused column. A one-off preview/conditional-format evaluation
+            // should not scan a whole column to read one short range.
+            if !self.column_candidates.contains(&key) {
+                if self.column_candidates.len() < 64 {
+                    self.column_candidates.insert(key);
+                }
+                return false;
+            }
+            if self.constant_columns.len() >= 64 || self.constant_column_cells >= 250_000 {
+                return false;
+            }
+            let whole = RangeRef::new(CellRef::new(0, key.1), CellRef::new(gridcraft_core::MAX_ROWS - 1, key.1));
+            let mut cells = Vec::new();
+            let mut eligible = true;
+            for (seen, (c, cell)) in sh.cells.iter_range(whole).enumerate() {
+                if cell.formula.is_some() || seen >= 250_000 || self.constant_column_cells.saturating_add(cells.len()) >= 250_000 {
+                    eligible = false;
+                    break;
+                }
+                if !cell.value.is_empty() {
+                    cells.push((c.row, cell.value.clone()));
+                }
+            }
+            let column = eligible.then_some(cells);
+            self.constant_column_cells += column.as_ref().map_or(0, Vec::len);
+            self.constant_columns.insert(key, column);
+        }
+        let Some(Some(cells)) = self.constant_columns.get(&key) else { return false };
+        let start = cells.partition_point(|(row, _)| *row < range.start.row);
+        for (row, value) in cells.get(start..).unwrap_or_default().iter().take_while(|(row, _)| *row <= range.end.row) {
+            if let Some(slot) = out.get_mut(row.saturating_sub(range.start.row) as usize) {
+                *slot = value.clone();
+            }
+        }
+        true
     }
 }
 
@@ -670,6 +726,9 @@ impl Host for PassHost<'_> {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
+        if self.read_constant_column(sheet, range, &mut out) {
+            return out;
+        }
         let Some(sh) = self.wb.sheet(sheet) else { return out };
         // Sparse walk: only stored cells; formula cells that are (or were) dirty go through
         // `compute`, constants are copied straight from the store.
@@ -1267,6 +1326,48 @@ pub(crate) mod tests {
         let small = best(5_000);
         let large = best(20_000);
         assert!(large < small * 8 + Duration::from_millis(100), "5k rows {small:?}, 20k rows {large:?}");
+    }
+
+    #[test]
+    fn constant_column_reads_preserve_sparse_values_and_bypass_spills() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        for row in [0, 12, 63, 127, 1_048_575] {
+            sh.cells.set(CellRef::new(row, 0), Cell::value(Value::Number(row as f64)));
+        }
+        sh.cells.set(CellRef::new(0, 1), Cell::formula(Formula::new("42")));
+        let exprs = HashMap::default();
+        let mut rng = 1;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        for (start, end) in [(0, 63), (10, 127), (100, 255), (1_048_500, 1_048_575)] {
+            let range = RangeRef::new(CellRef::new(start, 0), CellRef::new(end, 0));
+            let expected: Vec<Value> = range.iter().map(|c| wb.sheet(0).unwrap().value(c)).collect();
+            assert_eq!(host.range_values(0, range), expected);
+        }
+        assert_eq!(host.constant_columns.len(), 1);
+        assert_eq!(host.constant_column_cells, 5);
+        let range = RangeRef::new(CellRef::new(0, 1), CellRef::new(63, 1));
+        host.range_values(0, range);
+        assert!(!host.constant_columns.contains_key(&(0, 1)));
+        host.range_values(0, range);
+        assert!(host.constant_columns.get(&(0, 1)).unwrap().is_none());
+        // A newly computed spill overrides a previously cached blank in column A.
+        host.spills.insert((0, CellRef::new(0, 0)), std::sync::Arc::new(gridcraft_core::Array::column(vec![Value::Number(7.0); 32])));
+        let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(63, 0));
+        assert_eq!(host.range_values(0, range).get(1), Some(&Value::Number(7.0)));
+        host.spills.clear();
+        // The input budget is a performance fallback, never an input rejection.
+        host.constant_column_cells = 250_000;
+        let range = RangeRef::new(CellRef::new(0, 2), CellRef::new(63, 2));
+        assert_eq!(host.range_values(0, range), vec![Value::Empty; 64]);
+        assert!(!host.constant_columns.contains_key(&(0, 2)));
+
+        // Stored spills also bypass the index.
+        wb.sheet_mut(0).unwrap().spill.insert(CellRef::new(1, 0), Value::Number(99.0));
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(63, 0));
+        assert_eq!(host.range_values(0, range).get(1), Some(&Value::Number(99.0)));
+        assert!(host.constant_columns.is_empty());
     }
 
     #[test]

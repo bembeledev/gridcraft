@@ -554,12 +554,24 @@ fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
 
 fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
-    if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
+    let folders = app.services.pick_folder.is_some();
+    if square_button(ui, Icon::OpenFolder, lang.tr(if folders { "Open Folder…" } else { "Browse…" })).clicked() {
         let before = app.session.active().map(|d| d.uid);
         app.open_dialog("open", json!({}));
         // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
-        if app.session.active().map(|d| d.uid) != before {
+        if app.session.active().map(|d| d.uid) != before || app.workspace.busy() {
             out.close = true;
+        }
+    }
+    if folders {
+        ui.add_space(12.0);
+        ui.label(lang.tr("Open a folder to browse your spreadsheets."));
+        if ui.link(lang.tr("Open File…")).clicked() {
+            let before = app.session.active().map(|d| d.uid);
+            app.open_dialog("openFile", json!({}));
+            if app.session.active().map(|d| d.uid) != before {
+                out.close = true;
+            }
         }
     }
     ui.add_space(22.0);

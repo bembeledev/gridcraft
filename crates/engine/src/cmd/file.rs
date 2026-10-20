@@ -42,18 +42,32 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
-    let (name, bytes) = if let Some(b) = str_param(p, "base64") {
-        (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
-    } else if let Some(path) = str_param(p, "path") {
-        // Already open? Switch to it.
-        if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
-            s.set_active(i);
-            return Ok(json!({"index": i, "alreadyOpen": true}));
-        }
-        (path.to_string(), crate::io::read_file(path)?)
-    } else {
+    if let Some(path) = str_param(p, "path")
+        && str_param(p, "base64").is_none()
+        && let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path))
+    {
+        s.set_active(i);
+        return Ok(json!({"index": i, "alreadyOpen": true}));
+    }
+    if str_param(p, "path").is_none() && str_param(p, "base64").is_none() {
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
+    }
+    finish_open(s, prepare_open(p)?)
+}
+
+/// A fully decoded and recalculated document. Preparation is independent of the live session
+/// and can run on a background worker; adoption below only transfers ownership.
+pub struct PreparedOpen {
+    doc: DocState,
+    warnings: Vec<String>,
+}
+pub fn prepare_open(p: &Json) -> Result<PreparedOpen> {
+    let (name, bytes) = if let Some(b) = str_param(p, "base64") {
+        (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
+    } else {
+        let path = str_param(p, "path").ok_or_else(|| bad("file.open", "missing path"))?;
+        (path.to_string(), crate::io::read_file(path)?)
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
     let (mut wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
@@ -70,15 +84,21 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
+    let mut doc = DocState::new(wb, path, title);
+    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+        doc.content_kind = Some(crate::io::FileKind::Xlsx);
+    }
+    Ok(PreparedOpen { doc, warnings })
+}
+
+/// Finish a prepared file.open using the same import/save-path and warning semantics.
+pub fn finish_open(s: &mut Session, prepared: PreparedOpen) -> Result<Json> {
+    let PreparedOpen { doc, warnings } = prepared;
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
     {
         s.close_document(0);
-    }
-    let mut doc = DocState::new(wb, path, title);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
-        doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
@@ -148,7 +168,7 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
     let force = bool_param(p, "force").unwrap_or(false);
     let d = s.doc()?;
     if d.is_dirty() && !force {
-        s.ui_requests.push(crate::UiRequest::Dialog("saveChanges".into(), json!({"title": d.display_title()})));
+        s.ui_requests.push(crate::UiRequest::Dialog("saveChanges".into(), json!({"title": d.display_title(), "uid": d.uid})));
         return Ok(json!({"closed": false, "dirty": true}));
     }
     let i = s.active_index();

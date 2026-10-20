@@ -50,7 +50,11 @@ impl eframe::App for App {
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
-                self.0.open_path(&p);
+                if std::path::Path::new(&p).is_dir() {
+                    self.0.run_or_alert("workspace.open", json!({"path": p}));
+                } else {
+                    self.0.open_path(&p);
+                }
             }
         }
     }
@@ -161,6 +165,7 @@ fn services() -> Services {
         })),
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
+        pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
@@ -306,7 +311,11 @@ fn main() -> eframe::Result<()> {
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
     for f in &files {
-        app.open_path(f);
+        if std::path::Path::new(f).is_dir() {
+            app.run_or_alert("workspace.open", json!({"path": f}));
+        } else {
+            app.open_path(f);
+        }
     }
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")

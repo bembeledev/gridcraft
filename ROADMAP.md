@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (formula-heavy workbook opening, continuous selection animation and CK folder workspace) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -132,6 +132,14 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-20 | Formula-heavy CookieDialogData opening: 143 s → ~6 s locally with full recalculation; bounded MATCH/constant-column indices and faster literal criteria/search. Cell fingerprint unchanged across the second optimization (9 s → 6 s). |
+| 2026-10-20 | Selection outlines keep moving during continuous cell dragging; frame-rate regression tests and real-workbook drag benchmark |
+| 2026-10-20 | Diagnostic location navigation reveals the selected cell in the grid |
+| 2026-10-20 | File-tab context menus: close one, others, right or all; save/discard/cancel per dirty workbook |
+| 2026-10-20 | Explorer worksheet children and direct sheet navigation; persistent diagnostics open/close controls, hidden by default |
+| 2026-10-20 | CK project indexing without cumulative input limits, background explorer file opening and conditional-format frame caching |
+| 2026-10-19 | CK patch-data authoring extension: column/value editor, local schema/reference checks, version preview and clickable diagnostic table; [scope and limits](docs/ck-patch-data.md) |
+| 2026-10-19 | Desktop folder workspace: folder picker, resizable explorer with lazy subfolders, document tabs and unsaved-edit preservation; control/MCP commands and Korean labels |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
@@ -193,6 +201,11 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Reduce repeated searches and allocations when opening formula-heavy workbooks |
+| 2026-10-20 | minor | Fix animation restarts that stalled the selection outline during continuous dragging |
+| 2026-10-20 | minor | Complete CK project validation and CakeTycoon UI performance verification |
+| 2026-10-19 | minor | CK profile and local authoring assistance; no change to Excel parity estimates |
+| 2026-10-19 | minor | Desktop folder-first open with a resizable explorer, lazy subfolders and document tabs; preserves unsaved documents and undo while switching; agent commands included |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

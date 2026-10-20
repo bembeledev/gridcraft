@@ -66,23 +66,29 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
+/// Worksheet names for an explorer preview. Only the workbook manifest and relationships
+/// are inflated; cell data, styles, and shared strings are never loaded.
+pub fn read_sheet_names(bytes: &[u8]) -> Result<Vec<String>, IoError> {
+    let mut cx = context(bytes)?;
+    let root_rels = cx.pkg.rels("")?;
+    let part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
+    let bytes = cx.pkg.read(&part)?.ok_or_else(|| IoError::Format("no workbook part".into()))?;
+    let root = xml::parse_streaming_strict(&bytes, &[], &mut |_| Ok(()))?;
+    if root.name != "workbook" {
+        return Err(IoError::Format("invalid workbook part".into()));
+    }
+    let rels = cx.pkg.rels(&part)?;
+    Ok(root
+        .child("sheets")
+        .into_iter()
+        .flat_map(|s| s.kids("sheet"))
+        .filter(|s| s.attr("id").is_some_and(|id| rels.iter().any(|r| r.id == id && r.kind == "worksheet")))
+        .filter_map(|s| s.attr("name").map(str::to_string))
+        .collect())
+}
+
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    let pkg = Package::open(bytes)?;
-    let mut cx = Ctx {
-        pkg,
-        report: ReadReport::default(),
-        sst: vec![],
-        xf_map: vec![],
-        dxfs: vec![],
-        palette: crate::tables::INDEXED.to_vec(),
-        date_system: DateSystem::D1900,
-        styles: StyleTable::default(),
-        persons: Default::default(),
-        next_id: 1,
-        num_fmts: Default::default(),
-        cell_pictures: vec![],
-        cf_ext_ids: vec![],
-    };
+    let mut cx = context(bytes)?;
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
     let wb_xml = match cx.pkg.read_xml(&wb_part)? {
@@ -388,4 +394,65 @@ pub fn parse_print_titles(text: &str) -> (Option<(u32, u32)>, Option<(u32, u32)>
         }
     }
     (rows, cols)
+}
+
+fn context(bytes: &[u8]) -> Result<Ctx<'_>, IoError> {
+    let pkg = Package::open(bytes)?;
+    Ok(Ctx {
+        pkg,
+        report: ReadReport::default(),
+        sst: vec![],
+        xf_map: vec![],
+        dxfs: vec![],
+        palette: crate::tables::INDEXED.to_vec(),
+        date_system: DateSystem::D1900,
+        styles: StyleTable::default(),
+        persons: Default::default(),
+        next_id: 1,
+        num_fmts: Default::default(),
+        cell_pictures: vec![],
+        cf_ext_ids: vec![],
+    })
+}
+
+/// Read cached scalar values for analysis. No formulas are recalculated and no presentation
+/// parts are imported. Sheet names are preserved exactly so consumers can diagnose duplicates.
+pub fn read_xlsx_values(bytes: &[u8], accept: impl Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
+    let mut cx = context(bytes)?;
+    let root_rels = cx.pkg.rels("")?;
+    let part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
+    let bytes = cx.pkg.read(&part)?.ok_or_else(|| IoError::Format("no workbook part".into()))?;
+    let root = xml::parse_streaming_strict(&bytes, &[], &mut |_| Ok(()))?;
+    if root.name != "workbook" {
+        return Err(IoError::Format("invalid workbook part".into()));
+    }
+    let rels = cx.pkg.rels(&part)?;
+    if root.child("workbookPr").is_some_and(|p| p.flag("date1904", false)) {
+        cx.date_system = DateSystem::D1904;
+    }
+    if let Some(rel) = find_rel(&rels, "sharedStrings") {
+        let bytes = cx.pkg.read(&rel.target)?.ok_or_else(|| IoError::Format("missing shared strings part".into()))?;
+        xml::parse_streaming_strict(&bytes, &["si"], &mut |si| {
+            cx.sst.push(Arc::from(xml::rich_text(&si)));
+            Ok(())
+        })?;
+    }
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+    wb.date_system = cx.date_system;
+    if let Some(sheets) = root.child("sheets") {
+        for se in sheets.kids("sheet") {
+            let name = se.attr("name").unwrap_or_default();
+            if !accept(name) {
+                continue;
+            }
+            let rel =
+                se.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).ok_or_else(|| IoError::Format(format!("sheet {name} has no part")))?;
+            if rel.kind != "worksheet" {
+                continue;
+            }
+            wb.sheets.push(Arc::new(crate::sheet_read::read_sheet_values(&mut cx, &rel.target, name)?));
+        }
+    }
+    Ok((wb, cx.report))
 }

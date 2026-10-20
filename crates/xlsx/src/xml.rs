@@ -153,13 +153,21 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
 /// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
 /// kept in the returned tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    parse_streaming_mode(xml, split, cb, false)
+}
+
+/// Analysis must report damaged input instead of accepting the editing reader's recovered rows.
+pub fn parse_streaming_strict(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    parse_streaming_mode(xml, split, cb, true)
+}
+fn parse_streaming_mode(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>, strict: bool) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
         let cfg = reader.config_mut();
-        cfg.check_end_names = false;
-        cfg.allow_unmatched_ends = true;
-        cfg.allow_dangling_amp = true;
+        cfg.check_end_names = strict;
+        cfg.allow_unmatched_ends = !strict;
+        cfg.allow_dangling_amp = !strict;
         cfg.trim_text_start = false;
         cfg.trim_text_end = false;
     }
@@ -235,6 +243,9 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             _ => {}
         }
         buf.clear();
+    }
+    if strict && !stack.is_empty() {
+        return Err(IoError::Xml("unclosed elements in XML part".into()));
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {

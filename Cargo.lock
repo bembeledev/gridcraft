@@ -1648,6 +1648,7 @@ dependencies = [
  "serde_json",
  "skrifa",
  "sys-locale",
+ "tempfile",
  "toml",
  "web-sys",
  "zbus",

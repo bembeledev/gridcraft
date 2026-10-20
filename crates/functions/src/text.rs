@@ -214,8 +214,7 @@ fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
     let needle = text(a, 0)?;
     let hay = text(a, 1)?;
     let start = opt_num(a, 2, 1.0)?;
-    let hc = chars(&hay);
-    if (start.is_nan() || start < 1.0) || start > hc.len().max(1) as f64 {
+    if (start.is_nan() || start < 1.0) || start > hay.chars().count().max(1) as f64 {
         return Err(CellError::Value);
     }
     let start = start as usize - 1;
@@ -225,8 +224,11 @@ fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
     let pos = if wild {
         wildcard_find(&needle, &hay, start)
     } else {
-        let nc = chars(&needle);
-        (start..hc.len()).find(|&i| hc.get(i..i + nc.len()).is_some_and(|w| w == nc.as_slice()))
+        hay.char_indices().nth(start).and_then(|(byte, _)| {
+            let tail = hay.get(byte..)?;
+            let found = tail.find(&needle)?;
+            Some(start + tail.get(..found)?.chars().count())
+        })
     };
     match pos {
         Some(p) => num_val((p + 1) as f64),
@@ -1045,6 +1047,10 @@ mod tests {
         for f in ["FIND", "SEARCH"] {
             close(ev(f, vec![t(""), t("abc"), n(3.0)]), 3.0);
             is_err(ev(f, vec![t(""), t("abc"), n(4.0)]), CellError::Value);
+            close(ev(f, vec![t("가나"), t("😀가나다😀가나"), n(4.0)]), 6.0);
+            close(ev(f, vec![t("😀"), t("😀가나다😀가나"), n(2.0)]), 5.0);
+            is_err(ev(f, vec![t("가나다라"), t("😀가나다")]), CellError::Value);
+            close(ev(f, vec![t(""), t(""), n(1.0)]), 1.0);
         }
         assert_eq!(ev("EXACT", vec![t("a"), t("A")]), Value::Bool(false));
         assert_eq!(ev("EXACT", vec![t("a"), t("a")]), Value::Bool(true));

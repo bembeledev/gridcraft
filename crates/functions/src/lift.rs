@@ -25,6 +25,7 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
     if rows.saturating_mul(cols) > MAX_CELLS {
         return Value::Error(CellError::Num);
     }
+    let match_index = if spec.name == "MATCH" { crate::lookup::MatchIndex::prepare(args) } else { None };
     let mut cell_args: Vec<Arg> = args.to_vec();
     let mut data = Vec::with_capacity(rows * cols);
     for r in 0..rows {
@@ -38,7 +39,10 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
                     slot.value = if let Value::Array(inner) = &v { inner.data.first().cloned().unwrap_or(Value::Empty) } else { v };
                 }
             }
-            let out = (spec.imp)(&cell_args, ctx);
+            let out = match &match_index {
+                Some(index) => index.lookup(&cell_args),
+                None => (spec.imp)(&cell_args, ctx),
+            };
             data.push(match out {
                 Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
                 v => v,

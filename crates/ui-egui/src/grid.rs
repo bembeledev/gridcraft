@@ -103,6 +103,10 @@ pub enum Drag {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// Retain range statistics across paints. Weak ownership does not hold undo snapshots alive.
+    pub(crate) cf_snapshot: std::sync::Weak<Workbook>,
+    pub(crate) cf_sheet: usize,
+    pub(crate) cf_cache: CfCache,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
@@ -178,6 +182,15 @@ impl WheelZoom {
 }
 
 impl GridState {
+    fn prepare_cf_cache(&mut self, wb: &Arc<Workbook>, sheet: usize) {
+        let snapshot = Arc::downgrade(wb);
+        if !self.cf_snapshot.ptr_eq(&snapshot) || self.cf_sheet != sheet {
+            self.cf_cache = CfCache::new();
+            self.cf_snapshot = snapshot;
+            self.cf_sheet = sheet;
+        }
+    }
+
     pub fn autosave(&self) -> bool {
         self.autosave
     }
@@ -724,12 +737,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     painter.rect_filled(rect, 0.0, t.grid_bg);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
     let mirror_from = painter.add(egui::Shape::Noop);
-    let mut cf = CfCache::new();
+    app.grid.prepare_cf_cache(&wb, si);
+    let mut cf = std::mem::take(&mut app.grid.cf_cache);
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     } else {
         paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     };
+    app.grid.cf_cache = cf;
     // Objects above cells.
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
@@ -3338,6 +3353,36 @@ mod selection_fill_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn conditional_statistics_follow_edits_undo_sheet_and_inplace_mutations() {
+        use gridcraft_engine::{Session, core::CellRef};
+        use serde_json::json;
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[[1],[1]]})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A2","rule":{"type":"duplicate","preset":"lightRedFill"}})).unwrap();
+        let mut grid = super::GridState::default();
+        let mut marked = |s: &Session| {
+            let doc = s.active().unwrap();
+            let si = doc.sheet_index();
+            grid.prepare_cf_cache(&doc.wb, si);
+            grid.cf_cache.look(&doc.wb, si, CellRef::new(0, 0)).is_some()
+        };
+        assert!(marked(&s));
+        assert!(marked(&s));
+        s.execute("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+        assert!(!marked(&s));
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(marked(&s));
+        s.execute("home.insertSheet", json!({"name":"Other"})).unwrap();
+        assert!(!marked(&s));
+        s.execute("sheet.activate", json!({"sheet":0})).unwrap();
+        assert!(marked(&s));
+        let doc = s.active_mut().unwrap();
+        std::sync::Arc::make_mut(&mut doc.wb).sheet_mut(0).unwrap().set_value(CellRef::new(1, 0), gridcraft_engine::core::Value::Number(9.0));
+        assert!(!marked(&s));
+    }
+
     use super::*;
 
     #[test]

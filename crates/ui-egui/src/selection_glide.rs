@@ -59,6 +59,8 @@ pub struct SelectionGlide {
     last: Option<((u64, usize), RangeRef)>,
     /// Where it was drawn (screen points).
     drawn: Rect,
+    /// Previous destination, used to advance an in-flight glide before retargeting.
+    target: Rect,
     /// Each edge's distance from the target when the glide set off: left, top, right, bottom.
     offset: [f32; 4],
     started: f64,
@@ -68,7 +70,7 @@ pub struct SelectionGlide {
 
 impl Default for SelectionGlide {
     fn default() -> Self {
-        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
+        SelectionGlide { last: None, drawn: Rect::ZERO, target: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
     }
 }
 
@@ -79,7 +81,10 @@ impl SelectionGlide {
         self.frame_nr = f.frame_nr;
         let key = Some((f.place, f.range));
         if self.last != key {
-            // A new destination: set off from where the outline is drawn now (mid-glide or at rest).
+            // Consume elapsed time on the previous destination before starting the next leg.
+            // A drag can change range on every frame: resetting the clock first would keep
+            // progress at zero indefinitely, freezing the outline until the pointer stops.
+            self.drawn = self.position_at(self.target, f.now);
             let same_sheet = self.last.is_some_and(|(place, _)| place == f.place);
             self.offset = if same_sheet && fresh { offset_between(self.drawn, f.target, f.view) } else { [0.0; 4] };
             self.started = f.now;
@@ -91,10 +96,16 @@ impl SelectionGlide {
         // Arrived when the time is up (or the clock went backwards).
         let progress = (f.now - self.started) / GLIDE_SECS;
         self.gliding = self.offset != [0.0; 4] && (0.0..1.0).contains(&progress);
-        let left = if self.gliding { 1.0 - ease_out(progress as f32) } else { 0.0 };
-        let [l, t, r, b] = self.offset.map(|o| o * left);
-        self.drawn = Rect::from_min_max(pos2(f.target.min.x + l, f.target.min.y + t), pos2(f.target.max.x + r, f.target.max.y + b));
+        self.target = f.target;
+        self.drawn = self.position_at(f.target, f.now);
         self.drawn
+    }
+
+    fn position_at(&self, target: Rect, now: f64) -> Rect {
+        let progress = (now - self.started) / GLIDE_SECS;
+        let left = if (0.0..1.0).contains(&progress) { 1.0 - ease_out(progress as f32) } else { 0.0 };
+        let [l, t, r, b] = self.offset.map(|o| o * left);
+        Rect::from_min_max(pos2(target.min.x + l, target.min.y + t), pos2(target.max.x + r, target.max.y + b))
     }
 
     /// The outline is on its way somewhere: keep repainting.
@@ -266,6 +277,27 @@ mod tests {
         let next = r.step(0.0);
         assert!(near(next, mid), "no jump when the destination changes: {next:?} vs {mid:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
+    }
+
+    #[test]
+    fn changing_destination_every_frame_keeps_the_outline_moving() {
+        for hz in [30, 60, 120, 240] {
+            let dt = 1.0 / f64::from(hz);
+            let mut r = Rig::new(cell(0, 0), at(0.0, 0.0));
+            let mut previous = r.glide.drawn();
+            for i in 1..=30 {
+                let target = Rect::from_min_max(pos2(0.0, 0.0), pos2(64.0 + i as f32 * 16.0, 16.0));
+                r.select(RangeRef::new(CellRef::new(0, 0), CellRef::new(0, i)), target);
+                let drawn = r.step(dt);
+                if i > 1 {
+                    assert!(drawn.max.x > previous.max.x, "drag stalled at {hz} Hz, step {i}");
+                }
+                assert_eq!(drawn.min, pos2(0.0, 0.0));
+                assert!(drawn.max.x <= target.max.x, "no overshoot");
+                previous = drawn;
+            }
+            assert_eq!(r.settle(dt).last(), Some(&r.f.target));
+        }
     }
 
     #[test]

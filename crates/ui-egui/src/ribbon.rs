@@ -99,7 +99,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             egui::Popup::menu(&more).show(|ui| {
                 for (label, id) in [
                     ("New Workbook", "file.new"),
-                    ("Open…", "file.open"),
+                    (if app.services.pick_folder.is_some() { "Open Folder…" } else { "Open…" }, "file.open"),
                     ("Save As…", "file.saveAs"),
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),

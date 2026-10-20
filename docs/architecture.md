@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (lookup performance, folder workspace and CK authoring rules) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -38,12 +38,30 @@ including tests, 2026-10-10.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.
+   Array-lifted exact `MATCH` indexes text once per invocation (at most 100,000 lookup entries
+   and 8 MiB of folded keys), preserving first matches. Wildcards and numeric comparisons use
+   the normal search; indices never survive a call or workbook edit. Lookup vectors are borrowed,
+   and literal text criteria/searches avoid repeated wildcard-token allocations. Immutable calculation
+   passes lazily index sparse constant columns (64 columns / 250,000 values maximum); any formula
+   in a column or stored/new spill uses the original read path. File opening still fully recalculates.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
 ## Agent control
+
+CK rules live in the engine’s `patch_data` module, without UI dependencies. The UI’s `patch_data` module owns a disk-backed background file index and panel state; edits use normal engine commands. See [CK authoring](ck-patch-data.md) for behavior, evidence, limits and commands.
+
+The desktop's folder workspace lives in `ui-egui/workspace.rs`. Bounded background directory
+reads populate a virtualized explorer; subfolders load only when expanded. File disclosure lazily reads worksheet names on bounded background workers (XLSX manifest only). Open models override cached names, reflecting unsaved sheet changes. Worksheet selection carries its target through background file preparation. Selecting a file calls
+the engine's file-open preparation worker or `window.activate`, retaining each document's model and undo history. Completed file-open preparation is adopted on the UI thread; rapid explorer selections coalesce.
+Document-tab context menus close one, other, right-side, or all tabs. A UI-owned queue uses document UIDs, pauses at each normal save prompt, and stops on cancellation or failed saving. Save prompts are bound to the original document UID.
+Source-path-to-document-uid mappings also reuse imported and encrypted documents that have no
+save path. The platform shell supplies the folder picker; browser uploads are unchanged.
+The `workspace.*` and `view.explorer` commands expose this UI state through control and connected
+MCP; folder commands never open a native picker. No filesystem watcher or session restoration
+is implemented; refreshing the list does not reload open documents.
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
   (`engine.execute`, `ui.screenshot`, pointer and keyboard input…), see
@@ -68,4 +86,10 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Bounded per-call array MATCH text indices, per-pass constant columns and faster literal criteria/searches reduce formula-heavy opening time without skipping recalculation. Read-only `perf_open` reports decode/recalc times and a cell fingerprint. |
+| 2026-10-20 | minor | Three-pass disk-backed CK index, cached XLSX values, background file decoding and persistent conditional-format statistics |
+| 2026-10-19 | minor | CK engine schema checks, background project index, guarded authoring panel and diagnostics |
+| 2026-10-20 | minor | Document-tab context menus, UID-based close groups and guarded save prompts |
+| 2026-10-20 | minor | Lazy worksheet previews and navigation; persisted, independent diagnostics visibility |
+| 2026-10-19 | minor | UI-layer folder explorer, background directory reads and document navigation; desktop picker and control commands |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

@@ -4,6 +4,7 @@
 //! Reference-only behaviour (INDEX returning a reference, OFFSET, ROW…) belongs to the host.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use gridcraft_core::{Array, CellError, Value, col_to_letters, compare};
 
@@ -107,8 +108,62 @@ fn bsearch_upto(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
 }
 
 /// A 1-D view of an array (row or column), `None` when it is 2-D.
-fn vector(a: &Array) -> Option<Vec<Value>> {
-    if a.rows == 1 || a.cols == 1 { Some(a.data.clone()) } else { None }
+fn vector(a: &Array) -> Option<&[Value]> {
+    if a.rows == 1 || a.cols == 1 { Some(&a.data) } else { None }
+}
+
+/// One invocation's exact MATCH text index. Array lifting otherwise scans (and used to clone)
+/// the same lookup vector for every needle, making MATCH(keys, keys, 0) quadratic. Keep the
+/// first duplicate, fold exactly like compare_text, and leave wildcard/numeric semantics to
+/// the ordinary search. Nothing survives a call, so edits and recalculation cannot reuse stale
+/// values. Bound both entry count and folded text storage for untrusted formula inputs.
+pub(crate) struct MatchIndex<'a> {
+    hay: &'a [Value],
+    text: HashMap<String, usize>,
+}
+
+impl<'a> MatchIndex<'a> {
+    pub(crate) fn prepare(args: &'a [Arg]) -> Option<Self> {
+        let Value::Array(needles) = &args.first()?.value else { return None };
+        let Value::Array(hay) = &args.get(1)?.value else { return None };
+        if needles.data.len() < 8 || matches!(args.get(2)?.value, Value::Array(_)) || opt_num(args, 2, 1.0).ok()? != 0.0 {
+            return None;
+        }
+        let hay = vector(hay)?;
+        if !(8..=100_000).contains(&hay.len()) {
+            return None;
+        }
+        let mut text = HashMap::new();
+        let mut bytes = 0usize;
+        for (i, value) in hay.iter().enumerate() {
+            if let Value::Text(t) = value {
+                // Unicode lowercase can expand to at most three chars per input char.
+                if t.len() > (8 * 1024 * 1024usize).saturating_sub(bytes) / 3 {
+                    return None;
+                }
+                let key: String = t.chars().flat_map(char::to_lowercase).collect();
+                if let std::collections::hash_map::Entry::Vacant(e) = text.entry(key) {
+                    bytes = bytes.saturating_add(e.key().len());
+                    e.insert(i);
+                }
+            }
+        }
+        Some(Self { hay, text })
+    }
+
+    pub(crate) fn lookup(&self, args: &[Arg]) -> Value {
+        let x = match needle(args, 0) {
+            Ok(x) => x,
+            Err(e) => return Value::Error(e),
+        };
+        let pos = match &x {
+            Value::Text(t) if t.len() <= 8 * 1024 * 1024 / 3 && !has_wildcards(t) => {
+                self.text.get(&t.chars().flat_map(char::to_lowercase).collect::<String>()).copied()
+            }
+            _ => find_exact(&x, self.hay, true, false),
+        };
+        pos.map(|p| Value::Number((p + 1) as f64)).unwrap_or(Value::Error(CellError::NA))
+    }
 }
 
 fn column(a: &Array, c: usize) -> Vec<Value> {
@@ -200,14 +255,15 @@ fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if let Value::Error(e) = av {
         return Err(*e);
     }
-    let hay = vector(&as_array(av)).ok_or(CellError::NA)?;
+    let array = as_array(av);
+    let hay = vector(&array).ok_or(CellError::NA)?;
     let mt = opt_num(args, 2, 1.0)?;
     let pos = if mt == 0.0 {
-        find_exact(&x, &hay, true, false)
+        find_exact(&x, hay, true, false)
     } else if mt > 0.0 {
-        bsearch_last(&x, &hay, false)
+        bsearch_last(&x, hay, false)
     } else {
-        bsearch_last(&x, &hay, true)
+        bsearch_last(&x, hay, true)
     };
     pos.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
@@ -306,7 +362,7 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let mm = if has(args, 4) { opt_int(args, 4, 0)? } else { 0 };
     let sm = if has(args, 5) { opt_int(args, 5, 1)? } else { 1 };
-    match xsearch(&x, &hay, mm, sm)? {
+    match xsearch(&x, hay, mm, sm)? {
         Some(p) => {
             if vertical {
                 let r = row(&ra, p);
@@ -338,10 +394,11 @@ fn xmatch(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if let Value::Error(e) = lv {
         return Err(*e);
     }
-    let hay = vector(&as_array(lv)).ok_or(CellError::Value)?;
+    let array = as_array(lv);
+    let hay = vector(&array).ok_or(CellError::Value)?;
     let mm = if has(args, 2) { int(args, 2)? } else { 0 };
     let sm = if has(args, 3) { int(args, 3)? } else { 1 };
-    xsearch(&x, &hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
+    xsearch(&x, hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -653,6 +710,104 @@ mod tests {
         let mut tall = vec![vec![nv(1.0)], vec![nv(2.0)], vec![nv(3.0)]];
         tall.extend((0..10_000).map(|_| vec![Value::Empty]));
         close(ev("MATCH", vec![n(9.0), rf(arr(tall))]), 3.0);
+    }
+
+    #[test]
+    fn lifted_exact_match_agrees_with_scalar_search() {
+        // Duplicates, Unicode (including multi-char case folding), wildcard escapes, empty
+        // cells versus empty text, numeric rounding, booleans and errors retain scalar MATCH
+        // semantics. Two-dimensional needles retain their shape and first-match positions.
+        let values = vec![
+            tv("Apple"),
+            tv("apple"),
+            tv("İ"),
+            tv("i\u{307}"),
+            tv("ΟΣ"),
+            tv("οσ"),
+            tv("한글"),
+            tv("*"),
+            tv("?"),
+            tv("~"),
+            tv(""),
+            Value::Empty,
+            nv(0.0),
+            nv(0.1 + 0.2),
+            nv(0.3),
+            tv("0"),
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::Error(CellError::Ref),
+            tv("missing"),
+        ];
+        let hay = arr(vec![values]);
+        let needles = vec![
+            tv("APPLE"),
+            tv("İ"),
+            tv("οσ"),
+            tv("한글"),
+            tv("~*"),
+            tv("~?"),
+            tv("~~"),
+            tv("a*"),
+            tv("?"),
+            tv(""),
+            Value::Empty,
+            nv(-0.0),
+            nv(0.3),
+            tv("0"),
+            Value::Bool(true),
+            Value::Error(CellError::Div0),
+            tv("absent"),
+            nv(100.0),
+            Value::Bool(false),
+            tv("missing"),
+        ];
+        let expected: Vec<Value> = needles.iter().map(|v| ev("MATCH", vec![av(v.clone()), av(hay.clone()), n(0.0)])).collect();
+        let args = vec![av(arr(needles.chunks(5).map(|r| r.to_vec()).collect())), av(hay), n(0.0)];
+        assert!(super::MatchIndex::prepare(&args).is_some());
+        assert_eq!(rows_of(&ev("MATCH", args)), expected.chunks(5).map(|r| r.to_vec()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn lifted_exact_match_large_duplicate_vector() {
+        // The unique-count idiom used in large workbooks: MATCH(keys, keys, 0). The first
+        // occurrence wins even with mixed case, and all 8,192 results are checked.
+        let keys: Vec<Value> = (0..8192).map(|i| tv(&format!("key_{}", i % 4096))).collect();
+        let hay = arr(vec![keys.clone()]);
+        let queries = arr(vec![keys.into_iter().map(|v| tv(&v.display().to_uppercase())).collect()]);
+        let out = ev("MATCH", vec![av(queries), av(hay), n(0.0)]);
+        assert_eq!(rows_of(&out), vec![(0..8192).map(|i| nv((i % 4096 + 1) as f64)).collect::<Vec<_>>()]);
+    }
+
+    #[test]
+    fn lifted_match_modes_still_broadcast() {
+        let keys = row(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let needles = row(&[1.5, 2.0, 3.5, 4.0, 5.5, 6.0, 7.5, 8.0]);
+        let args = vec![av(needles), av(keys), av(col(&[0.0, 1.0]))];
+        assert!(super::MatchIndex::prepare(&args).is_none());
+        assert_eq!(
+            rows_of(&ev("MATCH", args)),
+            vec![
+                vec![
+                    Value::Error(CellError::NA),
+                    nv(2.0),
+                    Value::Error(CellError::NA),
+                    nv(4.0),
+                    Value::Error(CellError::NA),
+                    nv(6.0),
+                    Value::Error(CellError::NA),
+                    nv(8.0)
+                ],
+                (1..=8).map(|i| nv(i as f64)).collect(),
+            ]
+        );
+    }
+
+    #[test]
+    fn match_index_bounds_text_memory() {
+        let huge = tv(&"x".repeat(3 * 1024 * 1024));
+        let args = vec![av(row(&[0.0; 8])), av(arr(vec![vec![huge; 8]])), n(0.0)];
+        assert!(super::MatchIndex::prepare(&args).is_none());
     }
 
     #[test]

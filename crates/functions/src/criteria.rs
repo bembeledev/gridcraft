@@ -25,7 +25,10 @@ enum Operand {
     Bool(bool),
     Error(CellError),
     /// Text (lower-cased chars kept for wildcard matching).
-    Text(String),
+    Text {
+        raw: String,
+        literal: Option<Vec<char>>,
+    },
     /// A criterion cut to its first 255 UTF-16 units in the middle of a surrogate pair: the
     /// complete characters before the cut, followed (in Excel) by a lone high surrogate.
     ///
@@ -118,7 +121,7 @@ impl Criterion {
         } else if let Some(e) = CellError::parse(rest) {
             Operand::Error(e)
         } else {
-            Operand::Text(rest.to_string())
+            Operand::Text { raw: rest.to_string(), literal: (!has_wildcards(rest)).then(|| lower_chars(rest)) }
         };
         Criterion { op, operand, bare_empty: false }
     }
@@ -126,8 +129,8 @@ impl Criterion {
     /// Whether a cell value satisfies the criterion.
     pub(crate) fn matches(&self, v: &Value) -> bool {
         let v = match v {
-            Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
-            other => other.clone(),
+            Value::Array(a) => a.data.first().unwrap_or(&Value::Empty),
+            other => other,
         };
         if self.bare_empty {
             return matches!(&v, Value::Empty) || matches!(&v, Value::Text(t) if t.is_empty());
@@ -166,14 +169,13 @@ impl Criterion {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => match self.op {
+            Operand::Text { raw: pat, literal } => match self.op {
                 Op::Eq | Op::Ne => {
                     // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                    let cell_text = match &v {
-                        Value::Text(t) => Some(t.to_string()),
-                        _ => None,
-                    };
-                    let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                    let m = matches!(v, Value::Text(t) if match literal {
+                        Some(chars) => chars.iter().copied().eq(t.chars().map(lower_char)),
+                        None => wildcard_match(pat, t),
+                    });
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {
@@ -255,13 +257,18 @@ fn lower_chars(s: &str) -> Vec<char> {
     s.chars().map(lower_char).collect()
 }
 
-/// Whether the pattern contains an unescaped wildcard.
+/// Whether the pattern contains wildcard syntax or an escape.
 pub(crate) fn has_wildcards(pattern: &str) -> bool {
-    tokenize(pattern).iter().any(|t| !matches!(t, Tok::Char(_))) || pattern.contains('~')
+    pattern.bytes().any(|b| matches!(b, b'*' | b'?' | b'~'))
 }
 
 /// Case-insensitive whole-text match with `*`, `?` and `~` escapes.
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
+    // Most COUNTIF(S) criteria are literal IDs. Avoid allocating and tokenizing two vectors
+    // for every candidate in the range; preserve the wildcard engine's one-char case fold.
+    if !has_wildcards(pattern) {
+        return pattern.chars().map(lower_char).eq(text.chars().map(lower_char));
+    }
     let p = tokenize(pattern);
     let t = lower_chars(text);
     match_from(&p, &t, true).is_some()
@@ -305,6 +312,13 @@ fn match_from(p: &[Tok], t: &[char], whole: bool) -> Option<usize> {
 /// SEARCH-style find: the char index (0-based) of the first position at or after `start` where
 /// the wildcard pattern matches, case-insensitively.
 pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
+    if !has_wildcards(pattern) {
+        let pattern = lower_chars(pattern);
+        let Some(first) = pattern.first() else { return (start <= text.chars().count()).then_some(start) };
+        return text.char_indices().enumerate().skip(start).find_map(|(i, (byte, ch))| {
+            (lower_char(ch) == *first && text.get(byte..)?.chars().map(lower_char).take(pattern.len()).eq(pattern.iter().copied())).then_some(i)
+        });
+    }
     let p = tokenize(pattern);
     let t = lower_chars(text);
     if p.is_empty() {
@@ -338,6 +352,27 @@ mod tests {
 
     fn m(c: &str, v: Value) -> bool {
         Criterion::parse(&Value::from(c)).matches(&v)
+    }
+
+    #[test]
+    fn literal_wildcard_fast_path_matches_tokenized_semantics() {
+        let texts = ["", "Apple", "APPLE", "İ", "i", "i\u{307}", "ΟΣ", "οσ", "ος", "한글", "쿠키42", "😀", "*", "~", "?"];
+        for pattern in texts {
+            for text in texts {
+                let expected = match_from(&tokenize(pattern), &lower_chars(text), true).is_some();
+                assert_eq!(wildcard_match(pattern, text), expected, "{pattern:?}, {text:?}");
+                for start in 0..=text.chars().count() + 1 {
+                    let p = tokenize(pattern);
+                    let t = lower_chars(text);
+                    let expected = if p.is_empty() {
+                        (start <= t.len()).then_some(start)
+                    } else {
+                        (start..t.len()).find(|&i| t.get(i..).is_some_and(|rest| match_from(&p, rest, false).is_some()))
+                    };
+                    assert_eq!(wildcard_find(pattern, text, start), expected, "{pattern:?}, {text:?}, {start}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -446,3 +446,50 @@ fn a_hidden_workbook_has_no_tab() {
         let _ = std::fs::remove_file(p);
     }
 }
+
+/// A cell edit in progress is committed into its own workbook before a tab switches away.
+#[test]
+fn clicking_a_tab_commits_the_cell_edit_in_the_workbook_it_started_in() {
+    let a = temp_csv("edit_a.csv", "a,1\n");
+    let b = temp_csv("edit_b.csv", "b,2\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a);
+    h.state_mut().open_path(&b);
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(3);
+    h.state_mut().run("selection.set", serde_json::json!({"range": "C3"})).unwrap();
+    h.state_mut().begin_edit(Some("draft".into()), false);
+    h.run_steps(2);
+    h.get_by_label_contains("edit_b.csv").click();
+    h.run_steps(3);
+    assert!(h.state().editor.is_none(), "the edit was committed, not carried over");
+    assert_eq!(h.state().session.active_index(), 1);
+    let docs = h.state().session.documents();
+    let c3 = CellRef::parse("C3").unwrap();
+    assert_eq!(docs[0].wb.sheets[0].cell(c3).map(|c| c.value.clone()), Some(Value::Text("draft".into())));
+    assert!(docs[1].wb.sheets[0].cell(c3).is_none(), "the other workbook is untouched");
+    let _ = std::fs::remove_file(a);
+    let _ = std::fs::remove_file(b);
+}
+
+/// With more workbooks than the title bar can fit, the rest are under "»", so every one is reachable.
+#[test]
+fn every_workbook_tab_stays_reachable_when_they_overflow() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    for _ in 1..20 {
+        h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    }
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 20);
+    let last = h.state().session.documents()[19].display_title();
+    assert!(h.query_by_label(&last).is_none(), "the last tab does not fit beside the first");
+    h.get_by_label("»").click();
+    h.run_steps(3);
+    h.get_by_label(&last).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), 19);
+    // The active workbook now has a visible tab of its own.
+    h.get_by_label(&last);
+}

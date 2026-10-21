@@ -189,6 +189,10 @@ pub struct Services {
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Web: tells which `download` calls have finished writing. A saved workbook counts as
+    /// saved once its own download is reported here, not before the browser has written it.
+    /// Leave it `None` when `download` never reports (the embedding host).
+    pub delivered: Option<Delivered>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
@@ -197,6 +201,41 @@ pub struct Services {
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
 }
+
+/// Numbers each `download` call and collects the numbers whose file is written, so a finished
+/// download is matched to the save that started it even when two saves share a file name.
+#[derive(Default)]
+pub struct DeliveryLog {
+    started: std::sync::atomic::AtomicU64,
+    done: std::sync::Mutex<Vec<u64>>,
+}
+
+impl DeliveryLog {
+    /// Call at the start of each `download`; returns the number that download will report.
+    pub fn begin(&self) -> u64 {
+        self.started.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    }
+
+    /// The number of the most recent `download` call (0 before the first).
+    pub fn last_started(&self) -> u64 {
+        self.started.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Reports that the file of download `id` is written.
+    pub fn finish(&self, id: u64) {
+        self.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(id);
+    }
+
+    fn take(&self) -> Vec<u64> {
+        std::mem::take(&mut *self.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
+
+/// Shared handle to a [`DeliveryLog`] (see [`Services::delivered`]).
+pub type Delivered = std::sync::Arc<DeliveryLog>;
+
+/// Saves handed to `download` and not yet reported written; older ones are dropped beyond this.
+const MAX_PENDING_SAVES: usize = 8;
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
@@ -285,6 +324,8 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    /// Workbooks handed to `download` and not yet confirmed written: (download number, doc uid, content).
+    pending_saves: Vec<(u64, u64, std::sync::Arc<gridcraft_engine::model::Workbook>)>,
 }
 
 impl SheetApp {
@@ -328,6 +369,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            pending_saves: Vec::new(),
             started: now_ms(),
         }
     }
@@ -760,6 +802,15 @@ impl SheetApp {
                 {
                     let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
                     dl(&name, &b);
+                    // Only a download that reports back can be matched; the host bridge's cannot.
+                    if let Some(log) = &self.services.delivered
+                        && let Some(d) = self.session.active()
+                    {
+                        self.pending_saves.push((log.last_started(), d.uid, d.wb.clone()));
+                        while self.pending_saves.len() > MAX_PENDING_SAVES {
+                            self.pending_saves.remove(0);
+                        }
+                    }
                 }
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
@@ -1094,6 +1145,16 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        // Downloads the browser finished writing: the workbook saved then is clean (unless edited since).
+        let delivered: Vec<u64> = self.services.delivered.as_ref().map(|log| log.take()).unwrap_or_default();
+        for id in delivered {
+            if let Some(i) = self.pending_saves.iter().position(|(n, ..)| *n == id) {
+                let (_, uid, wb) = self.pending_saves.remove(i);
+                // Earlier saves of this document that never reported (cancelled) are out of date now.
+                self.pending_saves.retain(|(n, u, _)| *u != uid || *n > id);
+                self.session.mark_saved(uid, wb);
+            }
+        }
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services

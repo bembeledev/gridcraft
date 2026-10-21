@@ -276,6 +276,12 @@ impl Session {
     pub fn active(&self) -> Option<&DocState> {
         self.docs.get(self.active)
     }
+    /// Records that document `uid` was written out as `wb`: it is clean unless edited since.
+    pub fn mark_saved(&mut self, uid: u64, wb: Arc<Workbook>) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) {
+            d.saved = wb;
+        }
+    }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
     }

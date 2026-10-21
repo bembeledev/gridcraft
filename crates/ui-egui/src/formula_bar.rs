@@ -41,7 +41,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let id = egui::Id::new("gridcraft.formula_bar");
                 let editing_here = app.editor.as_ref().is_some_and(|e| e.from_formula_bar);
                 if app.editor.is_some() {
-                    editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0);
+                    editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0, None);
                 } else {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
@@ -154,8 +154,10 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
-/// The text editor used in the cell and in the formula bar (they share `app.editor`).
-pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
+/// The text editor used in the cell and in the formula bar (they share `app.editor`). In the
+/// grid, `desired_rows` pins the multiline widget's height to the computed line count, so it
+/// does not fall back to the four-row default and poke out of the painted editor border.
+pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, desired_rows: Option<usize>) {
     let Some(mut ed) = app.editor.take() else { return };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
@@ -280,6 +282,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
+    let edit = match desired_rows {
+        Some(rows) => edit.desired_rows(rows),
+        None => edit,
+    };
     let mut output = edit
         .id(id)
         .frame(egui::Frame::NONE)

@@ -313,8 +313,10 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
     let focused = ui.memory(|m| m.has_focus(id));
     let mut edited = None;
     if focused {
+        // Shift+Tab first: a plain Tab pattern matches a shifted Tab too.
         let (tab, shift_tab, enter) = ui.input_mut(|i| {
-            (i.consume_key(Modifiers::NONE, Key::Tab), i.consume_key(Modifiers::SHIFT, Key::Tab), i.consume_key(Modifiers::NONE, Key::Enter))
+            let shift_tab = i.consume_key(Modifiers::SHIFT, Key::Tab);
+            (i.consume_key(Modifiers::NONE, Key::Tab), shift_tab, i.consume_key(Modifiers::NONE, Key::Enter))
         });
         if tab || shift_tab || enter {
             let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
@@ -462,6 +464,34 @@ mod tests {
         let mut s = "é".to_string();
         let e = newline(&mut s, (99, 99), Lang::Plain);
         assert_eq!((s.as_str(), e.caret), ("é\n", 2));
+    }
+
+    #[test]
+    fn shift_tab_in_the_editor_dedents_rather_than_indents() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+            |ui, text: &mut String| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    let mut fonts = egui::FontDefinitions::default();
+                    let mono = fonts.families.get(&egui::FontFamily::Monospace).cloned().unwrap_or_default();
+                    fonts.families.insert(egui::FontFamily::Name(theme::MONO.into()), mono);
+                    ui.ctx().set_fonts(fonts);
+                    return;
+                }
+                let id = egui::Id::new("code");
+                ui.memory_mut(|m| m.request_focus(id));
+                code_editor(ui, id, text, Lang::Python, 5);
+            },
+            "        x".to_string(),
+        );
+        h.run_steps(2);
+        let tab = |modifiers| egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
+        h.input_mut().events.push(tab(Modifiers::SHIFT));
+        h.run_steps(1);
+        assert_eq!(h.state(), "    x");
+        // A plain Tab still inserts spaces at the caret (the end).
+        h.input_mut().events.push(tab(Modifiers::NONE));
+        h.run_steps(1);
+        assert_eq!(h.state(), "    x    ");
     }
 
     #[test]

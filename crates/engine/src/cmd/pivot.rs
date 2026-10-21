@@ -2182,6 +2182,85 @@ mod tests {
         assert_eq!(val(&s, "K1"), shown);
     }
 
+    /// `=GETPIVOTDATA("Sales", <report>, "Region", <region>)` evaluated in K1 of the active sheet.
+    fn region_sales(s: &mut Session, region: &str) -> Value {
+        let at = pt(s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","{region}")"#)})).unwrap();
+        val(s, "K1")
+    }
+
+    fn reopen(s: &mut Session) {
+        let wb = (*s.doc().unwrap().wb).clone();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into()));
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    }
+
+    #[test]
+    fn getpivotdata_keeps_the_refreshed_report_when_an_item_is_inserted() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+        // A new first item in the source shifts every item of a fresh report down one row.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        // Before the refresh the report still shows the old items, and the lookup reads that report.
+        assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+        assert_eq!(region_sales(&mut s, "Alpha"), Value::Error(CellError::Ref));
+        // Saved and reopened unrefreshed: the stored report no longer matches the source, so there
+        // is no index to trust (never the shifted cell of a different item).
+        reopen(&mut s);
+        assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+        assert_eq!(region_sales(&mut s, "Alpha"), Value::Error(CellError::Ref));
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("data.refreshAll", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        assert_eq!(region_sales(&mut s, "Alpha"), Value::Number(100.0));
+        assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+        assert_eq!(region_sales(&mut s, "East"), Value::Number(315.0));
+    }
+
+    #[test]
+    fn getpivotdata_keeps_the_refreshed_report_when_an_item_is_removed() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(region_sales(&mut s, "North"), Value::Number(135.0));
+        // Every North row becomes East: North leaves the report and West moves up.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        for a in ["A5", "A8", "A11"] {
+            s.execute("cell.set", json!({"cell": a, "input": "East"})).unwrap();
+        }
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        assert_eq!(region_sales(&mut s, "North"), Value::Number(135.0));
+        assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+        reopen(&mut s);
+        assert_eq!(region_sales(&mut s, "North"), Value::Error(CellError::Ref));
+        assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("data.refreshAll", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        assert_eq!(region_sales(&mut s, "North"), Value::Error(CellError::Ref));
+        assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+        assert_eq!(region_sales(&mut s, "East"), Value::Number(550.0));
+    }
+
+    #[test]
+    fn getpivotdata_index_is_saved_with_an_unrefreshed_pivot() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        // The pivot as saved by the native format: the index of the stored report comes back with
+        // it even though the source has since changed.
+        let back: gridcraft_model::PivotTable = serde_json::from_str(&serde_json::to_string(&pt(&s)).unwrap()).unwrap();
+        let cells = back.data_index.cells().expect("index saved");
+        assert_eq!(cells, pt(&s).data_index.cells().unwrap());
+        let west = back.data_index.find("Sales", &[("Region", "West", false)]).unwrap();
+        assert_eq!((west.row, west.col), (3, 1));
+    }
+
     #[test]
     fn getpivotdata_calculated_field() {
         let mut s = sales();

@@ -1,7 +1,8 @@
 //! GETPIVOTDATA: a value from a PivotTable report, found by its value field and the row and
 //! column items that locate it (Excel's documented semantics). Each PivotTable's value cells are
-//! indexed in `PivotTable::data_index` (set on refresh, built from the source on first use after
-//! opening a workbook); the result is read from the report cell the sheet shows.
+//! indexed in `PivotTable::data_index` (set on refresh and saved with the report; built on first
+//! use only for a pivot loaded without one, and only when it matches the stored report); the
+//! result is read from the report cell the sheet shows.
 
 use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_formula::Expr;
@@ -37,9 +38,10 @@ fn is_axis_field(pt: &PivotTable, field: &str) -> bool {
 /// The value cell whose value field and items are exactly those asked for. Text items hit the
 /// hash index; numbers and booleans also match by value, which a miss falls back to scanning for.
 fn find<'a>(cells: &'a PivotLookup, data_field: &str, pairs: &[(String, Value)]) -> Option<&'a PivotDataCell> {
-    let labels: Option<Vec<(&str, String)>> = pairs.iter().map(|(f, v)| v.to_text().ok().map(|t| (f.as_str(), t))).collect();
+    let labels: Option<Vec<(&str, String, bool)>> =
+        pairs.iter().map(|(f, v)| v.to_text().ok().map(|t| (f.as_str(), t, matches!(v, Value::Bool(_))))).collect();
     if let Some(labels) = &labels {
-        let refs: Vec<(&str, &str)> = labels.iter().map(|(f, t)| (*f, t.as_str())).collect();
+        let refs: Vec<(&str, &str, bool)> = labels.iter().map(|(f, t, b)| (*f, t.as_str(), *b)).collect();
         if let Some(c) = cells.find(data_field, &refs) {
             return Some(c);
         }
@@ -110,10 +112,12 @@ impl Evaluator<'_> {
                 return Err(CellError::Ref);
             }
         }
-        // The report's value cells; built from the source on first use when a refresh didn't set them.
+        // The report's value cells. A pivot loaded without them builds them once; a stored report
+        // that no longer matches its source gets an empty index (#REF! until refreshed) instead of
+        // positions from the changed source.
         if pt.data_index.cells().is_none() {
             let build = PIVOT_INDEXER.get().ok_or(CellError::Ref)?;
-            pt.data_index.set_cells(build(wb, area.sheet, pt).map_err(|_| CellError::Ref)?);
+            pt.data_index.set_cells(build(wb, area.sheet, pt).unwrap_or_default());
         }
         let cell = find(&pt.data_index, &data_field, &axis_pairs).ok_or(CellError::Ref)?;
         // The value is the one the sheet shows, so the formula and the report cell always agree.

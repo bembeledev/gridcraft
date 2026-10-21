@@ -1622,10 +1622,31 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     }
 }
 
-/// The value cells of a PivotTable's report, computed from its source. GETPIVOTDATA calls this
-/// the first time it reads a pivot whose index was not set by a refresh (a workbook just opened).
+/// The value cells of a PivotTable's report, for GETPIVOTDATA when a refresh did not set the
+/// index (a workbook just opened from XLSX). The positions must describe the report as it is
+/// stored on the sheet, not as the current source would render it: the source is recomputed only
+/// to learn the layout, and the result is accepted when every label and header cell of that
+/// layout equals the stored cell at the same place. A source changed since the last refresh gives
+/// a different layout, so there is no trustworthy index and the lookup fails until a refresh.
 pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, String> {
-    compute(wb, pt, sheet).map(|o| o.data)
+    const STALE: &str = "The stored report no longer matches the source. Refresh the PivotTable.";
+    let report = pt.last_range.ok_or("The PivotTable has no report.")?;
+    let out = compute(wb, pt, sheet)?;
+    let sh = wb.sheet(sheet).ok_or("There's no such sheet.")?;
+    let rows = u64::from(report.end.row) - u64::from(report.start.row) + 1;
+    let cols = u64::from(report.end.col) - u64::from(report.start.col) + 1;
+    if rows != u64::from(out.height().max(1)) || cols != u64::from(out.width.max(1)) {
+        return Err(STALE.into());
+    }
+    let labels = [CellKind::Header, CellKind::RowLabel, CellKind::ColLabel, CellKind::Filter];
+    for (r, row) in out.grid.iter().enumerate() {
+        for (c, oc) in row.iter().enumerate() {
+            if labels.contains(&oc.kind) && sh.value(CellRef::new(report.start.row + r as u32, report.start.col + c as u32)) != oc.value {
+                return Err(STALE.into());
+            }
+        }
+    }
+    Ok(out.data)
 }
 
 /// Clears a pivot's last output area.

@@ -420,8 +420,8 @@ fn var(key: &str) -> Option<String> {
 
 impl TokenSource for CloudToken {
     fn join(&self) -> Option<(String, String)> {
-        // Runs before the window exists, so blocking here is the same trade
-        // the sign-in itself makes. A saved session opens no browser.
+        // Runs on the collab worker, so a sign-in does not stall the first
+        // frame. A saved session opens no browser.
         let mut client = Client::new(&self.base);
         match load_token() {
             Some(token) => client = client.with_token(token),

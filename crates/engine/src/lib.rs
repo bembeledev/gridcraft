@@ -261,6 +261,11 @@ pub struct Session {
     /// Hears about every local command, when a collaboration layer is attached.
     /// `None` is the ordinary single-user case and costs nothing.
     pub collab: Option<std::sync::Arc<dyn collab::CollabSink>>,
+    /// The workbook the room is for. Edits in any other open workbook stay on
+    /// this machine, and a remote edit is applied here even when another
+    /// window is active. `None` means the active workbook (tests, and the
+    /// moment before a link has bound).
+    pub collab_uid: Option<u64>,
     /// Set while a remote command is being applied, so it is not sent back to
     /// the peer that sent it. Without this, one edit echoes forever.
     applying_remote: bool,
@@ -361,12 +366,13 @@ impl Session {
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }
-            // `spec.journal` already means the command changed the workbook,
-            // so it is exactly the right predicate for what a peer needs to
-            // see. Commands that only move the view are not journaled and are
-            // not shared. The Arc is cloned so the sink can be called without
-            // holding a borrow of `self`.
+            // Journaled is not the same as shared: file commands and undo are
+            // journaled for macros, and must not leave this machine. The Arc
+            // is cloned so the sink can be called without holding a borrow of
+            // `self`.
             if !self.applying_remote
+                && collab::shareable(id)
+                && self.collab_uid.is_none_or(|uid| self.active().is_some_and(|d| d.uid == uid))
                 && let Some(sink) = self.collab.clone()
             {
                 sink.on_local(id, &params);
@@ -377,12 +383,19 @@ impl Session {
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
-                d.undo.remove(0);
-            }
-            d.redo.clear();
             d.revision += 1;
+            if self.applying_remote {
+                // Undo is this peer's own. A snapshot taken before the remote
+                // edit would wipe it if restored, so the local stacks go.
+                d.undo.clear();
+                d.redo.clear();
+            } else {
+                d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
+                if d.undo.len() > UNDO_LIMIT {
+                    d.undo.remove(0);
+                }
+                d.redo.clear();
+            }
         }
         result
     }
@@ -393,14 +406,29 @@ impl Session {
 
     /// Runs a command that arrived from another peer.
     ///
-    /// Identical to [`Session::execute`] except that it is not reported to the
-    /// [`collab::CollabSink`], which is what stops an edit bouncing between
-    /// two peers forever. It still journals and still records undo history, so
-    /// a remote edit can be undone locally like any other.
+    /// Three things differ from [`Session::execute`]. It is not reported to
+    /// the [`collab::CollabSink`], which is what stops an edit bouncing
+    /// between two peers forever. It only accepts a [`collab::shareable`]
+    /// command, so a peer cannot open, save or undo on this machine. And it
+    /// runs against the shared workbook ([`Session::collab_uid`]) even when
+    /// another window is active. Undo stays local: the remote edit is not
+    /// recorded on this peer's stack, and local history is cleared because a
+    /// snapshot taken before it would wipe it if restored.
     pub fn apply_remote(&mut self, id: &str, params: Json) -> Result<Json> {
+        if !collab::shareable(id) {
+            return Err(EngineError::Other(format!("{id} is not a shared edit")));
+        }
+        let was_active = self.active;
+        if let Some(uid) = self.collab_uid {
+            match self.docs.iter().position(|d| d.uid == uid) {
+                Some(i) => self.active = i,
+                None => return Err(EngineError::Other("the shared workbook is not open".into())),
+            }
+        }
         let was = std::mem::replace(&mut self.applying_remote, true);
         let out = self.execute(id, params);
         self.applying_remote = was;
+        self.active = was_active;
         out
     }
 

@@ -25,7 +25,7 @@ use serde_json::Value as Json;
 /// the Nextcloud app produced, so all a client can do is present a token it
 /// was handed. Anything able to mint tokens could forge any file id and any
 /// permission bits, and that is why the key stays server-side.
-pub trait TokenSource {
+pub trait TokenSource: Send {
     /// Where the relay is, and a signed token for one document.
     ///
     /// One call, because one call mints one token. Asking separately would
@@ -130,12 +130,14 @@ fn scope_of(params: &Json) -> Option<String> {
 
 /// A live shared-editing link.
 pub struct Link {
-    // The socket runs on a task inside this runtime, so the runtime has to
-    // outlive the hub. Dropping it first closes the connection underneath us.
-    _rt: tokio::runtime::Runtime,
+    // Declared before the runtime so the hub is dropped first. The socket
+    // runs on a task inside the runtime; dropping the runtime first would
+    // close the connection underneath the hub.
     hub: NativeHub,
+    _rt: tokio::runtime::Runtime,
     wire: Wire,
     local: Receiver<(String, Json)>,
+    outbound: Sender<(String, Json)>,
     /// Lines for the user, drained by the app each frame.
     pub notices: Vec<String>,
     /// Who else is in the document. The identifier comes with the name
@@ -148,12 +150,26 @@ pub struct Link {
 }
 
 impl Link {
-    /// Connects and attaches to the engine.
+    /// Reaches the relay on a worker. The first paint does not wait.
     ///
-    /// Returns `None` when no credential is configured or the relay cannot be
-    /// reached, and the app then behaves exactly as it did before. Shared
-    /// editing is an addition, never a precondition for opening a file.
-    pub fn attach(engine: &mut Engine, src: &dyn TokenSource) -> Option<Link> {
+    /// The receiver yields one [`Link`] when the handshake succeeds. It
+    /// disconnects with nothing sent when no credential is configured or the
+    /// relay cannot be reached, and the app then behaves exactly as it did
+    /// before. Shared editing is an addition, never a precondition for
+    /// opening a file.
+    pub fn spawn(src: impl TokenSource + 'static) -> Receiver<Link> {
+        let (tx, rx) = channel();
+        let _ = std::thread::Builder::new().name("collab-connect".into()).spawn(move || {
+            if let Some(link) = Link::connect(&src) {
+                let _ = tx.send(link);
+            }
+        });
+        rx
+    }
+
+    /// Connects to the relay. Does not touch the engine; call [`Link::bind`]
+    /// on the UI thread once the window exists.
+    pub fn connect(src: &dyn TokenSource) -> Option<Link> {
         let (relay, token) = src.join()?;
         let Some(doc) = doc_from_token(&token) else {
             log::warn!("collab: the token carries no file id, so there is no room to join");
@@ -167,10 +183,15 @@ impl Link {
                 return None;
             }
         };
-        let hub = match rt.block_on(NativeHub::connect(&relay, &token)) {
-            Ok(h) => h,
-            Err(e) => {
+        let connect = tokio::time::timeout(std::time::Duration::from_secs(5), NativeHub::connect(&relay, &token));
+        let hub = match rt.block_on(connect) {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => {
                 log::warn!("collab: cannot reach the relay at {relay}: {e}");
+                return None;
+            }
+            Err(_) => {
+                log::warn!("collab: the relay at {relay} did not answer in time");
                 return None;
             }
         };
@@ -181,10 +202,27 @@ impl Link {
         // cost a duplicate session every time. The relay speaks first.
         let wire = Wire::new(doc.clone());
 
-        let (tx, local) = channel();
-        engine.collab = Some(Arc::new(Outbound(tx)));
+        let (outbound, local) = channel();
         log::info!("collab: joining {doc} on {relay}");
-        Some(Link { _rt: rt, hub, wire, local, notices: Vec::new(), roster: Vec::new(), was_connected: true })
+        Some(Link {
+            hub,
+            _rt: rt,
+            wire,
+            local,
+            outbound,
+            notices: Vec::new(),
+            roster: Vec::new(),
+            was_connected: true,
+        })
+    }
+
+    /// Hands the engine the outbound sink and pins the room to this workbook.
+    ///
+    /// Call once, on the UI thread, after the window exists. Edits made
+    /// before this returns stay local.
+    pub fn bind(&self, engine: &mut Engine, uid: Option<u64>) {
+        engine.collab = Some(Arc::new(Outbound(self.outbound.clone())));
+        engine.collab_uid = uid;
     }
 
     /// One frame's work: send what the user did, apply what arrived.

@@ -32,6 +32,9 @@ struct App {
     /// Shared editing, when a credential was configured. `None` leaves the app
     /// behaving exactly as it did before.
     collab: Option<collab::Link>,
+    /// The worker that reaches the relay. Taken once it answers, or dropped
+    /// when it gives up, so the first paint never waits on a socket.
+    collab_rx: Option<std::sync::mpsc::Receiver<collab::Link>>,
     #[cfg(target_os = "macos")]
     menu: Option<native_menu::NativeMenu>,
     #[cfg(target_os = "macos")]
@@ -49,6 +52,21 @@ impl eframe::App for App {
                 m.poll(&mut self.sheet, ctx);
             }
             apple_events::poll(&self.events, &mut self.sheet, ctx);
+        }
+        if self.collab.is_none() {
+            match self.collab_rx.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
+                Some(Ok(link)) => {
+                    let uid = self.sheet.session.active().map(|d| d.uid);
+                    link.bind(&mut self.sheet.session, uid);
+                    self.collab = Some(link);
+                    self.collab_rx = None;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => self.collab_rx = None,
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
+                None => {}
+            }
         }
         if let Some(link) = &mut self.collab {
             link.pump(&mut self.sheet.session);
@@ -391,22 +409,24 @@ fn main() -> eframe::Result<()> {
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
-                // Attached after the workbook exists, so the first
-                // remote edit has somewhere to land. A missing credential or
-                // an unreachable relay logs and yields None, and the app runs
-                // as an ordinary single-user spreadsheet.
+                // The relay is reached on a worker. Binding happens on the
+                // first frame that finds the link ready, so the window is
+                // already up. A missing credential or an unreachable relay
+                // logs and yields nothing, and the app runs as an ordinary
+                // single-user spreadsheet.
                 //
                 // A document named by the launcher, reached through
                 // CollabCraft, which signs in through the browser. Otherwise
                 // the plain token in the environment, which is what a test
                 // harness supplies.
-                let link = match cloud::CloudToken::from_env() {
-                    Some(source) => collab::Link::attach(&mut app.session, &source),
-                    None => collab::Link::attach(&mut app.session, &collab::EnvToken),
-                };
+                let collab_rx = Some(match cloud::CloudToken::from_env() {
+                    Some(source) => collab::Link::spawn(source),
+                    None => collab::Link::spawn(collab::EnvToken),
+                });
                 Ok(Box::new(App {
                     sheet: app,
-                    collab: link,
+                    collab: None,
+                    collab_rx,
                     #[cfg(target_os = "macos")]
                     menu: None,
                     #[cfg(target_os = "macos")]

@@ -672,7 +672,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             let forced = invoke(app, "home.fillColor");
             egui::Popup::menu(&fa).open_memory(popup_command(forced, fa.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
+                if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill", "fillColor") {
                     if c != "none" {
                         app.grid.last_fill = c.clone();
                     }
@@ -680,6 +680,11 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
+            // A colour chosen in the Colors window (More Colors…) arrives after the menu closed.
+            if let Some(c) = crate::color_picker::take_result(ui.ctx(), "fillColor") {
+                app.grid.last_fill = c.clone();
+                act(app, "home.fillColor", json!({"color": c}));
+            }
             let fc = app.grid.last_font_color.clone();
             let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
@@ -689,7 +694,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             let forced = invoke(app, "home.fontColor");
             egui::Popup::menu(&ca).open_memory(popup_command(forced, ca.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic") {
+                if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic", "fontColor") {
                     if c != "none" {
                         app.grid.last_font_color = c.clone();
                     }
@@ -697,6 +702,10 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
+            if let Some(c) = crate::color_picker::take_result(ui.ctx(), "fontColor") {
+                app.grid.last_font_color = c.clone();
+                act(app, "home.fontColor", json!({"color": c}));
+            }
         });
     });
     sep(ui);

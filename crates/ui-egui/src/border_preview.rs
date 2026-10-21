@@ -80,3 +80,35 @@ pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
         }
     }
 }
+
+/// Translates a label that marks its access key with `&` ("Entire &row"). The catalogs hold
+/// the plain text ("Entire row"); a translation is shown without an access key, and a label with
+/// no translation keeps its English access key.
+pub(crate) fn tr_access(lang: crate::i18n::Language, label: &str) -> String {
+    let plain = label.replace('&', "");
+    let shown = lang.tr(&plain);
+    if shown == plain { label.to_string() } else { shown.to_string() }
+}
+
+/// Lays out `label` with the character after `&` underlined (Windows menu access key).
+pub(crate) fn access_key_job(label: &str, font: egui::FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    // "&&" is a literal ampersand ("Merge && &Center").
+    let chars: Vec<char> = label.chars().collect();
+    let mut i = 0;
+    let mut underline_next = false;
+    while let Some(&c) = chars.get(i) {
+        if c == '&' && chars.get(i + 1) == Some(&'&') {
+            i += 1;
+        } else if c == '&' {
+            underline_next = true;
+            i += 1;
+            continue;
+        }
+        let underline = if underline_next { Stroke::new(1.0, color) } else { Stroke::NONE };
+        underline_next = false;
+        job.append(&c.to_string(), 0.0, egui::TextFormat { font_id: font.clone(), color, underline, ..Default::default() });
+        i += 1;
+    }
+    job
+}

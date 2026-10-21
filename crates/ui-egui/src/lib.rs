@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod color_picker;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -29,6 +30,8 @@ pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
+pub mod sheet_dialogs;
+pub mod sheet_tab_menu;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
@@ -1172,6 +1175,8 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        // The Colors window first, so its Escape doesn't also close the dialog that opened it.
+        color_picker::window(&ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

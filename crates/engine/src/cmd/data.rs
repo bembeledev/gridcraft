@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Validation List Items",
             [],
             None,
-            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and accents)",
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and Latin-1 / Latin Extended-A accents)",
             has_doc,
             validation_list_cmd
         ),

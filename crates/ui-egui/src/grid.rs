@@ -3177,6 +3177,11 @@ pub(crate) fn paint_overlays(
 
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
+    // An edit shows its own searched list; two lists would stack.
+    if app.editor.is_some() {
+        app.grid.list_picker = None;
+        return;
+    }
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
     let si = wb.active_sheet;

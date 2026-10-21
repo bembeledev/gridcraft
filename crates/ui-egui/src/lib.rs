@@ -915,6 +915,8 @@ impl SheetApp {
             Some(t) => (t, true),
             None => (current.clone(), false),
         };
+        // Typing over an open dropdown list hands over to the searched list the edit shows.
+        self.grid.list_picker = None;
         let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar);
         ed.locale = locale;
         // A list validation with an in-cell dropdown is searched as the user types; its list

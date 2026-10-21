@@ -9,12 +9,15 @@
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+pub mod cf_icons;
 pub mod chartview;
+pub mod color_picker;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
 pub mod fonts;
+pub mod format_cells;
 pub mod formula_bar;
 mod formula_locale;
 pub mod grid;
@@ -28,7 +31,11 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
+pub mod ribbon_art;
+pub mod ribbon_extra;
 pub mod selection_glide;
+pub mod sheet_dialogs;
+pub mod sheet_tab_menu;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
@@ -53,6 +60,8 @@ pub struct UiState {
     pub system_theme: bool,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
+    /// Hide the Quick Access Toolbar (Save, Undo, Redo…) in the title bar.
+    pub qat_hidden: bool,
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
@@ -99,6 +108,7 @@ impl Default for UiState {
             system_theme: false,
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
+            qat_hidden: false,
             formula_bar_expanded: false,
             status_bar: true,
             animations: true,
@@ -1172,6 +1182,8 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        // The Colors window first, so its Escape doesn't also close the dialog that opened it.
+        color_picker::window(&ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

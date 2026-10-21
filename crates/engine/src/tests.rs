@@ -843,6 +843,32 @@ fn sort_and_filter() {
     assert_eq!(r["hiddenRows"], 1);
 }
 
+/// Sorting a selected column (or the whole column) keeps the neighbouring columns' rows together,
+/// from Sort Z to A and from the Custom Sort dialog alike. The key is the column the user picked
+/// (B), named by letter or by a numeric offset from the picked range, never from the expanded one.
+/// Sorted by Name (A) the rows would come out c, b, a; sorted by Score (B) they come out b, a, c.
+#[test]
+fn sorting_a_selected_column_expands_to_the_adjacent_data() {
+    let by_letter = json!({"header": true, "keys": [{"column": "B", "order": "desc"}]});
+    let by_offset = json!({"header": true, "keys": [{"column": 0, "order": "desc"}]});
+    let quick = "data.sortDescending";
+    let cases = [(quick, json!({})), (quick, json!({"column": 0})), ("data.sort", by_letter), ("data.sort", by_offset)];
+    for (cmd, params) in cases {
+        for sel in ["B2:B4", "B:B"] {
+            let mut s = s();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 3], ["c", 1], ["a", 2]]})).unwrap();
+            s.execute("selection.set", json!({"range": sel})).unwrap();
+            s.execute(cmd, params.clone()).unwrap();
+            for (cell, want) in [("A2", Value::from("b")), ("A3", Value::from("a")), ("A4", Value::from("c"))] {
+                assert_eq!(v(&s, cell), want, "{cmd} {params} {sel} {cell}");
+            }
+            for (cell, want) in [("B2", 3.0), ("B3", 2.0), ("B4", 1.0)] {
+                assert_eq!(v(&s, cell), Value::Number(want), "{cmd} {params} {sel} {cell}");
+            }
+        }
+    }
+}
+
 /// Top 10 keeps the top or bottom N items or percent, ties at the threshold included.
 #[test]
 fn filter_top10_items_and_percent() {

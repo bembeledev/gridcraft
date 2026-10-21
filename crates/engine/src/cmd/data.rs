@@ -182,9 +182,26 @@ struct SortKey {
     list: Option<Vec<String>>,
 }
 
+/// A selected block one column wide (a whole column, or part of one) next to more data would
+/// sort that column alone and scramble the rows: take Excel's "Expand the selection" choice and
+/// sort the whole current region. An explicit `range` is sorted as given.
+fn expand_sort_range(s: &Session, p: &Json, r: RangeRef) -> Result<RangeRef> {
+    if p.get("range").is_some() || r.width() != 1 || r.is_single() {
+        return Ok(r);
+    }
+    let d = s.doc()?;
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    if sh.table_at(d.selection.active).is_some() {
+        return Ok(r);
+    }
+    let region = current_region(sh, r.start);
+    Ok(if region.width() > 1 && region.contains_range(&r) { region } else { r })
+}
+
 fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
-    let r = data_range(s, p)?;
-    let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
+    let picked = data_range(s, p)?;
+    let r = expand_sort_range(s, p, picked)?;
+    let col = col_param(p.get("column"), picked.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let header = guess_header(&d.wb, sh, r);
@@ -192,11 +209,12 @@ fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
 }
 
 fn sort(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = data_range(s, p)?;
+    let by_cols = str_param(p, "orientation") == Some("columns");
+    let picked = data_range(s, p)?;
+    let r = if by_cols { picked } else { expand_sort_range(s, p, picked)? };
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
-    let by_cols = str_param(p, "orientation") == Some("columns");
     let case = bool_param(p, "matchCase").unwrap_or(false);
     let mut keys: Vec<SortKey> = Vec::new();
     for k in p.get("keys").and_then(Json::as_array).map(Vec::as_slice).unwrap_or_default() {
@@ -211,7 +229,8 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             };
             row.or_else(|| col_param(k.get("column"), r.start.row))
         } else {
-            col_param(k.get("column"), r.start.col)
+            // Numeric offsets count from the range the user picked, not from the expanded one.
+            col_param(k.get("column"), picked.start.col)
         };
         let Some(col) = col else { continue };
         keys.push(SortKey {

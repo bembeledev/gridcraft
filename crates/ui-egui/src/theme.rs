@@ -767,6 +767,25 @@ mod font_binding_tests {
     }
 
     #[test]
+    fn a_workbook_font_named_by_a_localized_name_binds_under_that_name() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Any installed family the file calls by more than one name (a CJK font's Japanese and
+        // English records, say): a workbook spelling it the non-English way must bind and render.
+        let cat = crate::fonts::catalog();
+        let Some(face) = cat.iter().find(|f| f.names.len() > 1) else { return }; // single-name fonts only
+        let Some(alias) = face.names.iter().map(|(n, _)| n).find(|n| **n != face.family).cloned() else { return };
+        let fonts = font_definitions_with(crate::i18n::Language::En, std::slice::from_ref(&alias));
+        let role = crate::fonts::role_key(&alias, false, false);
+        assert!(
+            fonts.families.get(&FontFamily::Name(role.as_str().into())).is_some_and(|c| !c.is_empty()),
+            "{alias:?} (a name of {:?}) didn't bind",
+            face.family
+        );
+        assert_eq!(cell_family(&alias, false, false), FontFamily::Name(role.into()));
+        crate::fonts::set_bound(always_bound());
+    }
+
+    #[test]
     fn arbitrary_names_never_yield_an_unbound_family() {
         let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A workbook can hold any font name; none may name a family egui has no data for.

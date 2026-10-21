@@ -369,12 +369,14 @@ fn popup_command(forced: bool, clicked: bool) -> Option<egui::SetOpenCommand> {
     if forced { Some(egui::SetOpenCommand::Bool(true)) } else { clicked.then_some(egui::SetOpenCommand::Toggle) }
 }
 
-/// Per-control state of an [`editable_combo`]: the filter text and highlighted row.
+/// Per-control state of an [`editable_combo`]: the filter text, highlighted row, and whether an
+/// IME composition is live on the filter field.
 #[derive(Clone, Default)]
 struct ComboState {
     text: String,
     sel: i32,
     was_open: bool,
+    composing: bool,
 }
 
 /// What the user did with an [`editable_combo`].
@@ -412,12 +414,26 @@ pub(crate) fn editable_combo(
     let mut result = ComboResult::None;
     egui::Popup::menu(anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         // Arrows and Enter navigate the list, not the filter field's cursor. Capture them and
-        // strip them from the input so the TextEdit never sees them.
+        // strip them from the input so the TextEdit never sees them — except while an IME
+        // composition is live: those keys belong to the conversion window, and the Enter that
+        // confirms a conversion must not fire the list.
         let (mut down, mut up, mut enter) = (false, false, false);
+        let mut ime_this_frame = false;
         ui.input(|i| {
-            down = i.key_pressed(egui::Key::ArrowDown);
-            up = i.key_pressed(egui::Key::ArrowUp);
-            enter = i.key_pressed(egui::Key::Enter);
+            for e in &i.events {
+                match e {
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => st.composing = !text.is_empty(),
+                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => st.composing = false,
+                    egui::Event::Ime(_) => {}
+                    _ => continue,
+                }
+                ime_this_frame = true;
+            }
+            if !(st.composing || ime_this_frame) {
+                down = i.key_pressed(egui::Key::ArrowDown);
+                up = i.key_pressed(egui::Key::ArrowUp);
+                enter = i.key_pressed(egui::Key::Enter);
+            }
         });
         if down || up || enter {
             ui.ctx().input_mut(|i| {
@@ -1068,9 +1084,13 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
-    if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
-        act(app, "home.fontName", json!({"name": value}));
+    // Installed fonts after the standard set — a font the machine has (a Japanese face, say) can be
+    // picked, and any other name can be typed in.
+    let fams = crate::fonts::families(app.ui.language);
+    let items: Vec<(&str, String)> = fams.iter().map(|f| (f.as_str(), f.clone())).collect();
+    match editable_combo(ui, &resp, "font", &name, &items, forced) {
+        ComboResult::Picked(value) | ComboResult::Entered(value) => act(app, "home.fontName", json!({"name": value})),
+        ComboResult::None => {}
     }
 }
 

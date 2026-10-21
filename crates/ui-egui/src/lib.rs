@@ -343,6 +343,9 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        // Every app entry point comes through here (setup_context delegates too), so this is where
+        // the installed-font catalog scan starts; it's a no-op after the first call and on wasm.
+        fonts::start_scan();
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }

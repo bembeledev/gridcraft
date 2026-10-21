@@ -22,8 +22,11 @@ const MAX_FONT_FILE: u64 = 64 << 20;
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
 pub struct Face {
-    /// Typographic family name, e.g. `"Segoe UI"`.
+    /// Typographic family name, e.g. `"Segoe UI"` (the English record when the file has one).
     pub family: String,
+    /// Every localized family name the file gives this face, with its BCP-47 language tag:
+    /// "MS Gothic" and "ＭＳ ゴシック" are the same font, and a workbook may name it by either.
+    pub names: Vec<(String, Option<String>)>,
     /// The file the face lives in.
     pub path: PathBuf,
     /// Face index within the file (collections hold several, e.g. a family's Regular and Bold).
@@ -95,9 +98,10 @@ fn style_italic(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// Every face in `data` as `(index, family, style)`. Damaged data yields nothing, never a panic.
+/// Every face in `data` as `(index, family, localized family names, style)`. Damaged data yields
+/// nothing, never a panic.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_faces(data: &[u8]) -> Vec<(u32, String, String)> {
+fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<(String, Option<String>)>, String)> {
     use skrifa::raw::FileRef;
     use skrifa::{MetadataProvider, string::StringId};
     let count = match FileRef::new(data) {
@@ -108,12 +112,27 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, String)> {
     let name = |f: &skrifa::FontRef<'_>, ids: &[StringId]| -> Option<String> {
         ids.iter().find_map(|id| f.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
     };
+    // Every localized family name (each language/platform record), so a workbook naming the face
+    // in Japanese ("ＭＳ ゴシック") resolves to the same face as its English name ("MS Gothic").
+    let all_names = |f: &skrifa::FontRef<'_>| -> Vec<(String, Option<String>)> {
+        let mut v: Vec<(String, Option<String>)> = Vec::new();
+        for id in [StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME] {
+            for s in f.localized_strings(id) {
+                let name = s.to_string();
+                let lang = s.language().map(str::to_string);
+                if !name.is_empty() && !v.iter().any(|(n, _)| *n == name) {
+                    v.push((name, lang));
+                }
+            }
+        }
+        v
+    };
     (0..count)
         .filter_map(|i| {
             let f = skrifa::FontRef::from_index(data, i).ok()?;
             let family = name(&f, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME])?;
             let style = name(&f, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]).unwrap_or_else(|| "Regular".into());
-            Some((i, family, style))
+            Some((i, family, all_names(&f), style))
         })
         .collect()
 }
@@ -143,8 +162,8 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
                 continue;
             }
             let Ok(data) = std::fs::read(&path) else { continue };
-            for (index, family, style) in file_faces(&data) {
-                out.push(Face { family, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
+            for (index, family, names, style) in file_faces(&data) {
+                out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
         }
     }
@@ -188,26 +207,64 @@ pub fn scan_done() -> bool {
     CATALOG.get().is_some()
 }
 
+/// Family-name comparison key: lowercases, folds full-width ASCII to half-width, and drops
+/// whitespace (including the ideographic space), so "ＭＳ ゴシック", "ＭＳ　ゴシック" and
+/// "MS ゴシック" all compare equal. Real spelling differences across locales ("MS Gothic" vs
+/// "ゴシック") are covered by [`Face::names`], not by this key.
+fn name_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c })
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+impl Face {
+    /// Whether this face can be named `wanted`: any localized family name the file ships counts,
+    /// in any case or character width ("ＭＳ ゴシック" finds the face catalogued as "MS Gothic").
+    pub fn matches(&self, wanted: &str) -> bool {
+        let w = name_key(wanted);
+        name_key(&self.family) == w || self.names.iter().any(|(n, _)| name_key(n) == w)
+    }
+
+    /// The family name in `lang` (a BCP-47 primary subtag like `"ja"` or `"pt"`) when the file has
+    /// a record for it, else the canonical name — so a Japanese interface shows "ＭＳ ゴシック"
+    /// rather than "MS Gothic", like Excel does.
+    pub fn display_name(&self, lang: &str) -> &str {
+        self.names
+            .iter()
+            .find(|(_, l)| l.as_deref().is_some_and(|l| l.split('-').next() == Some(lang)))
+            .map(|(n, _)| n.as_str())
+            .unwrap_or(&self.family)
+    }
+}
+
+/// The catalog face a workbook font name resolves to, if any.
+fn find_family<'a>(cat: &'a [Face], wanted: &str) -> Option<&'a Face> {
+    cat.iter().find(|f| f.matches(wanted))
+}
+
 /// The faces of one installed family, regular-weight first (the order roles pick from).
 pub fn faces_of(family: &str) -> Vec<Face> {
     let Some(cat) = catalog_now() else { return Vec::new() };
-    let mut v: Vec<Face> = cat.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).cloned().collect();
+    let mut v: Vec<Face> = cat.iter().filter(|f| f.matches(family)).cloned().collect();
     v.sort_by(|a, b| a.weight.total_cmp(&b.weight).then(a.italic.cmp(&b.italic)).then(a.index.cmp(&b.index)));
     v
 }
 
 /// The subset of `names` that is installed, sorted and deduped. These are the families whose files
-/// get bound for a workbook.
+/// get bound for a workbook. The returned names are the workbook's own spellings — roles are keyed
+/// on them — so a cell naming a face by any of its localized names resolves to the bound family.
 pub fn installed_among(names: &[String]) -> Vec<String> {
     let Some(cat) = catalog_now() else { return Vec::new() };
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for wanted in names {
-        if !seen.insert(wanted.to_lowercase()) {
+        if !seen.insert(name_key(wanted)) {
             continue;
         }
-        if let Some(f) = cat.iter().find(|f| f.family.eq_ignore_ascii_case(wanted)) {
-            out.push(f.family.clone());
+        if find_family(cat, wanted).is_some() {
+            out.push(wanted.clone());
         }
     }
     out.sort_by_key(|a| a.to_lowercase());
@@ -215,13 +272,16 @@ pub fn installed_among(names: &[String]) -> Vec<String> {
 }
 
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
-/// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
-pub fn families() -> Vec<String> {
+/// offers, and what we substitute), then every other installed family A–Z in the interface
+/// language's name for it ("IPAゴシック" in a Japanese UI), falling back to its canonical name.
+/// Never blocks: until the background scan finishes it returns just the standard names.
+pub fn families(language: crate::i18n::Language) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
     let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
+    let mut fams_seen: HashSet<String> = HashSet::new();
+    let mut installed: Vec<String> =
+        cat.iter().filter(|f| fams_seen.insert(name_key(&f.family))).map(|f| f.display_name(language.code()).to_string()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
     installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     for f in installed {
@@ -401,13 +461,57 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn localized_family_names_and_width_fold_into_face_matches() {
+        let face = |family: &str, names: &[(&str, Option<&str>)]| Face {
+            family: family.into(),
+            names: names.iter().map(|(n, l)| (n.to_string(), l.map(str::to_string))).collect(),
+            path: PathBuf::new(),
+            index: 0,
+            weight: 400.0,
+            italic: false,
+        };
+        // The name table of a Japanese font carries both records ("MS Gothic", "ＭＳ ゴシック").
+        let gothic = face("MS Gothic", &[("MS Gothic", Some("en")), ("ＭＳ ゴシック", Some("ja"))]);
+        assert!(gothic.matches("ＭＳ ゴシック"), "the Japanese name the file ships");
+        assert!(gothic.matches("MS Gothic"));
+        assert!(gothic.matches("ms gothic"));
+        assert!(gothic.matches("ＭＳ　ゴシック"), "the ideographic space folds away");
+        assert!(gothic.matches("MS ゴシック"), "a half-width spelling still finds it");
+        assert!(!gothic.matches("MS Mincho"));
+
+        // The display name follows the interface language, like Excel's font box.
+        assert_eq!(gothic.display_name("ja"), "ＭＳ ゴシック");
+        assert_eq!(gothic.display_name("en"), "MS Gothic");
+        assert_eq!(gothic.display_name("fr"), "MS Gothic", "no French record → canonical name");
+
+        let cat = vec![face("Arial", &[("Arial", Some("en"))]), gothic];
+        assert!(find_family(&cat, "ＭＳ ゴシック").is_some(), "a workbook's Japanese name resolves");
+        assert!(find_family(&cat, "MS GOTHIC").is_some(), "case doesn't matter");
+        assert!(find_family(&cat, "游ゴシック").is_none(), "a different font doesn't match");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn every_localized_family_name_in_the_catalog_resolves() {
+        // Whatever the machine has installed: a workbook may name a face by ANY name the file
+        // ships (its Japanese name, its English name, …), so each must resolve to its face.
+        let cat = catalog();
+        for f in cat {
+            for (n, _) in &f.names {
+                assert!(find_family(cat, n).is_some(), "{n:?} should resolve to {:?}", f.family);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn binding_a_family_binds_all_four_roles_and_never_stores_missing_data() {
         let dir = std::env::temp_dir().join(format!("gridcraft-fonts-bind-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let face = Face { family: "Ubuntu".into(), path, index: 0, weight: 300.0, italic: false };
+        let face = Face { family: "Ubuntu".into(), names: vec![("Ubuntu".into(), None)], path, index: 0, weight: 300.0, italic: false };
 
         let mut fonts = egui::FontDefinitions::default();
         let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));

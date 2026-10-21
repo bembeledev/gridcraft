@@ -170,3 +170,13 @@ fn a_long_list_of_nested_records_is_not_cut() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     assert_eq!(wb.sheet(0).unwrap().tables[0].range.end.row, 300_000);
 }
+
+#[test]
+fn many_occurrences_with_many_rows_each_are_cut_with_a_warning() {
+    // 40 <g> each holding 1000 x 1000 pairings: 40 million rows if nothing bounded the group.
+    let inner: String = format!("<g>{}{}</g>", "<a>1</a>".repeat(1000), "<b>2</b>".repeat(1000));
+    let xml = format!("<r>{}</r>", inner.repeat(40));
+    let (wb, report) = read_xml_table(xml.as_bytes()).unwrap();
+    assert!(!report.warnings.is_empty());
+    assert!(wb.sheet(0).unwrap().tables[0].range.end.row < gridcraft_core::MAX_ROWS);
+}

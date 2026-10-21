@@ -182,8 +182,18 @@ fn rows_of(el: &El, path: &str, st: &mut State) -> Vec<Row> {
         done.push(child.name.as_str());
         let child_path = format!("{path}/{}", child.name);
         let mut group: Vec<Row> = vec![];
+        let mut group_cells = 0usize;
         for inst in el.children.iter().filter(|c| c.name == child.name) {
-            group.extend(rows_of(inst, &child_path, st));
+            // Many occurrences, each with many rows of its own, must not pile up past what a
+            // sheet holds before the pairing below gets to cut them.
+            for r in rows_of(inst, &child_path, st) {
+                if group.len() >= MAX_ROWS as usize || group_cells.saturating_add(r.len()) > MAX_CELLS {
+                    st.truncated = true;
+                    break;
+                }
+                group_cells += r.len();
+                group.push(r);
+            }
             if st.truncated {
                 break;
             }

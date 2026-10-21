@@ -3346,3 +3346,12 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
+
+#[test]
+fn xml_import_is_imported_so_save_asks_for_a_new_file() {
+    let mut s = s();
+    s.execute("file.open", json!({"name": "nfe.xml", "path": "C:/x/nfe.xml", "base64": crate::io::base64_encode(b"<r><a>1</a></r>")})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.path.is_none());
+    assert_eq!(d.display_title(), "nfe (imported).xlsx");
+}

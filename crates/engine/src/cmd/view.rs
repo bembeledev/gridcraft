@@ -33,6 +33,10 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
+        cmd!(query "options.defaultDirection", "Default Direction", [], None, "{rightToLeft?: bool} (toggles without it)", always, |s, p| {
+            s.prefs.right_to_left = bool_param(p, "rightToLeft").unwrap_or(!s.prefs.right_to_left);
+            Ok(json!({"rightToLeft": s.prefs.right_to_left}))
+        }),
         cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
         cmd!("pageLayout.size", "Size", ["Page Layout", "Page Setup"], None, "{paper: Letter|Legal|A4|A3|A5|Tabloid|Executive}", has_doc, paper),

@@ -89,17 +89,17 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    // A right-to-left interface mirrors the button: icon on the right, the arrow on the left.
+    let rtl = crate::i18n::current(ui.ctx()).is_rtl();
+    let icon_x = if rtl { rect.right() - 12.0 } else { rect.left() + 12.0 };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
     if !label.is_empty() {
-        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+        let (x, anchor) = if rtl { (rect.right() - 24.0, Align2::RIGHT_CENTER) } else { (rect.left() + 24.0, Align2::LEFT_CENTER) };
+        ui.painter().text(pos2(x, rect.center().y), anchor, label, font, t.text);
     }
     if dropdown {
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(rect.right() - 7.0, rect.center().y + 1.0), vec2(10.0, 10.0)),
-            Icon::Chevron,
-            t.text_dim,
-        );
+        let arrow_x = if rtl { rect.left() + 7.0 } else { rect.right() - 7.0 };
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow_x, rect.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
     }
     resp.on_hover_text(tr(ui, tip))
 }
@@ -225,10 +225,10 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
-    egui::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::widgets::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
         for (row, tint) in tints.iter().enumerate() {
             for (col, &i) in order.iter().enumerate() {
                 let base = theme_colors.get(i).copied().unwrap_or(0);
@@ -248,7 +248,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (col, hex) in std_hex.iter().enumerate() {
@@ -273,20 +273,26 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let mut close = false;
+    // Mirrored in a right-to-left interface: the icon and text from the right, OK on the left.
+    let rtl = crate::i18n::current(ctx).is_rtl();
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
-        ui.horizontal(|ui| {
+        let row = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        ui.with_layout(row, |ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
             ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
-            ui.vertical(|ui| {
+            ui.with_layout(egui::Layout::top_down(if rtl { egui::Align::Max } else { egui::Align::Min }), |ui| {
                 ui.label(egui::RichText::new(title).strong());
                 ui.add(egui::Label::new(msg).wrap());
             });
         });
         ui.add_space(8.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+        let buttons = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+        ui.with_layout(buttons, |ui| {
+            if ui.button(format!("  {}  ", crate::i18n::current(ui.ctx()).tr("OK"))).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });
@@ -360,5 +366,133 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     }
     if dismiss {
         app.notice = None;
+    }
+}
+
+/// `egui::Grid` that stays usable in a right-to-left layout. egui's Grid places its cells left to
+/// right inside an inner `ui.horizontal`, which a right-to-left parent (a mirrored dialog or pane)
+/// turns into a right-to-left row: the cells land in the wrong places, the grid never settles its
+/// sizes and keeps hiding itself, and the dialog holding it disappears. Under such a parent the grid
+/// runs in a left-to-right column, with its columns mirrored (the first one rightmost, cells
+/// aligned right: `Grid::right_to_left` in vendor/egui); anywhere else it is egui's Grid, unchanged.
+pub struct Grid(egui::Grid);
+
+impl Grid {
+    pub fn new(id_salt: impl egui::AsIdSalt) -> Self {
+        Self(egui::Grid::new(id_salt))
+    }
+    pub fn num_columns(self, num_columns: usize) -> Self {
+        Self(self.0.num_columns(num_columns))
+    }
+    pub fn spacing(self, spacing: impl Into<egui::Vec2>) -> Self {
+        Self(self.0.spacing(spacing))
+    }
+    pub fn striped(self, striped: bool) -> Self {
+        Self(self.0.striped(striped))
+    }
+    pub fn min_col_width(self, width: f32) -> Self {
+        Self(self.0.min_col_width(width))
+    }
+    pub fn min_row_height(self, height: f32) -> Self {
+        Self(self.0.min_row_height(height))
+    }
+    pub fn max_col_width(self, width: f32) -> Self {
+        Self(self.0.max_col_width(width))
+    }
+    pub fn show<R>(self, ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+        if ui.layout().prefer_right_to_left() {
+            // egui's grid lays itself out in a left-to-right row, so it runs in one, with its
+            // columns mirrored inside it instead.
+            let layout = egui::Layout::top_down(egui::Align::Min);
+            let grid = self.0.right_to_left(true);
+            ui.scope_builder(egui::UiBuilder::new().layout(layout), |ui| grid.show(ui, add_contents)).inner
+        } else {
+            self.0.show(ui, add_contents)
+        }
+    }
+}
+
+/// `ui.checkbox`, with the box on the right of its label under a right-to-left parent (a mirrored
+/// dialog or pane), as right-to-left interfaces draw it; clicking the label still toggles it.
+/// Anywhere else it is egui's checkbox unchanged.
+pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text = text.into();
+    // Without a label there is nothing to put the box beside (and no empty label to add).
+    if !ui.layout().prefer_right_to_left() || text.is_empty() {
+        return ui.checkbox(checked, text);
+    }
+    ui.horizontal(|ui| {
+        let mut b = ui.checkbox(checked, "");
+        let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+        if label.clicked() {
+            *checked = !*checked;
+            b.mark_changed();
+        }
+        b.union(label)
+    })
+    .inner
+}
+
+/// `ui.radio`, with the button on the right of its label under a right-to-left parent.
+pub fn radio(ui: &mut egui::Ui, selected: bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text = text.into();
+    if !ui.layout().prefer_right_to_left() || text.is_empty() {
+        return ui.radio(selected, text);
+    }
+    ui.horizontal(|ui| {
+        let b = ui.radio(selected, "");
+        let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+        b.union(label)
+    })
+    .inner
+}
+
+/// `ui.radio_value`, with the button on the right of its label under a right-to-left parent.
+pub fn radio_value<V: PartialEq>(ui: &mut egui::Ui, current: &mut V, alternative: V, text: impl Into<egui::WidgetText>) -> egui::Response {
+    if !ui.layout().prefer_right_to_left() {
+        return ui.radio_value(current, alternative, text);
+    }
+    let mut r = radio(ui, *current == alternative, text);
+    if r.clicked() && *current != alternative {
+        *current = alternative;
+        r.mark_changed();
+    }
+    r
+}
+
+/// `egui::Checkbox` (for `ui.add` / `ui.add_enabled`), with the box on the right of its label
+/// under a right-to-left parent; clicking the label still toggles it. Elsewhere it is egui's.
+pub struct Checkbox<'a> {
+    checked: &'a mut bool,
+    text: egui::WidgetText,
+    indeterminate: bool,
+}
+
+impl<'a> Checkbox<'a> {
+    pub fn new(checked: &'a mut bool, text: impl Into<egui::WidgetText>) -> Self {
+        Self { checked, text: text.into(), indeterminate: false }
+    }
+    pub fn indeterminate(mut self, indeterminate: bool) -> Self {
+        self.indeterminate = indeterminate;
+        self
+    }
+}
+
+impl egui::Widget for Checkbox<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let Self { checked, text, indeterminate } = self;
+        if !ui.layout().prefer_right_to_left() || text.is_empty() {
+            return ui.add(egui::Checkbox::new(checked, text).indeterminate(indeterminate));
+        }
+        ui.horizontal(|ui| {
+            let mut b = ui.add(egui::Checkbox::new(checked, "").indeterminate(indeterminate));
+            let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+            if label.clicked() && ui.is_enabled() {
+                *checked = !*checked;
+                b.mark_changed();
+            }
+            b.union(label)
+        })
+        .inner
     }
 }

@@ -199,6 +199,9 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// Options › Advanced › Default direction: new workbooks and inserted sheets start
+    /// right-to-left (column A on the right), as in Hebrew and Arabic Excel.
+    pub right_to_left: bool,
 }
 
 impl Default for Prefs {
@@ -213,6 +216,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            right_to_left: false,
         }
     }
 }
@@ -305,6 +309,11 @@ impl Session {
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+        }
+        if self.prefs.right_to_left {
+            for sheet in &mut wb.sheets {
+                Arc::make_mut(sheet).right_to_left = true;
+            }
         }
         self.add_document(DocState::new(wb, None, format!("Book{n}")))
     }

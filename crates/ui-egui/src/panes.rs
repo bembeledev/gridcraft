@@ -19,33 +19,39 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     // Capped at half the window so a pane can never cover the sheet, whatever its content asks for.
     let max = (ui.available_width() / 2.0).max(300.0);
-    let panel = egui::Panel::right("task_pane").default_size(300.0).max_size(max).resizable(true);
+    // A right-to-left interface (Hebrew) puts task panes on the left, their content from the right.
+    let rtl = crate::i18n::current(ui.ctx()).is_rtl();
+    let panel = if rtl { egui::Panel::left("task_pane") } else { egui::Panel::right("task_pane") };
+    let panel = panel.default_size(300.0).max_size(max).resizable(true);
     panel.frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let title = match pane.as_str() {
-                "comments" => "Comments",
-                "watch" => "Watch Window",
-                "selection" => "Selection",
-                "formatChart" => "Format Chart Area",
-                _ => "",
-            };
-            ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
-                    if pane == "comments" {
-                        app.run_or_alert("review.showComments", json!({"on": false}));
+        ui.scope_builder(egui::UiBuilder::new().layout(egui::Layout::top_down(if rtl { egui::Align::Max } else { egui::Align::Min })), |ui| {
+            ui.horizontal(|ui| {
+                let title = match pane.as_str() {
+                    "comments" => "Comments",
+                    "watch" => "Watch Window",
+                    "selection" => "Selection",
+                    "formatChart" => "Format Chart Area",
+                    _ => "",
+                };
+                ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
+                let trailing = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+                ui.with_layout(trailing, |ui| {
+                    if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
+                        if pane == "comments" {
+                            app.run_or_alert("review.showComments", json!({"on": false}));
+                        }
+                        app.grid.pane = None;
                     }
-                    app.grid.pane = None;
-                }
+                });
             });
-        });
-        ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
-            "comments" => comments(app, ui),
-            "watch" => watch(app, ui),
-            "selection" => selection(app, ui),
-            "formatChart" => format_chart(app, ui),
-            _ => {}
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
+                "comments" => comments(app, ui),
+                "watch" => watch(app, ui),
+                "selection" => selection(app, ui),
+                "formatChart" => format_chart(app, ui),
+                _ => {}
+            });
         });
     });
 }
@@ -55,7 +61,9 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     let Some(sh) = d.wb.active() else { return };
     let list: Vec<(String, gridcraft_engine::model::Comment)> = sh.comments.iter().map(|(c, m)| (c.a1(), m.clone())).collect();
     if list.is_empty() {
-        ui.label(egui::RichText::new("No comments on this sheet yet. Select a cell and choose New Comment.").italics());
+        ui.label(
+            egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No comments on this sheet yet. Select a cell and choose New Comment.")).italics(),
+        );
     }
     for (cell, c) in list {
         egui::Frame::NONE
@@ -72,7 +80,9 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     ui.label(egui::RichText::new(&c.author).color(Color32::from_gray(90)));
                     if c.resolved {
-                        ui.label(egui::RichText::new("Resolved").small().color(Color32::from_rgb(0x10, 0x7C, 0x41)));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Resolved")).small().color(Color32::from_rgb(0x10, 0x7C, 0x41)),
+                        );
                     }
                 });
                 ui.label(&c.text);
@@ -85,13 +95,13 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                 // a field sized by a guess wider than the row pushes the resizable pane wider every frame.
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Delete").clicked() {
+                        if ui.small_button(crate::i18n::current(ui.ctx()).tr("Delete")).clicked() {
                             app.run_or_alert("review.deleteComment", json!({"cell": cell}));
                         }
                         if ui.small_button(if c.resolved { "Reopen" } else { "Resolve" }).clicked() {
                             app.run_or_alert("review.resolveComment", json!({"cell": cell, "resolved": !c.resolved}));
                         }
-                        let send = ui.small_button("Send").clicked();
+                        let send = ui.small_button(crate::i18n::current(ui.ctx()).tr("Send")).clicked();
                         let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text("Reply…").desired_width(ui.available_width()));
                         if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || send) && !draft.is_empty() {
                             app.run_or_alert("review.replyComment", json!({"cell": cell, "text": draft}));
@@ -106,7 +116,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn watch(app: &mut SheetApp, ui: &mut Ui) {
-    if ui.button("Add Watch (active cell)").clicked()
+    if ui.button(crate::i18n::current(ui.ctx()).tr("Add Watch (active cell)")).clicked()
         && let Some(d) = app.session.active()
         && let Some(sh) = d.wb.active()
     {
@@ -114,10 +124,10 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
         let _ = app.session.run("formulas.watchWindow", json!({"add": r}));
     }
     let list = app.session.run("formulas.watchWindow", json!({})).unwrap_or(Json::Null);
-    egui::Grid::new("watch_grid").striped(true).num_columns(4).show(ui, |ui| {
-        ui.strong("Cell");
-        ui.strong("Value");
-        ui.strong("Formula");
+    crate::widgets::Grid::new("watch_grid").striped(true).num_columns(4).show(ui, |ui| {
+        ui.strong(crate::i18n::current(ui.ctx()).tr("Cell"));
+        ui.strong(crate::i18n::current(ui.ctx()).tr("Value"));
+        ui.strong(crate::i18n::current(ui.ctx()).tr("Formula"));
         ui.label("");
         ui.end_row();
         for w in list.as_array().cloned().unwrap_or_default() {
@@ -137,7 +147,7 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
     let list = app.session.run("arrange.selectionPane", json!({})).unwrap_or(Json::Null);
     let items = list.as_array().cloned().unwrap_or_default();
     if items.is_empty() {
-        ui.label(egui::RichText::new("There are no shapes, pictures or charts on this sheet.").italics());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("There are no shapes, pictures or charts on this sheet.")).italics());
     }
     for it in items.iter().rev() {
         let kind = it["kind"].as_str().unwrap_or("").to_string();
@@ -162,11 +172,11 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
 
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_chart else {
-        ui.label(egui::RichText::new("Select a chart to format it.").italics());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Select a chart to format it.")).italics());
         return;
     };
     let Some(chart) = app.session.active().and_then(|d| d.wb.active().and_then(|s| s.charts.iter().find(|c| c.id == id).cloned())) else {
-        ui.label("The chart no longer exists.");
+        ui.label(crate::i18n::current(ui.ctx()).tr("The chart no longer exists."));
         return;
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
@@ -207,22 +217,22 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.collapsing("Elements", |ui| {
         let mut dl = chart.data_labels;
-        if ui.checkbox(&mut dl, "Data Labels").changed() {
+        if crate::widgets::checkbox(ui, &mut dl, "Data Labels").changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "dataLabels": dl}));
         }
         let mut gl = chart.gridlines;
-        if ui.checkbox(&mut gl, "Gridlines").changed() {
+        if crate::widgets::checkbox(ui, &mut gl, "Gridlines").changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "gridlines": gl}));
         }
         ui.horizontal(|ui| {
-            ui.label("Horizontal axis title:");
+            ui.label(crate::i18n::current(ui.ctx()).tr("Horizontal axis title:"));
             let field = egui::Id::new(("gridcraft.chart_x_title", id));
             if let Some(xt) = crate::widgets::committed_text(ui, field, chart.x_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "xTitle": if xt.is_empty() { Json::Null } else { json!(xt) }}));
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Vertical axis title:");
+            ui.label(crate::i18n::current(ui.ctx()).tr("Vertical axis title:"));
             let field = egui::Id::new(("gridcraft.chart_y_title", id));
             if let Some(yt) = crate::widgets::committed_text(ui, field, chart.y_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "yTitle": if yt.is_empty() { Json::Null } else { json!(yt) }}));
@@ -240,7 +250,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ui.painter().rect_filled(r, 2.0, col);
                 ui.label(&name);
                 ui.label(egui::RichText::new(&s.values).small().color(Color32::from_gray(110)));
-                ui.menu_button("Fill…", |ui| {
+                ui.menu_button(crate::i18n::current(ui.ctx()).tr("Fill…"), |ui| {
                     if let Some(c) = crate::widgets::color_palette(ui, &theme.colors, "Automatic") {
                         app.run_or_alert(
                             "chart.formatSelection",

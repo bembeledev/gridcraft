@@ -156,8 +156,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let mut out = Outcome::default();
     let (nav_bg, nav_text, nav_sel) =
         if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
-    egui::Panel::left("backstage_nav")
-        .exact_size(NAV_W)
+    // A right-to-left interface (Hebrew) puts the menu on the right and the page content flows
+    // from the right.
+    let rtl = lang.is_rtl();
+    let nav = if rtl { egui::Panel::right("backstage_nav") } else { egui::Panel::left("backstage_nav") };
+    nav.exact_size(NAV_W)
         .resizable(false)
         .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
         .show(ui, |ui| {
@@ -198,20 +201,28 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
+            let margin = if rtl {
+                egui::Margin { left: 32, right: 44, top: 26, bottom: 32 }
+            } else {
+                egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }
+            };
+            egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                 ui.set_max_width(CONTENT_W);
-                ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
-                ui.add_space(18.0);
-                match bs.page {
-                    Page::Home => home(app, ui, &mut bs, &mut out),
-                    Page::New => new_page(app, ui, &mut out),
-                    Page::Open => open_page(app, ui, &mut bs, &mut out),
-                    Page::Info => info(app, ui, &mut bs),
-                    Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
-                    Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
-                    Page::Options => options(app, ui),
-                }
+                let layout = egui::Layout::top_down(if rtl { egui::Align::Max } else { egui::Align::Min });
+                ui.scope_builder(egui::UiBuilder::new().layout(layout), |ui| {
+                    ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
+                    ui.add_space(18.0);
+                    match bs.page {
+                        Page::Home => home(app, ui, &mut bs, &mut out),
+                        Page::New => new_page(app, ui, &mut out),
+                        Page::Open => open_page(app, ui, &mut bs, &mut out),
+                        Page::Info => info(app, ui, &mut bs),
+                        Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
+                        Page::Print => print(app, ui, &mut bs, &mut out),
+                        Page::Export => export(app, ui, &mut out),
+                        Page::Options => options(app, ui),
+                    }
+                });
             });
         });
     });
@@ -256,12 +267,20 @@ fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32,
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, 0.0, sel);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
+        let bar_x = if crate::i18n::current(ui.ctx()).is_rtl() { rect.max.x - 4.0 } else { rect.min.x };
+        p.rect_filled(Rect::from_min_size(pos2(bar_x, rect.min.y), vec2(4.0, rect.height())), 0.0, text);
     } else if resp.hovered() {
         p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
     }
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
-    p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
+    // Mirrored in a right-to-left interface: the icon on the right, the label before it.
+    let rtl = crate::i18n::current(ui.ctx()).is_rtl();
+    let (icon_x, text_x, anchor) = if rtl {
+        (rect.right() - 30.0, rect.right() - 50.0, Align2::RIGHT_CENTER)
+    } else {
+        (rect.left() + 30.0, rect.left() + 50.0, Align2::LEFT_CENTER)
+    };
+    icons::paint(p, Rect::from_center_size(pos2(icon_x, rect.center().y), vec2(17.0, 17.0)), icon, text);
+    p.text(pos2(text_x, rect.center().y), anchor, label, theme::ui_font(14.0), text);
     resp
 }
 
@@ -626,7 +645,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     });
     ui.add_space(22.0);
     section(ui, lang, "Properties");
-    egui::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+    crate::widgets::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
         ui.label(RichText::new(lang.tr("Location")).color(t.text_dim));
         ui.label(path.as_deref().unwrap_or(lang.tr("Not saved yet")));
         ui.end_row();
@@ -729,7 +748,7 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
                 }
             });
             ui.add_space(8.0);
-            if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
+            if crate::widgets::checkbox(ui, &mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
                 bs.preview_page = 0;
             }
             ui.add_space(8.0);
@@ -927,50 +946,72 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
 }
 
+/// Options › General › Display theme.
+fn theme_combo(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    let mode = app.ui.theme_mode();
+    let current = match mode {
+        "system" => "System",
+        "dark" => "Dark",
+        _ => "Light",
+    };
+    egui::ComboBox::from_id_salt("backstage_theme").width(160.0).selected_text(lang.tr(current)).show_ui(ui, |ui| {
+        for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+            if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
+                app.run_or_alert("view.theme", json!({"mode": value}));
+            }
+        }
+    });
+}
+
+/// Options › General › Interface language.
+fn language_combo(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
+        for l in i18n::Language::ALL {
+            if ui.selectable_label(l == lang, l.name()).clicked() {
+                app.run_or_alert("app.language.set", json!({"language": l.code()}));
+            }
+        }
+    });
+}
+
 fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
-    egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        ui.label(lang.tr("Display theme"));
-        let mode = app.ui.theme_mode();
-        let current = match mode {
-            "system" => "System",
-            "dark" => "Dark",
-            _ => "Light",
-        };
-        egui::ComboBox::from_id_salt("backstage_theme").width(160.0).selected_text(lang.tr(current)).show_ui(ui, |ui| {
-            for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
-                    app.run_or_alert("view.theme", json!({"mode": value}));
-                }
+    // A right-to-left interface mirrors the rows: the label on the right, its control on the left.
+    let rtl = lang.is_rtl();
+    crate::widgets::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        for (label, control) in [("Display theme", theme_combo as fn(&mut SheetApp, &mut Ui)), ("Interface language", language_combo)] {
+            if rtl {
+                control(app, ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(lang.tr(label)));
+            } else {
+                ui.label(lang.tr(label));
+                control(app, ui);
             }
-        });
-        ui.end_row();
-        ui.label(lang.tr("Interface language"));
-        egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
-            for l in i18n::Language::ALL {
-                if ui.selectable_label(l == lang, l.name()).clicked() {
-                    app.run_or_alert("app.language.set", json!({"language": l.code()}));
-                }
-            }
-        });
-        ui.end_row();
+            ui.end_row();
+        }
     });
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
-    if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
+    if crate::widgets::checkbox(ui, &mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
+    }
+    let mut rtl = app.session.prefs.right_to_left;
+    if crate::widgets::checkbox(ui, &mut rtl, lang.tr("New sheets right-to-left (default direction)")).changed() {
+        app.run_or_alert("options.defaultDirection", json!({"rightToLeft": rtl}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
-    if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
+    if crate::widgets::checkbox(ui, &mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.grid.autosave();
-    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
+    if crate::widgets::checkbox(ui, &mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.grid.toggle_autosave();
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
@@ -983,13 +1024,13 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
         (CalcMode::AutomaticExceptTables, "automaticExceptTables", "Automatic Except for Data Tables"),
         (CalcMode::Manual, "manual", "Manual"),
     ] {
-        if ui.radio(calc.mode == mode, lang.tr(label)).clicked() && calc.mode != mode {
+        if crate::widgets::radio(ui, calc.mode == mode, lang.tr(label)).clicked() && calc.mode != mode {
             app.run_or_alert("formulas.calculationOptions", json!({"mode": id}));
         }
     }
     ui.add_space(4.0);
     let mut iterative = calc.iterative;
-    if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).changed() {
+    if crate::widgets::checkbox(ui, &mut iterative, lang.tr("Enable iterative calculation")).changed() {
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
     ui.add_space(6.0);

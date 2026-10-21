@@ -106,10 +106,12 @@ fn load_prefs(app: &mut SheetApp) {
     // ...and its light or dark appearance (#239), until a theme is chosen and saved in ui.json.
     app.ui.system_theme = true;
     let Some(dir) = config_dir() else { return };
+    let mut language_saved = false;
     if let Ok(b) = std::fs::read(dir.join("ui.json"))
         && let Ok(ui) = serde_json::from_slice::<gridcraft_ui_egui::UiState>(&b)
     {
         let saved = serde_json::from_slice(&b).ok().and_then(|v| gridcraft_ui_egui::i18n::saved_language(&v));
+        language_saved = saved.is_some();
         let language = saved.unwrap_or(app.ui.language);
         app.ui = ui;
         app.ui.language = language;
@@ -118,6 +120,10 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
+    } else if !language_saved {
+        // A first run in a right-to-left desktop language starts with right-to-left sheets, as
+        // choosing that language in Options does.
+        app.adopt_language_direction(gridcraft_ui_egui::i18n::Language::En);
     }
 }
 
@@ -302,6 +308,12 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    // The blank Book1 was made before the preferences were read: make it again so it follows
+    // them (Options › Default direction, Sheets in new workbook).
+    if sample.is_none() && app.session.documents().len() == 1 {
+        app.session.close_document(0);
+        app.session.new_workbook();
+    }
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.

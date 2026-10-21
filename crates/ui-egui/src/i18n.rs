@@ -13,6 +13,7 @@ mod cs;
 mod de;
 mod es;
 mod fr;
+mod he;
 mod ko;
 mod pt;
 mod ru;
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    He,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::He];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::He => "עברית",
         }
     }
 
@@ -71,7 +75,14 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::He => "he",
         }
+    }
+
+    /// Whether the language is written right to left (Hebrew). Its interface defaults new sheets
+    /// to right-to-left.
+    pub const fn is_rtl(self) -> bool {
+        matches!(self, Self::He)
     }
 
     pub fn parse(code: &str) -> Option<Self> {
@@ -91,6 +102,8 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            // "iw" is the code older Java and Android systems report for Hebrew.
+            "he" | "iw" => Some(Self::He),
             _ => None,
         }
     }
@@ -117,7 +130,18 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// `tr` for text that is not a catalog key but may be one (a dialog note, often built from a
+    /// sheet name, file name or link): its translation, or else the text whole. Never cut at a
+    /// `|`, which in such text is the user's own.
+    pub fn tr_text(self, text: &str) -> &str {
+        self.translated(text).unwrap_or(text)
+    }
+
+    fn translated(self, text: &str) -> Option<&'static str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
@@ -129,8 +153,8 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+            Self::He => he::translate(text),
+        }
     }
 }
 
@@ -738,6 +762,46 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("he-IL"), Some(Language::He));
+        assert_eq!(Language::from_tag("iw_IL"), Some(Language::He));
+        assert_eq!(Language::parse("he"), Some(Language::He));
+    }
+
+    #[test]
+    fn hebrew_translates_the_ribbon_and_is_right_to_left() {
+        assert!(Language::He.is_rtl());
+        assert!(Language::ALL.iter().filter(|l| l.is_rtl()).all(|l| *l == Language::He));
+        assert_eq!(Language::He.name(), "עברית");
+        assert_eq!(Language::He.tr("Paste"), "הדבק");
+        assert_eq!(Language::He.tr("Home"), "בית");
+        assert_eq!(Language::He.tr("Sheet Right-to-Left"), "גליון מימין לשמאל");
+        // Context keys show only the label, untranslated text falls back to English.
+        assert!(!Language::He.tr("Page Layout|Orientation").contains('|'));
+        assert_eq!(Language::He.tr("Sheet1!A1"), "Sheet1!A1");
+        // Every label the other catalogs translate has a Hebrew translation.
+        for other in [Language::PtBr, Language::Cs, Language::Ja] {
+            for key in ["Paste", "Wrap Text", "Merge & Center", "Conditional\nFormatting", "Freeze Panes", "Data Validation"] {
+                if other.tr(key) != key {
+                    assert_ne!(Language::He.tr(key), key, "{key:?} missing in Hebrew");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn choosing_hebrew_makes_new_sheets_right_to_left() {
+        let mut app = crate::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        assert!(!app.session.prefs.right_to_left);
+        app.run("app.language.set", serde_json::json!({"language": "he"})).unwrap();
+        assert!(app.session.prefs.right_to_left);
+        app.session.new_workbook();
+        assert!(app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left));
+        app.session.execute("home.insertSheet", serde_json::json!({})).unwrap();
+        assert!(app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left));
+        // The option can be turned off again, and English leaves it alone.
+        app.run("options.defaultDirection", serde_json::json!({"rightToLeft": false})).unwrap();
+        app.run("app.language.set", serde_json::json!({"language": "en"})).unwrap();
+        assert!(!app.session.prefs.right_to_left);
     }
 
     #[test]

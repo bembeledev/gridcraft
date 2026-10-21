@@ -63,6 +63,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
+    ("options.defaultDirection", "an application preference: it changes no open workbook"),
 ];
 
 // ---------------------------------------------------------------- deterministic randomness

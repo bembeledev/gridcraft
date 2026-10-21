@@ -2,6 +2,8 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
+# Vendored third-party crates are patched in below, not workspace members (no fmt/clippy/tests).
+exclude = ["vendor/egui", "vendor/epaint"]
 
 [workspace.package]
 version = "0.10.0"
@@ -54,6 +56,15 @@ sys-locale = "0.3"
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
 epaint_default_fonts = "0.36"
+
+# epaint with bidirectional text (Hebrew, Arabic): right-to-left runs are reordered for display,
+# brackets mirrored, carets and hit-testing follow. Vendored from epaint 0.36.2; see
+# vendor/epaint/src/text/bidi.rs and docs/localization-parity.md.
+[patch.crates-io]
+epaint = { path = "vendor/epaint" }
+# egui whose Grid can run right to left (first column rightmost), for mirrored dialogs and
+# panes. Vendored from egui 0.36.2; see vendor/egui/VENDORED.md.
+egui = { path = "vendor/egui" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

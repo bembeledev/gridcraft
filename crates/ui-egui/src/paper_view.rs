@@ -900,10 +900,10 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         .unwrap_or_default();
     ui.vertical(|ui| {
         let (mut f, mut o) = (first, odd_even);
-        if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
+        if crate::widgets::checkbox(ui, &mut f, tr(app, "Different First Page")).changed() {
             set_option(app, "differentFirst", f);
         }
-        if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
+        if crate::widgets::checkbox(ui, &mut o, tr(app, "Different Odd & Even Pages")).changed() {
             set_option(app, "differentOddEven", o);
         }
     });

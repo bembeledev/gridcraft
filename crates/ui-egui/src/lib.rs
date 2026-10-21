@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backstage;
+pub mod bidi;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
@@ -341,6 +342,16 @@ impl SheetApp {
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
+    /// After the interface language became `self.ui.language` (it was `was`): choosing a
+    /// right-to-left language (Hebrew) sets Options › Default direction to right-to-left, as Hebrew
+    /// Excel ships. Switching away leaves the option as the user set it. Used by
+    /// `app.language.set` and by the first run, which takes the desktop's language.
+    pub fn adopt_language_direction(&mut self, was: i18n::Language) {
+        if self.ui.language.is_rtl() && !was.is_rtl() {
+            self.session.prefs.right_to_left = true;
+        }
+    }
+
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
@@ -651,10 +662,14 @@ impl SheetApp {
                 let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
                 match i18n::Language::parse(code) {
                     Some(l) => {
+                        let was = self.ui.language;
                         self.ui.language = l;
+                        self.adopt_language_direction(was);
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    None => Err(format!(
+                        "unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\", \"de\", \"cs\", \"fr\", \"sr\" or \"he\")"
+                    )),
                 }
             }
             "app.language.english" => {

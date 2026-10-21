@@ -143,7 +143,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {
@@ -256,6 +256,24 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             cycle_anchor(&mut ed);
         }
     }
+    // Inside Hebrew or Arabic text Left and Right move the caret the way they point on screen,
+    // which is backwards and forwards the other way round: swap them before the TextEdit sees them.
+    if has_focus && mine && crate::bidi::caret_in_rtl(&ed.text, ed.caret) {
+        ui.input_mut(|i| {
+            for event in &mut i.events {
+                if let egui::Event::Key { key, .. } = event {
+                    *key = match *key {
+                        Key::ArrowLeft => Key::ArrowRight,
+                        Key::ArrowRight => Key::ArrowLeft,
+                        k => k,
+                    };
+                }
+            }
+        });
+    }
+    // The in-cell editor puts Hebrew or Arabic text on the right, like the cell shows it.
+    let align =
+        if id == egui::Id::new("gridcraft.cell_editor") && crate::bidi::starts_rtl(&ed.text) { egui::Align::RIGHT } else { egui::Align::LEFT };
     // The text widget.
     let refs = formula_refs(&ed.text);
     let text_color = Tokens::get(ui.ctx()).text;
@@ -285,6 +303,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         .frame(egui::Frame::NONE)
         .font(font)
         .desired_width(width)
+        .horizontal_align(align)
         .layouter(&mut layouter)
         .lock_focus(true)
         .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })

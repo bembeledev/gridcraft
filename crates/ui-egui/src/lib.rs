@@ -673,7 +673,7 @@ impl SheetApp {
                         Some(page) => self.open_backstage(page),
                         None => {
                             return Some(Err(format!(
-                                "unknown File page {id:?} (use home, new, open, info, saveAs, print, export, options or close)"
+                                "unknown File page {id:?} (use home, new, open, info, saveAs, print, export, account, options or close)"
                             )));
                         }
                     },

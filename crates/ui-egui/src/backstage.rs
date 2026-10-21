@@ -35,11 +35,12 @@ pub enum Page {
     SaveAs,
     Print,
     Export,
+    Account,
     Options,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options];
+    pub const ALL: [Page; 9] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Account, Page::Options];
 
     /// The id `ui.backstage` and `ui.dialog {"name": "backstage", "page": …}` take.
     pub fn id(self) -> &'static str {
@@ -51,6 +52,7 @@ impl Page {
             Page::SaveAs => "saveAs",
             Page::Print => "print",
             Page::Export => "export",
+            Page::Account => "account",
             Page::Options => "options",
         }
     }
@@ -70,6 +72,7 @@ impl Page {
             Page::SaveAs => "Save As",
             Page::Print => "Print",
             Page::Export => "Export",
+            Page::Account => "Account",
             Page::Options => "Options",
         }
     }
@@ -83,6 +86,7 @@ impl Page {
             Page::SaveAs => Icon::Save,
             Page::Print => Icon::Print,
             Page::Export => Icon::Share,
+            Page::Account => Icon::Script,
             Page::Options => Icon::Settings,
         }
     }
@@ -191,8 +195,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
-                    out.page = Some(Page::Options);
+                // Bottom up: Options last, Account above it, as in Excel.
+                for page in [Page::Options, Page::Account] {
+                    if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                        out.page = Some(page);
+                    }
                 }
             });
         });
@@ -210,6 +217,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
+                    Page::Account => account(app, ui),
                     Page::Options => options(app, ui),
                 }
             });
@@ -867,6 +875,27 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     }
 }
 
+/// Account: the product and its version (Excel's File > Account > Product Information), and the
+/// About window with the contributors and models (#896).
+fn account(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    section(ui, lang, "Product Information");
+    ui.label(RichText::new("GridCraft").font(theme::ui_bold(20.0)).color(t.text));
+    ui.add_space(4.0);
+    ui.label(RichText::new(version_line()).font(theme::ui_font(13.5)).color(t.text));
+    dim(ui, &format!("{} {}", lang.tr("License:"), env!("CARGO_PKG_LICENSE")));
+    ui.add_space(14.0);
+    if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+        app.open_dialog("about", json!({}));
+    }
+}
+
+/// "Version 0.8.0 (linux x86_64)": what a bug report needs.
+pub fn version_line() -> String {
+    format!("Version {} ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH)
+}
+
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
 /// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
@@ -1076,7 +1105,7 @@ mod tests {
             assert_eq!(Page::parse(page.id()), Some(page));
         }
         assert_eq!(Page::parse(" SAVEAS "), Some(Page::SaveAs));
-        assert_eq!(Page::parse("account"), None);
+        assert_eq!(Page::parse("account"), Some(Page::Account));
         assert_eq!(Page::parse(""), None);
     }
 

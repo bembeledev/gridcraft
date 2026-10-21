@@ -122,7 +122,7 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
         h.run_steps(2);
         assert_eq!(page(&h), Some(id));
     }
-    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "account"})).is_err());
+    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "feedback"})).is_err());
     h.state_mut().run("ui.backstage", serde_json::json!({"page": "close"})).unwrap();
     assert!(h.state().backstage.is_none());
     // The back arrow returns to the sheet too.
@@ -130,6 +130,21 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     h.run_steps(2);
     click(&mut h, "Back");
     assert!(h.state().backstage.is_none());
+}
+
+#[test]
+fn file_account_shows_the_version_and_opens_about() {
+    // #1888 / #896: the version is on File > Account, as in Excel, with About GridCraft there.
+    let mut h = harness(Services::default());
+    choose(&mut h, "Account");
+    assert_eq!(page(&h), Some("account"));
+    let version = format!("Version {}", env!("CARGO_PKG_VERSION"));
+    assert!(h.query_by_label_contains(&version).is_some(), "no {version} on the Account page");
+    click(&mut h, "About GridCraft");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("about"));
+    h.state_mut().run("ui.backstage", serde_json::json!({"page": "account"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(page(&h), Some("account"));
 }
 
 #[test]

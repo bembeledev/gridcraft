@@ -66,5 +66,9 @@ sync_github_name = true
 display_name = "Netter"
 sync_github_name = false
 
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+sync_github_name = false
+
 [people.Shnrqpdr]
 sync_github_name = true

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | version | stats | ico"
+description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | version | stats | ico | web-offline"
 
 [lints]
 workspace = true
@@ -17,4 +17,5 @@ engine = ["dep:gridcraft-engine"]
 
 [dependencies]
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 gridcraft-engine = { workspace = true, optional = true }

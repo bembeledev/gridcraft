@@ -20,6 +20,7 @@ mod formula_locale;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
+pub mod install;
 pub mod keymap;
 pub mod keytips;
 pub mod outline;
@@ -29,6 +30,7 @@ pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
+pub mod storage;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
@@ -196,6 +198,10 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Web: PWA install offer and prompt trigger.
+    pub install_app: Option<install::InstallApp>,
+    /// Web: local persistent workbook storage and autosave recovery.
+    pub storage: Option<storage::StorageHandle>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -285,6 +291,7 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    pub install_steps: Option<install::Steps>,
 }
 
 impl SheetApp {
@@ -329,6 +336,7 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            install_steps: None,
         }
     }
 
@@ -554,6 +562,16 @@ impl SheetApp {
         if let Err(e) = self.run("file.exportPdf", params) {
             self.alert(e);
         }
+    }
+
+    /// Exports the active workbook in the given format and returns (name, bytes).
+    pub fn get_workbook_bytes(&mut self, format: &str) -> Result<(String, Vec<u8>), String> {
+        let result = self.run("file.saveBytes", json!({"format": format}))?;
+        let ext = format.trim_start_matches('.');
+        let name = result.get("name").and_then(Json::as_str).map(ToString::to_string).unwrap_or_else(|| format!("Book1.{ext}"));
+        let b64 = result.get("base64").and_then(Json::as_str).ok_or_else(|| "no base64 returned".to_string())?;
+        let bytes = gridcraft_engine::io::base64_decode(b64).ok_or_else(|| "failed to decode base64".to_string())?;
+        Ok((name, bytes))
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
@@ -1175,6 +1193,7 @@ impl SheetApp {
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
+        install::show(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
         if !ctx.input(|i| i.focused) {
@@ -1296,7 +1315,7 @@ pub fn now_ms() -> f64 {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        0.0
+        js_sys::Date::now()
     }
 }
 

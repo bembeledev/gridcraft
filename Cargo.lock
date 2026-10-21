@@ -1643,6 +1643,7 @@ dependencies = [
  "gridcraft-engine",
  "gridcraft-xlsx",
  "image",
+ "js-sys",
  "log",
  "serde",
  "serde_json",
@@ -4530,6 +4531,7 @@ version = "0.10.0"
 dependencies = [
  "gridcraft-engine",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

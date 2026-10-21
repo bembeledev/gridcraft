@@ -17,6 +17,10 @@
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
+mod install;
+#[cfg(target_arch = "wasm32")]
+mod storage;
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]

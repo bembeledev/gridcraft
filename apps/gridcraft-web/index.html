@@ -4,8 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>GridCraft</title>
+  <meta name="description" content="Clean-room, open-source, Rust-native spreadsheet. Desktop, browser, and MCP for AI agents.">
   <link data-trunk rel="icon" href="../../assets/app-icon/gridcraft.ico" />
   <link data-trunk rel="rust" data-bin="gridcraft-web" data-wasm-opt="z" data-weak-refs />
+  <!-- Installable as an app (manifest.webmanifest); the icons are the Linux exports of the app mark. -->
+  <meta name="theme-color" content="#107c41">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/32x32/ai.storyteller.gridcraft.png">
+  <link rel="apple-touch-icon" href="icons/256x256/ai.storyteller.gridcraft.png">
+  <link data-trunk rel="copy-file" href="manifest.webmanifest" />
+  <link data-trunk rel="copy-file" href="../../assets/app-icon/hicolor/32x32/apps/ai.storyteller.gridcraft.png" data-target-path="icons/32x32" />
+  <link data-trunk rel="copy-file" href="../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png" data-target-path="icons/256x256" />
+  <link data-trunk rel="copy-file" href="../../assets/app-icon/hicolor/512x512/apps/ai.storyteller.gridcraft.png" data-target-path="icons/512x512" />
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f3f3f3; }
     #gridcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -16,5 +26,15 @@
 <body>
   <canvas id="gridcraft_canvas"></canvas>
   <div id="gridcraft_loading">Loading GridCraft&hellip;</div>
+  <script>
+    // Offline use and updates (sw.js; written into release builds by `cargo xtask web-offline`).
+    if ("serviceWorker" in navigator) {
+      addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+    }
+    // Install as an app: the browser's offer can come before the app runs, so it is kept here for
+    // the app's File ▸ Install app… item (src/install.rs). Installed, the browser makes no more offers.
+    addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); window.gridcraftInstall = e; });
+    addEventListener("appinstalled", () => { window.gridcraftInstall = null; });
+  </script>
 </body>
 </html>

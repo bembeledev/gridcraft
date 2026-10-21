@@ -13,6 +13,7 @@ mod layers;
 mod parity;
 mod stats;
 mod version;
+mod web_offline;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -35,6 +36,8 @@ commands:
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  web-offline [DIR]
+                  inject build version and hashed file manifest into sw.js & build.json (Trunk post_build)
 ";
 
 fn main() -> ExitCode {
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
+        Some("web-offline") => web_offline::run(&root(), rest.first().copied()),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

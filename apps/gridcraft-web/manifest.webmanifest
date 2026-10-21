@@ -1,0 +1,16 @@
+{
+  "name": "GridCraft",
+  "short_name": "GridCraft",
+  "description": "Clean-room, open-source, Rust-native spreadsheet.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f3f3",
+  "theme_color": "#107c41",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "icons/32x32/ai.storyteller.gridcraft.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "icons/256x256/ai.storyteller.gridcraft.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "icons/512x512/ai.storyteller.gridcraft.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

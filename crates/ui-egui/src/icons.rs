@@ -108,6 +108,7 @@ pub enum Icon {
     Script,
     Pen,
     Share,
+    Download,
     Search,
     Settings,
     /// Light/dark appearance: a circle, its right half filled.
@@ -630,6 +631,11 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(8.0, 10.0), (8.0, 2.5)], c, 1.2);
             g.line(&[(5.5, 5.0), (8.0, 2.5), (10.5, 5.0)], c, 1.2);
         }
+        Icon::Download => {
+            g.line(&[(4.0, 9.0), (4.0, 13.0), (12.0, 13.0), (12.0, 9.0)], c, 1.2);
+            g.line(&[(8.0, 3.0), (8.0, 10.5)], c, 1.2);
+            g.line(&[(5.5, 8.0), (8.0, 10.5), (10.5, 8.0)], c, 1.2);
+        }
         Icon::Settings => {
             g.circle(8.0, 8.0, 5.0, None, Some(c));
             g.circle(8.0, 8.0, 2.0, Some(c), None);
@@ -741,6 +747,7 @@ pub const LIBRARY: &[(&str, Icon)] = &[
     ("link", Icon::Link),
     ("pen", Icon::Pen),
     ("share", Icon::Share),
+    ("download", Icon::Download),
     ("settings", Icon::Settings),
     ("home", Icon::Home),
     ("save", Icon::Save),

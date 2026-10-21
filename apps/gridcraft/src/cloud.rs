@@ -445,6 +445,33 @@ impl TokenSource for CloudToken {
                 log::info!("collab: joining {} through {}", join.room, join.relay);
                 Some((join.relay, join.token))
             }
+            Err(Error::Unauthenticated) => {
+                log::info!("the saved cloud session was rejected while joining; signing in again");
+                forget_token();
+                client = Client::new(&self.base);
+                if let Err(e) = client.sign_in(|url| {
+                    if let Err(e) = open_browser(url) {
+                        log::warn!("could not open a browser: {e}");
+                    }
+                    log::info!("waiting for a cloud sign-in at {url}");
+                }) {
+                    log::warn!("cloud sign-in failed: {e}");
+                    return None;
+                }
+                if let Some(token) = client.token() {
+                    save_token(token);
+                }
+                match client.join(&self.id) {
+                    Ok(join) => {
+                        log::info!("collab: joining {} through {}", join.room, join.relay);
+                        Some((join.relay, join.token))
+                    }
+                    Err(e) => {
+                        log::warn!("could not get a relay token for {} after re-sign-in: {e}", self.id);
+                        None
+                    }
+                }
+            }
             Err(e) => {
                 log::warn!("could not get a relay token for {}: {e}", self.id);
                 None

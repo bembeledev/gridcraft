@@ -726,7 +726,11 @@ impl SheetApp {
             // `file.save` is intercepted only for a workbook that came from
             // the cloud and has no local file of its own, so saving a local
             // workbook behaves exactly as it always did.
-            "file.save" if p.get("path").is_none() && cloud::has_target(self) => cloud::save(self),
+            "file.save"
+                if p.get("path").and_then(Json::as_str).is_none_or(str::is_empty) && cloud::has_target(self) =>
+            {
+                cloud::save(self)
+            }
             "cloud.status" => Ok(cloud::status(self)),
             "cloud.open" => {
                 if !cloud::available(self) {

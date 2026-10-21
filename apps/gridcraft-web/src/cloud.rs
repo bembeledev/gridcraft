@@ -47,9 +47,6 @@ impl Service {
                     capabilities: me.capabilities,
                     provider_linked: me.provider_linked,
                 });
-                if matches!(&answer, Err(Fault::Unauthenticated)) {
-                    offer_login();
-                }
                 post(Event::Account(answer));
             }
             Job::LinkStart => match self.client.link_start().await.map_err(fault) {
@@ -61,8 +58,11 @@ impl Service {
                 post(Event::Linked(answer));
             }
             Job::SignOut => {
-                if fetch_logout().await.is_ok() {
-                    let _ = web_sys::window().and_then(|w| w.location().reload().ok());
+                match fetch_logout().await {
+                    Ok(()) => {
+                        let _ = web_sys::window().and_then(|w| w.location().reload().ok());
+                    }
+                    Err(e) => log::warn!("cloud sign-out failed: {e}"),
                 }
             }
             Job::List(path) => {
@@ -115,15 +115,6 @@ fn fault(e: Error) -> Fault {
             Fault::Refused("GridCraft could not build that request".to_owned())
         }
     }
-}
-
-fn offer_login() {
-    let Some(window) = web_sys::window() else { return };
-    let Ok(path) = window.location().pathname() else { return };
-    if path.starts_with("/auth/") {
-        return;
-    }
-    let _ = window.location().set_href("/auth/login");
 }
 
 async fn fetch_logout() -> Result<(), String> {

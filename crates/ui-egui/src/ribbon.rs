@@ -165,7 +165,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
-    let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    let h = if collapsed { 34.0 } else { 34.0 + 92.0 + GROUP_LABEL_H };
     egui::Panel::top("ribbon")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
@@ -226,11 +226,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             if collapsed {
                 return;
             }
-            // Ribbon card.
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 88.0));
-            ui.painter().rect_filled(card, 10.0, t.ribbon);
-            ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+            // The commands sit on the window, with each group's name under it.
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 88.0 + GROUP_LABEL_H));
             let inner = card.shrink2(vec2(10.0, 6.0));
+            let tab = app.ui.ribbon_tab.clone();
+            ui.ctx().data_mut(|d| {
+                d.remove_temp::<Vec<f32>>(egui::Id::new(SEPS_ID));
+                d.insert_temp(egui::Id::new(SEPS_ID).with("tab"), tab);
+            });
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -250,6 +253,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
+                        let groups = group_names(&app.ui.ribbon_tab);
+                        paint_group_labels(app, ui, groups, inner.top() + 74.0, t.text_dim);
                     });
                 });
             });
@@ -297,9 +302,74 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     v
 }
 
+/// Height of the row of group names under the ribbon's commands.
+const GROUP_LABEL_H: f32 = 14.0;
+const SEPS_ID: &str = "ribbon_group_seps";
+
+/// The names of a tab's groups, in order, one per run of commands between `sep`s (Excel's names).
+fn group_names(tab: &str) -> &'static [&'static str] {
+    match tab {
+        "Home" => &["Clipboard", "Font", "Alignment", "Number", "Styles", "Cells", "Editing"],
+        "Insert" => &["Tables", "Illustrations", "Charts", "Filters", "Sparklines", "Cell Controls", "Links & Comments", "Text"],
+        "Draw" => &["Tools", "Pens", "Convert"],
+        "Page Layout" => &["Themes", "Page Setup", "Sheet Options"],
+        "Formulas" => &["Function Library", "Defined Names", "Formula Auditing", "Calculation"],
+        "Data" => &["Get & Transform Data", "Sort & Filter", "Data Tools", "Forecast", "Outline", "Analysis"],
+        "Review" => &["Proofing", "Comments", "Protect"],
+        "View" => &["Workbook Views", "Show", "Zoom", "Window", "Interface"],
+        "Table Design" => &["Properties", "Tools", "Table Style Options", "Table Styles"],
+        _ => &[],
+    }
+}
+
+/// Paints each group's name centred under it: the groups are the spans between the separators
+/// `sep` recorded while the tab was laid out. A tab whose names don't match its groups gets none.
+fn paint_group_labels(app: &SheetApp, ui: &Ui, names: &[&str], y: f32, color: Color32) {
+    let seps = ui.ctx().data(|d| d.get_temp::<Vec<f32>>(egui::Id::new(SEPS_ID))).unwrap_or_default();
+    if names.len() != seps.len() + 1 {
+        return;
+    }
+    let content = ui.min_rect();
+    let mut edges = vec![content.left()];
+    edges.extend(&seps);
+    edges.push(content.right());
+    let font = theme::ui_font(11.0);
+    let mut widths = Vec::with_capacity(names.len());
+    for (name, span) in names.iter().zip(edges.windows(2)) {
+        let [left, right] = span else { continue };
+        let key = format!("Ribbon group|{name}");
+        let label = app.ui.language.tr(&key);
+        let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), color);
+        widths.push(galley.size().x + 12.0);
+        // Clip to the group so a long translation never runs into its neighbour.
+        let clip = Rect::from_x_y_ranges(*left..=*right, y..=y + GROUP_LABEL_H);
+        let at = pos2((left + right - galley.size().x) / 2.0, y);
+        ui.painter().with_clip_rect(clip.intersect(ui.clip_rect())).galley(at.max(pos2(*left, y)), galley, color);
+    }
+    // Next frame `sep` widens a group that is narrower than its name, as Excel does.
+    ui.ctx().data_mut(|d| d.insert_temp(label_widths_id(&app.ui.ribbon_tab), widths));
+}
+
+fn label_widths_id(tab: &str) -> egui::Id {
+    egui::Id::new(SEPS_ID).with(("widths", tab))
+}
+
 fn sep(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
+    // Room for the group's name when its commands are narrower than it.
+    let (seps, need) = ui.ctx().data(|d| {
+        let seps = d.get_temp::<Vec<f32>>(egui::Id::new(SEPS_ID)).unwrap_or_default();
+        let tab = d.get_temp::<String>(egui::Id::new(SEPS_ID).with("tab")).unwrap_or_default();
+        let need = d.get_temp::<Vec<f32>>(label_widths_id(&tab)).and_then(|w| w.get(seps.len()).copied()).unwrap_or(0.0);
+        (seps, need)
+    });
+    let start = seps.last().copied().unwrap_or(ui.min_rect().left());
+    let have = ui.cursor().left() - start + 6.5;
+    if need > have {
+        ui.add_space(need - have);
+    }
+    let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0 + GROUP_LABEL_H), Sense::hover());
+    ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<Vec<f32>>(egui::Id::new(SEPS_ID)).push(r.center().x));
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 
@@ -2010,7 +2080,6 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
-    sep(ui);
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }
@@ -2295,7 +2364,6 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "table.convertToRange", json!({"table": tname}));
     }
-    sep(ui);
     if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
         act(app, "table.insertSlicer", json!({"table": tname}));
     }

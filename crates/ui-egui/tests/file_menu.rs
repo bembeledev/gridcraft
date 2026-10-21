@@ -400,3 +400,12 @@ fn closing_one_of_two_workbooks_does_not_quit() {
     assert_eq!(h.state().session.documents().len(), 1);
     assert!(!h.state().quit_requested);
 }
+
+#[test]
+fn a_script_closing_the_last_workbook_does_not_quit() {
+    let mut h = harness(Services::default());
+    let ctx = h.ctx.clone();
+    let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.execute", &serde_json::json!({"command": "file.close"}));
+    assert!(h.state().session.documents().is_empty());
+    assert!(!h.state().quit_requested, "the control channel keeps the app running");
+}

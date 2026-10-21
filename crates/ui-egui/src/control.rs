@@ -222,7 +222,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(run(app, id, if params.is_null() { json!({}) } else { params }))
+            // A script closing the last workbook keeps the app (and its control channel) running.
+            let quit = app.quit_requested;
+            let r = run(app, id, if params.is_null() { json!({}) } else { params });
+            app.quit_requested = quit;
+            wrap(r)
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();

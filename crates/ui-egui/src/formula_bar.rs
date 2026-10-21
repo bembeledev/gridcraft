@@ -200,7 +200,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             action = Some((0, 0, true, false));
         }
         if esc {
-            if !ed.autocomplete.is_empty() {
+            if ed.list_open() {
+                ed.close_list();
+            } else if !ed.autocomplete.is_empty() {
                 ed.autocomplete.clear();
             } else if ed.completion.is_some() {
                 ed.completion = None;
@@ -219,7 +221,14 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             )
         });
         let (up, down, left, right, ashift) = arrows;
-        if (up || down) && !ed.autocomplete.is_empty() {
+        if (up || down) && !ashift && ed.list_open() {
+            // The searched validation list takes Up/Down, even in Enter mode.
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+            });
+            ed.list_step(down);
+        } else if (up || down) && !ed.autocomplete.is_empty() {
             ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
@@ -311,7 +320,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         ed.completion = None;
+        ed.update_list();
         if app.ui.autocomplete
+            && ed.list.is_none()
             && !ed.is_formula()
             && ed.caret == ed.text.chars().count()
             && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))

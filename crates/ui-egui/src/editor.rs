@@ -41,6 +41,41 @@ pub struct EditState {
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// The searchable list of a cell with an in-cell list validation dropdown.
+    pub list: Option<ListSearch>,
+}
+
+/// Entries of a list validation, searched as the user types (Excel's searchable dropdown).
+#[derive(Clone, Debug, Default)]
+pub struct ListSearch {
+    pub items: Vec<String>,
+    /// `items` folded for search once, so each keystroke only compares.
+    folded: Vec<String>,
+    /// Indices into `items` of the entries matching the typed text, in list order.
+    pub matches: Vec<usize>,
+    /// The highlighted entry, an index into `matches`.
+    pub index: usize,
+    /// Closed with Escape: hidden until the text changes again.
+    pub closed: bool,
+    /// First visible row of the popup (an index into `matches`).
+    pub top: usize,
+    /// The highlight moved: scroll the popup so it shows.
+    pub reveal: bool,
+}
+
+impl ListSearch {
+    /// Rows the popup shows at once.
+    pub const VISIBLE: usize = 8;
+
+    /// Scrolls `top` just enough to show the highlighted row.
+    fn keep_visible(&mut self) {
+        if self.index < self.top {
+            self.top = self.index;
+        } else if self.index >= self.top.saturating_add(Self::VISIBLE) {
+            self.top = self.index.saturating_add(1).saturating_sub(Self::VISIBLE);
+        }
+        self.reveal = true;
+    }
 }
 
 impl EditState {
@@ -62,6 +97,69 @@ impl EditState {
             sync_caret: true,
             caret_to_end: true,
             completion: None,
+            list: None,
+        }
+    }
+
+    /// Gives this edit the entries of its cell's list validation. `search_now` filters them
+    /// against the text right away (an edit started by typing); otherwise the list waits for
+    /// the first change (F2 on an existing value).
+    pub fn set_list_items(&mut self, items: Vec<String>, search_now: bool) {
+        let folded = items.iter().map(|i| gridcraft_engine::cmd::data::search_fold(i)).collect();
+        self.list = Some(ListSearch { items, folded, ..Default::default() });
+        if search_now {
+            self.update_list();
+        }
+    }
+
+    /// Refilters the list against the typed text (call when the text changes).
+    pub fn update_list(&mut self) {
+        let typed = if self.is_formula() || self.text.trim().is_empty() { None } else { Some(self.text.as_str()) };
+        let Some(list) = self.list.as_mut() else { return };
+        list.matches.clear();
+        list.index = 0;
+        list.top = 0;
+        list.reveal = true;
+        list.closed = false;
+        let Some(typed) = typed else { return };
+        let term = gridcraft_engine::cmd::data::search_term(typed);
+        let cap = gridcraft_engine::cmd::data::LIST_MATCH_CAP;
+        list.matches =
+            list.folded.iter().enumerate().filter(|(_, f)| gridcraft_engine::cmd::data::search_matches(f, &term)).map(|(i, _)| i).take(cap).collect();
+        // Text naming an entry exactly highlights that entry rather than the first match.
+        let whole = gridcraft_engine::cmd::data::search_fold(typed.trim());
+        if let Some(pos) = list.matches.iter().position(|&i| list.folded.get(i).is_some_and(|f| *f == whole)) {
+            list.index = pos;
+            list.keep_visible();
+        }
+    }
+
+    /// Whether the searched list is showing (it has matches and wasn't closed).
+    pub fn list_open(&self) -> bool {
+        self.list.as_ref().is_some_and(|l| !l.closed && !l.matches.is_empty())
+    }
+
+    /// The highlighted entry of the open list: what Enter or Tab commits.
+    pub fn list_choice(&self) -> Option<&str> {
+        let l = self.list.as_ref().filter(|_| self.list_open())?;
+        l.matches.get(l.index).and_then(|&i| l.items.get(i)).map(String::as_str)
+    }
+
+    /// Moves the highlight down (or up), wrapping around.
+    pub fn list_step(&mut self, down: bool) {
+        if let Some(l) = self.list.as_mut()
+            && !l.matches.is_empty()
+        {
+            let n = l.matches.len();
+            l.index = if down { (l.index + 1) % n } else { (l.index + n - 1) % n };
+            l.keep_visible();
+        }
+    }
+
+    /// Hides the list until the text changes (Escape).
+    pub fn close_list(&mut self) {
+        if let Some(l) = self.list.as_mut() {
+            l.closed = true;
         }
     }
 
@@ -345,5 +443,94 @@ mod tests {
         assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
         assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
         assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
+    }
+
+    fn cities() -> Vec<String> {
+        ["Dubai - United Arab Emirates", "Paris - France", "London - United Kingdom", "Boston - United States", "Los Angeles - United States"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    fn typed(text: &str) -> EditState {
+        let mut e = EditState::new(0, CellRef::new(0, 0), text.into(), true, false);
+        e.set_list_items(cities(), true);
+        e
+    }
+
+    #[test]
+    fn list_search_filters_as_typed_and_picks_the_first_match() {
+        let mut e = typed("u");
+        assert!(e.list_open());
+        e.text = "United".into();
+        e.update_list();
+        assert_eq!(e.list.as_ref().map(|l| l.matches.clone()), Some(vec![0, 2, 3, 4]));
+        assert_eq!(e.list_choice(), Some("Dubai - United Arab Emirates"));
+        e.text = "united st".into();
+        e.update_list();
+        assert_eq!(e.list_choice(), Some("Boston - United States"));
+        e.list_step(true);
+        assert_eq!(e.list_choice(), Some("Los Angeles - United States"));
+        e.list_step(true);
+        assert_eq!(e.list_choice(), Some("Boston - United States"), "the highlight wraps");
+        e.list_step(false);
+        assert_eq!(e.list_choice(), Some("Los Angeles - United States"));
+    }
+
+    #[test]
+    fn list_search_hides_without_matches_formulas_or_text() {
+        assert!(!typed("Tokyo").list_open());
+        assert!(!typed("=A1").list_open());
+        assert!(!typed("  ").list_open());
+        assert_eq!(typed("Tokyo").list_choice(), None);
+    }
+
+    #[test]
+    fn list_search_escape_closes_until_the_text_changes() {
+        let mut e = typed("Par");
+        e.close_list();
+        assert!(!e.list_open());
+        assert_eq!(e.list_choice(), None, "a closed list commits the typed text");
+        e.text = "Pari".into();
+        e.update_list();
+        assert_eq!(e.list_choice(), Some("Paris - France"));
+    }
+
+    #[test]
+    fn list_search_prefers_an_exact_entry() {
+        let mut e = EditState::new(0, CellRef::new(0, 0), "paris".into(), true, false);
+        e.set_list_items(vec!["Paris - France".into(), "Paris".into()], true);
+        assert_eq!(e.list_choice(), Some("Paris"));
+    }
+
+    #[test]
+    fn list_search_waits_for_a_change_when_editing_an_existing_value() {
+        let mut e = EditState::new(0, CellRef::new(0, 0), "Paris - France".into(), false, false);
+        e.set_list_items(cities(), false);
+        assert!(!e.list_open(), "F2 doesn't pop the list up");
+        e.text = "Paris".into();
+        e.update_list();
+        assert!(e.list_open());
+    }
+
+    #[test]
+    fn list_search_keeps_the_highlight_in_view() {
+        let items: Vec<String> = (0..20).map(|i| format!("Item {i}")).collect();
+        let mut e = EditState::new(0, CellRef::new(0, 0), "item".into(), true, false);
+        e.set_list_items(items, true);
+        for _ in 0..10 {
+            e.list_step(true);
+        }
+        let l = e.list.as_ref().map(|l| (l.index, l.top)).unwrap_or_default();
+        assert_eq!(l, (10, 10 + 1 - ListSearch::VISIBLE));
+        e.list_step(false);
+        e.list_step(false);
+        e.list_step(false);
+        e.list_step(false);
+        e.list_step(false);
+        e.list_step(false);
+        e.list_step(false);
+        let l = e.list.as_ref().map(|l| (l.index, l.top)).unwrap_or_default();
+        assert_eq!(l, (3, 3));
     }
 }

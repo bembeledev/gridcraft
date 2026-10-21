@@ -917,7 +917,15 @@ impl SheetApp {
         };
         let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar);
         ed.locale = locale;
-        if replace && self.ui.autocomplete && !ed.is_formula() {
+        // A list validation with an in-cell dropdown is searched as the user types; its list
+        // replaces column AutoComplete.
+        let list = sh
+            .validations
+            .iter()
+            .find(|v| v.kind == gridcraft_engine::model::ValidationKind::List && v.in_cell_dropdown && v.ranges.iter().any(|r| r.contains(at)));
+        if let Some(dv) = list {
+            ed.set_list_items(gridcraft_engine::cmd::data::list_items(&d.wb, d.wb.active_sheet, dv), replace);
+        } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
         self.editor = Some(ed);
@@ -928,8 +936,10 @@ impl SheetApp {
     pub fn commit_edit(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
-        let text = match &ed.completion {
-            Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+        let text = match (ed.list_choice(), &ed.completion) {
+            // The searched validation list's highlighted entry, as the list spells it.
+            (Some(choice), _) => choice.to_string(),
+            (None, Some(full)) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {

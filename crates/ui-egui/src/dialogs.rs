@@ -1521,6 +1521,43 @@ fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
     });
 }
 
+/// Format Cells' orientation controls: the degrees slider and the stacked-vertical checkbox.
+///
+/// `Alignment::rotation == Alignment::VERTICAL` is Excel's stacked-vertical sentinel
+/// (`textRotation="255"`, upright glyphs one per line), not an angle — so it needs its own
+/// control, and the slider's display value must never be assigned back into the style
+/// unconditionally. Doing that turned stacked text into `0°` when the dialog was merely
+/// confirmed. `angle` is presentation only: it lives in the dialog's values so the slider keeps
+/// its position across frames and tab visits while the style holds the real rotation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OrientationDraft {
+    vertical: bool,
+    angle: f32,
+}
+
+impl OrientationDraft {
+    /// The draft a style opens with. `degrees` is the slider's remembered position, used only
+    /// while the style holds an ordinary angle (a stacked cell has none).
+    fn read(rotation: i16, degrees: Option<&Json>) -> Self {
+        let vertical = rotation == gridcraft_engine::model::Alignment::VERTICAL;
+        let angle = if vertical { degrees.and_then(Json::as_f64).unwrap_or(0.0) as f32 } else { rotation.clamp(-90, 90) as f32 };
+        OrientationDraft { vertical, angle: angle.clamp(-90.0, 90.0) }
+    }
+
+    /// The rotation to store after the Vertical text checkbox was toggled to `on`.
+    /// On: the sentinel. Off: ordinary horizontal text, 0°.
+    fn set_vertical(&mut self, on: bool) -> i16 {
+        self.vertical = on;
+        self.angle = 0.0;
+        if on { gridcraft_engine::model::Alignment::VERTICAL } else { 0 }
+    }
+
+    /// The ordinary rotation the slider's current position stands for.
+    fn angle_degrees(&self) -> i16 {
+        self.angle.round().clamp(-90.0, 90.0) as i16
+    }
+}
+
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
     // labels are translated. The Fill tab is keyed by context: the Alignment tab's "Fill" is a
@@ -1619,9 +1656,25 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
             let mut indent = st.align.indent as f32;
             ui.add(egui::Slider::new(&mut indent, 0.0..=15.0).text(lang.tr("Indent")));
             st.align.indent = indent as u8;
-            let mut rot = if st.align.rotation == 255 { 0.0 } else { st.align.rotation as f32 };
-            ui.add(egui::Slider::new(&mut rot, -90.0..=90.0).text(lang.tr("Orientation (degrees)")));
-            st.align.rotation = rot as i16;
+            // Orientation is two controls: the degrees slider, and stacked vertical text. The
+            // slider only writes into the style when it is actually dragged, so opening the
+            // dialog, visiting another tab or pressing OK keeps whatever orientation is there.
+            let mut draft = OrientationDraft::read(st.align.rotation, d.values.get("orientationDegrees"));
+            let mut vertical = draft.vertical;
+            if ui.checkbox(&mut vertical, lang.tr("Vertical Text")).changed() {
+                // Turning stacked mode off returns the text to ordinary horizontal orientation
+                // (0°): the cell's other alignment properties are untouched.
+                st.align.rotation = draft.set_vertical(vertical);
+                draft.vertical = vertical;
+            }
+            let mut angle = draft.angle;
+            if ui.add(egui::Slider::new(&mut angle, -90.0..=90.0).text(lang.tr("Orientation (degrees)"))).changed() {
+                // A dragged angle is a deliberate ordinary rotation, so it leaves stacked mode.
+                draft.angle = angle;
+                draft.vertical = false;
+                st.align.rotation = draft.angle_degrees();
+            }
+            d.values.insert("orientationDegrees".into(), json!(f64::from(draft.angle)));
             ui.checkbox(&mut st.align.wrap, lang.tr("Wrap text"));
             ui.checkbox(&mut st.align.shrink, lang.tr("Shrink to fit"));
         }

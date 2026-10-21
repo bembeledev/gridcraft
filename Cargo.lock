@@ -1579,6 +1579,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "zip",
 ]
 
@@ -1649,6 +1650,7 @@ dependencies = [
  "skrifa",
  "sys-locale",
  "toml",
+ "unicode-segmentation",
  "web-sys",
  "zbus",
 ]

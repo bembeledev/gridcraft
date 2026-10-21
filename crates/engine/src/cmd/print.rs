@@ -13,6 +13,7 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
 use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
 use serde_json::{Value as Json, json};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::*;
 
@@ -768,6 +769,18 @@ fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
 
 const PAD_PX: f32 = 2.0;
 
+/// Most glyphs printed for one stacked-vertical cell (`textRotation="255"`). Bounds the work for a
+/// hostile input-sized cell; the row height clips far sooner in practice.
+const MAX_STACKED_GLYPHS: usize = 500;
+
+/// One string per grapheme cluster, for printed stacked-vertical text (`textRotation="255"`):
+/// upright glyphs, one per line, reading down. Grapheme clusters (not bytes or code points) keep a
+/// combining mark with its base letter and an emoji/flag sequence whole; hard line endings (CR, LF,
+/// CRLF — one cluster) are dropped, as in the grid's in-cell text. `max` bounds the allocation.
+fn vertical_text_lines(text: &str, max: usize) -> Vec<String> {
+    text.graphemes(true).filter(|g| !g.chars().all(|c| matches!(c, '\r' | '\n'))).take(max).map(str::to_string).collect()
+}
+
 /// Word-wraps `text` to `width` points.
 fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
     let mut out = Vec::new();
@@ -1115,6 +1128,9 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     };
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
+    // Stacked vertical text ignores horizontal wrapping, so keep the glyph source (the formatted
+    // text) before the lines below consume it. Only vertical cells pay for the copy.
+    let stacked = (rot == 255).then(|| text.clone());
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
         (true, false) => wrap_lines(&text, font, size, avail.max(size)),
@@ -1187,16 +1203,52 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         return;
     }
     if rot == 255 {
-        // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
-        for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
-            yy += line_h;
-            if yy > y + h + line_h {
-                break;
+        // Stacked vertical text (`textRotation="255"`): upright glyphs, one grapheme cluster per
+        // line, reading down. This is not a rotation — no angle is applied. It mirrors the grid's
+        // semantics (horizontal alignment places the glyph column, vertical alignment places the
+        // block, the block never starts above the cell and is clipped at the bottom) using the
+        // PDF's own font metrics.
+        let glyphs = stacked.as_deref().map_or_else(Vec::new, |src| vertical_text_lines(src, MAX_STACKED_GLYPHS));
+        if !glyphs.is_empty() {
+            let widths: Vec<f32> = glyphs.iter().map(|g| gridcraft_pdf::text_width(font, size, g)).collect();
+            let widest = widths.iter().copied().fold(0.0f32, f32::max);
+            // Horizontal alignment moves the whole column; General follows the value type. Fill is
+            // right and Center Across / Distributed are centred, exactly as in the grid.
+            let block_h = if st.align.h == HAlign::General { h_align } else { st.align.h };
+            let block_x = match block_h {
+                HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => x + (w - widest) / 2.0,
+                HAlign::Right | HAlign::Fill => x + w - pad - indent - widest,
+                _ => x + pad + indent,
+            };
+            let centred = matches!(block_h, HAlign::Center | HAlign::CenterAcross | HAlign::Distributed);
+            // Vertical alignment moves the block. One taller than the row starts at the top edge
+            // and is clipped below, never reaching above the cell.
+            let n = glyphs.len() as f32;
+            let block_top = match st.align.v {
+                VAlign::Top => y + pad,
+                VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0,
+                VAlign::Bottom => y + h - pad - n * line_h,
+            }
+            .max(y + pad);
+            let uw = (size * 0.06).max(0.2);
+            for (i, (glyph, gw)) in glyphs.iter().zip(&widths).enumerate() {
+                let top = block_top + i as f32 * line_h;
+                if top >= y + h {
+                    // Below the row: clipped, not redrawn sideways.
+                    break;
+                }
+                let gx = block_x + if centred { (widest - gw) / 2.0 } else { 0.0 };
+                let baseline = top + size * 0.8;
+                pg.text(gx, baseline, size, font, color, glyph);
+                if st.font.underline != Underline::None {
+                    pg.stroke_line(gx, baseline + size * 0.12, gx + gw, baseline + size * 0.12, uw, color);
+                    if matches!(st.font.underline, Underline::Double | Underline::DoubleAccounting) {
+                        pg.stroke_line(gx, baseline + size * 0.24, gx + gw, baseline + size * 0.24, uw, color);
+                    }
+                }
+                if st.font.strike {
+                    pg.stroke_line(gx, baseline - size * 0.3, gx + gw, baseline - size * 0.3, uw, color);
+                }
             }
         }
         pg.restore();
@@ -2163,5 +2215,113 @@ mod tests {
         // Every piece of both headers is rotated, each wrapped along the row height into a few long lines.
         assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
         assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
+    }
+
+    /// Every text block on the page as `(text matrix "a b c d x y", shown text)`.
+    fn pdf_text_blocks(pdf: &str) -> Vec<(String, String)> {
+        pdf.split("BT\n")
+            .skip(1)
+            .filter_map(|b| {
+                let b = b.split("ET").next()?;
+                if !b.contains(" Tj") {
+                    return None;
+                }
+                let tm = b.lines().find(|l| l.trim_end().ends_with("Tm"))?.trim_end().trim_end_matches("Tm").trim().to_string();
+                let open = b.find('(')?;
+                let close = b[open..].find(") Tj")? + open;
+                Some((tm, b[open + 1..close].to_string()))
+            })
+            .collect()
+    }
+
+    /// The `(x, y)` placement of each block's text matrix.
+    fn matrix_xy(blocks: &[(String, String)]) -> Vec<(f32, f32)> {
+        blocks
+            .iter()
+            .map(|(tm, _)| {
+                let mut it = tm.split_whitespace();
+                for _ in 0..4 {
+                    let _ = it.next();
+                }
+                let x: f32 = it.next().and_then(|v| v.parse().ok()).unwrap_or(f32::NAN);
+                let y: f32 = it.next().and_then(|v| v.parse().ok()).unwrap_or(f32::NAN);
+                (x, y)
+            })
+            .collect()
+    }
+
+    /// Print: `textRotation="255"` stacks upright glyphs, one per line, reading down. This is what
+    /// the on-screen grid does too; PDF y grows upward, so the stack descends as the y values fall.
+    #[test]
+    fn stacked_vertical_text_prints_upright_one_glyph_per_line() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B2", "input": "ABCD"})).unwrap();
+        s.execute("home.orientation", json!({"range": "B2", "angle": "vertical"})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "height": 200})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let blocks = pdf_text_blocks(&String::from_utf8_lossy(&pdf));
+        assert_eq!(blocks.iter().map(|b| b.1.as_str()).collect::<Vec<_>>(), ["A", "B", "C", "D"], "one upright glyph per line: {blocks:?}");
+        // No glyph is turned: every block carries the identity text matrix.
+        assert!(blocks.iter().all(|b| b.0.starts_with("1 0 0 1 ")), "no glyph is rotated: {blocks:?}");
+        let xy = matrix_xy(&blocks);
+        assert!(xy.windows(2).all(|w| w[1].1 < w[0].1), "reading order runs down the cell: {xy:?}");
+        // Left-aligned text, so the glyph column keeps one x.
+        assert!(xy.windows(2).all(|w| (w[1].0 - w[0].0).abs() < 0.01), "one glyph column: {xy:?}");
+    }
+
+    /// Print: ordinary angles stay one rotated galley; `255` is the only stacked mode.
+    #[test]
+    fn numeric_angles_print_rotated_not_stacked() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "SIDE"})).unwrap();
+        for (angle, matrix) in [(90i16, "0 1 -1 0"), (45, ""), (-45, ""), (-90, "0 -1 1 0")] {
+            s.execute("home.orientation", json!({"range": "A1", "angle": angle})).unwrap();
+            let (pdf, _) = pdf_of(&mut s, json!({}));
+            let blocks = pdf_text_blocks(&String::from_utf8_lossy(&pdf));
+            assert_eq!(blocks.len(), 1, "{angle}° is one galley, never stacked: {blocks:?}");
+            assert_eq!(blocks[0].1, "SIDE");
+            if matrix.is_empty() {
+                assert!(!blocks[0].0.starts_with("1 0 0 1 "), "{angle}° is turned: {:?}", blocks[0]);
+            } else {
+                assert!(blocks[0].0.starts_with(matrix), "{angle}° matrix: {:?}", blocks[0]);
+            }
+        }
+    }
+
+    /// Print: vertical alignment moves the stacked block; the glyphs keep reading downwards.
+    #[test]
+    fn stacked_text_follows_vertical_alignment() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "XY"})).unwrap();
+        s.execute("home.orientation", json!({"range": "A1", "angle": "vertical"})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:1", "height": 200})).unwrap();
+        let first_y = |s: &mut Session, cmd: &str| -> f32 {
+            s.execute(cmd, json!({"range": "A1"})).unwrap();
+            let (pdf, _) = pdf_of(s, json!({}));
+            let blocks = pdf_text_blocks(&String::from_utf8_lossy(&pdf));
+            assert!(!blocks.is_empty(), "{cmd} left no text");
+            matrix_xy(&blocks)[0].1
+        };
+        let top = first_y(&mut s, "home.alignTop");
+        let middle = first_y(&mut s, "home.alignMiddle");
+        let bottom = first_y(&mut s, "home.alignBottom");
+        assert!(top > middle && middle > bottom, "PDF y grows upward: top {top} > middle {middle} > bottom {bottom}");
+    }
+
+    /// Print: a short row clips the stack at the bottom; it never falls back to sideways text and
+    /// never starts above the cell.
+    #[test]
+    fn a_short_row_clips_stacked_text_instead_of_printing_it_sideways() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "VERTICAL MODE TEST"})).unwrap();
+        s.execute("home.orientation", json!({"range": "A1", "angle": "vertical"})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:1", "height": 30})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let blocks = pdf_text_blocks(&String::from_utf8_lossy(&pdf));
+        assert!(!blocks.is_empty(), "the first glyphs are shown");
+        assert!(blocks.len() < "VERTICAL MODE TEST".chars().count(), "the rest is clipped: {}", blocks.len());
+        assert!(blocks.iter().all(|b| b.0.starts_with("1 0 0 1 ")), "never turned sideways: {blocks:?}");
+        let ys: Vec<f32> = matrix_xy(&blocks).iter().map(|&(_, y)| y).collect();
+        assert!(ys.windows(2).all(|w| w[1] < w[0]), "still a downwards stack: {ys:?}");
     }
 }

@@ -314,8 +314,24 @@ pub struct Alignment {
     pub wrap: bool,
     pub shrink: bool,
     pub indent: u8,
-    /// Degrees -90..=90, or 255 for vertical stacked text.
+    /// Degrees -90..=90, or [`Alignment::VERTICAL`] for vertical stacked text.
+    ///
+    /// [`Alignment::VERTICAL`] is a sentinel, not an angle: OOXML writes it as
+    /// `textRotation="255"` and it means upright glyphs stacked down the cell. Never pass it to
+    /// trigonometry or to an angle slider's range.
     pub rotation: i16,
+}
+
+impl Alignment {
+    /// Excel's stacked-vertical orientation (`textRotation="255"`): the glyphs stay upright and
+    /// read downwards. A sentinel value, not degrees.
+    pub const VERTICAL: i16 = 255;
+
+    /// Whether the text is stacked vertically (upright glyphs, top to bottom) rather than turned
+    /// by [`Self::rotation`] degrees.
+    pub fn is_vertical(&self) -> bool {
+        self.rotation == Self::VERTICAL
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

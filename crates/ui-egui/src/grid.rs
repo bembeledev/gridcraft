@@ -10,6 +10,7 @@ use gridcraft_engine::cf::{CfCache, CfLook};
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex, PatternType, Sheet, Style, Underline, VAlign, Workbook};
 use serde_json::json;
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::SheetApp;
 use crate::editor::{EditState, REF_COLORS};
@@ -975,6 +976,19 @@ pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     }
 }
 
+/// Splits `text` into the glyphs stacked vertically by [`paint_vertical_text`]: one line per
+/// grapheme cluster, in reading order.
+///
+/// Excel's stacked-vertical orientation turns nothing — it puts one upright character under
+/// another. Splitting on grapheme clusters (not bytes or code points) keeps a combining mark with
+/// its base letter, an emoji ZWJ sequence and a flag whole, and never corrupts UTF-8. Hard line
+/// endings (CR, LF, CRLF — one cluster, so one break) are dropped, like the other in-cell text
+/// paths do; every other character, spaces included, keeps its own line. An empty string has no
+/// lines, so the cell draws nothing.
+pub fn vertical_text_lines(text: &str) -> Vec<String> {
+    text.graphemes(true).filter(|g| !g.chars().all(|c| matches!(c, '\r' | '\n'))).map(str::to_string).collect()
+}
+
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
 /// negative for upward text) for it to sit in `rect` per the cell's alignment. egui turns the
 /// galley about `pos`, its top-left corner, so the turned box is placed first and `pos` follows.
@@ -994,6 +1008,91 @@ pub(crate) fn rotated_text_pos(rect: Rect, size: egui::Vec2, angle: f32, h: HAli
         _ => rect.top() + pad,
     };
     pos2(x, y) - turned.min.to_vec2()
+}
+
+/// Where a stacked-vertical block sits in `rect`: the `x` of the block (as wide as its widest
+/// glyph) and each line's top `y`. Horizontal alignment moves the block and, when centred, the
+/// glyphs inside it; vertical alignment moves the block while the glyphs keep reading downwards.
+/// A block taller than the row starts at the row's top edge and is clipped at its bottom, the way
+/// overflowing cell text is; it never reaches above the cell. Pure, so the paint loop and the tests
+/// share one definition of the layout.
+pub(crate) fn vertical_text_positions(
+    rect: Rect,
+    left: f32,
+    widths: &[f32],
+    line_h: f32,
+    h: HAlign,
+    v: VAlign,
+    pad: f32,
+    indent: f32,
+) -> (f32, Vec<f32>) {
+    let w = widths.iter().copied().fold(0.0f32, f32::max);
+    let x = match h {
+        HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => rect.center().x - w / 2.0,
+        HAlign::Right | HAlign::Fill => rect.right() - pad - indent - w,
+        _ => left + pad + indent,
+    };
+    let n = widths.len() as f32;
+    let y0 = match v {
+        VAlign::Top => rect.top(),
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => (rect.top() + rect.bottom()) / 2.0 - n * line_h / 2.0,
+        VAlign::Bottom => rect.bottom() - n * line_h,
+    }
+    .max(rect.top());
+    (x, widths.iter().enumerate().map(|(i, _)| y0 + i as f32 * line_h).collect())
+}
+
+/// Paints stacked-vertical text — Excel's `textRotation="255"`, upright glyphs reading downwards —
+/// inside `rect`. This is not a rotation: no angle is involved and no glyph is turned. Text too
+/// tall for the cell is clipped at the bottom, never redrawn sideways.
+pub(crate) fn paint_vertical_text(
+    p: &Painter,
+    rect: Rect,
+    left: f32,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    h: HAlign,
+    v: VAlign,
+    pad: f32,
+    indent: f32,
+    st: &Style,
+) {
+    let lines = vertical_text_lines(text);
+    if lines.is_empty() {
+        return;
+    }
+    // The line box of the font (a glyph with a descender), so the stack keeps its own spacing.
+    let line_h = p.layout_no_wrap("0y".to_string(), font.clone(), color).size().y.max(font.size * 1.2);
+    let galleys: Vec<Arc<egui::text::Galley>> = lines.iter().map(|l| p.layout_no_wrap(l.clone(), font.clone(), color)).collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x).collect();
+    let (block_x, ys) = vertical_text_positions(rect, left, &widths, line_h, h, v, pad, indent);
+    let widest = widths.iter().copied().fold(0.0f32, f32::max);
+    let centred = matches!(h, HAlign::Center | HAlign::CenterAcross | HAlign::Distributed);
+    let cp = p.with_clip_rect(rect.intersect(p.clip_rect()));
+    for ((g, w), y) in galleys.iter().zip(&widths).zip(&ys) {
+        if *y >= rect.bottom() {
+            // The rest is below the row: clipping, not a sideways fallback.
+            break;
+        }
+        let x = block_x + if centred { (widest - w) / 2.0 } else { 0.0 };
+        let gh = g.size().y;
+        cp.galley(pos2(x, *y), g.clone(), color);
+        let baseline = y + gh * 0.82;
+        match st.font.underline {
+            Underline::None => {}
+            Underline::Double | Underline::DoubleAccounting => {
+                cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
+                cp.line_segment([pos2(x, baseline + 3.0), pos2(x + w, baseline + 3.0)], Stroke::new(1.0, color));
+            }
+            _ => {
+                cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
+            }
+        }
+        if st.font.strike {
+            cp.line_segment([pos2(x, y + gh * 0.55), pos2(x + w, y + gh * 0.55)], Stroke::new(1.0, color));
+        }
+    }
 }
 
 /// Mirror what the grid painted into `layer` (the shape indices in `range`) for a right-to-left
@@ -1189,7 +1288,13 @@ pub(crate) fn paint_quadrant(
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
-        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+        // Stacked-vertical text (`textRotation="255"`): upright glyphs one per line, reading down.
+        // The sentinel is not an angle, so it never reaches `to_radians`. A General number is
+        // fitted to the row height here (one digit per line), not to the column width.
+        let vertical = st.align.is_vertical();
+        let line_h = (size * 1.2).max(1.0);
+        let fit_w = if vertical { (rect.height() / z.max(0.1) / line_h * char_w).max(char_w) } else { avail_w / z.max(0.1) * z };
+        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, fit_w, char_w);
         if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
             text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
         }
@@ -1208,7 +1313,11 @@ pub(crate) fn paint_quadrant(
         };
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
-        let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+        if vertical {
+            paint_vertical_text(p, *rect, text_left, &text, &font, color, halign, st.align.v, pad, indent, st);
+            continue;
+        }
+        let rotated = st.align.rotation != 0;
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
@@ -3611,6 +3720,127 @@ mod tests {
         assert!(near(up, pos2(rect.left() + pad, rect.bottom() - pad)), "{up:?}");
         let down = rotated_text_pos(rect, size, std::f32::consts::FRAC_PI_2, HAlign::General, VAlign::Bottom, pad, 0.0);
         assert!(near(down, pos2(rect.left() + pad + size.y, rect.top() + pad)), "{down:?}");
+    }
+
+    // Stacked-vertical text (`textRotation="255"`): upright glyphs one per line, reading down.
+    // These check the layout, never a rotation angle — 90° would be the wrong behaviour.
+
+    #[test]
+    fn vertical_text_stacks_one_upright_glyph_per_line_in_reading_order() {
+        assert_eq!(vertical_text_lines("TEST"), ["T", "E", "S", "T"]);
+        assert_eq!(vertical_text_lines("VERTICAL MODE TEST").len(), 18, "one line per character, spaces included");
+        // Nothing is turned: the "stack" is one-character lines in source order.
+        let lines = vertical_text_lines("AB");
+        assert_eq!(lines.first().map(String::as_str), Some("A"));
+        assert_eq!(lines.get(1).map(String::as_str), Some("B"));
+    }
+
+    #[test]
+    fn empty_and_single_character_text_are_handled() {
+        assert!(vertical_text_lines("").is_empty(), "an empty cell draws nothing");
+        assert_eq!(vertical_text_lines("X"), ["X"]);
+    }
+
+    #[test]
+    fn vertical_text_keeps_grapheme_clusters_whole_and_never_corrupts_utf8() {
+        // A base letter with two combining marks is one line, not three.
+        assert_eq!(vertical_text_lines("e\u{0301}\u{0301}"), ["e\u{0301}\u{0301}"]);
+        // A ZWJ emoji sequence stays together; a flag is one pair of regional indicators.
+        assert_eq!(vertical_text_lines("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"), ["\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"]);
+        assert_eq!(vertical_text_lines("\u{1F1E6}\u{1F1F8}"), ["\u{1F1E6}\u{1F1F8}"]);
+        // CJK and Cyrillic are one line per character.
+        assert_eq!(vertical_text_lines("ĄĆ"), ["Ą", "Ć"]);
+        // Nothing is dropped: stacking then joining gives the text back, bar line breaks.
+        let text = "A\u{0301} \u{1F600}\nB";
+        assert_eq!(vertical_text_lines(text).concat(), "A\u{0301} \u{1F600}B");
+        assert_eq!(vertical_text_lines(text), ["A\u{0301}", " ", "\u{1F600}", "B"]);
+    }
+
+    #[test]
+    fn vertical_text_drops_line_endings_without_adding_lines() {
+        // CRLF is one grapheme cluster, so it is one dropped ending, not two.
+        assert_eq!(vertical_text_lines("AB\r\nCD"), ["A", "B", "C", "D"]);
+        assert_eq!(vertical_text_lines("AB\nCD"), ["A", "B", "C", "D"]);
+        assert_eq!(vertical_text_lines("AB\rCD"), ["A", "B", "C", "D"]);
+        assert!(vertical_text_lines("\r\n").is_empty());
+    }
+
+    #[test]
+    fn vertical_text_keeps_lithuanian_diacritics_whole_and_upright() {
+        // Precomposed Lithuanian letters: one line each, never split or detached.
+        let upper = "ĄČĘĖĮŠŲŪŽ";
+        let lower = "ąčęėįšųūž";
+        assert_eq!(vertical_text_lines(upper), upper.chars().map(|c| c.to_string()).collect::<Vec<_>>());
+        assert_eq!(vertical_text_lines(lower).len(), lower.chars().count());
+        // A decomposed base letter plus a combining ogonek stays one line (no detached mark).
+        assert_eq!(vertical_text_lines("a\u{0328}"), ["a\u{0328}"]);
+        // Upper and lower variants stack in source order, one glyph each.
+        assert_eq!(vertical_text_lines("ĄąČč").len(), 4);
+    }
+
+    #[test]
+    fn vertical_text_block_follows_the_cell_alignment() {
+        let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(60.0, 120.0));
+        let widths = [12.0, 12.0, 12.0];
+        let line_h = 15.0;
+        let pad = 2.5;
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        // Horizontal alignment moves the block of glyphs; every line keeps reading downwards.
+        for (h, x) in [
+            (HAlign::General, rect.left() + pad),
+            (HAlign::Left, rect.left() + pad),
+            (HAlign::Center, rect.center().x - 12.0 / 2.0),
+            (HAlign::Right, rect.right() - pad - 12.0),
+        ] {
+            let (bx, ys) = vertical_text_positions(rect, rect.left(), &widths, line_h, h, VAlign::Top, pad, 0.0);
+            assert!(near(bx, x), "{h:?}: block at {bx}, want {x}");
+            assert_eq!(ys.len(), 3, "{h:?}");
+            assert!(ys[0] < ys[1] && ys[1] < ys[2], "{h:?}: {ys:?} must increase downwards");
+            assert!(near(ys[0], rect.top()), "{h:?}");
+        }
+        // Vertical alignment positions the stack within the row height.
+        let n = widths.len() as f32;
+        for (v, y) in [
+            (VAlign::Top, rect.top()),
+            (VAlign::Center, (rect.top() + rect.bottom()) / 2.0 - n * line_h / 2.0),
+            (VAlign::Bottom, rect.bottom() - n * line_h),
+        ] {
+            let (_, ys) = vertical_text_positions(rect, rect.left(), &widths, line_h, HAlign::Left, v, pad, 0.0);
+            assert!(near(ys[0], y), "{v:?}: {ys:?}");
+            assert!(ys[0] >= rect.top() && ys[2] <= rect.bottom(), "{v:?}: {ys:?} inside {rect:?}");
+        }
+        // Indent shifts the block right, never turning anything.
+        let (plain, _) = vertical_text_positions(rect, rect.left(), &widths, line_h, HAlign::Left, VAlign::Top, pad, 0.0);
+        let (indented, _) = vertical_text_positions(rect, rect.left(), &widths, line_h, HAlign::Left, VAlign::Top, pad, 9.0);
+        assert!(near(indented - plain, 9.0), "{indented} vs {plain}");
+    }
+
+    #[test]
+    fn a_short_row_clips_the_stack_instead_of_turning_it_sideways() {
+        // Four glyphs do not fit a one-line-tall row: the positions below it are outside the rect,
+        // which is what the paint loop clips on (it never re-rotates the text).
+        let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(60.0, 35.0));
+        let line_h = 15.0;
+        let (_, ys) = vertical_text_positions(rect, rect.left(), &[12.0; 4], line_h, HAlign::Left, VAlign::Top, 2.5, 0.0);
+        assert!(ys[0] < rect.bottom(), "the first glyph is inside");
+        assert!(ys[1] >= rect.bottom(), "the rest is clipped, not turned: {ys:?}");
+        // Bottom-aligned text that does not fit starts at the top edge rather than reaching above
+        // the cell and over the row above.
+        for v in [VAlign::Top, VAlign::Center, VAlign::Bottom] {
+            let (_, ys) = vertical_text_positions(rect, rect.left(), &[12.0; 4], line_h, HAlign::Left, v, 2.5, 0.0);
+            assert!(ys[0] >= rect.top(), "{v:?}: the stack never leaves the top of its cell: {ys:?}");
+        }
+    }
+
+    #[test]
+    fn numeric_angles_keep_their_degree_behaviour() {
+        // 0, ±45 and ±90 stay on the rotated-text path; 255 is the only stacked sentinel.
+        for deg in [0i16, 45, 90, -45, -90] {
+            assert!(!gridcraft_engine::model::Alignment { rotation: deg, ..Default::default() }.is_vertical(), "{deg}° is not vertical");
+        }
+        let vertical = gridcraft_engine::model::Alignment { rotation: 255, ..Default::default() };
+        assert!(vertical.is_vertical(), "255 is the stacked-vertical sentinel");
+        assert_eq!(vertical.rotation, gridcraft_engine::model::Alignment::VERTICAL);
     }
 
     #[test]

@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use egui::{Align2, Color32, Key, Modifiers, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value as Json, json};
 
+use gridcraft_engine::model::HAlign;
+
 use crate::SheetApp;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
@@ -827,20 +829,48 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
             let cell = gridcraft_engine::core::CellRef::new(row, col);
             let text = gridcraft_engine::display::cell_text(wb, sh, cell);
             if !text.is_empty() {
+                let st = wb.styles.get(sh.style_id(cell));
                 let numeric = sh.value(cell).as_f64().is_some();
-                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
-                let mut span = w;
-                if !numeric {
-                    let mut next = col.saturating_add(1);
-                    while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
-                        span += sh.col_width(next) * per_px;
-                        next = next.saturating_add(1);
+                // General follows the value's type, as in the grid; otherwise the alignment is explicit.
+                let halign = match st.align.h {
+                    HAlign::General if numeric => HAlign::Right,
+                    HAlign::General => HAlign::Left,
+                    h => h,
+                };
+                let cell_rect = Rect::from_min_size(pos2(x, y), vec2(w, h));
+                let pad = 2.5 * per_px;
+                let indent = st.align.indent as f32 * 9.0 * per_px;
+                if st.align.is_vertical() {
+                    // Stacked vertical text (`textRotation="255"`): upright glyphs one per line,
+                    // reading down. The grid's own painter, so the thumbnail matches the sheet.
+                    let body_p = p.with_clip_rect(body);
+                    crate::grid::paint_vertical_text(&body_p, cell_rect, x, &text, &font, t.cell_text, halign, st.align.v, pad, indent, st);
+                } else if st.align.rotation != 0 {
+                    // Ordinary rotation: one turned galley, placed as the grid places it.
+                    let angle = -(st.align.rotation as f32).to_radians();
+                    let galley = p.layout_no_wrap(text.clone(), font.clone(), t.cell_text);
+                    let at = crate::grid::rotated_text_pos(cell_rect, galley.size(), angle, halign, st.align.v, pad, indent);
+                    let mut shape = egui::epaint::TextShape::new(at, galley, t.cell_text);
+                    shape.angle = angle;
+                    p.with_clip_rect(cell_rect.intersect(body)).add(shape);
+                } else {
+                    // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
+                    let mut span = w;
+                    if !numeric {
+                        let mut next = col.saturating_add(1);
+                        while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
+                            span += sh.col_width(next) * per_px;
+                            next = next.saturating_add(1);
+                        }
                     }
+                    let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
+                    let (anchor, at) = if numeric {
+                        (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0))
+                    } else {
+                        (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0))
+                    };
+                    p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
                 }
-                let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
-                let (anchor, at) =
-                    if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
-                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
             }
             x += w;
         }

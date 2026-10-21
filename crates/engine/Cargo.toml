@@ -23,6 +23,10 @@ gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 image = { workspace = true }
+# Grapheme clusters, so printed stacked-vertical text (`textRotation="255"`) breaks between whole
+# characters, not inside a combining mark or an emoji sequence. Already in the tree (ui-egui);
+# this promotes it to a direct engine dependency. Pure Rust, wasm-safe.
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }

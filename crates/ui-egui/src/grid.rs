@@ -3176,6 +3176,7 @@ pub(crate) fn paint_overlays(
     let _ = (wb, si);
 }
 
+/// The full list of a list validation, opened by the arrow beside the cell or Alt+Down.
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
     // An edit shows its own searched list; two lists would stack.

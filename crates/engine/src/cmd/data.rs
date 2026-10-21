@@ -1023,6 +1023,8 @@ pub fn search_fold(s: &str) -> String {
     out
 }
 
+/// The unaccented spelling of a lower-case Latin letter (`é` → `e`, `ß` → `ss`); combining
+/// marks fold to nothing. `None` leaves the character as it is.
 fn fold_latin(c: char) -> Option<&'static str> {
     Some(match c {
         '\u{300}'..='\u{36f}' => "",
@@ -1081,6 +1083,8 @@ pub fn filter_list_items(items: &[String], typed: &str, cap: usize) -> Vec<usize
     items.iter().enumerate().filter(|(_, it)| search_matches(&search_fold(it), &term)).map(|(i, _)| i).take(cap).collect()
 }
 
+/// `data.validationList`: a cell's list validation entries, searched like the in-cell dropdown,
+/// at most [`LIST_MATCH_CAP`] of them.
 fn validation_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);

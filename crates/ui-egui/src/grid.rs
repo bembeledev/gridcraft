@@ -2619,8 +2619,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
-            if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
+            if !m.alt && (m.ctrl || m.command || (*key == egui::Key::Space && m.shift)))
     });
+    // Set when a Space key event toggled a checkbox this frame; the Text(" ") it typed follows.
+    // Checked per event, not up front: an arrow earlier in the same frame can move off the checkbox.
+    let mut space_consumed = false;
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
     for ev in events {
         match ev {
@@ -2631,6 +2634,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
+            // The Space that toggled a checkbox types exactly one " "; consume that one and
+            // re-open the edit path, so a character typed later in the same frame (after an
+            // arrow to the next cell) still starts its edit (#1951 review).
+            egui::Event::Text(t) if space_consumed && t == " " => space_consumed = false,
             egui::Event::Text(_) if shortcut_pressed => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
@@ -2706,7 +2713,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         app.session.clipboard = None;
                         app.session.format_painter = None;
                     }
-                    Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+                    Key::Space if !cmd && !shift && space_toggles(sh, app) => {
+                        app.run_or_alert("cell.toggleCheckbox", json!({}));
+                        space_consumed = true;
+                    }
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
                     }
@@ -3233,9 +3243,18 @@ fn insert_copied_item(app: &SheetApp) -> Option<(&'static str, &'static str)> {
     }
 }
 
-fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
+/// Space toggles the active cell only when `cell.toggleCheckbox` can actually toggle it (#1951):
+/// checkbox format, no formula, and an empty or boolean value. Otherwise Space edits, as usual.
+fn space_toggles(sh: &Sheet, app: &SheetApp) -> bool {
     let Some(d) = app.session.active() else { return false };
-    d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
+    let a = d.selection.active;
+    if d.wb.styles.get(sh.style_id(a)).num_fmt.as_str() != "checkbox" {
+        return false;
+    }
+    match sh.cells.get(a) {
+        None => true,
+        Some(c) => c.formula.is_none() && matches!(c.value, Value::Empty | Value::Bool(_)),
+    }
 }
 
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {

@@ -2606,6 +2606,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     if editing || app.dialog.is_some() || other_focus || app.message.is_some() || app.grid.filter_menu.is_some() {
+        // An active editor's `TextEdit` publishes `PlatformOutput::ime` itself; when nothing
+        // publishes it egui leaves IME disabled. Leave it alone here rather than overriding a
+        // focused editor (this handler runs after the editor paints).
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -2615,6 +2618,28 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
+    // egui 0.36 enables IME for whichever widget publishes `PlatformOutput::ime` this frame (a
+    // focused `TextEdit` does). The grid must publish it too, every frame it owns input on an
+    // editable cell, so the OS routes even the FIRST CJK keystroke through composition instead
+    // of delivering it as a raw `Event::Text` that the text arm would seed into the cell. When
+    // the active cell isn't editable we publish nothing, leaving `ime = None` (IME disabled).
+    let ime_rect = app.session.active().and_then(|d| {
+        let at = d.selection.active;
+        if sh.cell_pictures.contains_key(&at) {
+            None
+        } else {
+            Some(match sh.merge_at(at) {
+                Some(m) => geo.range_rect(sh, m),
+                None => geo.cell_rect(sh, at),
+            })
+        }
+    });
+    if let Some(rect) = ime_rect {
+        let cursor_rect = egui::Rect::from_min_size(rect.min, egui::vec2(1.0, rect.height()));
+        ctx.output_mut(|o| {
+            o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect, cursor_rect, should_interrupt_composition: false })
+        });
+    }
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -2639,6 +2664,18 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 }
                 return;
             }
+            // A CJK IME delivers the committed string via `ImeEvent::Commit` (mutually exclusive
+            // with `Event::Text` per keystroke, so no double-insert). Seed the editor directly;
+            // IME was already requested above, so the first keystroke reached the IME, not us.
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => {
+                app.begin_edit(Some(text), false);
+                if let Some(ed) = app.editor.as_mut() {
+                    ed.caret = ed.text.chars().count();
+                }
+                return;
+            }
+            // Preedit and the other IME notifications must not seed the editor mid-composition.
+            egui::Event::Ime(_) => {}
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {

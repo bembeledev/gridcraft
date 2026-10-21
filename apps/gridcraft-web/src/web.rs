@@ -127,9 +127,159 @@ impl eframe::App for WebShell {
     }
 }
 
+static JS_FONT_ARRAY: std::sync::OnceLock<js_sys::Array> = std::sync::OnceLock::new();
+
+/// Asynchronously fetches and caches font file blobs for the needed faces of `family`.
+fn fetch_family_blobs(family: &str, ctx: &egui::Context) {
+    let Some(arr) = JS_FONT_ARRAY.get() else { return };
+    let faces = gridcraft_ui_egui::fonts::needed_faces(family);
+    for face in faces {
+        if gridcraft_ui_egui::fonts::has_face_bytes(family, &face) {
+            continue;
+        }
+        if !gridcraft_ui_egui::fonts::mark_face_in_flight(family, &face) {
+            continue;
+        }
+        let js_index = face.js_index;
+        if js_index >= arr.length() {
+            gridcraft_ui_egui::fonts::clear_face_in_flight(family, &face);
+            continue;
+        }
+        let item = arr.get(js_index);
+        let blob_fn: Option<js_sys::Function> = js_sys::Reflect::get(&item, &JsValue::from_str("blob")).ok().and_then(|v| v.dyn_into().ok());
+        let Some(blob_fn) = blob_fn else {
+            gridcraft_ui_egui::fonts::clear_face_in_flight(family, &face);
+            continue;
+        };
+        let Ok(blob_prom) = blob_fn.call0(&item).and_then(|v| v.dyn_into::<js_sys::Promise>()) else {
+            gridcraft_ui_egui::fonts::clear_face_in_flight(family, &face);
+            continue;
+        };
+
+        let family = family.to_string();
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let res = async {
+                let blob_val = wasm_bindgen_futures::JsFuture::from(blob_prom).await.map_err(|e| format!("{e:?}"))?;
+                let blob = blob_val.dyn_into::<web_sys::Blob>().map_err(|_| "not a blob".to_string())?;
+                let buf = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await.map_err(|e| format!("{e:?}"))?;
+                Ok::<Vec<u8>, String>(js_sys::Uint8Array::new(&buf).to_vec())
+            }
+            .await;
+
+            gridcraft_ui_egui::fonts::clear_face_in_flight(&family, &face);
+            match res {
+                Ok(bytes) => {
+                    let mut resolved_face = face.clone();
+                    if gridcraft_ui_egui::fonts::is_collection_font_bytes(&bytes) {
+                        resolved_face.index = gridcraft_ui_egui::fonts::resolve_collection_face_index(&bytes, &face.postscript_name);
+                    }
+                    if !gridcraft_ui_egui::fonts::is_valid_font_bytes(&bytes, resolved_face.index) {
+                        log::warn!("dropping unparseable font blob for {family} (face index {})", resolved_face.index);
+                        return;
+                    }
+                    let is_collection = gridcraft_ui_egui::fonts::is_collection_font_bytes(&bytes);
+                    let stored = gridcraft_ui_egui::fonts::store_face_bytes(&family, &resolved_face, bytes);
+                    if is_collection {
+                        if let Some(buffer) = gridcraft_ui_egui::fonts::get_face_buffer(&family, &resolved_face) {
+                            let needed = gridcraft_ui_egui::fonts::needed_faces(&family);
+                            gridcraft_ui_egui::fonts::store_collection_sibling_faces(&needed, buffer);
+                        }
+                    }
+                    if stored {
+                        ctx.request_repaint();
+                    }
+                }
+                Err(e) => {
+                    log::warn!("failed fetching font blob for {family}: {e}");
+                }
+            }
+        });
+    }
+}
+
+/// Checks whether local font access permission is explicitly denied via the Permissions API.
+async fn is_local_fonts_denied() -> bool {
+    let Some(window) = web_sys::window() else { return false };
+    let Ok(nav) = js_sys::Reflect::get(&window, &JsValue::from_str("navigator")) else { return false };
+    let Ok(perms) = js_sys::Reflect::get(&nav, &JsValue::from_str("permissions")) else { return false };
+    let Ok(query_fn) = js_sys::Reflect::get(&perms, &JsValue::from_str("query")).and_then(|v| v.dyn_into::<js_sys::Function>()) else {
+        return false;
+    };
+    let query_obj = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&query_obj, &JsValue::from_str("name"), &JsValue::from_str("local-fonts"));
+    let Ok(prom_val) = query_fn.call1(&perms, &query_obj) else { return false };
+    let Ok(prom) = prom_val.dyn_into::<js_sys::Promise>() else { return false };
+    let Ok(status_val) = wasm_bindgen_futures::JsFuture::from(prom).await else { return false };
+    let state = js_sys::Reflect::get(&status_val, &JsValue::from_str("state")).ok().and_then(|v| v.as_string());
+    state.as_deref() == Some("denied")
+}
+
+/// Sets up callbacks for querying browser local system fonts and fetching on-demand font blobs.
+fn setup_system_fonts(ctx: egui::Context) -> (Option<Box<dyn Fn()>>, Option<Box<dyn Fn(&str)>>) {
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => return (None, None),
+    };
+    let query_prop = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")).ok();
+    if !query_prop.as_ref().is_some_and(|p| p.is_function()) {
+        return (None, None);
+    }
+
+    let fetch_ctx = ctx.clone();
+    let fetch_action: Box<dyn Fn(&str)> = Box::new(move |family: &str| {
+        fetch_family_blobs(family, &fetch_ctx);
+    });
+
+    let load_action: Box<dyn Fn()> = Box::new(move || {
+        let Some(window) = web_sys::window() else { return };
+        let Ok(query_val) = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")) else { return };
+        let Ok(query_fn) = query_val.dyn_into::<js_sys::Function>() else { return };
+        let Ok(prom_val) = query_fn.call0(&window) else { return };
+        let Ok(prom) = prom_val.dyn_into::<js_sys::Promise>() else { return };
+
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(result) = wasm_bindgen_futures::JsFuture::from(prom).await else {
+                log::info!("queryLocalFonts was not granted");
+                return;
+            };
+            let Ok(arr) = result.dyn_into::<js_sys::Array>() else { return };
+
+            if arr.length() == 0 && is_local_fonts_denied().await {
+                log::info!("queryLocalFonts permission was denied");
+                return;
+            }
+
+            log::info!("queryLocalFonts granted with {} fonts", arr.length());
+
+            let mut faces: Vec<gridcraft_ui_egui::fonts::Face> = Vec::with_capacity(arr.length() as usize);
+            for i in 0..arr.length() {
+                let item = arr.get(i);
+                let family = js_sys::Reflect::get(&item, &JsValue::from_str("family")).ok().and_then(|v| v.as_string()).unwrap_or_default();
+                if family.is_empty() {
+                    continue;
+                }
+                let style =
+                    js_sys::Reflect::get(&item, &JsValue::from_str("style")).ok().and_then(|v| v.as_string()).unwrap_or_else(|| "Regular".into());
+                let postscript_name =
+                    js_sys::Reflect::get(&item, &JsValue::from_str("postscriptName")).ok().and_then(|v| v.as_string()).unwrap_or_default();
+                faces.push(gridcraft_ui_egui::fonts::Face::new_web(family, i, &style, postscript_name));
+            }
+            let _ = JS_FONT_ARRAY.set(arr);
+            gridcraft_ui_egui::fonts::init_catalog(faces);
+            ctx.request_repaint();
+        });
+    });
+
+    (Some(load_action), Some(fetch_action))
+}
+
+/// Builds the web platform [`Services`] integration for GridCraft.
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
+    let (load_system_fonts, fetch_font) = setup_system_fonts(ctx.clone());
     Services {
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
@@ -177,6 +327,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        load_system_fonts,
+        fetch_font,
         ..Default::default()
     }
 }
@@ -274,7 +426,6 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after `name`.
-
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;

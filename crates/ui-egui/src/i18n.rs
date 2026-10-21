@@ -205,6 +205,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Unmerge Cells", "セル結合の解除"),
     ("Fill Color", "塗りつぶしの色"),
     ("Font Color", "フォントの色"),
+    ("Load System Fonts…", "システムフォントを読み込む…"),
     ("Borders", "罫線"),
     ("Top\nAlign", "上揃え"),
     ("Middle\nAlign", "中央揃え (縦)"),

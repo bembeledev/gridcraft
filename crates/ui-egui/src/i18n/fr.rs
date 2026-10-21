@@ -1,5 +1,6 @@
 //! French translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to French, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Different First Page" => "Première page différente",
@@ -33,6 +34,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Annuler la fusion des cellules",
         "Fill Color" => "Couleur de remplissage",
         "Font Color" => "Couleur de police",
+        "Load System Fonts…" => "Charger les polices système…",
         "Borders" => "Bordures",
         "Top\nAlign" => "Aligner en\nhaut",
         "Middle\nAlign" => "Aligner au\nmilieu",

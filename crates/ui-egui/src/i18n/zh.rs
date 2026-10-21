@@ -1,5 +1,6 @@
 //! Simplified Chinese translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to Simplified Chinese, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "粘贴",
@@ -31,6 +32,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "取消合并单元格",
         "Fill Color" => "填充颜色",
         "Font Color" => "字体颜色",
+        "Load System Fonts…" => "加载系统字体…",
         "Borders" => "边框",
         "Top\nAlign" => "顶端对齐",
         "Middle\nAlign" => "垂直居中",

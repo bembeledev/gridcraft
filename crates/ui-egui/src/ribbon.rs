@@ -397,6 +397,19 @@ pub(crate) fn editable_combo(
     items: &[(&str, String)],
     forced: bool,
 ) -> ComboResult {
+    editable_combo_ext(ui, anchor, salt, current_value, items, forced, |_| {})
+}
+
+/// Variant of [`editable_combo`] that renders an optional `footer` closure at the bottom of the popup.
+fn editable_combo_ext(
+    ui: &mut Ui,
+    anchor: &egui::Response,
+    salt: &'static str,
+    current_value: &str,
+    items: &[(&str, String)],
+    forced: bool,
+    mut footer: impl FnMut(&mut Ui),
+) -> ComboResult {
     let popup_id = anchor.id.with("popup");
     let state_id = anchor.id.with(salt).with("__combo_state");
     let mut st = ui.data_mut(|d| d.get_temp::<ComboState>(state_id)).unwrap_or_default();
@@ -472,6 +485,7 @@ pub(crate) fn editable_combo(
                 }
             }
         });
+        footer(ui);
         if !matches!(result, ComboResult::None) {
             ui.close();
         }
@@ -1063,13 +1077,31 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Font family dropdown on the Home tab, with an optional "Load System Fonts…" button on web.
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
+    let font_id = theme::ui_font(12.5);
+    let truncated = crate::widgets::truncate_with_ellipsis(ui, &name, 140.0, font_id.clone());
+    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&truncated).font(font_id)));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
-    if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
+    let popup_id = resp.id.with("popup");
+    let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id) || resp.clicked() || forced;
+    let items: &[(&str, String)] = if is_open { crate::fonts::family_combo_items() } else { &[] };
+    let load_action = app.services.load_system_fonts.as_ref();
+    let can_load = load_action.is_some() && !crate::fonts::scan_done();
+    let res = editable_combo_ext(ui, &resp, "font", &name, items, forced, |ui| {
+        if can_load {
+            ui.separator();
+            if ui.button(crate::i18n::current(ui.ctx()).tr("Load System Fonts…")).clicked() {
+                if let Some(load_action) = load_action {
+                    load_action();
+                }
+                ui.close();
+            }
+        }
+    });
+    if let ComboResult::Picked(value) = res {
         act(app, "home.fontName", json!({"name": value}));
     }
 }

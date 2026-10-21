@@ -1,6 +1,7 @@
 //! Brazilian Portuguese translations for the interface strings in i18n.rs. Labels follow Excel's
 //! pt-BR wording; anything absent falls back to English.
 
+/// Translates an English interface string to Portuguese, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Colar",
@@ -32,6 +33,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Desmesclar Células",
         "Fill Color" => "Cor de Preenchimento",
         "Font Color" => "Cor da Fonte",
+        "Load System Fonts…" => "Carregar fontes do sistema…",
         "Borders" => "Bordas",
         "Top\nAlign" => "Alinhar\nno Topo",
         "Middle\nAlign" => "Alinhar\nno Meio",

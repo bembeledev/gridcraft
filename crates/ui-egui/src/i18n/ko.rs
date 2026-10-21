@@ -1,5 +1,6 @@
 //! Korean translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to Korean, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "붙여넣기",
@@ -31,6 +32,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "셀 병합 취소",
         "Fill Color" => "채우기 색",
         "Font Color" => "글꼴 색",
+        "Load System Fonts…" => "시스템 글꼴 불러오기…",
         "Borders" => "테두리",
         "Top\nAlign" => "위쪽\n맞춤",
         "Middle\nAlign" => "가운데\n맞춤",

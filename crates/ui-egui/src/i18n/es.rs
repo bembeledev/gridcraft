@@ -2,6 +2,7 @@
 //! wording (sentence case, «Inmovilizar paneles», «Combinar y centrar»); anything absent falls back
 //! to English. Formula names and separators are localized separately (`formula_locale`).
 
+/// Translates an English interface string to Spanish, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Pegar",
@@ -29,6 +30,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Separar celdas",
         "Fill Color" => "Color de relleno",
         "Font Color" => "Color de fuente",
+        "Load System Fonts…" => "Cargar fuentes del sistema…",
         "Borders" => "Bordes",
         "Top\nAlign" => "Alinear en la\nparte superior",
         "Middle\nAlign" => "Alinear en\nel medio",

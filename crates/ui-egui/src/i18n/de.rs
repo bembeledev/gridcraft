@@ -1,6 +1,7 @@
 //! German translations for the interface strings in i18n.rs. Labels follow the wording German
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Translates an English interface string to German, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Einfügen",
@@ -28,6 +29,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Zellverbindung aufheben",
         "Fill Color" => "Füllfarbe",
         "Font Color" => "Schriftfarbe",
+        "Load System Fonts…" => "Systemschriftarten laden…",
         "Borders" => "Rahmen",
         "Top\nAlign" => "Oben\nausrichten",
         "Middle\nAlign" => "Vertikal\nzentrieren",

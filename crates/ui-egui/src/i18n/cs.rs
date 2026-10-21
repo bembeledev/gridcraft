@@ -1,5 +1,6 @@
 //! Czech translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to Czech, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Vložit",
@@ -27,6 +28,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Zrušit sloučení buněk",
         "Fill Color" => "Barva výplně",
         "Font Color" => "Barva písma",
+        "Load System Fonts…" => "Načíst systémová písma…",
         "Borders" => "Ohraničení",
         "Top\nAlign" => "Zarovnat\nnahoru",
         "Middle\nAlign" => "Zarovnat\ndoprostřed",

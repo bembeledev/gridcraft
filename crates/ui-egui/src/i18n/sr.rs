@@ -1,5 +1,6 @@
 //! Serbian (Latin script, ekavian) translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to Serbian, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Nalepi",
@@ -31,6 +32,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Razdvoji ćelije",
         "Fill Color" => "Boja popune",
         "Font Color" => "Boja fonta",
+        "Load System Fonts…" => "Učitaj sistemske fontove…",
         "Borders" => "Ivice",
         "Top\nAlign" => "Gornje\nporavnanje",
         "Middle\nAlign" => "Srednje\nporavnanje",

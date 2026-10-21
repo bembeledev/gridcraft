@@ -1,5 +1,6 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Translates an English interface string to Russian, or returns None if untranslated.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",
@@ -31,6 +32,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unmerge Cells" => "Отменить объединение ячеек",
         "Fill Color" => "Цвет заливки",
         "Font Color" => "Цвет шрифта",
+        "Load System Fonts…" => "Загрузить системные шрифты…",
         "Borders" => "Границы",
         "Top\nAlign" => "По верхнему\nкраю",
         "Middle\nAlign" => "По центру\nвертикали",

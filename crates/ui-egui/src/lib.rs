@@ -196,6 +196,10 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Web: trigger browser local system fonts query via Font Access API.
+    pub load_system_fonts: Option<Box<dyn Fn()>>,
+    /// Web: request font file bytes for a family on demand.
+    pub fetch_font: Option<Box<dyn Fn(&str)>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -262,6 +266,8 @@ pub struct SheetApp {
     /// Set while a font-set change is pending activation: skip this frame's paint, like the
     /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
     fonts_rebind: bool,
+    /// In-memory font bytes generation counter last processed.
+    fonts_gen: u64,
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
@@ -318,6 +324,7 @@ impl SheetApp {
             fonts_bound: Vec::new(),
             fonts_seen: (0, 0),
             fonts_rebind: false,
+            fonts_gen: 0,
             fonts_han: None,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -1052,12 +1059,23 @@ impl SheetApp {
             // A font-set change made last frame is active now.
             self.fonts_rebind = false;
         } else if fonts::scan_done() {
+            let bytes_gen = fonts::bytes_generation();
+            if bytes_gen != self.fonts_gen {
+                self.fonts_gen = bytes_gen;
+                self.fonts_bound.clear();
+                self.fonts_seen = (0, 0);
+            }
             // Bind the workbook's installed fonts once the background scan has finished. Adding
             // fonts re-applies the font set, which egui activates at the next pass, so skip this
             // frame's paint (same one-frame cost as startup). Only when the workbook changed.
             let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
+                if let Some(fetch) = &self.services.fetch_font {
+                    for f in &used {
+                        fetch(f);
+                    }
+                }
                 self.fonts_seen = seen;
                 if used != self.fonts_bound {
                     ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
@@ -1287,6 +1305,7 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
+/// Wall-clock time in milliseconds since UNIX epoch on desktop, or 0.0 on web.
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1300,6 +1319,46 @@ pub fn now_ms() -> f64 {
     }
 }
 
+/// Helper constructing a [`CellRef`] from 1-based row and column coordinates.
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that when font bytes arrive asynchronously, `SheetApp::logic` detects the new generation and rebinds fonts.
+    #[test]
+    fn arrival_of_font_bytes_triggers_rebind() {
+        let _lock = fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let family = "LateArrivalFont";
+        let face = fonts::Face::new_web(family.into(), 0, "Regular", "LateArrivalFont-Regular".into());
+        fonts::init_catalog(vec![face.clone()]);
+
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("home.fontName", serde_json::json!({"name": family})).expect("set font");
+
+        let ctx = egui::Context::default();
+        let mut app = SheetApp::new(session, Default::default());
+
+        // Step through initial font ready frames:
+        app.logic(&ctx);
+        app.logic(&ctx);
+        app.logic(&ctx);
+
+        let role = fonts::role_key(family, false, false);
+        assert!(!fonts::is_bound(&role), "before bytes arrive, font is not bound");
+
+        // Bytes arrive asynchronously and are stored:
+        assert!(fonts::store_face_bytes(family, &face, epaint_default_fonts::UBUNTU_LIGHT.to_vec()));
+
+        // Frame following arrival of bytes: logic() detects bytes_generation() changed and rebinds:
+        app.logic(&ctx);
+        // Next frame activates the new font set:
+        app.logic(&ctx);
+
+        assert!(fonts::is_bound(&role), "arrival of bytes triggers rebind and binds the family");
+    }
 }

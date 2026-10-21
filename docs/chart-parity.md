@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (chart sheets are kept on save, still not editable (#727); previously minor: trendlines: model, XLSX round-trip, drawing, Add Chart Element) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (value axis bounds and units, secondary axis for any column, line or area series, secondary axis title; previously trivial: chart sheets are kept on save, still not editable (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -28,7 +28,7 @@ open PRs #158, #161, and issue #190.
 | Box & Whisker | 1 | 1 of 1 | loses its kind in XLSX (PR #161) |
 | Waterfall, Funnel | 2 | 2 of 2 | lose their kind in XLSX (PR #161) |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
+| Combo | custom combinations, secondary axis | yes: clustered, stacked and 100% columns, lines (±markers, stacked) and areas (±stacked), any series on the secondary axis | |
 | **Total** | ~60 subtypes | **25 (~42%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
@@ -40,8 +40,8 @@ open PRs #158, #161, and issue #190.
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
 | Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
-| Secondary axis | any series | line series in combo charts |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | Minimum, Maximum and Major unit of the vertical value axes (Format pane ▸ Axes; `chart.set` `yMin`/`yMax`/`yUnit`, `y2Min`/`y2Max`/`y2Unit`, `y2Title`), read and written; the rest missing |
+| Secondary axis | any series | any column, line or area series (Format pane ▸ Series ▸ Secondary axis, `chart.formatSelection {secondary}`), with its own bounds and title; each series keeps its type (stacked columns, areas, marker lines) through XLSX save and reopen |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
@@ -61,7 +61,7 @@ open PRs #158, #161, and issue #190.
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
+survive: anything else (axis options beyond Minimum, Maximum and Major unit, label options, error bars, per-point formats, chartex
 extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
@@ -80,6 +80,7 @@ back.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Value axis Minimum, Maximum and Major unit and the secondary axis title, drawn, read and written; any column, line or area series on the secondary axis; combo series keep their own plot group (stacked columns, areas, marker lines) through XLSX |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |
 | 2026-10-11 | minor | PivotCharts (`insert.pivotChart`) |

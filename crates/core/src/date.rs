@@ -28,8 +28,17 @@ pub struct DateTime {
     pub weekday: u32,
 }
 
-/// Days from 0000-03-01 style civil algorithm (Howard Hinnant), days since 1970-01-01.
+/// Days since 1970-01-01 for a proleptic Gregorian date.
 pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
+    // `NaiveDate` counts from 0001-01-01 (num_days_from_ce 1); 1970-01-01 is 719_163.
+    match chrono::NaiveDate::from_ymd_opt(y, m, d) {
+        Some(date) => i64::from(chrono::Datelike::num_days_from_ce(&date)) - 719_163,
+        None => days_from_civil_fallback(y, m, d),
+    }
+}
+
+/// [`days_from_civil`] for dates outside `NaiveDate`'s range (Howard Hinnant's algorithm).
+fn days_from_civil_fallback(y: i32, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y as i64 - 1 } else { y as i64 };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
@@ -68,6 +77,15 @@ pub fn serial_in_system(sys: DateSystem, serial_1900: f64) -> f64 {
 }
 
 pub fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    // `NaiveDate` counts from 0001-01-01 (num_days_from_ce 1); 1970-01-01 is 719_163.
+    match z.checked_add(719_163).and_then(|n| i32::try_from(n).ok()).and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => (chrono::Datelike::year(&d), chrono::Datelike::month(&d), chrono::Datelike::day(&d)),
+        None => civil_from_days_fallback(z),
+    }
+}
+
+/// [`civil_from_days`] for values outside `NaiveDate`'s range (Howard Hinnant's algorithm).
+fn civil_from_days_fallback(z: i64) -> (i32, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -84,15 +102,19 @@ const UNIX_1899_12_30: i64 = -25569; // days_from_civil(1899, 12, 30)
 const UNIX_1904_01_01: i64 = -24107;
 
 pub fn is_leap(y: i32) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    // A year is a leap year iff 29 February exists in it.
+    chrono::NaiveDate::from_ymd_opt(y, 2, 29).is_some()
 }
 
 pub fn days_in_month(y: i32, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap(y) => 29,
-        2 => 28,
+    // The length of a month is the day before the first of the next month. An out-of-range month
+    // keeps the old `0`.
+    if !(1..=12).contains(&m) {
+        return 0;
+    }
+    let first = |y: i32, m: u32| chrono::NaiveDate::from_ymd_opt(y, m, 1);
+    match (first(y, m), if m == 12 { first(y + 1, 1) } else { first(y, m + 1) }) {
+        (Some(a), Some(b)) => u32::try_from((b - a).num_days()).unwrap_or(0),
         _ => 0,
     }
 }

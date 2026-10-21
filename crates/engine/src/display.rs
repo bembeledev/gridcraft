@@ -114,6 +114,26 @@ pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
     }
 }
 
+/// The phonetic (furigana) reading of a cell's string, when the workbook carries one for its text:
+/// the `<rPh>` runs joined in document order (XLSX keeps them per shared string, so the reading is
+/// found by the cell's text). `None` for a cell without a string, a formula, or one whose string
+/// has no readings.
+///
+/// This is what View › Show › Furigana draws above the cell text on screen and in PDF export; the
+/// readings are never used to change the cell's value, formula or layout.
+pub fn phonetic_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> Option<String> {
+    if sheet.cell(c).is_some_and(|cell| cell.formula.is_some()) {
+        return None;
+    }
+    let text = sheet.input_text(c);
+    if text.is_empty() {
+        return None;
+    }
+    let phonetic = wb.phonetics.iter().find(|p| p.text == text && !p.runs.is_empty())?;
+    let reading: String = phonetic.runs.iter().map(|run| run.text.as_str()).collect();
+    (!reading.trim().is_empty()).then_some(reading)
+}
+
 /// Tab-separated text of a range, as the system clipboard gets it.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
@@ -199,4 +219,46 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_model::{PhoneticRun, PhoneticString};
+
+    use super::*;
+
+    fn string_book(text: &str, reading: Option<&[(&str, &str)]>) -> Workbook {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).expect("one sheet").set_value(CellRef::new(0, 0), Value::text(text));
+        if let Some(runs) = reading {
+            let mut start = 0u32;
+            let runs = runs
+                .iter()
+                .map(|(base, reading)| {
+                    let end = start + base.encode_utf16().count() as u32;
+                    let run = PhoneticRun { start, end, text: (*reading).into() };
+                    start = end;
+                    run
+                })
+                .collect();
+            wb.phonetics.push(PhoneticString { text: text.into(), runs, props: None });
+        }
+        wb
+    }
+
+    #[test]
+    fn phonetic_text_joins_the_runs_of_the_cells_string() {
+        let wb = string_book("東京都", Some(&[("東京", "トウキョウ"), ("都", "ト")]));
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(phonetic_text(&wb, sh, CellRef::new(0, 0)).as_deref(), Some("トウキョウト"));
+        // A cell without readings, a string without phonetic data and an empty cell have none.
+        let plain = string_book("abc", None);
+        assert_eq!(phonetic_text(&plain, plain.sheet(0).expect("one sheet"), CellRef::new(0, 0)), None);
+        assert_eq!(phonetic_text(&plain, plain.sheet(0).expect("one sheet"), CellRef::new(1, 1)), None);
+        // A formula cell's value is not a shared string, so it has no readings even when its text matches.
+        let mut formula = string_book("東京都", Some(&[("東京", "トウキョウ")]));
+        let f = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=A1"));
+        formula.sheet_mut(0).expect("one sheet").set_cell(CellRef::new(0, 1), f);
+        assert_eq!(phonetic_text(&formula, formula.sheet(0).expect("one sheet"), CellRef::new(0, 1)), None);
+    }
 }

@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** trivial (Japanese phonetic runs — ふりがな — in XLSX shared strings survive open + save: `<rPh>` offsets and readings and `<phoneticPr>` are kept on the workbook and written back; previously trivial: formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** trivial (the Japanese phonetic runs — ふりがな — in XLSX shared strings are now displayed above the cell text with View › Show › Furigana, off by default, on screen and in PDF export; previously trivial: Japanese phonetic runs survive open + save: `<rPh>` offsets and readings and `<phoneticPr>` are kept on the workbook and written back; previously trivial: formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -82,6 +82,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | XLSX phonetic runs are displayed: View › Show › Furigana draws the readings above the cell text (about half the cell font, shrunk and clipped to the cell, row height unchanged) on screen and in PDF export; the reading is found by the cell's string, the option is off by default and never changes the document (#1692) |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-19 | minor | .xls import skips dialog sheets (WsBool `fDialog`), which share the worksheet BOF type and were read as empty worksheets |
 | 2026-10-19 | minor | `.xls` import reads WINDOW2: right-to-left sheets (common in older Arabic and Hebrew files) open right-to-left, and hidden gridlines, headings and zero values and Show Formulas carry over |

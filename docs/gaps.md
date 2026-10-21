@@ -98,8 +98,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 11. No localization at all (L)
 - Ribbon-only catalog in five languages (#31, #104, #82; ~12% of strings each); dialogs, menus and
-  messages English; en-US function names and separators (#45); German in PR #163. **Estimate:**
-  100–165 h including #5. [localization-parity.md](localization-parity.md)
+  messages English; en-US function names and separators (#45); German in PR #163. Japanese
+  phonetic runs (ふりがな) are kept in XLSX and now displayed with View › Show › Furigana (#1692;
+  PDF export follows the option but its WinAnsi writer cannot carry Japanese readings, #141).
+  **Estimate:** 100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or

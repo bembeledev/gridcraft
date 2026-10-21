@@ -385,6 +385,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Formula Bar", "数式バー"),
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
+    ("Furigana", "ふりがな表示"),
     ("Zoom", "ズーム"),
     ("100%", "100%"),
     ("Zoom to\nSelection", "選択範囲を拡大"),
@@ -613,6 +614,7 @@ mod tests {
             assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
+        assert_eq!(Language::Ja.tr("Furigana"), "ふりがな表示");
         assert_eq!(Language::Zh.tr("Data"), "数据");
         assert_eq!(Language::Ko.tr("Data"), "데이터");
         assert_eq!(Language::Ru.tr("Data"), "Данные");

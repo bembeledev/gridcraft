@@ -36,6 +36,7 @@ fn activate_sheet(app: &mut SheetApp, i: usize) {
 }
 
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
         let rect = ui.max_rect();
@@ -168,23 +169,23 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 }
                                 resp.context_menu(|ui| {
                                     ui.set_min_width(180.0);
-                                    if ui.button("Insert Sheet").clicked() {
+                                    if ui.button(lang.tr("Insert Sheet")).clicked() {
                                         app.run_or_alert("home.insertSheet", json!({"before": i}));
                                     }
-                                    if ui.button("Delete").clicked() {
+                                    if ui.button(lang.tr("Delete")).clicked() {
                                         app.run_or_alert("home.deleteSheet", json!({"sheet": i}));
                                     }
-                                    if ui.button("Rename").clicked() {
+                                    if ui.button(lang.tr("Rename")).clicked() {
                                         app.grid.renaming_tab = Some(i);
                                         app.grid.rename_text = name.clone();
                                     }
-                                    if ui.button("Move or Copy…").clicked() {
+                                    if ui.button(lang.tr("Move or Copy…")).clicked() {
                                         app.open_dialog("moveSheet", json!({"sheet": i}));
                                     }
-                                    if ui.button("Duplicate").clicked() {
+                                    if ui.button(lang.tr("Duplicate")).clicked() {
                                         app.run_or_alert("sheet.move", json!({"sheet": i, "to": i + 1, "copy": true}));
                                     }
-                                    ui.menu_button("Tab Color", |ui| {
+                                    ui.menu_button(lang.tr("Tab Color"), |ui| {
                                         let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
                                         if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color") {
                                             app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
@@ -192,10 +193,10 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         }
                                     });
                                     ui.separator();
-                                    if ui.button("Hide").clicked() {
+                                    if ui.button(lang.tr("Hide")).clicked() {
                                         app.run_or_alert("sheet.hide", json!({"sheet": i}));
                                     }
-                                    if ui.button("Unhide…").clicked() {
+                                    if ui.button(lang.tr("Unhide…")).clicked() {
                                         app.run_or_alert("sheet.unhide", json!({}));
                                     }
                                     ui.separator();
@@ -203,7 +204,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     if ui.button(if protected { "Unprotect Sheet…" } else { "Protect Sheet…" }).clicked() {
                                         app.open_dialog(if protected { "unprotectSheet" } else { "protectSheet" }, json!({}));
                                     }
-                                    if ui.button("Select All Sheets").clicked() {
+                                    if ui.button(lang.tr("Select All Sheets")).clicked() {
                                         ui.close();
                                     }
                                 });
@@ -225,6 +226,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
@@ -240,7 +242,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        ui.label(egui::RichText::new(lang.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -250,7 +252,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         let (si, c) = d.calc.circular[0];
                         let name = d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
-                        ui.label(egui::RichText::new(format!("Circular References: {name}!{}", c.a1())).font(theme::ui_font(12.5)).color(t.danger));
+                        ui.label(
+                            egui::RichText::new(format!("{} {name}!{}", lang.tr("Circular References:"), c.a1()))
+                                .font(theme::ui_font(12.5))
+                                .color(t.danger),
+                        );
                     }
                     if app.session.clipboard.is_some() && app.editor.is_none() {
                         ui.add_space(12.0);
@@ -298,7 +304,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(lang.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -319,13 +325,13 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         };
                         let mut parts = Vec::new();
                         if st.numeric > 0 {
-                            parts.push(format!("Sum: {}", fmt(st.sum)));
+                            parts.push(lang.tr("Sum: {n}").replace("{n}", &fmt(st.sum)));
                         }
                         if st.count > 0 {
-                            parts.push(format!("Count: {}", st.count));
+                            parts.push(lang.tr("Count: {n}").replace("{n}", &st.count.to_string()));
                         }
                         if let Some(a) = st.average {
-                            parts.push(format!("Average: {}", fmt(a)));
+                            parts.push(lang.tr("Average: {n}").replace("{n}", &fmt(a)));
                         }
                         for p in parts {
                             ui.label(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));

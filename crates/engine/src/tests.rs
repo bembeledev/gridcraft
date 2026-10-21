@@ -1535,6 +1535,19 @@ fn names_that_begin_like_r1c1_references_are_refused() {
 }
 
 #[test]
+fn a_dot_may_follow_a_column_number_in_a_name() {
+    // Excel 365's answers, measured in #1663 on #1666: `.` after a column number is fine too.
+    let mut s = s();
+    for good in ["C1.", "C1.x", "C1.5", "RC1.", "RC1.x", "C16385x", "RC16385x", "R1048576.x"] {
+        s.execute("formulas.defineName", json!({"name": good, "refersTo": "=Sheet1!$A$1"})).map_err(|e| format!("{good}: {e}")).unwrap();
+    }
+    for bad in ["R1C1.x", "C1_", "RC1x", "C16384x", "RC16384x", "R1048576x", "R01x", "C1Ä"] {
+        let e = s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=Sheet1!$A$1"})).unwrap_err();
+        assert!(e.to_string().contains("not valid"), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn a_saved_name_excel_refuses_is_kept_and_can_be_edited() {
     // Earlier versions saved names such as `R1_Total`: opening the file keeps them, and Name
     // Manager can still change what they refer to (or rename them to a valid name).

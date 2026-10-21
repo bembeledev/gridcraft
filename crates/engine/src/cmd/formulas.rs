@@ -237,8 +237,9 @@ fn valid_name(n: &str) -> bool {
 
 /// Begins like an R1C1 reference, which Excel doesn't accept as a name (#1663): `R` and a row
 /// number, or `C` or `RC` and a column number, the number being the whole run of digits and
-/// within the sheet, so `R0C0` and `R1048577C1` are names. Only a `.` may follow a row number
-/// (`R1.x` is a name). `R`, `C` and `RC` alone are refused too.
+/// within the sheet, so `R0C0` and `R1048577C1` are names. Only a `.` may follow the number
+/// (`R1.x`, `C1.x` and `RC1.x` are names; `R1C1.x` isn't, the row number is followed by `C`).
+/// `R`, `C` and `RC` alone are refused too.
 fn is_r1c1(n: &str) -> bool {
     fn number(s: &str, max: u32) -> Option<&str> {
         let d = s.bytes().take_while(u8::is_ascii_digit).count();
@@ -252,11 +253,11 @@ fn is_r1c1(n: &str) -> bool {
         if let Some(rest) = number(r, 1_048_576) {
             return !rest.starts_with('.');
         }
-        if r.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)).is_some() {
-            return true;
+        if let Some(rest) = r.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)) {
+            return !rest.starts_with('.');
         }
     }
-    n.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)).is_some()
+    n.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)).is_some_and(|rest| !rest.starts_with('.'))
 }
 
 fn define_name(s: &mut Session, p: &Json) -> Result<Json> {

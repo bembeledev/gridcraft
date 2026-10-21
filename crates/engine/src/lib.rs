@@ -256,6 +256,8 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// The last menu command that changed the workbook on the selection, for Repeat (F4).
+    pub last_action: Option<(String, Json)>,
 }
 
 impl Session {
@@ -356,6 +358,9 @@ impl Session {
             }
             d.redo.clear();
             d.revision += 1;
+            if cmd::repeatable(spec, &params) {
+                self.last_action = Some((id.to_string(), params));
+            }
         }
         result
     }

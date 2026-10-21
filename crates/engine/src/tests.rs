@@ -3344,3 +3344,32 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
+
+#[test]
+fn repeat_runs_the_last_menu_command_on_the_new_selection() {
+    let mut s = s();
+    assert!(s.execute("edit.repeat", json!({})).is_err(), "nothing to repeat yet");
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("home.fillColor", json!({"color": "#FFFF00"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:D4"})).unwrap();
+    let r = s.execute("edit.repeat", json!({})).unwrap();
+    assert_eq!(r["repeated"], "home.fillColor");
+    let fill = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["style"]["fill"].clone();
+    let yellow = fill(&mut s, "A1");
+    assert_eq!(yellow["fg"]["Rgb"], 0xFFFF00);
+    for cell in ["C3", "D4"] {
+        assert_eq!(fill(&mut s, cell), yellow, "{cell}");
+    }
+    // The repeat is its own undo step; undoing it leaves the first fill.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(fill(&mut s, "C3"), yellow);
+    assert_eq!(fill(&mut s, "A1"), yellow);
+    // A command aimed at a named range is not repeated; typing is not either.
+    s.execute("home.italic", json!({"range": "F1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F2", "input": "x"})).unwrap();
+    assert_eq!(s.execute("edit.repeat", json!({})).unwrap()["repeated"], "home.fillColor");
+    // Nor is the repeat itself journaled twice.
+    let n = s.journal.len();
+    s.execute("edit.repeat", json!({})).unwrap();
+    assert_eq!(s.journal.len(), n + 1);
+}

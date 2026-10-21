@@ -61,7 +61,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Polish (pl), 970 labels (~44%: every key the other catalogs translate, dialogs included); formulas stay English. Grid number and date formats stay en-US.
+Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Polish (pl), 970 labels (~44%: every key the other catalogs translate, dialogs included) plus the Import Text/CSV dialog (#2109); formulas stay English. Grid number and date formats stay en-US.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
@@ -83,6 +83,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | trivial | Polish labels for the Import Text/CSV dialog (#2109); they take effect once it lands |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
 | 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |

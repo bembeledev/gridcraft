@@ -989,6 +989,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Układ raportu",
         "Compact" => "Kompaktowy",
         "Tabular" => "Tabelaryczny",
+        // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+        "Import Text/CSV" => "Importuj tekst/CSV",
+        "Detect automatically" => "Wykryj automatycznie",
+        "Dot (1.5)" => "Kropka (1.5)",
+        "Comma (1,5)" => "Przecinek (1,5)",
+        "Delimiter" => "Ogranicznik",
+        "Decimal separator" => "Separator dziesiętny",
+        "Data Type Detection" => "Wykrywanie typu danych",
+        "Based on first 200 rows" => "Na podstawie pierwszych 200 wierszy",
+        "Based on entire dataset" => "Na podstawie całego zestawu danych",
+        "Do not detect data types" => "Nie wykrywaj typów danych",
+        "Do not import column" => "Nie importuj kolumny (pomiń)",
+        "Rows of data:" => "Wiersze danych:",
+        "Load" => "Załaduj",
+        "Choose at least one column to import." => "Wybierz co najmniej jedną kolumnę do zaimportowania.",
         _ => return None,
     })
 }

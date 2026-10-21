@@ -176,13 +176,21 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
     let mut style = style;
-    if let Some(code) = parsed.format {
+    if let Some(code) = &parsed.format {
         let cur = wb.styles.get(style).num_fmt.as_str().to_string();
         if cur == "General" {
             style = wb.styles.derive(style, |s| s.num_fmt = gridcraft_model::NumFmt::new(code));
         }
+    } else if gridcraft_numfmt::NumberFormat::parse(wb.styles.get(style).num_fmt.as_str()).is_percent()
+        && !input.contains('%')
+        && let Some(n) = gridcraft_core::parse::parse_number_text(input)
+    {
+        // #1967: Excel divides a bare number by 100 when the cell is already formatted as
+        // Percentage (enter 3, get 3%). A typed % carries its own scale and skips this, and
+        // text that only looks numeric (dates, currency) is left alone by the number check.
+        parsed.value = gridcraft_core::Value::Number(n / 100.0);
     }
     // Wrap text automatically when the input has line breaks (Alt+Enter).
     if input.contains('\n') && !wb.styles.get(style).align.wrap {

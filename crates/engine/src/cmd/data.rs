@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Validation…",
             ["Data", "Data Tools"],
             None,
-            "{range?, type: any|whole|decimal|list|date|time|textLength|custom, operator?: between|notBetween|equal|notEqual|greater|less|greaterOrEqual|lessOrEqual, formula1, formula2?, ignoreBlank?, dropdown?, inputTitle?, inputMessage?, errorStyle?: stop|warning|information, errorTitle?, errorMessage?, clear?: bool}",
+            "{range?, type: any|whole|decimal|list|date|time|textLength|custom, operator?: between|notBetween|equal|notEqual|greater|less|greaterOrEqual|lessOrEqual, formula1, formula2?, ignoreBlank?, dropdown?, inputTitle?, inputMessage?, showInput?: bool (default true), errorStyle?: stop|warning|information, errorTitle?, errorMessage?, showError?: bool (default true), clear?: bool}",
             has_doc,
             validation
         ),
@@ -963,7 +963,7 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         in_cell_dropdown: bool_param(p, "dropdown").unwrap_or(true),
         input_title: str_param(p, "inputTitle").unwrap_or("").into(),
         input_message: str_param(p, "inputMessage").unwrap_or("").into(),
-        show_input: true,
+        show_input: bool_param(p, "showInput").unwrap_or(true),
         error_title: str_param(p, "errorTitle").unwrap_or("").into(),
         error_message: str_param(p, "errorMessage").unwrap_or("").into(),
         error_style: match str_param(p, "errorStyle") {
@@ -971,7 +971,7 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
             Some("information") => ErrorStyle::Information,
             _ => ErrorStyle::Stop,
         },
-        show_error: true,
+        show_error: bool_param(p, "showError").unwrap_or(true),
     };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;

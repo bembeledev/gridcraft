@@ -32,7 +32,9 @@ fn borders(h: &egui_kittest::Harness<'static, SheetApp>, cell: &str) -> Borders 
 
 #[test]
 fn diagram_menu_applies_left_right_inside_and_outside_then_undoes() {
-    for label in ["Left Border", "Right Border", "Inside Borders", "Outside Borders"] {
+    // The menu follows the desktop Borders menu, which has no Inside Borders (that preset lives in
+    // Format Cells ▸ Border).
+    for label in ["Left Border", "Right Border", "Outside Borders"] {
         let mut h = harness();
         h.get_by_label("Border presets").click();
         h.run_steps(6);
@@ -108,19 +110,25 @@ fn border_preview_uses_the_colored_draft_until_ok_and_cancel_discards_it() {
         let [r, g, b] = line.color.resolve(&Default::default()).unwrap();
         assert_eq!(preview_lines(&h, Color32::from_rgb(r, g, b)), 1);
     }
-    h.get_by_label("Top double").click();
+    // As in the desktop dialog: pick a line style, then click the edge it goes on. The draft
+    // changes; the sheet does not until OK.
+    h.get_by_label("Line double").click();
+    h.run_steps(6);
+    h.get_by_label("Top border").click();
     h.run_steps(6);
     assert_eq!(borders(&h, "A1"), original);
-    assert_eq!(preview_lines(&h, Color32::from_rgb(0xab, 0x19, 0x2d)), 2);
-    h.get_by_label(" Cancel ").click();
+    assert_eq!(preview_lines(&h, Color32::BLACK), 2, "the new top edge is a double line in the automatic colour");
+    h.get_by_label("Cancel").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert_eq!(borders(&h, "A1"), original);
     h.state_mut().open_dialog("formatCells", json!({"tab": "Border"}));
     h.run_steps(6);
-    h.get_by_label("Top double").click();
+    h.get_by_label("Line double").click();
     h.run_steps(6);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("Top border").click();
+    h.run_steps(6);
+    h.get_by_label("OK").click();
     h.run_steps(6);
     assert!(h.state().dialog.is_none());
     assert_eq!(borders(&h, "A1").top.style, BorderStyle::Double);

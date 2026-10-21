@@ -117,7 +117,8 @@ fn filter_closes_when_clicking_another_table_or_sheet() {
 fn popup_actions_still_execute_and_filter_checkboxes_stay_open() {
     let mut h = harness();
     open(&mut h, Menu::Header);
-    h.get_by_label("Copy").click();
+    // The ribbon has a Copy button too; the menu's is the lower one.
+    h.get_all_by_label("Copy").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("menu Copy").click();
     h.run_steps(2);
     assert!(!is_open(&h, Menu::Header));
     assert!(h.state().session.clipboard.is_some());

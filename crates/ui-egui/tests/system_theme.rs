@@ -44,7 +44,7 @@ fn set_mode(h: &mut egui_kittest::Harness<'static, SheetApp>, mode: &str) {
 }
 
 fn select_ribbon_theme(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
-    // The View tab's first combo box is the display theme (the interface language follows it).
+    // The Options page's first combo box is the display theme (the interface language follows it).
     h.get_all_by_role(egui::accesskit::Role::ComboBox).next().expect("display theme combo").click();
     h.run_steps(2);
     h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
@@ -108,7 +108,8 @@ fn ribbon_selects_system_and_fixed_modes_ignore_subsequent_os_changes() {
     let mut h = harness(UiState::default());
     system_theme(&mut h, Some(Theme::Dark));
     assert_appearance(&h, false);
-    h.state_mut().run("ui.ribbonTab", json!({"tab": "View"})).unwrap();
+    // File › Options holds the display theme, as in the desktop app.
+    h.state_mut().open_dialog("options", json!({}));
     h.run_steps(2);
     select_ribbon_theme(&mut h, "System");
     assert_eq!(preferences(&h)["systemTheme"], true);

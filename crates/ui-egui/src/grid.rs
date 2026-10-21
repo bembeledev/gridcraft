@@ -1741,6 +1741,9 @@ pub(crate) fn paint_headers(
     let full_col = |c: u32| sel.ranges.iter().any(|x| x.is_full_cols() && c >= x.start.col && c <= x.end.col);
     let full_row = |rr: u32| sel.ranges.iter().any(|x| x.is_full_rows() && rr >= x.start.row && rr <= x.end.row);
     let _ = bounds;
+    // The heading under the pointer is tinted, as in the desktop app. Headings are laid out in
+    // logical coordinates and mirrored afterwards on a right-to-left sheet, so the pointer is too.
+    let hover = p.ctx().pointer_hover_pos().map(|h| geo.mirror_pos(h));
     let mut done_cols = std::collections::HashSet::new();
     let mut done_rows = std::collections::HashSet::new();
     for (rows, cols, clip) in quads {
@@ -1759,6 +1762,9 @@ pub(crate) fn paint_headers(
                 if col_sel(c) {
                     pc.rect_filled(cr, 0.0, if full_col(c) { t.header_all_bg } else { t.header_sel_bg });
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
+                }
+                if hover.is_some_and(|h| cr.contains(h) && clip.x_range().contains(h.x)) {
+                    pc.rect_filled(cr, 0.0, t.header_hover);
                 }
                 pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
                 let color = if col_sel(c) { t.header_sel_text } else { t.header_text };
@@ -1780,6 +1786,9 @@ pub(crate) fn paint_headers(
                 if row_sel(rr) {
                     pr.rect_filled(cr, 0.0, if full_row(rr) { t.header_all_bg } else { t.header_sel_bg });
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));
+                }
+                if hover.is_some_and(|h| cr.contains(h) && clip.y_range().contains(h.y)) {
+                    pr.rect_filled(cr, 0.0, t.header_hover);
                 }
                 pr.line_segment([pos2(cr.left() + 3.0, cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.header_line));
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (desktop-layout ribbon: every tab laid out like Excel's, group captions, title bar and Quick Access Toolbar; previously minor: sheet tab menu) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -44,7 +44,7 @@ this logic, with one undo step.
 | Behaviour | Status |
 |---|---|
 | Click/drag/Shift/Ctrl selection, multi-area selection | rectangular drag works in one direction only in some cases (#28) |
-| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
+| Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; File ▸ Options ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series); right-drag menu missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
@@ -161,6 +161,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Desktop look in the light theme: window #E6E9ED, headings #F0F0F0, the heading under the pointer tinted (new `header_hover` token, both themes), a neutral selection veil, rounded Name Box and formula boxes with a divider, no rule under the formula bar, and crisper light-mode text (whole-pixel glyphs, a 1.35 coverage gamma) |
+| 2026-10-19 | minor | Format Cells in the desktop layout: a light title row, Number (categories with their options and a live sample), Alignment (text control, orientation dial and vertical text), Font (installed fonts, styles, sizes, underline, colour, effects and preview), Border (line styles and colour, presets, an edge preview that takes a click), Fill (palette, pattern, sample) and Protection tabs; OK applies the drafted style (and merge), Cancel discards it |
+| 2026-10-19 | minor | Ribbon in the desktop layout: Home, Insert, Draw, Page Layout, Formulas, Data, Review, View and Automate follow Excel's groups, order and labels (labelled Cut, Copy and Format Painter, font grow/shrink, large Insert/Delete/Format, a Conditional Formatting menu with icons), plus Developer and Help tabs. Group captions sit under each group with dialog launchers. The title bar holds the Quick Access Toolbar and the centred title; right-clicking the ribbon hides the toolbar or collapses the ribbon. Commands GridCraft doesn't have yet are drawn greyed out with a tooltip, and icon-only buttons are named by their tooltip. Theme, interface size and Animations moved to File ▸ Options. All artwork is drawn in code |
+| 2026-10-19 | minor | Sheet tabs: the right-click menu is laid out like Excel's (icons, underlined access keys, Insert…, Delete, Rename, Move or Copy…, View Code (disabled), Protect/Unprotect Sheet…, a Tab Color palette, Hide, Unhide…, Select All Sheets (disabled until sheets can be grouped), Link to this Sheet, which copies `#Sheet!A1`). Double-click renaming selects the whole name. Dragging a tab shows where it lands; with Ctrl it copies the sheet. Insert/Delete cells and Move or Copy are desktop-style dialogs: access keys, a before-sheet list with (move to end), Create a copy |
+| 2026-10-19 | minor | Colour menus (Fill Color, Font Color, Tab Color, Format Cells, chart series) use one palette laid out like Excel's: High-contrast only switch, Theme Colors with five tints and shades per colour, Standard Colors, No Fill / Automatic, and More Colors… opening a Colors window (Standard honeycomb and grey scale, Custom spectrum, lightness, RGB and hex; New and Current). Arrow keys and Enter still work; the window's colour reaches the menu that opened it |
 | 2026-10-19 | minor | Ctrl+Enter (`range.fill`) gives each cell what typing the input there gives: a General cell gets the automatic number format (`5%`, `$5`, `3/4/2026`, `=TODAY()`) even when it already held a value, and a cell with its own format, a formatted row or column, or Text keeps it. Cells that held a value used to keep General (`5%` showed 0.05), and empty cells took the active cell's format |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |

@@ -13,13 +13,23 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let expanded = app.ui.formula_bar_expanded;
     let h = if expanded { 72.0 } else { 30.0 };
     egui::Panel::top("formula_bar")
+        .show_separator_line(false)
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 3 }))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 name_box(app, ui, &t);
-                ui.add_space(4.0);
+                // A dotted divider between the Name Box and the formula buttons, as in desktop suites.
+                let (dots, _) = ui.allocate_exact_size(vec2(10.0, 24.0), Sense::hover());
+                for dy in [-5.0, 0.0, 5.0] {
+                    ui.painter().circle_filled(pos2(dots.center().x, dots.center().y + dy), 1.2, t.text_dim);
+                }
+                // Cancel, Enter and Insert Function sit together in one rounded box.
+                let group = Rect::from_min_size(ui.cursor().min, vec2(86.0, 24.0));
+                ui.painter().rect_filled(group, 6.0, t.input_bg);
+                ui.painter().rect_stroke(group, 6.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
+                ui.add_space(2.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
                 if crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 22.0)).clicked() && editing {
@@ -31,12 +41,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 22.0)).clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
-                ui.add_space(4.0);
+                let used = ui.cursor().min.x - group.left();
+                ui.add_space((group.width() - used).max(0.0) + 6.0);
                 // The formula field.
                 let avail = ui.available_width() - 24.0;
                 let field = Rect::from_min_size(ui.cursor().min, vec2(avail, h - 6.0));
-                ui.painter().rect_filled(field, 4.0, t.input_bg);
-                ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
+                ui.painter().rect_filled(field, 6.0, t.input_bg);
+                ui.painter().rect_stroke(field, 6.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field.shrink2(vec2(6.0, 3.0))));
                 let id = egui::Id::new("gridcraft.formula_bar");
                 let editing_here = app.editor.as_ref().is_some_and(|e| e.from_formula_bar);
@@ -100,8 +111,8 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
     let rect = Rect::from_min_size(ui.cursor().min, vec2(118.0, 24.0));
-    ui.painter().rect_filled(rect, 4.0, t.input_bg);
-    ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
+    ui.painter().rect_filled(rect, 6.0, t.input_bg);
+    ui.painter().rect_stroke(rect, 6.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(6.0, 3.0), vec2(96.0, 18.0))));
     let resp = child.add(TextEdit::singleline(&mut text).id(id).frame(egui::Frame::NONE).font(theme::ui_font(13.0)).desired_width(96.0));
     if resp.gained_focus() {

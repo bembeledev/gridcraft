@@ -34,6 +34,8 @@ pub struct Tokens {
     pub header_sel_bg: Color32,
     pub header_sel_text: Color32,
     pub header_all_bg: Color32,
+    /// A row or column heading under the pointer.
+    pub header_hover: Color32,
     pub sel_fill: Color32,
     pub sel_border: Color32,
     pub input_bg: Color32,
@@ -56,7 +58,7 @@ impl Tokens {
     pub fn light() -> Tokens {
         Tokens {
             dark: false,
-            window: Color32::from_rgb(0xF3, 0xF3, 0xF3),
+            window: Color32::from_rgb(0xE6, 0xE9, 0xED),
             ribbon: Color32::from_rgb(0xFF, 0xFF, 0xFF),
             ribbon_border: Color32::from_rgb(0xE3, 0xE3, 0xE3),
             text: Color32::from_rgb(0x24, 0x24, 0x24),
@@ -71,13 +73,14 @@ impl Tokens {
             grid_bg: Color32::WHITE,
             desk: Color32::from_rgb(0xDE, 0xDE, 0xDE),
             gridline: Color32::from_rgb(0xE1, 0xE1, 0xE1),
-            header_bg: Color32::from_rgb(0xF8, 0xF8, 0xF8),
+            header_bg: Color32::from_rgb(0xF0, 0xF0, 0xF0),
             header_text: Color32::from_rgb(0x42, 0x42, 0x42),
             header_line: Color32::from_rgb(0xD6, 0xD6, 0xD6),
             header_sel_bg: Color32::from_rgb(0xE1, 0xE1, 0xE1),
             header_sel_text: Color32::from_rgb(0x10, 0x7C, 0x41),
             header_all_bg: Color32::from_rgb(0xC8, 0xE6, 0xD3),
-            sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C),
+            header_hover: Color32::from_rgb(0x9F, 0xD5, 0xB7),
+            sel_fill: Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 0x39),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: Color32::WHITE,
             input_border: Color32::from_rgb(0xD1, 0xD1, 0xD1),
@@ -119,6 +122,7 @@ impl Tokens {
             header_sel_bg: Color32::from_rgb(0x45, 0x45, 0x45),
             header_sel_text: Color32::from_rgb(0x5C, 0xC5, 0x87),
             header_all_bg: Color32::from_rgb(0x2E, 0x55, 0x3E),
+            header_hover: Color32::from_rgb(0x3A, 0x6B, 0x4F),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: Color32::from_rgb(0x1F, 0x1F, 0x1F),
@@ -690,6 +694,9 @@ pub fn symbol_face_installed() -> bool {
     }
 }
 
+/// Gamma applied to glyph coverage on light backgrounds (1.0 = egui's default; higher = thinner).
+pub const LIGHT_TEXT_GAMMA: f32 = 1.35;
+
 pub fn apply(ctx: &egui::Context, dark: bool) {
     // Install both palettes before System can switch between the style slots.
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
@@ -711,6 +718,13 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.window_corner_radius = egui::CornerRadius::same(10);
         v.menu_corner_radius = egui::CornerRadius::same(8);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        // Thinner, crisper text, closer to the ClearType rendering of desktop spreadsheets: glyphs
+        // sit on whole pixels (no sub-pixel binning blur) and, on light backgrounds, partially
+        // covered pixels are lightened (coverage^gamma) so strokes do not read as semi-bold.
+        v.text_options.subpixel_binning = false;
+        if !dark {
+            v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(LIGHT_TEXT_GAMMA);
+        }
         ctx.set_visuals_of(theme, v);
     }
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);

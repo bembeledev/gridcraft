@@ -76,6 +76,8 @@ pub fn serial_in_system(sys: DateSystem, serial_1900: f64) -> f64 {
     }
 }
 
+/// Proleptic Gregorian `(year, month, day)` for a day count `z` since 1970-01-01 (the inverse of
+/// [`days_from_civil`]).
 pub fn civil_from_days(z: i64) -> (i32, u32, u32) {
     // `NaiveDate` counts from 0001-01-01 (num_days_from_ce 1); 1970-01-01 is 719_163.
     match z.checked_add(719_163).and_then(|n| i32::try_from(n).ok()).and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
@@ -101,22 +103,35 @@ fn civil_from_days_fallback(z: i64) -> (i32, u32, u32) {
 const UNIX_1899_12_30: i64 = -25569; // days_from_civil(1899, 12, 30)
 const UNIX_1904_01_01: i64 = -24107;
 
+/// Whether `y` is a Gregorian leap year. Works for every `i32`, including years outside the range
+/// chrono can represent, by falling back to the Gregorian rule directly.
 pub fn is_leap(y: i32) -> bool {
-    // A year is a leap year iff 29 February exists in it.
-    chrono::NaiveDate::from_ymd_opt(y, 2, 29).is_some()
+    // A year is a leap year iff 29 February exists in it; chrono validates that in range.
+    match chrono::NaiveDate::from_ymd_opt(y, 2, 29) {
+        Some(_) => true,
+        // Out of chrono's range: the pure Gregorian rule (divisible by 4, except centuries not by 400).
+        None => y % 4 == 0 && (y % 100 != 0 || y % 400 == 0),
+    }
 }
 
+/// Number of days in month `m` of year `y` (1–31), or `0` for an invalid month number. Works for
+/// every `i32` year, including years outside chrono's range, via [`days_from_civil`]'s fallback.
 pub fn days_in_month(y: i32, m: u32) -> u32 {
     // The length of a month is the day before the first of the next month. An out-of-range month
     // keeps the old `0`.
     if !(1..=12).contains(&m) {
         return 0;
     }
-    let first = |y: i32, m: u32| chrono::NaiveDate::from_ymd_opt(y, m, 1);
-    match (first(y, m), if m == 12 { first(y + 1, 1) } else { first(y, m + 1) }) {
-        (Some(a), Some(b)) => u32::try_from((b - a).num_days()).unwrap_or(0),
-        _ => 0,
-    }
+    // December rolls into next January; `checked_add` avoids an overflow panic at `i32::MAX`.
+    let (ny, nm) = if m == 12 {
+        match y.checked_add(1) {
+            Some(ny) => (ny, 1),
+            None => return 31, // i32::MAX December has 31 days; the Gregorian rule is month-only here.
+        }
+    } else {
+        (y, m + 1)
+    };
+    u32::try_from(days_from_civil(ny, nm, 1) - days_from_civil(y, m, 1)).unwrap_or(0)
 }
 
 /// Days in a month of a date system's calendar: like [`days_in_month`], except that February
@@ -217,6 +232,32 @@ pub const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Th
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leap_and_month_length_outside_chrono_range() {
+        // In range, the ordinary Gregorian rule holds.
+        assert!(is_leap(2000));
+        assert!(!is_leap(1900));
+        assert!(is_leap(2024));
+        assert!(!is_leap(2023));
+        // Outside chrono's NaiveDate range the Gregorian rule is still applied.
+        assert!(is_leap(400_000)); // divisible by 400
+        assert!(!is_leap(300_100)); // century not divisible by 400
+        assert!(is_leap(i32::MAX - 3)); // 2147483644 is divisible by 4, not a century
+        assert!(!is_leap(i32::MAX)); // 2147483647 is odd
+        // days_in_month keeps calendar lengths out of range and 0 for invalid months.
+        assert_eq!(days_in_month(400_000, 2), 29);
+        assert_eq!(days_in_month(300_100, 2), 28);
+        assert_eq!(days_in_month(400_000, 1), 31);
+        assert_eq!(days_in_month(400_000, 4), 30);
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(2023, 0), 0);
+        assert_eq!(days_in_month(2023, 13), 0);
+        // December at i32::MAX does not overflow and still reports 31 days.
+        assert_eq!(days_in_month(i32::MAX, 12), 31);
+        assert_eq!(days_in_month(i32::MAX, 2), 28); // 2147483647 is not a leap year
+    }
 
     #[test]
     fn serial_from_unix_time() {

@@ -377,3 +377,26 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     assert_eq!(asked.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn closing_the_last_workbook_quits_and_close_with_none_open_quits() {
+    let mut h = harness(Services::default());
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert!(h.state().session.documents().is_empty());
+    assert!(h.state().quit_requested, "closing the last workbook quits");
+    h.run_steps(2);
+    assert!(!h.state().quit_requested, "the request is consumed once, so it cannot loop");
+    // Cmd+W with nothing open (the command itself is disabled) also quits.
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert!(h.state().quit_requested);
+}
+
+#[test]
+fn closing_one_of_two_workbooks_does_not_quit() {
+    let mut h = harness(Services::default());
+    h.state_mut().session.new_workbook();
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert!(!h.state().quit_requested);
+}

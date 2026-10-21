@@ -1645,6 +1645,7 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
                 ("Wide", "pageLayout.margins", json!({"preset": "wide"})),
                 ("Narrow", "pageLayout.margins", json!({"preset": "narrow"})),
                 ("Custom Margins…", "dialog:pageSetup", json!({})),
+                ("Adjust in Print Preview…", "file.printPreview", json!({})),
             ],
         );
     });

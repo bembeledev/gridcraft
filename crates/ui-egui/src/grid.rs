@@ -43,17 +43,14 @@ pub fn wheel_zoom_step(zoom: u16, zoom_in: bool) -> u16 {
     ahead.into_iter().find(|&l| l == 100 || far(u32::from(l))).unwrap_or(limit)
 }
 
-/// One frame of the zoom gliding from `from` to `to` percent: the share `t` (0–1) of the way,
-/// measured as a ratio so zooming in and out feel alike, and at least one percent, so it arrives.
-pub fn zoom_glide_step(from: u16, to: u16, t: f32) -> u16 {
-    let (f, g) = (f32::from(from.max(1)), f32::from(to.max(1)));
-    let next = (f * (g / f).powf(t.clamp(0.0, 1.0))).round();
-    let next = if next.is_finite() { next.clamp(f32::from(from.min(to)), f32::from(from.max(to))) as u16 } else { to };
-    match (next == from, from.cmp(&to)) {
-        (true, std::cmp::Ordering::Less) => from + 1,
-        (true, std::cmp::Ordering::Greater) => from - 1,
-        _ => next,
+/// Interpolate in ratios without rounding away small movements at high frame rates.
+pub fn zoom_glide_step(from: f32, to: u16, t: f32) -> f32 {
+    let to = f32::from(to);
+    if !from.is_finite() || !t.is_finite() || t >= 1.0 {
+        return to;
     }
+    let from = from.clamp(10.0, 400.0);
+    from * (to / from).powf(t.clamp(0.0, 1.0))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -149,6 +146,8 @@ pub struct GridState {
     pub hscroll: Option<Rect>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// Rule statistics survive repainting, but never a workbook replacement or sheet switch.
+    pub cf: Option<(std::sync::Weak<Workbook>, usize, CfCache)>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
 }
@@ -163,19 +162,29 @@ pub struct WheelZoom {
     pub notches: f32,
     /// When `notches` last changed.
     pub time: f64,
-    /// The step the zoom is gliding to, and the percentage set last on the way.
-    pub glide: Option<(u16, u16)>,
+    /// The committed destination and the visual percentage when the glide started.
+    pub glide: Option<(u16, f32)>,
+    pub started: f64,
 }
 
 impl WheelZoom {
     /// The state for `place` showing `zoom` percent: fresh for another document or sheet, and
-    /// without its glide if the zoom was changed some other way since the glide set it.
+    /// without its glide if another command changed the committed destination.
     fn at(app: &SheetApp, place: (u64, usize), zoom: u16, now: f64) -> WheelZoom {
-        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None });
-        if w.glide.is_some_and(|(_, shown)| shown != zoom) {
+        let mut w =
+            app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None, started: now });
+        if w.glide.is_some_and(|(to, _)| to != zoom) {
             w.glide = None;
         }
         w
+    }
+
+    /// Visual zoom at `now`, settling at the destination when the glide expires.
+    fn shown(&self, now: f64, zoom: u16) -> f32 {
+        self.glide.map_or(f32::from(zoom), |(to, from)| {
+            let progress = ((now - self.started) / crate::selection_glide::GLIDE_SECS) as f32;
+            if (0.0..1.0).contains(&progress) { zoom_glide_step(from, to, crate::selection_glide::ease_out(progress)) } else { f32::from(to) }
+        })
     }
 }
 
@@ -220,8 +229,14 @@ pub struct Geo {
 }
 
 impl Geo {
+    /// Normal-view geometry at the sheet's committed zoom percentage.
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
-        let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+        Self::with_zoom(sh, rect, scroll, f32::from(sh.zoom))
+    }
+
+    /// Normal-view geometry at a fractional visual zoom during animation.
+    fn with_zoom(sh: &Sheet, rect: Rect, scroll: egui::Vec2, percent: f32) -> Geo {
+        let zoom = (percent / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
         let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
         let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
@@ -276,8 +291,13 @@ impl Geo {
     /// Page Layout view geometry: `rect` excludes the rulers; cells are drawn at the print scale
     /// on pages laid out by `grid`; frozen panes don't apply (as in Excel).
     pub fn paged(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
-        let mut g = Geo::new(sh, rect, scroll);
-        let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+        Self::paged_with_zoom(sh, rect, scroll, grid, f32::from(sh.zoom))
+    }
+
+    /// Page Layout geometry at a fractional visual zoom, including the print scale.
+    fn paged_with_zoom(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>, percent: f32) -> Geo {
+        let mut g = Geo::with_zoom(sh, rect, scroll, percent);
+        let zoom = (percent / 100.0).clamp(0.1, 4.0);
         g.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
         (g.fr, g.fc, g.frozen_w, g.frozen_h) = (0, 0, 0.0, 0.0);
         g.paper = Some(grid);
@@ -558,6 +578,7 @@ fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
+/// Handle grid input and paint the active sheet using the current visual zoom.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -587,90 +608,83 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(pos2((rect.left() + ruler).min(rect.right()), (rect.top() + ruler).min(rect.bottom())), rect.max)
     };
-    let make_geo = |app: &mut SheetApp, scroll: egui::Vec2| -> Geo {
-        if paper {
-            let probe = Geo::new(sh, grid_rect, scroll);
-            if let Some(g) = crate::paper_view::grid_for(app, &wb, si, sh, probe.cells.size(), scroll) {
-                let g = crate::paper_view::with_dragged_margin(app, &wb, si, g);
-                return Geo::paged(sh, grid_rect, scroll, g);
-            }
-        }
-        Geo::new(sh, rect, scroll)
-    };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
-    if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
-        if zoom_delta != 1.0 {
-            // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
-            let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);
-            let turned = zoom_delta.ln() / notch;
-            let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
-            if now - zooming.time > WHEEL_ZOOM_IDLE {
-                zooming.notches = 0.0;
-            }
-            if turned.is_finite() {
-                zooming.notches = (zooming.notches + turned).clamp(-32.0, 32.0);
-            }
-            zooming.time = now;
-            // A notch steps once 60% of it has turned, and the rest of it brings `notches` back to
-            // about 0. (Past half, so what's left after a step can't step back.) Steps count from
-            // where a glide is going, not from where it has got to.
-            let from = zooming.glide.map_or(sh.zoom, |(to, _)| to);
-            let mut z = from;
-            while zooming.notches >= 0.6 {
-                z = wheel_zoom_step(z, true);
-                zooming.notches -= 1.0;
-            }
-            while zooming.notches <= -0.6 {
-                z = wheel_zoom_step(z, false);
-                zooming.notches += 1.0;
-            }
-            if z != from {
-                zooming.glide = Some((z, sh.zoom));
-            }
-            app.grid.wheel_zoom = Some(zooming);
-        } else if scroll_delta != egui::Vec2::ZERO {
-            let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-            let mut d = scroll_delta;
-            // A horizontal swipe moves the content the way the fingers go, which is towards
-            // higher columns on a mirrored sheet.
-            if sh.right_to_left {
-                d.x = -d.x;
-            }
-            if modifiers.shift && d.x == 0.0 {
-                d = vec2(d.y, 0.0);
-            }
-            view.scroll -= d / z;
+    let over_grid = (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx());
+    let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
+    let mut shown_zoom = zooming.shown(now, sh.zoom);
+    if over_grid && zoom_delta != 1.0 {
+        // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
+        let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);
+        let turned = zoom_delta.ln() / notch;
+        if now - zooming.time > WHEEL_ZOOM_IDLE {
+            zooming.notches = 0.0;
+        }
+        if turned.is_finite() {
+            zooming.notches = (zooming.notches + turned).clamp(-32.0, 32.0);
+        }
+        zooming.time = now;
+        // A notch steps once 60% of it has turned, and the rest of it brings `notches` back to
+        // about 0. (Past half, so what's left after a step can't step back.) Steps count from
+        // where a glide is going, not from where it has got to.
+        let from = zooming.glide.map_or(sh.zoom, |(to, _)| to);
+        let mut z = from;
+        while zooming.notches >= 0.6 {
+            z = wheel_zoom_step(z, true);
+            zooming.notches -= 1.0;
+        }
+        while zooming.notches <= -0.6 {
+            z = wheel_zoom_step(z, false);
+            zooming.notches += 1.0;
+        }
+        if z != from && app.session.run("view.zoom", json!({"percent": z})).is_ok() {
+            // Only the destination edits the workbook; intermediate frames are geometry.
+            zooming.glide = Some((z, shown_zoom));
+            zooming.started = now;
         }
     }
-    // A one-finger touch drag pans the sheet, the content following the finger; it doesn't select.
-    // (Two fingers pinch-zoom through `zoom_delta` above.)
+    if let Some((to, _)) = zooming.glide {
+        let glides = app.ui.animations && ui.input(|i| i.focused) && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+        shown_zoom = if glides { zooming.shown(now, to) } else { f32::from(to) };
+        if shown_zoom == f32::from(to) {
+            zooming.glide = None;
+        } else {
+            ui.ctx().request_repaint();
+        }
+    }
+    app.grid.wheel_zoom = Some(zooming);
+    let make_geo = |app: &mut SheetApp, scroll: egui::Vec2| -> Geo {
+        if paper {
+            let probe = Geo::with_zoom(sh, grid_rect, scroll, shown_zoom);
+            if let Some(g) = crate::paper_view::grid_for(app, &wb, si, sh, probe.cells.size(), scroll, shown_zoom) {
+                let g = crate::paper_view::with_dragged_margin(app, &wb, si, g);
+                return Geo::paged_with_zoom(sh, grid_rect, scroll, g, shown_zoom);
+            }
+        }
+        Geo::with_zoom(sh, rect, scroll, shown_zoom)
+    };
+    if over_grid && zoom_delta == 1.0 && scroll_delta != egui::Vec2::ZERO {
+        let z = if paper { make_geo(app, view.scroll).z } else { shown_zoom / 100.0 * DISPLAY_SCALE };
+        let mut delta = scroll_delta;
+        if sh.right_to_left {
+            delta.x = -delta.x;
+        }
+        if modifiers.shift && delta.x == 0.0 {
+            delta = vec2(delta.y, 0.0);
+        }
+        view.scroll -= delta / z;
+    }
+    // A one-finger drag pans without selecting; two fingers keep their pinch zoom.
     if resp.drag_started() && ui.input(|i| i.any_touches()) {
         app.grid.touch_pan = true;
     }
     if app.grid.touch_pan && resp.dragged() && ui.input(|i| i.multi_touch().is_none()) {
-        let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-        let mut d = resp.drag_delta();
+        let z = if paper { make_geo(app, view.scroll).z } else { shown_zoom / 100.0 * DISPLAY_SCALE };
+        let mut delta = resp.drag_delta();
         if sh.right_to_left {
-            d.x = -d.x;
+            delta.x = -delta.x;
         }
-        view.scroll -= d / z;
-    }
-    // The zoom glides to its step like egui eases a wheel notch (90% of the way in 0.1 s), or goes
-    // there at once without animations (as for the selection outline below: View › Animations
-    // off, egui's off in the headless harness, or a screenshot on its way).
-    let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
-    if let Some((to, shown)) = zooming.glide {
-        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
-        let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
-        let z = if glides { zoom_glide_step(shown, to, share) } else { to };
-        let _ = app.session.run("view.zoom", json!({"percent": z}));
-        zooming.glide = (z != to).then_some((to, z));
-        ui.ctx().request_repaint();
-    }
-    // Store a glide's progress, or that it stopped.
-    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
-        app.grid.wheel_zoom = Some(zooming);
+        view.scroll -= delta / z;
     }
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
     let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
@@ -729,22 +743,30 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
+        animate: app.ui.animations && ui.input(|i| i.focused) && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
     }
     app.grid.geo = Some(geo.clone());
+    app.grid.marching_phase =
+        if app.ui.animations && ui.input(|i| i.focused) && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() {
+            crate::selection_glide::ants_phase(now)
+        } else {
+            0.0
+        };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, t.grid_bg);
     // Everything up to the headers is painted in logical (left-to-right) coordinates.
     let mirror_from = painter.add(egui::Shape::Noop);
-    let mut cf = CfCache::new();
+    let identity = Arc::downgrade(&wb);
+    let mut cf = app.grid.cf.take().filter(|(cached, sheet, _)| cached.ptr_eq(&identity) && *sheet == si).map(|(_, _, cf)| cf).unwrap_or_default();
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     } else {
         paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     };
+    app.grid.cf = Some((identity, si, cf));
     // Objects above cells.
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
@@ -792,11 +814,6 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     context_menu(app, ui);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
-    if app.session.clipboard.is_some() {
-        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
-        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-    }
 }
 
 /// Normal view: up to four panes (frozen rows/columns), each painted with its own clip.
@@ -1713,9 +1730,31 @@ pub(crate) fn paint_selection(
         let areas = if clip.areas.is_empty() { std::slice::from_ref(&clip.range) } else { clip.areas.as_slice() };
         for area in areas {
             let rr = geo.range_rect(sh, *area).expand(0.5);
-            let phase = app.grid.marching_phase;
-            let pts = [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()];
-            p.extend(egui::Shape::dashed_line_with_offset(&pts, Stroke::new(2.0, t.sel_border), &[4.0], &[4.0], phase));
+            // Clip before tessellating: a whole-column copy has millions of offscreen dashes.
+            let sides = outline_bands(rr, 2.0, p.clip_rect());
+            if !sides.is_empty()
+                && app.ui.animations
+                && p.ctx().input(|i| i.focused)
+                && p.ctx().global_style().animation_time > 0.0
+                && !app.shots.in_flight()
+            {
+                p.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+            }
+            for side in sides {
+                let (points, distance) = if side.height() > side.width() {
+                    if side.center().x < rr.center().x {
+                        ([pos2(rr.left(), side.bottom()), pos2(rr.left(), side.top())], rr.width() * 2.0 + rr.height() + rr.bottom() - side.bottom())
+                    } else {
+                        ([pos2(rr.right(), side.top()), pos2(rr.right(), side.bottom())], rr.width() + side.top() - rr.top())
+                    }
+                } else if side.center().y < rr.center().y {
+                    ([pos2(side.left(), rr.top()), pos2(side.right(), rr.top())], side.left() - rr.left())
+                } else {
+                    ([pos2(side.right(), rr.bottom()), pos2(side.left(), rr.bottom())], rr.width() + rr.height() + rr.right() - side.right())
+                };
+                let phase = (app.grid.marching_phase + distance.rem_euclid(8.0)).rem_euclid(8.0);
+                p.extend(egui::Shape::dashed_line_with_offset(&points, Stroke::new(2.0, t.sel_border), &[4.0], &[4.0], phase));
+            }
         }
     }
 }
@@ -3393,6 +3432,7 @@ mod tests {
     }
     use super::*;
 
+    /// Wheel notches follow the zoom ladder, preserve 100%, and respect the limits.
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {
         for (from, zoom_in, to) in [
@@ -3423,7 +3463,7 @@ mod tests {
             assert_eq!(wheel_zoom_step(from, zoom_in), to, "{from}% {}", if zoom_in { "in" } else { "out" });
         }
         // Every step on the ladder is 15–25% from the next, and a notch in then out returns.
-        // (The glide between steps is `zoom_glide_moves_by_ratio_and_always_arrives`.)
+        // (The glide between steps is `zoom_glide_keeps_subpercent_motion_and_lands_by_time`.)
         for w in WHEEL_ZOOM_LADDER.windows(2) {
             let ratio = f32::from(w[1]) / f32::from(w[0]);
             assert!((1.15..=1.25).contains(&ratio), "{w:?}");
@@ -3432,28 +3472,55 @@ mod tests {
         }
     }
 
+    /// Fractional zoom keeps moving at high frame rates and settles even with invalid time.
     #[test]
-    fn zoom_glide_moves_by_ratio_and_always_arrives() {
-        // A third of the way per frame, as at 60 frames a second.
-        for (from, to) in [(100, 120), (120, 100), (10, 12), (340, 400), (400, 10), (85, 100)] {
-            let (mut z, mut frames) = (from, 0);
-            while z != to {
-                let next = zoom_glide_step(z, to, 0.32);
-                assert!(next != z && next.abs_diff(to) < z.abs_diff(to), "{from} → {to}: {z} then {next}");
-                z = next;
-                frames += 1;
-                assert!(frames < 40, "{from} → {to} arrives");
+    fn zoom_glide_keeps_subpercent_motion_and_lands_by_time() {
+        for (from, to) in [(100.0, 120), (120.0, 100), (10.0, 12), (340.0, 400), (400.0, 10)] {
+            let w = WheelZoom { place: (1, 0), notches: 0.0, time: 10.0, glide: Some((to, from)), started: 10.0 };
+            assert_eq!(w.shown(10.0, to), from);
+            let first = w.shown(10.0 + 1.0 / 240.0, to);
+            assert!((first - f32::from(to)).abs() < (from - f32::from(to)).abs());
+            assert_eq!(w.shown(10.0 + crate::selection_glide::GLIDE_SECS + 0.001, to), f32::from(to));
+            assert_eq!(w.shown(11.0, to), f32::from(to), "a delayed frame must settle");
+            for now in [9.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                assert_eq!(w.shown(now, to), f32::from(to));
             }
-            assert!(frames >= 2, "{from} → {to} glides over more than one frame ({frames})");
         }
-        assert_eq!(zoom_glide_step(100, 120, 0.32), 106, "a third of the way by ratio");
-        assert_eq!(zoom_glide_step(120, 100, 0.32), 113);
-        // No progress asked or nonsense: still a percent closer, or straight there.
-        assert_eq!(zoom_glide_step(100, 120, 0.0), 101);
-        assert_eq!(zoom_glide_step(120, 100, f32::NAN), 100);
-        assert_eq!(zoom_glide_step(100, 120, 5.0), 120);
-        assert_eq!(zoom_glide_step(120, 120, 0.5), 120);
-        assert_eq!(zoom_glide_step(0, 10, 0.5), 3);
+        let tiny = zoom_glide_step(100.0, 120, 0.001);
+        assert!(tiny > 100.0 && tiny < 100.1, "{tiny}");
+        assert_eq!(zoom_glide_step(100.0, 120, 0.0), 100.0);
+        assert_eq!(zoom_glide_step(100.0, 120, f32::NAN), 120.0);
+        assert_eq!(zoom_glide_step(f32::NAN, 120, 0.5), 120.0);
+    }
+
+    /// Workbook changes invalidate cached conditional-format statistics.
+    #[test]
+    fn cached_conditional_statistics_follow_edits_undo_and_recalculation() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.run("range.setValues", json!({"range": "A1", "values": [[0], [5], [10]]})).unwrap();
+        session.run("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "dataBar"}})).unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
+        let fraction = |h: &mut egui_kittest::Harness<'_, SheetApp>| {
+            h.run_steps(4);
+            let app = h.state_mut();
+            let wb = app.session.active().unwrap().wb.clone();
+            app.grid.cf.as_mut().unwrap().2.look(&wb, 0, CellRef::new(1, 0)).unwrap().bar.unwrap().0
+        };
+        assert!((fraction(&mut h) - 0.55).abs() < 1e-6);
+        h.state_mut().run("cell.set", json!({"cell": "A3", "input": "20"})).unwrap();
+        assert!((fraction(&mut h) - 0.325).abs() < 1e-6);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert!((fraction(&mut h) - 0.55).abs() < 1e-6);
+        h.state_mut().run("formulas.calculateNow", json!({})).unwrap();
+        assert!((fraction(&mut h) - 0.55).abs() < 1e-6);
     }
 
     #[test]

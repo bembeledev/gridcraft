@@ -201,3 +201,19 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     assert_eq!(set["result"]["animations"], json!(true));
     assert!(a.ui.animations);
 }
+
+/// Repeated arrow input keeps the outline moving until it reaches the selected cell.
+#[test]
+fn consecutive_arrow_keys_keep_the_outline_moving() {
+    let mut h = animated();
+    let start = outline(&h);
+    for _ in 0..8 {
+        press(&mut h, egui::Key::ArrowRight);
+        h.step();
+    }
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "I1");
+    assert!(outline(&h).min.x > start.min.x, "the outline must advance while keys are still arriving");
+    steps(&mut h, 40);
+    assert_eq!(outline(&h), cell_rect(&h, "I1"));
+    assert!(!gliding(&h));
+}

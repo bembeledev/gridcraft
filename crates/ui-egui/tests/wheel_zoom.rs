@@ -1,4 +1,4 @@
-//! Ctrl+wheel zoom steps along a ladder of percentages that always comes back to 100%.
+//! Grid motion: wheel zoom, workbook history and copied-outline repaint budgets.
 
 use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
 use gridcraft_engine::Session;
@@ -68,7 +68,7 @@ fn turn_and_watch(h: &mut Harness, notches: f32, frames: usize) -> Vec<u16> {
     (0..frames)
         .map(|_| {
             h.step();
-            zoom(h)
+            (h.state().grid.geo.as_ref().unwrap().z / gridcraft_ui_egui::grid::DISPLAY_SCALE * 100.0).round() as u16
         })
         .collect()
 }
@@ -183,4 +183,46 @@ fn from_a_zoom_set_another_way_a_notch_goes_to_the_next_step_or_100() {
     set_zoom(&mut h, 121);
     wheel(&mut h, -2.0);
     assert_eq!(zoom(&h), 85);
+}
+
+/// A visual zoom glide adds one undo entry and leaves the workbook untouched after settling.
+#[test]
+fn a_zoom_glide_commits_once_and_stops_changing_the_workbook() {
+    let mut h = animated();
+    let undo_before = h.state().session.active().unwrap().undo.len();
+    let seen = turn_and_watch(&mut h, 1.0, 40);
+    assert!(seen.iter().any(|&z| z > 100 && z < 120));
+    assert_eq!(zoom(&h), 120);
+    assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "view.zoom").count(), 1);
+    assert_eq!(h.state().session.active().unwrap().undo.len(), undo_before + 1);
+    assert!(h.state().grid.wheel_zoom.unwrap().glide.is_none());
+    let wb = h.state().session.active().unwrap().wb.clone();
+    h.run_steps(30);
+    assert!(std::sync::Arc::ptr_eq(&wb, &h.state().session.active().unwrap().wb));
+}
+
+/// Copied outlines repaint only when visible and animated, with viewport-bounded geometry.
+#[test]
+fn copied_outlines_stop_repainting_when_hidden_or_disabled() {
+    let mut h = animated();
+    h.state_mut().run("edit.copy", json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(30);
+    let delay = |h: &Harness| h.output().viewport_output.get(&egui::ViewportId::ROOT).unwrap().repaint_delay;
+    assert!(delay(&h) <= std::time::Duration::from_millis(60));
+    h.state_mut().run("view.animations", json!({"on": false})).unwrap();
+    h.run_steps(30);
+    assert!(delay(&h) > std::time::Duration::from_millis(60));
+    h.state_mut().run("view.animations", json!({"on": true})).unwrap();
+    h.state_mut().run("home.insertSheet", json!({"name": "Other"})).unwrap();
+    h.run_steps(30);
+    assert!(delay(&h) > std::time::Duration::from_millis(60), "a copy on another sheet must not wake the grid");
+    h.state_mut().run("sheet.activate", json!({"sheet": 0})).unwrap();
+    h.run_steps(30);
+    assert!(delay(&h) <= std::time::Duration::from_millis(60));
+    h.state_mut().grid.wheel_zoom = None;
+    if let Some(clip) = &mut h.state_mut().session.clipboard {
+        clip.range = gridcraft_engine::core::RangeRef::cols(0, 0);
+    }
+    h.run_steps(3);
+    assert!(h.output().shapes.len() < 20_000, "dash geometry must be bounded by the viewport");
 }

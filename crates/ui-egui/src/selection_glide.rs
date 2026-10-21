@@ -59,6 +59,7 @@ pub struct SelectionGlide {
     last: Option<((u64, usize), RangeRef)>,
     /// Where it was drawn (screen points).
     drawn: Rect,
+    target: Rect,
     /// Each edge's distance from the target when the glide set off: left, top, right, bottom.
     offset: [f32; 4],
     started: f64,
@@ -67,8 +68,9 @@ pub struct SelectionGlide {
 }
 
 impl Default for SelectionGlide {
+    /// Start without a previous selection or an active glide.
     fn default() -> Self {
-        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
+        SelectionGlide { last: None, drawn: Rect::ZERO, target: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
     }
 }
 
@@ -79,21 +81,28 @@ impl SelectionGlide {
         self.frame_nr = f.frame_nr;
         let key = Some((f.place, f.range));
         if self.last != key {
-            // A new destination: set off from where the outline is drawn now (mid-glide or at rest).
+            // Advance the old destination first; repeated input must not pin the outline in place.
+            let from = self.advance(f.now);
             let same_sheet = self.last.is_some_and(|(place, _)| place == f.place);
-            self.offset = if same_sheet && fresh { offset_between(self.drawn, f.target, f.view) } else { [0.0; 4] };
+            self.offset = if same_sheet && fresh { offset_between(from, f.target, f.view) } else { [0.0; 4] };
             self.started = f.now;
             self.last = key;
         }
         if !f.animate {
             self.offset = [0.0; 4];
         }
+        self.target = f.target;
+        self.advance(f.now)
+    }
+
+    /// Advance the current destination before drawing or retargeting the outline.
+    fn advance(&mut self, now: f64) -> Rect {
         // Arrived when the time is up (or the clock went backwards).
-        let progress = (f.now - self.started) / GLIDE_SECS;
+        let progress = (now - self.started) / GLIDE_SECS;
         self.gliding = self.offset != [0.0; 4] && (0.0..1.0).contains(&progress);
         let left = if self.gliding { 1.0 - ease_out(progress as f32) } else { 0.0 };
         let [l, t, r, b] = self.offset.map(|o| o * left);
-        self.drawn = Rect::from_min_max(pos2(f.target.min.x + l, f.target.min.y + t), pos2(f.target.max.x + r, f.target.max.y + b));
+        self.drawn = Rect::from_min_max(pos2(self.target.min.x + l, self.target.min.y + t), pos2(self.target.max.x + r, self.target.max.y + b));
         self.drawn
     }
 
@@ -109,7 +118,7 @@ impl SelectionGlide {
 }
 
 /// Decelerating curve: quick off the mark, soft landing.
-fn ease_out(t: f32) -> f32 {
+pub(crate) fn ease_out(t: f32) -> f32 {
     let r = 1.0 - t.clamp(0.0, 1.0);
     1.0 - r * r * r
 }
@@ -266,6 +275,24 @@ mod tests {
         let next = r.step(0.0);
         assert!(near(next, mid), "no jump when the destination changes: {next:?} vs {mid:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
+    }
+
+    /// Retargeting every frame still advances the outline at each supported frame rate.
+    #[test]
+    fn a_new_destination_every_frame_keeps_the_outline_moving() {
+        for dt in [1.0 / 30.0, 1.0 / 60.0, 1.0 / 240.0] {
+            let mut r = Rig::new(cell(0, 0), at(0.0, 0.0));
+            for col in 1..10 {
+                let before = r.glide.drawn();
+                r.select(cell(0, col), at(col as f32 * 64.0, 0.0));
+                let next = r.step(dt);
+                if col > 1 {
+                    assert!(next.min.x > before.min.x, "continuous input stalled at {dt}s: {next:?}");
+                }
+                assert!(next.min.x < r.f.target.min.x);
+            }
+            assert_eq!(r.settle(dt).last(), Some(&r.f.target));
+        }
     }
 
     #[test]

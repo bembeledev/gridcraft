@@ -78,14 +78,22 @@ pub fn ensure_covers(app: &mut SheetApp, wb: &Workbook, si: usize, cell: gridcra
 }
 
 /// The page grid for the active sheet, covering what the view shows (cached).
-pub fn grid_for(app: &mut SheetApp, wb: &Workbook, si: usize, sh: &Sheet, view: egui::Vec2, scroll: egui::Vec2) -> Option<Arc<PageGrid>> {
+pub fn grid_for(
+    app: &mut SheetApp,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    view: egui::Vec2,
+    scroll: egui::Vec2,
+    percent: f32,
+) -> Option<Arc<PageGrid>> {
     let key = cache_key(app, wb, si)?;
     let cached = app.grid.paper.as_ref().filter(|(k, _)| *k == key).map(|(_, g)| g.clone());
     let base = match cached {
         Some(g) => g,
         None => Arc::new(PageGrid::build(wb, si, 0, 0)?),
     };
-    let z = ((sh.zoom as f32 / 100.0).clamp(0.1, 4.0) * DISPLAY_SCALE * base.scale.clamp(0.1, 4.0)).max(0.001);
+    let z = ((percent / 100.0).clamp(0.1, 4.0) * DISPLAY_SCALE * base.scale.clamp(0.1, 4.0)).max(0.001);
     let (x1, y1) = (scroll.x as f64 + (view.x / z) as f64, scroll.y as f64 + (view.y / z) as f64);
     let (need_r, need_c) = paper::need_for(sh, x1, y1);
     let g = if base.covers(need_r, need_c) {

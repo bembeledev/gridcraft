@@ -26,7 +26,7 @@ pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct RuleStats {
     sorted: Vec<f64>,
     avg: f64,
@@ -111,17 +111,13 @@ impl CfCache {
         let v = sh.value(c);
         for (idx, cf) in rules {
             let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
-            let st = self
-                .stats
-                .entry(idx)
-                .or_insert_with(|| {
-                    let (sorted, counts) = numbers_in(sh, &cf.ranges);
-                    let n = sorted.len().max(1) as f64;
-                    let avg = sorted.iter().sum::<f64>() / n;
-                    let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
-                    RuleStats { sorted, avg, std, counts }
-                })
-                .clone();
+            let st = self.stats.entry(idx).or_insert_with(|| {
+                let (sorted, counts) = numbers_in(sh, &cf.ranges);
+                let n = sorted.len().max(1) as f64;
+                let avg = sorted.iter().sum::<f64>() / n;
+                let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
+                RuleStats { sorted, avg, std, counts }
+            });
             let text = v.display();
             let matched_style: Option<&Style> = match &cf.rule {
                 CfRule::CellIs { op, a, b, style } => {
@@ -218,7 +214,7 @@ impl CfCache {
                     if let Some(n) = v.as_f64() {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
-                            .map(|(k, col)| (threshold(wb, sheet, c, &st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
+                            .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
                             .collect();
                         let rgb = match pts.as_slice() {
                             [(a, ca), (b, cb)] => lerp(*ca, *cb, if b > a { (n - a) / (b - a) } else { 0.0 }),
@@ -240,8 +236,8 @@ impl CfCache {
                 }
                 CfRule::DataBar { min, max, color, gradient, show_value } => {
                     if let Some(n) = v.as_f64() {
-                        let lo = threshold(wb, sheet, c, &st, min);
-                        let hi = threshold(wb, sheet, c, &st, max);
+                        let lo = threshold(wb, sheet, c, st, min);
+                        let hi = threshold(wb, sheet, c, st, max);
                         let lo = if lo > 0.0 { 0.0 } else { lo };
                         let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
                         if out.bar.is_none() {
@@ -270,7 +266,7 @@ impl CfCache {
                                 defaults.get(1..).unwrap_or_default()
                             }
                         };
-                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, &st, t)).collect();
+                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
                         let mut idx = cuts.iter().filter(|cut| n >= **cut).count();
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);

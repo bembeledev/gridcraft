@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Validation List Items",
             [],
             None,
-            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and Latin-1 / Latin Extended-A accents)",
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters)",
             has_doc,
             validation_list_cmd
         ),
@@ -1011,7 +1011,8 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
 pub const LIST_MATCH_CAP: usize = 10_000;
 
 /// Text folded for list search: lower case, with the accents of Latin letters removed
-/// (`É` → `e`, `ß` → `ss`, `Œ` → `oe`) and combining marks dropped.
+/// (`É` → `e`, `ß` → `ss`, `Œ` → `oe`, `Ộ` → `o`) and combining marks dropped. Covers Latin-1,
+/// Latin Extended-A and -B and Latin Extended Additional; other scripts keep their marks.
 pub fn search_fold(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars().flat_map(char::to_lowercase) {
@@ -1023,8 +1024,8 @@ pub fn search_fold(s: &str) -> String {
     out
 }
 
-/// The unaccented spelling of a lower-case Latin letter (`é` → `e`, `ß` → `ss`); combining
-/// marks fold to nothing. `None` leaves the character as it is.
+/// The unaccented spelling of a lower-case Latin letter (`é` → `e`, `ß` → `ss`, `ộ` → `o`);
+/// combining marks fold to nothing. `None` leaves the character as it is.
 fn fold_latin(c: char) -> Option<&'static str> {
     Some(match c {
         '\u{300}'..='\u{36f}' => "",
@@ -1051,6 +1052,38 @@ fn fold_latin(c: char) -> Option<&'static str> {
         'ŵ' => "w",
         'ý' | 'ÿ' | 'ŷ' => "y",
         'ź' | 'ż' | 'ž' => "z",
+        // Latin Extended-B and Latin Extended Additional (Vietnamese, pinyin tones, …): the base
+        // letter of each canonical decomposition (Unicode 15).
+        'ǎ' | 'ǟ' | 'ǡ' | 'ǻ' | 'ȁ' | 'ȃ' | 'ȧ' | 'ḁ' | 'ạ' | 'ả' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' => {
+            "a"
+        }
+        'ḃ' | 'ḅ' | 'ḇ' => "b",
+        'ḉ' => "c",
+        'ḋ' | 'ḍ' | 'ḏ' | 'ḑ' | 'ḓ' => "d",
+        'ȅ' | 'ȇ' | 'ȩ' | 'ḕ' | 'ḗ' | 'ḙ' | 'ḛ' | 'ḝ' | 'ẹ' | 'ẻ' | 'ẽ' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => "e",
+        'ḟ' => "f",
+        'ǧ' | 'ǵ' | 'ḡ' => "g",
+        'ȟ' | 'ḣ' | 'ḥ' | 'ḧ' | 'ḩ' | 'ḫ' | 'ẖ' => "h",
+        'ǐ' | 'ȉ' | 'ȋ' | 'ḭ' | 'ḯ' | 'ỉ' | 'ị' => "i",
+        'ǰ' => "j",
+        'ǩ' | 'ḱ' | 'ḳ' | 'ḵ' => "k",
+        'ḷ' | 'ḹ' | 'ḻ' | 'ḽ' => "l",
+        'ḿ' | 'ṁ' | 'ṃ' => "m",
+        'ǹ' | 'ṅ' | 'ṇ' | 'ṉ' | 'ṋ' => "n",
+        'ơ' | 'ǒ' | 'ǫ' | 'ǭ' | 'ȍ' | 'ȏ' | 'ȫ' | 'ȭ' | 'ȯ' | 'ȱ' | 'ṍ' | 'ṏ' | 'ṑ' | 'ṓ' | 'ọ' | 'ỏ' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ớ' | 'ờ'
+        | 'ở' | 'ỡ' | 'ợ' => "o",
+        'ṕ' | 'ṗ' => "p",
+        'ȑ' | 'ȓ' | 'ṙ' | 'ṛ' | 'ṝ' | 'ṟ' => "r",
+        'ṡ' | 'ṣ' | 'ṥ' | 'ṧ' | 'ṩ' => "s",
+        'ṫ' | 'ṭ' | 'ṯ' | 'ṱ' | 'ẗ' => "t",
+        'ư' | 'ǔ' | 'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ȕ' | 'ȗ' | 'ṳ' | 'ṵ' | 'ṷ' | 'ṹ' | 'ṻ' | 'ụ' | 'ủ' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => {
+            "u"
+        }
+        'ṽ' | 'ṿ' => "v",
+        'ẁ' | 'ẃ' | 'ẅ' | 'ẇ' | 'ẉ' | 'ẘ' => "w",
+        'ẋ' | 'ẍ' => "x",
+        'ȳ' | 'ẏ' | 'ẙ' | 'ỳ' | 'ỵ' | 'ỷ' | 'ỹ' => "y",
+        'ẑ' | 'ẓ' | 'ẕ' => "z",
         _ => return None,
     })
 }
@@ -1673,6 +1706,18 @@ mod tests {
         assert!(finds("Cafe\u{301} noir", "café n"));
         assert!(!finds("Cafe\u{301}s", "s"));
         assert!(finds("東京", "東"));
+        // Vietnamese (Latin Extended Additional, with ơ/ư from Latin Extended-B), any case.
+        assert!(finds("Hà Nội - Vietnam", "ha noi"));
+        assert!(finds("Đà Nẵng", "da nang"));
+        assert!(finds("Thừa Thiên Huế", "thua thien hue"));
+        assert!(finds("HỒ CHÍ MINH", "ho chi"));
+        assert!(finds("Hồ Chí Minh", "HỒ CHÍ"));
+        assert!(finds("Phường Bến Nghé", "phuong ben"));
+        // Pinyin tone marks, transliterations with dots below.
+        assert!(finds("Běijīng", "beijing"));
+        assert!(finds("Lǜ", "lu"));
+        assert!(finds("Ḥaifa", "haifa"));
+        assert_eq!(search_fold("ỆỢỰẠẞ"), "eouass");
     }
 
     #[test]

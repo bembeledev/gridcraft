@@ -1335,6 +1335,11 @@ fn preset_style(name: &str) -> Style {
     s
 }
 
+fn cf_formula(value: String) -> Result<String> {
+    gridcraft_formula::parse(&value).map_err(|e| bad("home.conditionalFormat", format!("invalid conditional-format formula: {e}")))?;
+    Ok(value)
+}
+
 fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
@@ -1351,8 +1356,8 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
     let kind = g("type").unwrap_or_else(|| "cellIs".into());
-    let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
-        match v {
+    let value_kind = |v: Option<&Json>, default: CfValueKind| -> Result<CfValueKind> {
+        Ok(match v {
             Some(Json::Object(o)) => {
                 let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
                 let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
@@ -1361,12 +1366,12 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                     "max" => CfValueKind::Max,
                     "percent" => CfValueKind::Percent(val),
                     "percentile" => CfValueKind::Percentile(val),
-                    "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
+                    "formula" => CfValueKind::Formula(cf_formula(o.get("value").and_then(Json::as_str).unwrap_or("").into())?),
                     _ => CfValueKind::Number(val),
                 }
             }
             _ => default,
-        }
+        })
     };
     let rule = match kind.as_str() {
         "cellIs" => {
@@ -1391,9 +1396,9 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                     format!("\"{}\"", v.replace('"', "\"\""))
                 }
             };
-            CfRule::CellIs { op, a: quote(a), b: b.map(quote), style }
+            CfRule::CellIs { op, a: cf_formula(quote(a))?, b: b.map(|v| cf_formula(quote(v))).transpose()?, style }
         }
-        "expression" => CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style },
+        "expression" => CfRule::Expression { formula: cf_formula(g("formula").unwrap_or_default().trim_start_matches('=').to_string())?, style },
         "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
         "notContainsText" => CfRule::NotContainsText { text: g("text").unwrap_or_default(), style },
         "beginsWith" => CfRule::BeginsWith { text: g("text").unwrap_or_default(), style },
@@ -1429,8 +1434,8 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             CfRule::ColorScale { stops }
         }
         "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
+            min: value_kind(rule.get("min"), CfValueKind::Min)?,
+            max: value_kind(rule.get("max"), CfValueKind::Max)?,
             color: super::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,

@@ -1656,7 +1656,9 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
             });
             ui.label(lang.tr("Color:"));
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic")) {
+            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic"), "formatCellsFont")
+                .or_else(|| crate::color_picker::take_result(ui.ctx(), "formatCellsFont"))
+            {
                 st.font.color =
                     if c == "none" { gridcraft_engine::model::Color::Auto } else { gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default() };
             }
@@ -1711,7 +1713,9 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
             ui.label(lang.tr("Background Color:"));
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
+            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color"), "formatCellsFill")
+                .or_else(|| crate::color_picker::take_result(ui.ctx(), "formatCellsFill"))
+            {
                 st.fill = if c == "none" {
                     Default::default()
                 } else {
@@ -2738,4 +2742,25 @@ mod tests {
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
     }
+}
+
+/// The light title row of desktop-style dialogs: the title on the left, help and close on the right.
+pub(crate) fn light_title(ui: &mut egui::Ui, title: &str, open: &mut bool, help: &str) {
+    let lang = crate::i18n::current(ui.ctx());
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.allocate_ui_with_layout(vec2(ui.available_width(), 26.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(lang.tr(title)).font(crate::theme::ui_font(13.0)).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let close = ui.add(
+                egui::Button::new(egui::RichText::new("✕").font(crate::theme::ui_font(14.0)).color(t.text)).frame(false).min_size(vec2(30.0, 24.0)),
+            );
+            close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close"));
+            if close.clicked() {
+                *open = false;
+            }
+            ui.add_space(14.0);
+            ui.add(egui::Label::new(egui::RichText::new("?").font(crate::theme::ui_font(14.0)).color(t.text_dim)).sense(egui::Sense::hover()))
+                .on_hover_text(lang.tr(help));
+        });
+    });
 }

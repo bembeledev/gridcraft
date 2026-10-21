@@ -186,7 +186,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     }
                                     ui.menu_button("Tab Color", |ui| {
                                         let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
-                                        if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color") {
+                                        if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color", &format!("tabColor{i}:{name}")) {
                                             app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
                                             ui.close();
                                         }
@@ -207,6 +207,10 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         ui.close();
                                     }
                                 });
+                                // More Colors… answers after the menu closed.
+                                if let Some(c) = crate::color_picker::take_result(ui.ctx(), &format!("tabColor{i}:{name}")) {
+                                    app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
+                                }
                             }
                         });
                     });

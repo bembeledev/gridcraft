@@ -378,6 +378,7 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Writes `body` to a CSV named `name` in this run's temp folder and returns its path.
 fn temp_csv(name: &str, body: &str) -> String {
     let dir = std::env::temp_dir().join(format!("gridcraft_open_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -386,6 +387,7 @@ fn temp_csv(name: &str, body: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Opening a second file adds a tab for it, and clicking the first tab switches back.
 #[test]
 fn opening_a_second_file_adds_a_visible_tab_and_keeps_the_first() {
     let a = temp_csv("one.csv", "a,1\n");
@@ -407,6 +409,7 @@ fn opening_a_second_file_adds_a_visible_tab_and_keeps_the_first() {
     let _ = std::fs::remove_file(b);
 }
 
+/// Only an untouched blank Book1 is replaced: New and Open keep an edited one.
 #[test]
 fn new_and_open_never_replace_an_edited_or_saved_workbook() {
     let a = temp_csv("edited.csv", "x,1\n");
@@ -419,4 +422,27 @@ fn new_and_open_never_replace_an_edited_or_saved_workbook() {
     h.run_steps(2);
     assert!(!h.state().session.documents()[0].wb.sheets[0].cells.is_empty());
     let _ = std::fs::remove_file(a);
+}
+
+/// A workbook hidden with View › Hide has no tab, so a click cannot bring it back past Unhide.
+#[test]
+fn a_hidden_workbook_has_no_tab() {
+    use egui_kittest::kittest::Queryable;
+    let a = temp_csv("shown.csv", "a,1\n");
+    let b = temp_csv("secret.csv", "b,2\n");
+    let c = temp_csv("third.csv", "c,3\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a);
+    h.state_mut().open_path(&b);
+    h.state_mut().open_path(&c);
+    h.state_mut().run("window.activate", serde_json::json!({"index": 1})).unwrap();
+    h.state_mut().run("view.hideWindow", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 3);
+    assert!(h.query_by_label_contains("secret.csv").is_none(), "the hidden workbook has no tab");
+    h.get_by_label_contains("shown.csv");
+    h.get_by_label_contains("third.csv");
+    for p in [a, b, c] {
+        let _ = std::fs::remove_file(p);
+    }
 }

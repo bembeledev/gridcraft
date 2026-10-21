@@ -433,7 +433,8 @@ fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }
 
-fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
+/// Maps a number-format color into the grid and conditional-preview renderer’s color type.
+pub(crate) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
     use gridcraft_engine::numfmt::FormatColor as F;
     match c {
         F::Black => Color32::BLACK,
@@ -457,47 +458,15 @@ fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) -> bool) ->
     end
 }
 
+/// Combines cell/table styling with matching conditional overrides for on-screen rendering.
 fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
         style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
     }
     let cfl = cf.look(wb, si, c);
-    if let Some(l) = &cfl
-        && let Some(st) = &l.style
-    {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
-        }
-        if st.font.color != Color::Auto {
-            style.font.color = st.font.color;
-        }
-        if st.font.bold {
-            style.font.bold = true;
-        }
-        if st.font.italic {
-            style.font.italic = true;
-        }
-        if st.font.underline != Underline::None {
-            style.font.underline = st.font.underline;
-        }
-        if st.font.strike {
-            style.font.strike = true;
-        }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
-            style.num_fmt = st.num_fmt.clone();
-        }
-        for (dst, src) in [
-            (&mut style.borders.left, st.borders.left),
-            (&mut style.borders.right, st.borders.right),
-            (&mut style.borders.top, st.borders.top),
-            (&mut style.borders.bottom, st.borders.bottom),
-        ] {
-            if !src.is_none() {
-                *dst = src;
-            }
-        }
+    if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        style.apply_differential(st);
     }
     let mut fill = match style.fill.pattern {
         PatternType::None => None,
@@ -1049,6 +1018,7 @@ fn mirror_shape(shape: &mut egui::Shape, axis: f32) {
     }
 }
 
+/// Paints a visible sheet region, applying effective conditional styles to text, fills and borders.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_quadrant(
     p: &Painter,
@@ -1183,7 +1153,8 @@ pub(crate) fn paint_quadrant(
         let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
         let rect = &text_rect;
         let st = &lk.style;
-        let size = st.font.size * 96.0 / 72.0 * z;
+        let script = st.font.vert != gridcraft_engine::model::VertAlign::Baseline;
+        let size = st.font.size * 96.0 / 72.0 * z * if script { 0.67 } else { 1.0 };
         let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
         let font = FontId::new(size, fam);
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
@@ -1196,7 +1167,11 @@ pub(crate) fn paint_quadrant(
         if text.is_empty() {
             continue;
         }
-        let color = ncolor.unwrap_or(lk.text_color);
+        let color = if cfl.as_ref().and_then(|l| l.style.as_ref()).is_some_and(|s| s.sets(gridcraft_engine::model::StyleProperty::FontColor)) {
+            lk.text_color
+        } else {
+            ncolor.unwrap_or(lk.text_color)
+        };
         let halign = match st.align.h {
             HAlign::General => match v {
                 Value::Number(_) => HAlign::Right,
@@ -1224,7 +1199,10 @@ pub(crate) fn paint_quadrant(
                 HAlign::Right => rect.right() - pad,
                 _ => text_left + pad + indent,
             };
-            let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+            let gh = galley.size().y;
+            let normal_h = if script { gh / 0.67 } else { gh };
+            let y = wrapped_cell_text_y(st.align.v, *rect, normal_h, z)
+                + if st.font.vert == gridcraft_engine::model::VertAlign::Subscript { normal_h - gh } else { 0.0 };
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
             continue;
         }
@@ -1311,7 +1289,13 @@ pub(crate) fn paint_quadrant(
             _ => text_left + pad + indent,
         };
         let gh = galley.size().y;
-        let y = cell_text_y(st.align.v, *rect, gh, z);
+        let normal_h = if script { gh / 0.67 } else { gh };
+        let y = cell_text_y(st.align.v, *rect, normal_h, z)
+            + match st.font.vert {
+                gridcraft_engine::model::VertAlign::Superscript => 0.0,
+                gridcraft_engine::model::VertAlign::Subscript => normal_h - gh,
+                _ => 0.0,
+            };
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
         if rotated {
             let angle = -(st.align.rotation as f32).to_radians();
@@ -3463,6 +3447,7 @@ mod tests {
         assert_eq!(center_across_end(0, 1, |_| true), 1);
     }
 
+    /// Checks conditional number-format precedence, font-only inheritance and explicit General resets in grid text.
     #[test]
     fn conditional_number_format_reaches_the_cell_text() {
         // #1163: a rule's number format replaces the cell's own; unmatched cells keep theirs.
@@ -3472,6 +3457,17 @@ mod tests {
         session.execute("home.numberFormat", json!({"range": "A3", "code": "0.0"})).unwrap();
         let rule = json!({"type": "cellIs", "operator": "greater", "value": "2", "style": {"num_fmt": "0.00"}});
         session.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
+        // An upper-priority font-only rule must inherit the lower rule's number format.
+        session
+            .execute(
+                "home.conditionalFormat",
+                json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "TRUE", "style": {"font": {"bold": true}}}}),
+            )
+            .unwrap();
+        session.execute("cell.set", json!({"cell": "A4", "input": "5"})).unwrap();
+        session.execute("home.numberFormat", json!({"range": "A4", "code": "0.0"})).unwrap();
+        // General can also be an explicit reset, distinguished from legacy unset General.
+        session.execute("home.conditionalFormat", json!({"range": "A4", "rule": {"type": "expression", "formula": "TRUE", "style": {"num_fmt": "General", "specified": ["NumberFormat"]}}})).unwrap();
         let wb = session.active().unwrap().wb.clone();
         let sh = wb.sheet(0).unwrap();
         let mut cf = CfCache::new();
@@ -3483,6 +3479,7 @@ mod tests {
         assert_eq!(text(0, &mut cf), "1");
         assert_eq!(text(1, &mut cf), "3.00");
         assert_eq!(text(2, &mut cf), "4.00");
+        assert_eq!(text(3, &mut cf), "5");
     }
 
     #[test]

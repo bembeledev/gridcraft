@@ -164,6 +164,7 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// Dispatches a control-channel request through the same commands and dialog confirmation paths as the UI.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
@@ -250,24 +251,42 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
-                Some(cmd) => {
-                    let params = Json::Object(d.values.clone());
-                    let r = app.run(cmd, params);
-                    if r.is_err() {
-                        app.dialog = Some(d);
-                    }
-                    wrap(r)
+            Some(mut d) if d.name == "cfFormat" => match d.confirm_custom_format(app) {
+                Ok(()) => {
+                    app.dialog = d.back.map(|d| *d);
+                    ok(Json::Null)
                 }
-                None => {
+                Err(e) => {
                     app.dialog = Some(d);
-                    err("this dialog has no OK command; drive it with its own commands")
+                    err(e)
                 }
             },
+            Some(mut d) => {
+                if let Err(e) = d.validate_confirmation(app) {
+                    app.dialog = Some(d);
+                    return err(e);
+                }
+                match d.command {
+                    Some(cmd) => {
+                        let params = crate::dialogs::build_params(&d);
+                        let r = app.run(cmd, params);
+                        if r.is_err() {
+                            app.dialog = Some(d);
+                        } else {
+                            app.dialog = d.back.take().map(|d| *d);
+                        }
+                        wrap(r)
+                    }
+                    None => {
+                        app.dialog = Some(d);
+                        err("this dialog has no OK command; drive it with its own commands")
+                    }
+                }
+            }
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => {
-            app.dialog = None;
+            app.dialog = app.dialog.take().and_then(|d| d.back.map(|d| *d));
             ok(Json::Null)
         }
         "ui.message.dismiss" => {

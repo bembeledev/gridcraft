@@ -70,8 +70,10 @@ impl DesktopTheme {
 /// The session-bus connection the watcher keeps between reads, opened on first use.
 #[cfg(target_os = "linux")]
 type Link = Option<zbus::blocking::Connection>;
+/// Platforms using winit do not need a portal connection.
 #[cfg(not(target_os = "linux"))]
-type Link = ();
+#[derive(Default)]
+struct Link {}
 
 /// Ask the portal once, over `link`'s connection (opened if absent, dropped if the bus went
 /// away). D-Bus calls block, so this belongs off the UI thread: the watcher's thread is its

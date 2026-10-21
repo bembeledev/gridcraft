@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 
 use gridcraft_model::style::Protection;
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleProperty, Underline, VAlign, VertAlign,
+    Workbook,
 };
 
 use crate::tables::{INDEXED, builtin_format, builtin_id};
@@ -350,8 +351,10 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
                     let mut s = Style::default();
                     if let Some(f) = x.child("font") {
                         let f = read_font(f, &palette);
-                        // Differential fonts rarely name a face; keep the default face and size.
-                        s.font = Font { name: s.font.name.clone(), size: s.font.size, ..f };
+                        s.font = f;
+                        if let Some(c) = x.child("font").and_then(|f| f.child("color")) {
+                            s.font.color = read_color(c, &palette);
+                        }
                     }
                     if let Some(n) = x.child("numFmt") {
                         if let Some(code) = n.attr("formatCode") {
@@ -372,6 +375,49 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
                     if let Some(p) = x.child("protection") {
                         s.protection = read_protection(p);
                     }
+                    let mut set = s.differential_properties();
+                    if let Some(f) = x.child("font") {
+                        for (tag, property) in [
+                            ("name", StyleProperty::FontName),
+                            ("sz", StyleProperty::FontSize),
+                            ("b", StyleProperty::Bold),
+                            ("i", StyleProperty::Italic),
+                            ("u", StyleProperty::Underline),
+                            ("strike", StyleProperty::Strike),
+                            ("color", StyleProperty::FontColor),
+                            ("vertAlign", StyleProperty::FontVertical),
+                        ] {
+                            if f.child(tag).is_some() {
+                                set.insert(property);
+                            }
+                        }
+                    }
+                    if x.child("numFmt").is_some() {
+                        set.insert(StyleProperty::NumberFormat);
+                    }
+                    if x.child("fill").is_some() {
+                        set.insert(StyleProperty::Fill);
+                    }
+                    if let Some(b) = x.child("border") {
+                        for (tag, property) in [
+                            ("left", StyleProperty::LeftBorder),
+                            ("right", StyleProperty::RightBorder),
+                            ("top", StyleProperty::TopBorder),
+                            ("bottom", StyleProperty::BottomBorder),
+                        ] {
+                            if b.child(tag).is_some_and(|line| line.attr("style").is_some()) {
+                                set.insert(property);
+                            }
+                        }
+                        if b.flag("diagonalDown", false) {
+                            set.insert(StyleProperty::DiagonalDown);
+                        }
+                        if b.flag("diagonalUp", false) {
+                            set.insert(StyleProperty::DiagonalUp);
+                        }
+                    }
+                    s.specified = Some(set);
+                    s.normalize_differential();
                     s
                 })
                 .collect()
@@ -577,6 +623,92 @@ impl NumFmts {
     }
 }
 
+/// Serialize only the fields the rule overrides. Explicit off/none/automatic values survive.
+fn differential_xml(d: &Style, nf: &mut NumFmts) -> String {
+    use StyleProperty::*;
+    let fields = d.differential_properties();
+    let has = |p| fields.contains(&p);
+    let mut out = String::new();
+    let mut font = String::new();
+    for (property, tag, value) in [(Bold, "b", d.font.bold), (Italic, "i", d.font.italic), (Strike, "strike", d.font.strike)] {
+        if has(property) {
+            let _ = write!(font, "<{tag} val=\"{}\"/>", u8::from(value));
+        }
+    }
+    if has(FontName) {
+        let _ = write!(font, "<name val=\"{}\"/>", esc_attr(&d.font.name));
+    }
+    if has(FontSize) {
+        let _ = write!(font, "<sz val=\"{}\"/>", num(d.font.size as f64));
+    }
+    if has(FontColor) {
+        let _ = write!(font, "<color {}/>", color_attrs(&d.font.color));
+    }
+    if has(Underline) {
+        let value = match d.font.underline {
+            gridcraft_model::Underline::None => "none",
+            gridcraft_model::Underline::Single => "single",
+            gridcraft_model::Underline::Double => "double",
+            gridcraft_model::Underline::SingleAccounting => "singleAccounting",
+            gridcraft_model::Underline::DoubleAccounting => "doubleAccounting",
+        };
+        let _ = write!(font, "<u val=\"{value}\"/>");
+    }
+    if has(FontVertical) {
+        let value = match d.font.vert {
+            VertAlign::Baseline => "baseline",
+            VertAlign::Superscript => "superscript",
+            VertAlign::Subscript => "subscript",
+        };
+        let _ = write!(font, "<vertAlign val=\"{value}\"/>");
+    }
+    if !font.is_empty() {
+        let _ = write!(out, "<font>{font}</font>");
+    }
+    if has(NumberFormat) {
+        let id = nf.id(d.num_fmt.as_str());
+        let _ = write!(out, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
+    }
+    if has(Fill) {
+        out.push_str(&fill_xml(&d.fill, true));
+    }
+    if let Some(a) = alignment_xml(&d.align) {
+        out.push_str(&a);
+    }
+    let mut border = String::new();
+    for (property, tag, line) in [
+        (LeftBorder, "left", d.borders.left),
+        (RightBorder, "right", d.borders.right),
+        (TopBorder, "top", d.borders.top),
+        (BottomBorder, "bottom", d.borders.bottom),
+    ] {
+        if has(property) {
+            if line.is_none() {
+                let _ = write!(border, "<{tag} style=\"none\"/>");
+            } else {
+                border.push_str(&line_xml(tag, &line));
+            }
+        }
+    }
+    if has(DiagonalDown) || has(DiagonalUp) {
+        // OOXML has one diagonal style shared by both directions.
+        let line = if has(DiagonalDown) { d.borders.diag_down } else { d.borders.diag_up };
+        if line.is_none() {
+            border.push_str("<diagonal style=\"none\"/>");
+        } else {
+            border.push_str(&line_xml("diagonal", &line));
+        }
+    }
+    if !border.is_empty() {
+        let _ =
+            write!(out, "<border diagonalDown=\"{}\" diagonalUp=\"{}\">{border}</border>", u8::from(has(DiagonalDown)), u8::from(has(DiagonalUp)));
+    }
+    if let Some(p) = protection_xml(&d.protection) {
+        out.push_str(&p);
+    }
+    out
+}
+
 /// `styles.xml` for the workbook: one cell format per model style, in `StyleId` order (so a
 /// cell's `s` attribute is its style id), plus the given differential formats.
 /// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); the
@@ -663,29 +795,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     let mut dx = String::new();
     for d in dxfs {
         dx.push_str("<dxf>");
-        let def = Style::default();
-        if d.font.bold
-            || d.font.italic
-            || d.font.strike
-            || d.font.underline != Underline::None
-            || d.font.color != Color::Auto
-            || d.font.vert != VertAlign::Baseline
-        {
-            dx.push_str(&font_xml(&d.font, true, false));
-        }
-        if d.num_fmt != def.num_fmt {
-            let id = nf.id(d.num_fmt.as_str());
-            let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
-        }
-        if d.fill != def.fill {
-            dx.push_str(&fill_xml(&d.fill, true));
-        }
-        if let Some(a) = alignment_xml(&d.align) {
-            dx.push_str(&a);
-        }
-        if d.borders != def.borders {
-            dx.push_str(&border_xml(&d.borders));
-        }
+        dx.push_str(&differential_xml(d, &mut nf));
         dx.push_str("</dxf>");
     }
     for f in extra_fmts {
@@ -730,4 +840,35 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    /// Checks schema child ordering and retained values when all differential sections coexist.
+    #[test]
+    fn differential_sections_follow_schema_order_and_round_trip() {
+        let mut style = Style::default();
+        style.font.bold = true;
+        style.num_fmt = NumFmt::new("0.00");
+        style.fill = Fill::solid(Color::rgb(10, 20, 30));
+        style.align.h = HAlign::Center;
+        style.borders.bottom = BorderLine::thin();
+        style.protection.locked = false;
+        let (xml, _) = write_styles(&Workbook::new(), &[style.clone()], &[]);
+        let root = crate::xml::parse(xml.as_bytes()).unwrap();
+        let dxf = root.child("dxfs").unwrap().child("dxf").unwrap();
+        assert_eq!(
+            dxf.children.iter().map(|child| child.name.as_str()).collect::<Vec<_>>(),
+            ["font", "numFmt", "fill", "alignment", "border", "protection"]
+        );
+        let loaded = read_styles(&root, &[]).dxfs.remove(0);
+        assert_eq!(loaded.font.bold, style.font.bold);
+        assert_eq!(loaded.num_fmt, style.num_fmt);
+        assert_eq!(loaded.fill, style.fill);
+        assert_eq!(loaded.align, style.align);
+        assert_eq!(loaded.borders, style.borders);
+        assert_eq!(loaded.protection, style.protection);
+    }
 }

@@ -631,6 +631,7 @@ struct Look {
     cf: Option<crate::cf::CfLook>,
 }
 
+/// Combines cell, table and conditional styles into the effective style and fill used for PDF output.
 fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
     let mut style = match sh.table_at(c) {
         Some(t) => crate::tables::table_cell_style(wb, si, t, c),
@@ -638,32 +639,7 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
-        }
-        if st.font.color != Color::Auto {
-            style.font.color = st.font.color;
-        }
-        style.font.bold |= st.font.bold;
-        style.font.italic |= st.font.italic;
-        style.font.strike |= st.font.strike;
-        if st.font.underline != Underline::None {
-            style.font.underline = st.font.underline;
-        }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
-            style.num_fmt = st.num_fmt.clone();
-        }
-        for (dst, src) in [
-            (&mut style.borders.left, st.borders.left),
-            (&mut style.borders.right, st.borders.right),
-            (&mut style.borders.top, st.borders.top),
-            (&mut style.borders.bottom, st.borders.bottom),
-        ] {
-            if !src.is_none() {
-                *dst = src;
-            }
-        }
+        style.apply_differential(st);
     }
     let mut fill = match style.fill.pattern {
         PatternType::None => None,
@@ -1046,6 +1022,7 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// Draws cell text using the effective number format, font, script position and available printable width.
 fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
     let (x, y, w, h) = rect;
     let sh = b.sh;
@@ -1058,7 +1035,8 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         return;
     }
     let st = &l.style;
-    let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
+    let normal_size = st.font.size.clamp(1.0, 409.0) * b.scale;
+    let mut size = normal_size * if st.font.vert == VertAlign::Baseline { 1.0 } else { 0.67 };
     let font = font_for(st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
@@ -1066,7 +1044,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let code = st.num_fmt.as_str();
     let formatted = crate::display::format(&v, code, wb);
     let mut color = formatted.color.map(numfmt_rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
-    if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.font.color != Color::Auto) {
+    if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.sets(StyleProperty::FontColor)) {
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
     let is_num = matches!(v, Value::Number(_));
@@ -1124,11 +1102,17 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     };
     let line_h = size * 1.2;
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let script_offset = match st.font.vert {
+        VertAlign::Superscript => -normal_size * 0.3,
+        VertAlign::Subscript => normal_size * 0.1,
+        _ => 0.0,
     };
+    let first_baseline = script_offset
+        + match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;
@@ -1762,6 +1746,27 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    /// Checks that conditional number formatting and font overrides reach the generated PDF.
+    #[test]
+    fn conditional_number_format_and_font_are_used_in_pdf() {
+        let mut session = s();
+        session.execute("cell.set", json!({"cell":"A1","input":"42"})).unwrap();
+        session.execute("home.columnWidth", json!({"range":"A1","width":200})).unwrap();
+        session
+            .execute(
+                "home.conditionalFormat",
+                json!({"rule":{"type":"expression","formula":"TRUE","style":{"num_fmt":"0.00","font":{"bold":true,"size":18.0}}}}),
+            )
+            .unwrap();
+        let (pdf, _) = pdf_of(&mut session, json!({}));
+        assert!(contains(&pdf, "(42.00) Tj"));
+        let doc = session.doc().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let look = cell_look(&doc.wb, 0, sheet, CellRef::new(0, 0), &mut Some(crate::cf::CfCache::new()));
+        assert!(look.style.font.bold);
+        assert_eq!(look.style.font.size, 18.0);
     }
 
     #[test]

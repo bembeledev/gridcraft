@@ -32,7 +32,9 @@ fn borders(h: &egui_kittest::Harness<'static, SheetApp>, cell: &str) -> Borders 
 
 #[test]
 fn diagram_menu_applies_left_right_inside_and_outside_then_undoes() {
-    for label in ["Left Border", "Right Border", "Inside Borders", "Outside Borders"] {
+    // The menu follows the desktop Borders menu, which has no Inside Borders (that preset lives in
+    // Format Cells ▸ Border).
+    for label in ["Left Border", "Right Border", "Outside Borders"] {
         let mut h = harness();
         h.get_by_label("Border presets").click();
         h.run_steps(6);

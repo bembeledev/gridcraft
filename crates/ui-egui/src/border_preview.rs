@@ -1,6 +1,6 @@
 //! Original border diagrams, painted with the same strokes as worksheet cells.
 
-use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::{BorderStyle, Borders, Theme};
 
 use crate::grid::paint_border;
@@ -9,10 +9,14 @@ use crate::theme::{self, Tokens};
 /// A labelled menu button with a two-by-two diagram to distinguish inside edges
 /// from the selection outline. Labels stay available to accessibility tools.
 pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response {
-    let response = ui.add(egui::Button::new("").frame(false).min_size(vec2(254.0, 26.0)));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    // `label` may mark its access key with `&` ("&Bottom Border"); it is drawn underlined, and
+    // translated by its plain text (`tr_access`).
+    let label = &tr_access(crate::i18n::current(ui.ctx()), label);
+    let plain = label.replace('&', "");
+    let response = ui.add(egui::Button::new("").frame(false).min_size(vec2(300.0, 30.0)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &plain));
     let t = Tokens::get(ui.ctx());
-    let rect = Rect::from_center_size(pos2(response.rect.left() + 16.0, response.rect.center().y), vec2(20.0, 16.0));
+    let rect = Rect::from_center_size(pos2(response.rect.left() + 18.0, response.rect.center().y), vec2(16.0, 16.0));
     let edges = [
         [rect.left_top(), rect.right_top()],
         [rect.left_bottom(), rect.right_bottom()],
@@ -45,7 +49,9 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
             paint_border(ui.painter(), points, style, t.text);
         }
     }
-    ui.painter().text(pos2(response.rect.left() + 36.0, response.rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
+    let galley = ui.painter().layout_job(access_key_job(label, theme::ui_font(13.0), t.text));
+    let at = pos2(response.rect.left() + 38.0, response.rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(at, galley, t.text);
     response
 }
 
@@ -79,4 +85,36 @@ pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
             paint_border(ui.painter(), points, line.style, color);
         }
     }
+}
+
+/// Translates a label that marks its access key with `&` ("Entire &row"). The catalogs hold
+/// the plain text ("Entire row"); a translation is shown without an access key, and a label with
+/// no translation keeps its English access key.
+pub(crate) fn tr_access(lang: crate::i18n::Language, label: &str) -> String {
+    let plain = label.replace('&', "");
+    let shown = lang.tr(&plain);
+    if shown == plain { label.to_string() } else { shown.to_string() }
+}
+
+/// Lays out `label` with the character after `&` underlined (Windows menu access key).
+pub(crate) fn access_key_job(label: &str, font: egui::FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    // "&&" is a literal ampersand ("Merge && &Center").
+    let chars: Vec<char> = label.chars().collect();
+    let mut i = 0;
+    let mut underline_next = false;
+    while let Some(&c) = chars.get(i) {
+        if c == '&' && chars.get(i + 1) == Some(&'&') {
+            i += 1;
+        } else if c == '&' {
+            underline_next = true;
+            i += 1;
+            continue;
+        }
+        let underline = if underline_next { Stroke::new(1.0, color) } else { Stroke::NONE };
+        underline_next = false;
+        job.append(&c.to_string(), 0.0, egui::TextFormat { font_id: font.clone(), color, underline, ..Default::default() });
+        i += 1;
+    }
+    job
 }

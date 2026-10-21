@@ -955,7 +955,26 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.end_row();
+        // Interface size (issue #230): scales the whole window on top of the desktop's scale. It
+        // lives here with the theme, as in the desktop app's Options (the View tab no longer has it).
+        ui.label(lang.tr("Interface size"));
+        let current = app.ui.interface_scale;
+        let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
+        egui::ComboBox::from_id_salt("backstage_interface_size").width(160.0).selected_text(text(current)).show_ui(ui, |ui| {
+            for v in [100, 75, 90, 110, 125, 150, 175, 200] {
+                if ui.selectable_label(v == current, text(v)).clicked() {
+                    app.run_or_alert("view.interfaceScale", json!({"percent": v}));
+                }
+            }
+        });
+        ui.end_row();
     });
+    ui.add_space(6.0);
+    let mut animations = app.ui.animations;
+    let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
+    if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.animations", json!({"on": animations}));
+    }
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {

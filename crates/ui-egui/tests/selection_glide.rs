@@ -118,11 +118,14 @@ fn with_eguis_animations_off_the_outline_is_always_on_its_cells() {
 }
 
 #[test]
-fn the_view_tab_checkbox_turns_the_glide_off_and_on() {
+fn the_options_checkbox_turns_the_glide_off_and_on() {
     let mut h = animated();
-    h.state_mut().ui.ribbon_tab = "View".into();
+    // File › Options holds the Animations switch, as the desktop app keeps it in Options.
+    h.state_mut().open_dialog("options", json!({}));
     h.run_steps(2);
     h.get_by_label("Animations").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(!h.state().ui.animations, "the checkbox turns the setting off");
     select(&mut h, "E9");
@@ -132,7 +135,11 @@ fn the_view_tab_checkbox_turns_the_glide_off_and_on() {
         assert_eq!(outline(&h), e9, "no animations: the outline is on its cells at once");
         assert!(!gliding(&h));
     }
+    h.state_mut().open_dialog("options", json!({}));
+    h.run_steps(2);
     h.get_by_label("Animations").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.animations, "and on again");
     select(&mut h, "B1");

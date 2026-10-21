@@ -14,6 +14,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod measure;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
@@ -141,6 +142,21 @@ impl DocState {
     }
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
+    }
+    /// Refits this workbook's rows of wrapped or multi-line text with the installed measurer
+    /// ([`cmd::refit_wrapped_rows`]). Not an edit: a workbook without unsaved changes stays without
+    /// them. Whether any row changed.
+    pub(crate) fn refit_wrapped_rows(&mut self) -> bool {
+        let clean = !self.is_dirty();
+        let mut wb = (*self.wb).clone();
+        if !cmd::refit_wrapped_rows(&mut wb) {
+            return false;
+        }
+        self.wb = Arc::new(wb);
+        if clean {
+            self.saved = self.wb.clone();
+        }
+        true
     }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet
@@ -358,6 +374,18 @@ impl Session {
             d.revision += 1;
         }
         result
+    }
+
+    /// Refits the rows of wrapped or multi-line text in every open workbook after the text measurer
+    /// changed ([`cmd::refit_wrapped_rows`]): all of them, so one opened before the measurer
+    /// existed is refitted even if it becomes active later without a font change. Not an edit: no
+    /// undo step, and a workbook without unsaved changes stays without them.
+    pub fn refit_wrapped_rows(&mut self) {
+        for d in &mut self.docs {
+            if d.refit_wrapped_rows() {
+                d.revision += 1;
+            }
+        }
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

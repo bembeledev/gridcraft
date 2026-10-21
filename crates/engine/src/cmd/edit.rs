@@ -620,6 +620,10 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    // The restored workbook may hold rows sized before the measurer last changed.
+    if crate::measure::installed() {
+        d.refit_wrapped_rows();
+    }
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -639,6 +643,9 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    if crate::measure::installed() {
+        d.refit_wrapped_rows();
+    }
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))

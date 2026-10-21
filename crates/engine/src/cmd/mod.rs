@@ -486,22 +486,41 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         let size = st.font.size;
         let line = (size * 1.8).round().max(default * size / gridcraft_model::DEFAULT_FONT_SIZE);
         let mut lines = 1.0f32;
+        let mut measured = None;
         if !cell.value.is_empty() || cell.formula.is_some() {
-            let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
+            let at = CellRef::new(row, c);
+            let text = crate::display::cell_text(wb, sh, at);
             let explicit = text.lines().count().max(1) as f32;
             lines = if st.align.wrap {
                 let w = sh.col_width(c).max(1.0) - 6.0;
-                text.lines()
-                    .map(|l| (crate::cmd::format::approx_text_width(l, size, st.font.bold) / w.max(1.0)).ceil().max(1.0))
-                    .sum::<f32>()
-                    .max(1.0)
+                text.lines().map(|l| crate::cmd::format::wrapped_line_count(l, size, st.font.bold, w)).sum::<f32>().max(1.0)
             } else {
                 explicit
             };
+            // A UI's measurer lays the text out in the drawing font, wrapped where the grid wraps
+            // it (2.5 px padding a side, the indent and a filter button), instead of estimating.
+            if st.align.wrap || explicit > 1.0 {
+                let wrap_width =
+                    st.align.wrap.then(|| (sh.col_width(c) - 5.0 - f32::from(st.align.indent) * 9.0 - sh.filter_button_space(at)).max(4.0));
+                measured = crate::measure::measure(&crate::measure::TextMeasure {
+                    text: &text,
+                    font: &st.font.name,
+                    size,
+                    bold: st.font.bold,
+                    italic: st.font.italic,
+                    wrap_width,
+                });
+            }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
         }
-        let h = if lines > 1.0 { (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil() } else { line };
+        let h = match measured {
+            // The grid insets wrapped text 1.5 px top and bottom; this keeps the estimate's margin.
+            Some((text_h, n)) if n > 1 => (text_h + 5.0).ceil(),
+            Some(_) => line,
+            None if lines > 1.0 => (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil(),
+            None => line,
+        };
         need = need.max(h.min(546.0));
     }
     let Some(shm) = wb.sheet_mut(si) else { return };
@@ -510,6 +529,39 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     if *e == gridcraft_model::LineInfo::default() {
         shm.rows.remove(&row);
     }
+}
+
+/// Refits the automatic rows holding wrapped or multi-line text, whose height depends on how the
+/// text measures: for after the UI's measurer changed (it bound the workbook's own fonts). As when
+/// a file opens, rows only grow: a taller height already there is kept, and custom heights are
+/// left alone ([`auto_row_height`]). Whether any row changed.
+pub fn refit_wrapped_rows(wb: &mut Workbook) -> bool {
+    let mut changed = false;
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheet(si) else { continue };
+        let mut rows: Vec<u32> = sh
+            .cells
+            .iter()
+            .filter(|(_, cell)| wb.styles.get(cell.style).align.wrap || cell.value.as_text().is_some_and(|t| t.contains('\n')))
+            .map(|(c, _)| c.row)
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        for row in rows {
+            let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            auto_row_height(wb, si, row);
+            let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
+            if let Some(before) = before
+                && after.is_none_or(|a| before > a + 0.5)
+                && let Some(sh) = wb.sheet_mut(si)
+            {
+                sh.rows.entry(row).or_default().size = Some(before);
+                continue;
+            }
+            changed |= after != before;
+        }
+    }
+    changed
 }
 
 impl Ctx<'_> {

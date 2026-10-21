@@ -824,7 +824,11 @@ impl SheetApp {
             self.notice = None;
             return;
         }
-        let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
+        let vba: Vec<&str> = msgs
+            .iter()
+            .copied()
+            .filter(|m| !m.starts_with("XLSB data-only import:") && (m.to_lowercase().contains("macro") || m.contains("VBA")))
+            .collect();
         if !vba.is_empty() {
             self.notice = Some(Notice {
                 text: "This workbook contains VBA macros. GridCraft keeps them intact when you save, but does not run them.".into(),
@@ -833,9 +837,13 @@ impl SheetApp {
             });
         } else {
             let text = if msgs.len() == 1 {
-                msgs[0].to_string()
+                self.ui.language.open_warning(msgs[0])
             } else {
-                format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
+                self.ui
+                    .language
+                    .tr("{count} items in this file were handled differently. First: {warning}")
+                    .replace("{count}", &msgs.len().to_string())
+                    .replace("{warning}", &self.ui.language.open_warning(msgs[0]))
             };
             self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
         }

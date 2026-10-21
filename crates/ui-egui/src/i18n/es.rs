@@ -4,6 +4,26 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "Se omitió una imagen vinculada (no incrustada).",
+        "missing picture {target}" => "Falta la imagen {target}.",
+        "chart {target} has no supported plot and was skipped" => "El gráfico {target} no contiene ningún tipo de gráfico compatible y se omitió.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Se omitió un gráfico de histograma, cascada, mapa de árbol… porque no tiene su parte de gráfico."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Se omitió un objeto incrustado (SmartArt, OLE…).",
+        "grouped shapes are not supported and were skipped" => "Las formas agrupadas no son compatibles y se omitieron.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Importación de XLSB solo con datos: las fórmulas se convierten en sus resultados guardados y no se recalcularán. No se importan el formato, los gráficos, las imágenes, las macros ni otras características; las fechas, la moneda y los porcentajes pueden mostrarse como números. Guarda un archivo .xlsx nuevo; no se admite guardar en XLSB."
+        }
+        "XLSB module sheets were skipped." => "Se omitieron las hojas de módulo XLSB.",
+        "XLSB non-worksheet sheets were skipped." => "Se omitieron las hojas de XLSB que no son hojas de cálculo.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Se omitieron los bloques futuros y de contenido alternativo no compatibles de XLSB."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Se omitieron los rangos combinados no válidos de XLSB.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} elementos de este archivo se procesaron de forma diferente. Primero: {warning}"
+        }
         "Paste" => "Pegar",
         "Paste Values" => "Pegar valores",
         "Paste Formulas" => "Pegar fórmulas",

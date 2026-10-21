@@ -224,3 +224,31 @@ fn typing_over_the_open_dropdown_replaces_it_with_the_searched_list() {
     assert!(h.state().grid.list_picker.is_none());
     assert!(!shown(&h, "Boston - United States of America"), "no list is left open after choosing");
 }
+
+fn click_cell(h: &mut Harness, cell: &str) {
+    let app = h.state();
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    let geo = grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let pos = geo.cell_rect(sh, CellRef::parse(cell).unwrap()).center();
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+fn leaving_the_cell_without_accepting_keeps_the_typed_text() {
+    // An Information rule lets the typed text in, so the commit itself succeeds.
+    let mut h = harness_with(json!({"range": "B2", "type": "list", "formula1": "=$H$1:$H$6", "errorStyle": "information"}));
+    text(&mut h, "United");
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.list_open()));
+    click_cell(&mut h, "E2"); // beside the cell: the popup hangs below it
+    assert!(h.state().editor.is_none(), "clicking another cell commits the edit");
+    assert_eq!(value(&h, "B2"), "United", "only Enter, Tab or a click on the list takes its entry");
+
+    // Ctrl+Enter is an Enter: it takes the highlighted entry.
+    let mut h = harness();
+    text(&mut h, "Ange");
+    key(&mut h, Key::Enter, Modifiers::COMMAND);
+    assert_eq!(value(&h, "B2"), "Los Angeles - United States of America");
+}

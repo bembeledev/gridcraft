@@ -196,6 +196,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         if cmd_enter {
             action = Some((0, 0, false, true));
         }
+        // Enter, Tab and Ctrl+Enter accept the searched list's highlighted entry.
+        if action.is_some() {
+            ed.list_accept = true;
+        }
         if ctrl_shift_enter {
             action = Some((0, 0, true, false));
         }

@@ -43,6 +43,9 @@ pub struct EditState {
     pub caret_to_end: bool,
     /// The searchable list of a cell with an in-cell list validation dropdown.
     pub list: Option<ListSearch>,
+    /// The user accepted the list's highlighted entry (Enter, Tab or a click on it). Any other
+    /// commit (clicking elsewhere, a ribbon command, saving) keeps the typed text.
+    pub list_accept: bool,
 }
 
 /// Entries of a list validation, searched as the user types (Excel's searchable dropdown).
@@ -98,6 +101,7 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             list: None,
+            list_accept: false,
         }
     }
 
@@ -124,11 +128,34 @@ impl EditState {
         let Some(typed) = typed else { return };
         let term = gridcraft_engine::cmd::data::search_term(typed);
         let cap = gridcraft_engine::cmd::data::LIST_MATCH_CAP;
-        list.matches =
-            list.folded.iter().enumerate().filter(|(_, f)| gridcraft_engine::cmd::data::search_matches(f, &term)).map(|(i, _)| i).take(cap).collect();
-        // Text naming an entry exactly highlights that entry rather than the first match.
+        // Text naming an entry exactly highlights that entry rather than the first match, even
+        // when it comes after the matches the list keeps.
         let whole = gridcraft_engine::cmd::data::search_fold(typed.trim());
-        if let Some(pos) = list.matches.iter().position(|&i| list.folded.get(i).is_some_and(|f| *f == whole)) {
+        let mut exact = None;
+        for (i, f) in list.folded.iter().enumerate() {
+            if !gridcraft_engine::cmd::data::search_matches(f, &term) {
+                continue;
+            }
+            if exact.is_none() && *f == whole {
+                exact = Some(i);
+            }
+            if list.matches.len() < cap {
+                list.matches.push(i);
+            } else if exact.is_some() {
+                break;
+            }
+        }
+        if let Some(e) = exact {
+            let pos = match list.matches.iter().position(|&i| i == e) {
+                Some(pos) => pos,
+                None => {
+                    // Past the cap: it takes the last kept slot.
+                    if let Some(last) = list.matches.last_mut() {
+                        *last = e;
+                    }
+                    list.matches.len().saturating_sub(1)
+                }
+            };
             list.index = pos;
             list.keep_visible();
         }
@@ -139,7 +166,7 @@ impl EditState {
         self.list.as_ref().is_some_and(|l| !l.closed && !l.matches.is_empty())
     }
 
-    /// The highlighted entry of the open list: what Enter or Tab commits.
+    /// The highlighted entry of the open list: what Enter or Tab commits (see `list_accept`).
     pub fn list_choice(&self) -> Option<&str> {
         let l = self.list.as_ref().filter(|_| self.list_open())?;
         l.matches.get(l.index).and_then(|&i| l.items.get(i)).map(String::as_str)
@@ -532,5 +559,19 @@ mod tests {
         e.list_step(false);
         let l = e.list.as_ref().map(|l| (l.index, l.top)).unwrap_or_default();
         assert_eq!(l, (3, 3));
+    }
+
+    #[test]
+    fn list_search_finds_an_exact_entry_past_the_cap() {
+        let cap = gridcraft_engine::cmd::data::LIST_MATCH_CAP;
+        let mut items: Vec<String> = (0..cap + 5).map(|i| format!("Item {i}")).collect();
+        items.push("Item".into());
+        let mut e = EditState::new(0, CellRef::new(0, 0), "item".into(), true, false);
+        e.set_list_items(items, true);
+        let (len, index, top) = e.list.as_ref().map(|l| (l.matches.len(), l.index, l.top)).unwrap_or_default();
+        assert_eq!(len, cap, "the kept matches stay capped");
+        assert_eq!(index, cap - 1, "the exact entry takes the last kept slot");
+        assert_eq!(top, cap - ListSearch::VISIBLE, "and is scrolled into view");
+        assert_eq!(e.list_choice(), Some("Item"));
     }
 }

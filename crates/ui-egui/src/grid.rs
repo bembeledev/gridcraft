@@ -2815,6 +2815,7 @@ fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb:
     }
     if let Some(row) = pick {
         list.index = row;
+        ed.list_accept = true;
         app.commit_edit(0, 0, false, false);
     }
 }

@@ -936,9 +936,11 @@ impl SheetApp {
 
     /// Commits the edit; `then` moves the selection (dr, dc) afterwards.
     pub fn commit_edit(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
-        let Some(ed) = self.editor.take() else { return true };
+        let Some(mut ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
-        let text = match (ed.list_choice(), &ed.completion) {
+        // Only an explicit acceptance takes the list's entry; a failed commit asks again.
+        let accepted = std::mem::take(&mut ed.list_accept);
+        let text = match (ed.list_choice().filter(|_| accepted), &ed.completion) {
             // The searched validation list's highlighted entry, as the list spells it.
             (Some(choice), _) => choice.to_string(),
             (None, Some(full)) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),

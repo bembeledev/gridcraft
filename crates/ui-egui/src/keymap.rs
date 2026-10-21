@@ -269,10 +269,12 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
 mod close_tests {
     use super::*;
 
+    /// Whether a shortcut runs Close.
     fn is_close(s: Option<Shortcut>) -> bool {
         matches!(s, Some(Shortcut::Run("file.close", _)))
     }
 
+    /// Control+W on macOS closes the workbook; Control+Shift+W does not.
     #[test]
     fn control_w_on_the_mac_closes_like_command_w() {
         let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };

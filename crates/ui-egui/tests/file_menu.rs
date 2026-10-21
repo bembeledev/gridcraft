@@ -378,6 +378,7 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Closing the last workbook, and Close with none open, each request one quit.
 #[test]
 fn closing_the_last_workbook_quits_and_close_with_none_open_quits() {
     let mut h = harness(Services::default());
@@ -385,13 +386,18 @@ fn closing_the_last_workbook_quits_and_close_with_none_open_quits() {
     h.state_mut().run("file.close", serde_json::json!({})).unwrap();
     assert!(h.state().session.documents().is_empty());
     assert!(h.state().quit_requested, "closing the last workbook quits");
+    // Cmd+W with nothing open (the command itself is disabled) also quits. Checked before any
+    // frame runs, since a frame with no workbook opens a fresh one.
+    h.state_mut().quit_requested = false;
+    let r = h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert!(h.state().session.documents().is_empty());
+    assert_eq!(r.get("quit"), Some(&serde_json::json!(true)), "the none-open branch ran");
+    assert!(h.state().quit_requested);
     h.run_steps(2);
     assert!(!h.state().quit_requested, "the request is consumed once, so it cannot loop");
-    // Cmd+W with nothing open (the command itself is disabled) also quits.
-    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
-    assert!(h.state().quit_requested);
 }
 
+/// Closing a workbook while another stays open keeps the app running.
 #[test]
 fn closing_one_of_two_workbooks_does_not_quit() {
     let mut h = harness(Services::default());
@@ -401,11 +407,32 @@ fn closing_one_of_two_workbooks_does_not_quit() {
     assert!(!h.state().quit_requested);
 }
 
+/// Control requests that close the last workbook, in every request form, never quit.
 #[test]
 fn a_script_closing_the_last_workbook_does_not_quit() {
+    // Both request forms: `engine.execute` with a command, and the command id as the method.
+    for (method, params) in [
+        ("engine.execute", serde_json::json!({"command": "file.close"})),
+        ("command", serde_json::json!({"id": "file.close"})),
+        ("file.close", serde_json::json!({})),
+    ] {
+        let mut h = harness(Services::default());
+        let ctx = h.ctx.clone();
+        let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, method, &params);
+        assert!(h.state().session.documents().is_empty(), "{method}: the workbook closed");
+        assert!(!h.state().quit_requested, "{method}: the control channel keeps the app running");
+        // With nothing open, the none-open quit branch is dropped too.
+        let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, method, &params);
+        assert!(!h.state().quit_requested, "{method}: a second close keeps running");
+    }
+}
+
+/// A control request leaves a quit the user already asked for in place.
+#[test]
+fn a_control_request_keeps_a_pending_user_quit() {
     let mut h = harness(Services::default());
+    h.state_mut().quit_requested = true;
     let ctx = h.ctx.clone();
-    let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.execute", &serde_json::json!({"command": "file.close"}));
-    assert!(h.state().session.documents().is_empty());
-    assert!(!h.state().quit_requested, "the control channel keeps the app running");
+    let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.commands", &serde_json::json!({}));
+    assert!(h.state().quit_requested, "a quit the user asked for still happens");
 }

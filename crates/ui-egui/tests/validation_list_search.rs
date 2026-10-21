@@ -252,3 +252,21 @@ fn leaving_the_cell_without_accepting_keeps_the_typed_text() {
     key(&mut h, Key::Enter, Modifiers::COMMAND);
     assert_eq!(value(&h, "B2"), "Los Angeles - United States of America");
 }
+
+#[test]
+fn the_formula_bar_enter_button_takes_the_highlighted_entry() {
+    let mut h = harness();
+    text(&mut h, "united st");
+    // The ✓ button sits right of the Name Box (118 wide), after the ✕ button: both are 22 wide
+    // with 4-point gaps. The Name Box is the leftmost text field; its text starts 6 points in.
+    let name_box = h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left())).unwrap();
+    let pos = egui::pos2(name_box.left() - 6.0 + 118.0 + 4.0 + 4.0 + 4.0 + 22.0 + 4.0 + 11.0, name_box.center().y);
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().editor.is_none(), "the Enter button commits");
+    assert!(h.state().message.is_none(), "no validation alert: the list entry was taken");
+    assert_eq!(value(&h, "B2"), "Boston - United States of America");
+    assert_eq!(active(&h), "B2", "the Enter button doesn't move the selection");
+}

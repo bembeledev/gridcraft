@@ -57,6 +57,20 @@ fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
     assert!(h.query_by_label("Scroll ribbon right").is_none());
 }
 
+#[test]
+fn the_scroll_arrows_stay_inside_a_narrow_window() {
+    // The tab row can be wider than a narrow window (more so with wider system fonts); the card
+    // and its arrows stay inside the window, and the right arrow still scrolls.
+    for width in [600.0, 480.0] {
+        let mut h = app_at(width, "Home");
+        let arrow = h.get_by_label("Scroll ribbon right").rect();
+        assert!(arrow.max.x <= width, "{width}: the arrow ends at {}", arrow.max.x);
+        h.get_by_label("Scroll ribbon right").click();
+        h.run_steps(3);
+        assert!(RibbonOverflow::get(&h.ctx).offset > 0.0, "{width}: the right arrow scrolls");
+    }
+}
+
 #[derive(Default)]
 struct Clicks {
     main: u32,

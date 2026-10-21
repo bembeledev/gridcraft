@@ -226,8 +226,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             if collapsed {
                 return;
             }
-            // Ribbon card.
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 88.0));
+            // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
+            // within the window (with the margin it has on the left), or its right scroll arrow
+            // would be drawn off screen.
+            let left = ui.cursor().min.x;
+            let screen = ui.ctx().content_rect();
+            let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));

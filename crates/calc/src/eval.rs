@@ -133,6 +133,16 @@ impl<'h> Evaluator<'h> {
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
     pub fn value(&mut self, e: &Expr) -> Value {
+        // A single cell on this sheet is its value. Kept off the reference vector so `A1+1` does
+        // not allocate. Ranges stay references until something dereferences them (`SUM(A1:A3)`).
+        if let Expr::Ref(r) = e
+            && matches!(r.sheet, SheetSel::Current)
+        {
+            let range = r.range();
+            if range.is_single() {
+                return self.host.cell_value(self.sheet, range.start);
+            }
+        }
         let ev = self.eval(e);
         self.deref(ev)
     }
@@ -151,7 +161,10 @@ impl<'h> Evaluator<'h> {
 
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
         let range = r.range();
-        Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
+        match &r.sheet {
+            SheetSel::Current => Ok(vec![Area { sheet: self.sheet, range }]),
+            other => Ok(self.resolve_sheet(other)?.into_iter().map(|sheet| Area { sheet, range }).collect()),
+        }
     }
 
     /// Dereferences: one cell → its value; a block → an array (trimmed to the used range);
@@ -493,6 +506,12 @@ impl<'h> Evaluator<'h> {
             _ => {
                 // A long chain such as A1+A2+…+A500 nests to the left: fold it in a loop instead
                 // of one level of recursion per operator (past the depth limit it was #CALC!).
+                // One operator, the common case, does not allocate that buffer.
+                if !matches!(a, Expr::Binary(o, _, _) if !matches!(o, BinOp::Range | BinOp::Union | BinOp::Intersect)) {
+                    let x = self.value(a);
+                    let y = self.value(b);
+                    return Ev::V(binary_values(op, &x, &y, self.host.workbook().date_system));
+                }
                 let mut rest = vec![(op, b)];
                 let mut left = a;
                 while let Expr::Binary(o, l, r) = left
@@ -794,6 +813,19 @@ impl<'h> Evaluator<'h> {
                 self.host.note_volatile();
                 self.builtin(name, args)
             }
+            // Built-ins that fold ranges. Matched here so a column of `SUM` does not allocate a
+            // name lookup. Arity matches the registry (at least one argument, no maximum).
+            "SUM" | "COUNT" | "AVERAGE" => {
+                if args.is_empty() {
+                    return err(CellError::Value);
+                }
+                let kind = match name {
+                    "COUNT" => Agg::Count,
+                    "AVERAGE" => Agg::Average,
+                    _ => Agg::Sum,
+                };
+                self.aggregate(kind, args)
+            }
             _ => self.builtin(name, args),
         }
     }
@@ -862,19 +894,44 @@ impl<'h> Evaluator<'h> {
     /// after another, as the array path does, so volatile formulas (like `RAND`) see the same order.
     /// Only `SUM`, `COUNT` and `AVG` are supported currently.
     fn aggregate(&mut self, kind: Agg, args: &[Expr]) -> Ev {
+        // `SUM(E1:J1)` is a current-sheet reference. Fold it without building a reference vector.
+        if args.iter().all(|a| matches!(a, Expr::Ref(r) if matches!(r.sheet, SheetSel::Current))) {
+            let mut acc = Acc::default();
+            let mut first_error = None;
+            for a in args {
+                let Expr::Ref(r) = a else { return err(CellError::Value) };
+                let area = Area { sheet: self.sheet, range: r.range() };
+                if let Err(e) = self.aggregate_area(kind, &area, &mut acc)
+                    && first_error.is_none()
+                {
+                    first_error = Some(e);
+                }
+            }
+            return first_error.unwrap_or_else(|| Ev::V(acc.finish(kind)));
+        }
         let mut acc = Acc::default();
         let mut first_error = None;
         for a in args {
             let ev = self.eval(a);
-            let steps = match ev {
-                Ev::R(areas) => areas.iter().map(|area| self.aggregate_area(kind, area, &mut acc)).collect(),
+            let step = match ev {
+                Ev::R(areas) => {
+                    let mut bad = None;
+                    for area in &areas {
+                        if let Err(e) = self.aggregate_area(kind, area, &mut acc)
+                            && bad.is_none()
+                        {
+                            bad = Some(e);
+                        }
+                    }
+                    bad
+                }
                 ev => {
                     let value = self.deref(ev);
-                    vec![self.aggregate_value(kind, value, false, &mut acc)]
+                    self.aggregate_value(kind, value, false, &mut acc).err()
                 }
             };
             if first_error.is_none() {
-                first_error = steps.into_iter().find_map(Result::err);
+                first_error = step;
             }
         }
         first_error.unwrap_or_else(|| Ev::V(acc.finish(kind)))

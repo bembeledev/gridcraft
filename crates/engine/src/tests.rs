@@ -2186,7 +2186,7 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001}));
+    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "maxWorkers": null}));
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -2301,6 +2301,97 @@ fn whole_sheet_selection_stays_within_the_data() {
     let r = s.execute("data.removeDuplicates", json!({"range": "D:D", "header": false})).unwrap();
     assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(2)));
     assert!(s.execute("data.removeDuplicates", json!({"range": "A1:XFD1048576", "header": false})).is_ok());
+}
+
+#[test]
+fn last_row_opens_recalculates_and_samples_both_ends() {
+    // Built in code: one populated column that reaches the last row, plus a whole-column formula.
+    // Opening and recalculating must not materialise a 1,048,576×16,384 grid.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A:A)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1048576", "input": "=A1048576*2"})).unwrap();
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "the sheet was stored dense ({n} cells)");
+    reopen(&mut s);
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(3.0));
+    assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+    assert_eq!(v(&s, "B1"), Value::Number(7.0));
+    assert_eq!(v(&s, "B1048576"), Value::Number(8.0));
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.used_range().map(|u| u.end.row), Some(gridcraft_core::MAX_ROWS - 1));
+    assert!(sh.cells.len() < 64, "open or recalc stored the sheet dense ({} cells)", sh.cells.len());
+}
+
+#[test]
+fn whole_column_fill_remove_duplicates_and_current_region_stay_sparse() {
+    {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A3", "input": "0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1048576", "input": "9"})).unwrap();
+        s.execute("edit.fillDown", json!({"range": "A:A"})).unwrap();
+        assert_eq!(v(&s, "A2"), Value::Number(10.0));
+        assert_eq!(v(&s, "A3"), Value::Number(10.0));
+        assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+        assert_eq!(v(&s, "B1048576"), Value::Number(9.0));
+        let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+        assert!(n < 64, "fill allocated the column ({n} cells)");
+    }
+    {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "a"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "a"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A3", "input": "b"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1048576", "input": "c"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1048576", "input": "keep"})).unwrap();
+        let r = s.execute("data.removeDuplicates", json!({"range": "A:A", "header": false})).unwrap();
+        assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(3)));
+        let mut got = vec![v(&s, "A1"), v(&s, "A2"), v(&s, "A3")];
+        got.sort_by_key(|a| a.display());
+        assert_eq!(got, vec![Value::text("a"), Value::text("b"), Value::text("c")]);
+        assert!(v(&s, "A1048576").is_empty());
+        assert_eq!(v(&s, "B1048576"), Value::text("keep"));
+        let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+        assert!(n < 64, "remove duplicates allocated the column ({n} cells)");
+    }
+    // Past the old 10_000-row stop, through the shipped command.
+    let mut s = s();
+    let rows: Vec<serde_json::Value> = (0..12_000).map(|_| json!([1, 2])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A100"})).unwrap();
+    let r = s.execute("selection.currentRegion", json!({})).unwrap();
+    assert_eq!(r["selection"], "A1:B12000");
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert_eq!(n, 24_000);
+}
+
+#[test]
+fn calculation_options_sets_the_worker_cap() {
+    let mut s = s();
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    assert!(s.take_ui_requests().is_empty(), "the command does not open a dialog");
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": serde_json::Value::Null})).unwrap();
+    assert!(r["maxWorkers"].is_null());
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, None);
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 100})).unwrap();
+    assert_eq!(r["maxWorkers"], 8);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1000})).unwrap();
+    assert_eq!(r["maxWorkers"], 8);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 0})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    let r = s.execute("formulas.calculationOptions", json!({})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert!(s.take_ui_requests().is_empty());
 }
 
 #[test]

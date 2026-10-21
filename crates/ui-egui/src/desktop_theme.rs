@@ -16,7 +16,16 @@ const POLL: Duration = Duration::from_secs(4);
 /// there is no session bus or no portal to ask (a bare X server, a container), so the caller
 /// keeps whatever it chose itself.
 pub fn prefers_dark() -> Option<bool> {
-    read(&mut Link::default())
+    // macOS and Windows already answer through winit. Binding `()` here is
+    // `clippy::let_unit_value` under `-D warnings`.
+    #[cfg(target_os = "linux")]
+    {
+        read(&mut Link::default())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 /// Watches the desktop and reports its choice when it changes. [`prefers_dark`] covers the
@@ -32,23 +41,7 @@ impl DesktopTheme {
     /// first answer is sent straight away, so the caller does not have to ask for it separately.
     pub fn start() -> Self {
         let (tx, rx) = channel();
-        let started = std::thread::Builder::new().name("gridcraft-desktop-theme".into()).spawn(move || {
-            let mut link = Link::default();
-            let mut last = read(&mut link);
-            if tx.send(last).is_err() {
-                return;
-            }
-            loop {
-                std::thread::sleep(POLL);
-                let now = read(&mut link);
-                if now != last {
-                    last = now;
-                    if tx.send(now).is_err() {
-                        return;
-                    }
-                }
-            }
-        });
+        let started = std::thread::Builder::new().name("gridcraft-desktop-theme".into()).spawn(move || watch(tx));
         Self { changes: started.ok().map(|_| rx) }
     }
 
@@ -70,8 +63,32 @@ impl DesktopTheme {
 /// The session-bus connection the watcher keeps between reads, opened on first use.
 #[cfg(target_os = "linux")]
 type Link = Option<zbus::blocking::Connection>;
-#[cfg(not(target_os = "linux"))]
-type Link = ();
+
+/// Poll until the receiver is dropped. The closure owns whatever a platform needs between reads.
+fn watch(tx: std::sync::mpsc::Sender<Option<bool>>) {
+    #[cfg(target_os = "linux")]
+    let mut read_now = {
+        let mut link = Link::default();
+        move || read(&mut link)
+    };
+    // Not `let link = ()`: that binding is `clippy::let_unit_value` on macOS and Windows.
+    #[cfg(not(target_os = "linux"))]
+    let read_now = || None;
+    let mut last = read_now();
+    if tx.send(last).is_err() {
+        return;
+    }
+    loop {
+        std::thread::sleep(POLL);
+        let now = read_now();
+        if now != last {
+            last = now;
+            if tx.send(now).is_err() {
+                return;
+            }
+        }
+    }
+}
 
 /// Ask the portal once, over `link`'s connection (opened if absent, dropped if the bus went
 /// away). D-Bus calls block, so this belongs off the UI thread: the watcher's thread is its
@@ -111,12 +128,6 @@ fn parse(scheme: &str) -> Option<bool> {
         "prefer-light" => Some(false),
         _ => None,
     }
-}
-
-/// macOS and Windows answer through winit, which the caller already has.
-#[cfg(not(target_os = "linux"))]
-fn read(_: &mut Link) -> Option<bool> {
-    None
 }
 
 #[cfg(test)]

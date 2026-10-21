@@ -32,6 +32,8 @@ commands:
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
+  bench           release timing of a 100_000-dependent edit (cargo run --release -p gridcraft-calc
+                  --example bench_100k). Not part of ci. Exits non-zero when a median is not under 100 ms.
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
@@ -50,6 +52,7 @@ fn main() -> ExitCode {
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
+        Some("bench") => cmd_bench(),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -155,6 +158,14 @@ fn cmd_wasm() -> Result<(), String> {
         println!("(if the target is missing: rustup target add wasm32-unknown-unknown)");
     }
     r
+}
+
+/// Release bench for a 100_000-dependent edit. Not part of `ci`: a miss stays visible here
+/// without turning the debug suite red.
+fn cmd_bench() -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--release", "-p", "gridcraft-calc", "--example", "bench_100k"]);
+    run(c, "cargo run --release -p gridcraft-calc --example bench_100k")
 }
 
 fn cmd_ci() -> Result<(), String> {

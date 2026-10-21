@@ -1328,21 +1328,28 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
 fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let mut r = target_range(s, p)?;
-    // Whole rows or columns fill only where the sheet has content (nothing on an empty sheet).
-    if r.is_full_cols() || r.is_full_rows() {
-        match s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| r.intersection(&u)) {
-            Some(u) => r = u,
-            None => return Ok(Json::Null),
-        }
+    // Whole rows or columns fill only the contiguous block around the first stored cell.
+    // The sheet's used range is a bounding box: a cell on the last row must not make Fill
+    // allocate every row of the column.
+    let full = r.is_full_cols() || r.is_full_rows();
+    if full {
+        let doc = s.doc()?;
+        let Some(sh) = doc.wb.sheet(sheet) else { return Ok(Json::Null) };
+        let Some(used) = sh.used_range() else { return Ok(Json::Null) };
+        let Some(inter) = r.intersection(&used) else { return Ok(Json::Null) };
+        let Some((anchor, _)) = sh.cells.iter_range(inter).next() else { return Ok(Json::Null) };
+        let region = current_region(sh, anchor);
+        r = region.intersection(&inter).unwrap_or(region);
     }
     if r.count() > 5_000_000 {
         return Err(bad("edit.fill", "range too large"));
     }
     // With one row selected, Fill Down copies from the row above (Excel behaviour).
-    if dr == 1 && r.height() == 1 {
+    // A whole column that shrank to a single stored cell has nothing further to fill.
+    if !full && dr == 1 && r.height() == 1 {
         r.start.row = r.start.row.saturating_sub(1);
     }
-    if dc == 1 && r.width() == 1 {
+    if !full && dc == 1 && r.width() == 1 {
         r.start.col = r.start.col.saturating_sub(1);
     }
     let src = if dr == 1 {

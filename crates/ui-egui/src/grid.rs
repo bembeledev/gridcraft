@@ -104,6 +104,9 @@ pub enum Drag {
 pub struct GridState {
     pub drag: Drag,
     pub ensure_visible: bool,
+    /// Space just toggled a checkbox cell: the " " the OS types with that key, which can arrive in
+    /// a later frame, is swallowed instead of starting an edit (#1951).
+    pub checkbox_space: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
     pub reveal_moving_end: bool,
@@ -2621,6 +2624,13 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
             if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
     });
+    // Space on a checkbox cell toggles it; the space the OS types with the key must not start an
+    // edit, or Enter would replace the checkbox with " " (#1951).
+    let checkbox_space = is_checkbox(sh, app)
+        && events.iter().any(|e| {
+            matches!(e, egui::Event::Key { pressed: true, modifiers: m, key: egui::Key::Space, .. }
+                if !m.alt && !m.ctrl && !m.command && !m.shift)
+        });
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
     for ev in events {
         match ev {
@@ -2632,6 +2642,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Paste(text) => app.paste_external(text),
             egui::Event::Text(_) if shortcut_pressed => {}
+            egui::Event::Text(text) if (checkbox_space || app.grid.checkbox_space) && text == " " => {
+                app.grid.checkbox_space = false;
+            }
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {
@@ -2641,6 +2654,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                app.grid.checkbox_space = false;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     continue;
                 }
@@ -2706,7 +2720,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         app.session.clipboard = None;
                         app.session.format_painter = None;
                     }
-                    Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+                    Key::Space if !cmd && !shift && is_checkbox(sh, app) => {
+                        app.run_or_alert("cell.toggleCheckbox", json!({}));
+                        app.grid.checkbox_space = true;
+                    }
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
                     }

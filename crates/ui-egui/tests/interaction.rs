@@ -208,6 +208,42 @@ fn space_toggles_the_active_checkbox_without_clicking_the_hovered_cell() {
 }
 
 #[test]
+fn space_on_a_checkbox_toggles_it_without_typing_a_space() {
+    // #1951: the OS types " " with the Space key; that text started an edit, and Enter then
+    // replaced the checkbox's value with a space. Both event orders must only toggle.
+    let mut session = blank();
+    session.execute("insert.checkbox", json!({"range": "A1"})).unwrap();
+    let mut h = harness(session);
+    let space = Event::Key { key: Key::Space, physical_key: Some(Key::Space), pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.push(space.clone());
+    h.input_mut().events.push(Event::Text(" ".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "Space started an edit");
+    assert_eq!(value(&h, "A1"), Value::Bool(true));
+    h.input_mut().events.push(Event::Text(" ".into()));
+    h.input_mut().events.push(space.clone());
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "Space started an edit");
+    assert_eq!(value(&h, "A1"), Value::Bool(false));
+    // The typed space can come a frame after the key.
+    h.input_mut().events.push(space.clone());
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Text(" ".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "a late space started an edit");
+    assert_eq!(value(&h, "A1"), Value::Bool(true));
+    key(&mut h, Key::Space, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Bool(false));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Bool(false), "Enter must not replace the checkbox");
+    // A space typed into an ordinary cell still starts an edit.
+    h.state_mut().session.run("selection.set", json!({"cell": "C3"})).unwrap();
+    h.input_mut().events.push(Event::Text(" ".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+}
+
+#[test]
 fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
     // #247: typing A1 in the Name Box and pressing Enter selected A2; the grid replayed the Enter.
     let mut h = harness(blank());

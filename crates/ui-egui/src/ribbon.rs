@@ -112,16 +112,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
+            // The title goes in the gap between the left controls (just laid out) and the right
+            // ones, so it is painted after them: a fixed reservation can't know their real widths,
+            // and at the 640 px minimum window it paints over them.
+            let left_end = ui.min_rect().right();
+            let mut right_start = rect.right();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
@@ -157,7 +152,45 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, "view.darkMode", json!({}));
                 }
                 theme.context_menu(|ui| theme_choices(app, ui));
+                right_start = ui.min_rect().left();
             });
+            let gap = right_start - left_end;
+            if gap > 0.0 {
+                let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+                let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+                let font = theme::ui_bold(13.0);
+                // Measure the dirty marker separately so it is never consumed by the ellipsis.
+                let marker_galley = dirty.then(|| ui.fonts_mut(|f| f.layout_no_wrap(" •".into(), font.clone(), t.text)));
+                let marker_w = marker_galley.as_ref().map(|g| g.size().x).unwrap_or(0.0);
+                // epaint places the ellipsis even when it alone exceeds the budget, so the
+                // title only gets a row when the gap fits the marker and at least the ellipsis.
+                let ellipsis_w = ui.fonts_mut(|f| f.layout_no_wrap("…".into(), font.clone(), t.text)).size().x;
+                // Skip painting entirely when the gap is too narrow to show even the marker.
+                if gap > marker_w {
+                    let title_w = gap - marker_w;
+                    let title_galley = (title_w > ellipsis_w && !title.is_empty()).then(|| {
+                        let mut job = egui::text::LayoutJob::simple_singleline(title, font.clone(), t.text);
+                        job.wrap.max_width = title_w;
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        job.wrap.overflow_character = Some('…');
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    });
+                    let title_w_drawn = title_galley.as_ref().map(|g| g.size().x).unwrap_or(0.0);
+                    let total_w = title_w_drawn + marker_w;
+                    let row_h = title_galley.as_ref().or(marker_galley.as_ref()).map(|g| g.size().y).unwrap_or(0.0);
+                    // Center on the window when the title fits there; the controls on the two
+                    // sides differ in width, so centering on the gap would shift a short title.
+                    let center_x = (rect.center().x - total_w * 0.5).clamp(left_end, right_start - total_w) + total_w * 0.5;
+                    let top_left = pos2(center_x, rect.center().y) - vec2(total_w * 0.5, row_h * 0.5);
+                    if let Some(tg) = title_galley {
+                        ui.painter().galley(top_left, tg, t.text);
+                    }
+                    if let Some(mg) = marker_galley {
+                        ui.painter().galley(top_left + vec2(total_w - marker_w, 0.0), mg, t.text);
+                    }
+                }
+            }
         });
     });
 }

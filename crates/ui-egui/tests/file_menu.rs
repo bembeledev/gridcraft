@@ -403,6 +403,8 @@ fn opening_a_second_file_adds_a_visible_tab_and_keeps_the_first() {
     h.run_steps(3);
     assert_eq!(h.state().session.active_index(), 0);
     assert_eq!(h.state().session.documents().len(), 2);
+    let _ = std::fs::remove_file(a);
+    let _ = std::fs::remove_file(b);
 }
 
 #[test]
@@ -415,5 +417,6 @@ fn new_and_open_never_replace_an_edited_or_saved_workbook() {
     h.state_mut().run("file.new", serde_json::json!({})).unwrap();
     assert_eq!(h.state().session.documents().len(), 3);
     h.run_steps(2);
-    assert_eq!(h.state().session.documents()[0].wb.sheets[0].cells.is_empty(), false);
+    assert!(!h.state().session.documents()[0].wb.sheets[0].cells.is_empty());
+    let _ = std::fs::remove_file(a);
 }

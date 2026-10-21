@@ -33,6 +33,8 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png` | GridCraft contributors | original (hand-written SVG; `packaging/icons.sh`) | MIT OR Apache-2.0 (`assets/app-icon/LICENSE.txt`) | Placeholder icon, Linux hicolor render |
 | `assets/app-icon/hicolor/512x512/apps/ai.storyteller.gridcraft.png` | GridCraft contributors | original (hand-written SVG; `packaging/icons.sh`) | MIT OR Apache-2.0 (`assets/app-icon/LICENSE.txt`) | Placeholder icon, Linux hicolor render |
 | `assets/app-icon/hicolor/scalable/apps/ai.storyteller.gridcraft.svg` | GridCraft contributors | original (hand-written SVG; `packaging/icons.sh`) | MIT OR Apache-2.0 (`assets/app-icon/LICENSE.txt`) | Placeholder icon, copy of gridcraft.svg |
+| `assets/styles/web/loading-logo.svg` | GridCraft contributors | Animation of the GridCraft mark, built from the paths and gradients of `assets/app-icon/hicolor/scalable/apps/ai.storyteller.gridcraft.svg`; original animation | MIT OR Apache-2.0 | Loading screen animated SVG for web |
+| `assets/styles/web/loading.css` | GridCraft contributors | Original GridCraft web loading screen stylesheet matching crafting apps conventions | MIT OR Apache-2.0 | Web loading screen stylesheet |
 | `assets/app-icon/README.md` | GridCraft contributors | original | MIT OR Apache-2.0 | Icon documentation |
 | `assets/app-icon/LICENSE.txt` | (licence text) | original | — | Licence of the app icon files |
 | `docs/images/hero-sales.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |

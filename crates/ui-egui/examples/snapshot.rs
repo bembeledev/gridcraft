@@ -17,6 +17,7 @@ fn main() {
     let mut cmds: Vec<String> = vec![];
     let mut tab = None;
     let mut dark = false;
+    let mut splash = false;
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
@@ -55,6 +56,7 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--splash" => splash = true,
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -124,10 +126,13 @@ fn main() {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
                 }
+                if splash {
+                    app.enable_splash();
+                }
                 app
             },
         );
-    harness.run_steps(8);
+    harness.run_steps(if splash { 3 } else { 8 });
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());

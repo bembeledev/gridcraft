@@ -6,15 +6,78 @@
   <title>GridCraft</title>
   <link data-trunk rel="icon" href="../../assets/app-icon/gridcraft.ico" />
   <link data-trunk rel="rust" data-bin="gridcraft-web" data-wasm-opt="z" data-weak-refs />
-  <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f3f3f3; }
-    #gridcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-    #gridcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
-  </style>
+  <link data-trunk rel="css" href="../../assets/styles/web/loading.css" />
+  <link data-trunk rel="copy-file" href="../../assets/styles/web/loading-logo.svg" />
 </head>
 <body>
   <canvas id="gridcraft_canvas"></canvas>
-  <div id="gridcraft_loading">Loading GridCraft&hellip;</div>
+  <div id="gridcraft_loading">
+    <div class="loading-container">
+      <div class="logo-box">
+        <img src="loading-logo.svg" alt="GridCraft" class="loading-logo">
+      </div>
+      <div class="app-subtitle">Clean-room, native spreadsheet</div>
+
+      <div class="progress-section">
+        <div class="progress-bar-track">
+          <div id="progress_bar" class="progress-bar-fill"></div>
+        </div>
+        <div class="progress-labels">
+          <span id="status_msg" class="status-msg" role="status">Starting GridCraft&hellip;</span>
+          <span id="progress_pct" class="progress-pct">0%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      const barEl = document.getElementById("progress_bar");
+      const pctEl = document.getElementById("progress_pct");
+      const statusEl = document.getElementById("status_msg");
+      const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      let currentPct = 6;
+      let targetPct = 20;
+      let finished = false;
+
+      // Stages timed to smoothly pace with the 3.6s logo construction animation
+      const stages = [
+        { afterMs: 350, pct: 28, msg: "Compiling WebAssembly modules\u2026" },
+        { afterMs: 1100, pct: 55, msg: "Initializing graphics pipeline\u2026" },
+        { afterMs: 1900, pct: 78, msg: "Loading fonts & typography\u2026" },
+        { afterMs: 2700, pct: 95, msg: "Mounting spreadsheet engine\u2026" },
+      ];
+
+      stages.forEach(function(s) {
+        setTimeout(function() {
+          if (!finished) {
+            targetPct = s.pct;
+            if (statusEl) statusEl.textContent = s.msg;
+            if (prefersReducedMotion) {
+              currentPct = targetPct;
+              if (barEl) barEl.style.width = currentPct + "%";
+              if (pctEl) pctEl.textContent = currentPct + "%";
+            }
+          }
+        }, s.afterMs);
+      });
+
+      const progressInterval = prefersReducedMotion ? null : setInterval(function() {
+        if (!finished && currentPct < targetPct) {
+          currentPct += Math.max(1, Math.floor((targetPct - currentPct) * 0.22));
+          if (barEl) barEl.style.width = currentPct + "%";
+          if (pctEl) pctEl.textContent = currentPct + "%";
+        }
+      }, 50);
+
+      window.gridcraftFinishLoading = function() {
+        finished = true;
+        if (progressInterval) clearInterval(progressInterval);
+        if (barEl) barEl.style.width = "100%";
+        if (pctEl) pctEl.textContent = "100%";
+        if (statusEl) statusEl.textContent = "Ready";
+      };
+    })();
+  </script>
 </body>
 </html>

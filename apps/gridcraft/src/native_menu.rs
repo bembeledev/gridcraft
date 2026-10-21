@@ -261,6 +261,9 @@ impl NativeMenu {
 
     pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
         while let Ok(ev) = self.events.try_recv() {
+            if app.splash.is_some() {
+                continue;
+            }
             let id = ev.id.as_ref().to_string();
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
             if app.text_box_editor.is_some() {

@@ -257,6 +257,7 @@ fn main() -> eframe::Result<()> {
     }
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;
+    let mut no_splash = false;
     let mut files: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -268,6 +269,9 @@ fn main() -> eframe::Result<()> {
             "--sample" => {
                 i += 1;
                 sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
+            }
+            "--no-splash" => {
+                no_splash = true;
             }
             a if a.starts_with("-psn_") => {}
             a => files.push(a.to_string()),
@@ -298,6 +302,16 @@ fn main() -> eframe::Result<()> {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
+    // Enable the splash screen; min_duration_ms starts when first painted, preserving visible duration.
+    if std::env::var_os("GRIDCRAFT_NO_SPLASH").is_none() && !no_splash {
+        app.enable_splash();
+        if let Some(first) = files.first() {
+            let name = std::path::Path::new(first).file_name().and_then(|n| n.to_str()).unwrap_or(first);
+            app.set_splash_status(format!("Opening {name}…"));
+        } else if let Some(s) = &sample {
+            app.set_splash_status(format!("Loading sample {s}…"));
+        }
+    }
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;

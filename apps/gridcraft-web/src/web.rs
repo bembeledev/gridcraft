@@ -8,6 +8,47 @@ use wasm_bindgen::JsValue;
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
+/// The loading animation (assets/styles/web/loading-logo.svg) settles into the finished mark
+/// about 3.0 s after the page starts; this adds a short hold so the user sees the complete mark.
+const LOADING_MIN_MS: f64 = 3600.0;
+/// The fade from the loading screen into the app.
+const LOADING_FADE_MS: i32 = 300;
+
+/// Take the loading screen away once the animation has played to the finished mark: wait out
+/// what is left of `LOADING_MIN_MS`, finish progress, fade it, then remove it.
+fn finish_loading() {
+    if let Some(w) = web_sys::window()
+        && let Ok(finish_val) = js_sys::Reflect::get(&w, &JsValue::from_str("gridcraftFinishLoading"))
+        && let Ok(func) = finish_val.dyn_into::<js_sys::Function>()
+    {
+        let _ = func.call0(&w);
+    }
+}
+
+fn dismiss_loading(el: web_sys::Element) {
+    let Some(window) = web_sys::window() else {
+        el.remove();
+        return;
+    };
+    let now = window.performance().map_or(LOADING_MIN_MS, |p| p.now());
+    let wait = (LOADING_MIN_MS - now).max(0.0) as i32;
+
+    let finish_delay = (wait - 150).max(0);
+    let finish = wasm_bindgen::closure::Closure::once_into_js(move || {
+        finish_loading();
+    });
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(finish.unchecked_ref(), finish_delay);
+
+    let fade = wasm_bindgen::closure::Closure::once_into_js(move || {
+        let _ = el.set_attribute("class", "done");
+        let gone = wasm_bindgen::closure::Closure::once_into_js(move || el.remove());
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(gone.unchecked_ref(), LOADING_FADE_MS);
+        }
+    });
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(fade.unchecked_ref(), wait);
+}
+
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     wasm_bindgen_futures::spawn_local(async {
@@ -74,8 +115,11 @@ pub fn start() {
         }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
-                Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>GridCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Ok(()) => dismiss_loading(el),
+                Err(e) => {
+                    finish_loading();
+                    el.set_inner_html(&format!("<p>GridCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"));
+                }
             }
         }
     });
@@ -274,7 +318,6 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after `name`.
-
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;

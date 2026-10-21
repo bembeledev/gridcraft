@@ -389,6 +389,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
 }
 
 pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
+    if app.splash.is_some() {
+        return;
+    }
     let Some(rx) = app.control_rx.take() else { return };
     while let Ok(req) = rx.try_recv() {
         let outcome = handle(app, ctx, &req.method, &req.params);
@@ -529,5 +532,25 @@ mod tests {
         }
         assert!(!app.printing.busy(), "discovery must not submit a job");
         assert!(app.backstage.is_none(), "discovery must not open settings");
+    }
+    #[test]
+    fn poll_skips_processing_while_splash_is_active() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let (req, reply_rx) = ControlRequest::new("engine.commands", json!({"search": "print"}));
+        let (req_tx, req_rx) = std::sync::mpsc::channel();
+        req_tx.send(req).unwrap();
+        app.control_rx = Some(req_rx);
+        app.enable_splash();
+        let ctx = egui::Context::default();
+        poll(&mut app, &ctx);
+        assert!(reply_rx.try_recv().is_err(), "control request must not be processed while splash is active");
+        assert!(app.control_rx.is_some(), "control_rx must not be taken while splash is active");
+
+        // Once splash is dismissed, poll processes the pending request
+        app.splash = None;
+        poll(&mut app, &ctx);
+        assert!(reply_rx.try_recv().is_ok(), "control request should be processed after splash dismiss");
     }
 }

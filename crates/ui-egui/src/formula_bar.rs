@@ -26,6 +26,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.cancel_edit();
                 }
                 if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 22.0)).clicked() && editing {
+                    // The Enter button is Enter: it takes the searched list's highlighted entry.
+                    if let Some(ed) = app.editor.as_mut() {
+                        ed.list_accept = true;
+                    }
                     app.commit_edit(0, 0, false, false);
                 }
                 if crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 22.0)).clicked() {

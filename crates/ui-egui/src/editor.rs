@@ -128,34 +128,24 @@ impl EditState {
         let Some(typed) = typed else { return };
         let term = gridcraft_engine::cmd::data::search_term(typed);
         let cap = gridcraft_engine::cmd::data::LIST_MATCH_CAP;
-        // Text naming an entry exactly highlights that entry rather than the first match, even
-        // when it comes after the matches the list keeps.
+        // Text naming an entry exactly highlights that entry rather than the first match. The
+        // kept matches stay the first `cap` in list order (as `data.validationList` returns), so
+        // an exact entry past the cap isn't shown.
         let whole = gridcraft_engine::cmd::data::search_fold(typed.trim());
         let mut exact = None;
         for (i, f) in list.folded.iter().enumerate() {
+            if list.matches.len() >= cap {
+                break;
+            }
             if !gridcraft_engine::cmd::data::search_matches(f, &term) {
                 continue;
             }
             if exact.is_none() && *f == whole {
-                exact = Some(i);
+                exact = Some(list.matches.len());
             }
-            if list.matches.len() < cap {
-                list.matches.push(i);
-            } else if exact.is_some() {
-                break;
-            }
+            list.matches.push(i);
         }
-        if let Some(e) = exact {
-            let pos = match list.matches.iter().position(|&i| i == e) {
-                Some(pos) => pos,
-                None => {
-                    // Past the cap: it takes the last kept slot.
-                    if let Some(last) = list.matches.last_mut() {
-                        *last = e;
-                    }
-                    list.matches.len().saturating_sub(1)
-                }
-            };
+        if let Some(pos) = exact {
             list.index = pos;
             list.keep_visible();
         }
@@ -562,16 +552,26 @@ mod tests {
     }
 
     #[test]
-    fn list_search_finds_an_exact_entry_past_the_cap() {
+    fn list_search_keeps_list_order_when_the_exact_entry_is_past_the_cap() {
         let cap = gridcraft_engine::cmd::data::LIST_MATCH_CAP;
         let mut items: Vec<String> = (0..cap + 5).map(|i| format!("Item {i}")).collect();
         items.push("Item".into());
         let mut e = EditState::new(0, CellRef::new(0, 0), "item".into(), true, false);
         e.set_list_items(items, true);
-        let (len, index, top) = e.list.as_ref().map(|l| (l.matches.len(), l.index, l.top)).unwrap_or_default();
-        assert_eq!(len, cap, "the kept matches stay capped");
-        assert_eq!(index, cap - 1, "the exact entry takes the last kept slot");
-        assert_eq!(top, cap - ListSearch::VISIBLE, "and is scrolled into view");
+        let (matches, index) = e.list.as_ref().map(|l| (l.matches.clone(), l.index)).unwrap_or_default();
+        assert_eq!(matches, (0..cap).collect::<Vec<_>>(), "the first `cap` matches, in list order");
+        assert_eq!(index, 0, "the first match stays highlighted");
+        assert_eq!(e.list_choice(), Some("Item 0"));
+    }
+
+    #[test]
+    fn list_search_highlights_an_exact_entry_within_the_cap() {
+        let items: Vec<String> = (0..20).map(|i| format!("Item {i}")).chain(["Item".to_string()]).collect();
+        let mut e = EditState::new(0, CellRef::new(0, 0), "item".into(), true, false);
+        e.set_list_items(items, true);
+        let (index, top) = e.list.as_ref().map(|l| (l.index, l.top)).unwrap_or_default();
+        assert_eq!(index, 20);
+        assert_eq!(top, 21 - ListSearch::VISIBLE, "scrolled into view");
         assert_eq!(e.list_choice(), Some("Item"));
     }
 }

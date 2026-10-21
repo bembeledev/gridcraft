@@ -328,9 +328,16 @@ impl Session {
     pub fn active_index(&self) -> usize {
         self.active
     }
-    /// Makes window `i` active. Like Excel, activating a window hidden with View › Hide (by
-    /// reopening its file, Switch Windows, Unhide…) shows it again.
+    /// Moves the active index to window `i` without touching its View › Hide state. For internal
+    /// bookkeeping (hide fallback, close); user activation goes through [`Self::activate_and_show`].
     pub fn set_active(&mut self, i: usize) {
+        if i < self.docs.len() {
+            self.active = i;
+        }
+    }
+    /// The user asked for workbook `i` (reopening its file, Switch Windows, Unhide…): like Excel,
+    /// a window hidden with View › Hide is shown again and made active.
+    pub fn activate_and_show(&mut self, i: usize) {
         if i < self.docs.len() {
             self.active = i;
             self.hidden_windows.retain(|x| *x != i);

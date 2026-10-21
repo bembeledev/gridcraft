@@ -47,7 +47,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     } else if let Some(path) = str_param(p, "path") {
         // Already open? Switch to it.
         if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
-            s.set_active(i);
+            s.activate_and_show(i);
             return Ok(json!({"index": i, "alreadyOpen": true}));
         }
         (path.to_string(), crate::io::read_file(path)?)
@@ -224,6 +224,6 @@ fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
     if i >= s.documents().len() {
         return Err(bad("window.activate", "no such window"));
     }
-    s.set_active(i);
+    s.activate_and_show(i);
     ok()
 }

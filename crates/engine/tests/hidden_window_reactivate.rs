@@ -90,3 +90,25 @@ fn closing_a_window_keeps_hidden_indices_on_their_documents() {
     let n = s.new_workbook();
     assert!(!s.hidden_windows.contains(&n));
 }
+
+#[test]
+fn hiding_both_of_two_workbooks_keeps_both_hidden() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("view.hideWindow", json!({})).unwrap();
+    s.execute("view.hideWindow", json!({})).unwrap();
+    let mut hidden = s.hidden_windows.clone();
+    hidden.sort_unstable();
+    hidden.dedup();
+    assert_eq!(hidden, vec![0, 1]);
+}
+
+#[test]
+fn hiding_the_only_workbook_keeps_it_hidden() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("view.hideWindow", json!({})).unwrap();
+    assert_eq!(s.hidden_windows, vec![0]);
+    assert_eq!(s.active_index(), 0);
+}

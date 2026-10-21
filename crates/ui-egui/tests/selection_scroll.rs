@@ -104,3 +104,21 @@ fn ctrl_shift_home_and_end_scroll_the_moving_end_into_view() {
     key(&mut h, Key::Home, CTRL_SHIFT);
     assert_extended(&h, "CV200", "A1");
 }
+
+#[test]
+fn home_with_frozen_columns_goes_to_the_first_unfrozen_column() {
+    // #2044: column A sits in the frozen pane, so Home must land on B and scroll the pane back.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezeFirstColumn", json!({})).unwrap();
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert!(visible(&h, "CV1") && !visible(&h, "B1"));
+    key(&mut h, Key::Home, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active, CellRef::parse("B1").unwrap());
+    assert!(visible(&h, "B1"), "the scrolling pane is back at its first column");
+    // Without frozen panes Home still goes to column A.
+    let mut h = harness();
+    key(&mut h, Key::ArrowRight, CTRL);
+    key(&mut h, Key::Home, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active, CellRef::parse("A1").unwrap());
+    assert!(visible(&h, "A1"));
+}

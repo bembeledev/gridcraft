@@ -2,7 +2,7 @@
 //! and sheet tabs until Esc or the back arrow returns to the sheet.
 //!
 //! A navigation column on the left picks a page (Home, New, Open, Info, Save As, Print, Export,
-//! Options); Save and Close act at once. Every action runs an existing command through
+//! Options, Account); Save and Close act at once. Every action runs an existing command through
 //! [`SheetApp::run`] or an existing dialog through [`SheetApp::open_dialog`]; the state here is
 //! UI-only and never saved. Recent workbooks are listed by path, with when each was last changed:
 //! that is asked of the file system on a thread of its own, never while drawing, and only the
@@ -36,10 +36,11 @@ pub enum Page {
     Print,
     Export,
     Options,
+    Account,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options];
+    pub const ALL: [Page; 9] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options, Page::Account];
 
     /// The id `ui.backstage` and `ui.dialog {"name": "backstage", "page": …}` take.
     pub fn id(self) -> &'static str {
@@ -52,6 +53,7 @@ impl Page {
             Page::Print => "print",
             Page::Export => "export",
             Page::Options => "options",
+            Page::Account => "account",
         }
     }
 
@@ -71,6 +73,7 @@ impl Page {
             Page::Print => "Print",
             Page::Export => "Export",
             Page::Options => "Options",
+            Page::Account => "Account",
         }
     }
 }
@@ -151,7 +154,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let (nav_bg, nav_text, nav_sel) =
         if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
     // The column is the shared one (storytold/craft-libs#53): a labelled Back, the pages in groups,
-    // Options at the foot. GridCraft supplies the entries, their wording, icons and colours.
+    // Account and Options at the foot. GridCraft supplies the entries, their wording, icons and colours.
     egui::Panel::left("backstage_nav").exact_size(NAV_W).resizable(false).frame(egui::Frame::NONE.fill(nav_bg)).show(ui, |ui| {
         use craft_ui::file_nav::{FileNav, FileNavAction, FileNavItem, FileNavStyle};
         let style = FileNavStyle {
@@ -178,7 +181,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             item("export", "Export"),
             item("close", "Close"),
         ];
-        let foot = [item("options", "Options")];
+        // Account sits just above Options, as in Excel.
+        let foot = [item("account", "Account"), item("options", "Options")];
         let paint = |key: Option<&str>, p: &egui::Painter, r: Rect, c: Color32| icons::paint(p, r, nav_icon(key), c);
         match FileNav::new(lang.tr("Back"), &[&top, &rest], Some(bs.page.id()), &style, &paint).foot(&foot).show(ui).action {
             Some(FileNavAction::Back) => out.close = true,
@@ -215,6 +219,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
                     Page::Options => options(app, ui),
+                    Page::Account => account(app, ui),
                 }
             });
         });
@@ -266,6 +271,7 @@ fn nav_icon(key: Option<&str>) -> Icon {
         Some("export") => Icon::Share,
         Some("close") => Icon::Close,
         Some("options") => Icon::Settings,
+        Some("account") => Icon::Info,
         Some(_) => Icon::Info,
     }
 }
@@ -1060,7 +1066,7 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
         ui.end_row();
         ui.label(lang.tr("Interface language"));
         egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
-            for l in i18n::Language::ALL {
+            for l in i18n::Language::for_picker() {
                 if ui.selectable_label(l == lang, l.name()).clicked() {
                     app.run_or_alert("app.language.set", json!({"language": l.code()}));
                 }
@@ -1081,9 +1087,9 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
-    let mut autosave = app.grid.autosave();
+    let mut autosave = app.ui.autosave;
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
-        app.grid.toggle_autosave();
+        app.toggle_autosave();
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
@@ -1106,6 +1112,51 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// The platform the app was built for, e.g. "macOS (aarch64)"; the web build reports "Web".
+fn platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        "openbsd" => "OpenBSD",
+        "netbsd" => "NetBSD",
+        _ if cfg!(target_arch = "wasm32") => return "Web".into(),
+        other => other,
+    };
+    format!("{os} ({})", std::env::consts::ARCH)
+}
+
+/// Excel's File › Account: product information and the About window.
+fn account(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    section(ui, lang, "Product Information");
+    ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
+    ui.add_space(8.0);
+    egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+        for (label, value) in
+            [("Version", env!("CARGO_PKG_VERSION").to_string()), ("Platform", platform()), ("Licence", env!("CARGO_PKG_LICENSE").to_string())]
+        {
+            ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+            ui.label(value);
+            ui.end_row();
+        }
+    });
+    ui.add_space(18.0);
+    ui.horizontal(|ui| {
+        if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+            app.open_dialog("about", json!({}));
+        }
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
+            dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+        });
+    });
 }
 
 #[cfg(test)]
@@ -1210,6 +1261,7 @@ mod tests {
         assert_eq!(age(Language::Ja, 3.0 * DAY), "3 日前");
         assert_eq!(age(Language::De, 3.0 * DAY), "vor 3 Tagen");
         assert_eq!(age(Language::Fr, 90.0), "il y a 1 min");
+        assert_eq!(age(Language::It, 3.0 * DAY), "3 giorni fa");
         for lang in Language::ALL {
             for seconds in [10.0, 600.0, 7200.0, 1.5 * DAY, 5.0 * DAY, 30.0 * DAY, 200.0 * DAY, 2000.0 * DAY] {
                 let words = age(lang, seconds);
@@ -1252,7 +1304,7 @@ mod tests {
             assert_eq!(Page::parse(page.id()), Some(page));
         }
         assert_eq!(Page::parse(" SAVEAS "), Some(Page::SaveAs));
-        assert_eq!(Page::parse("account"), None);
+        assert_eq!(Page::parse("feedback"), None);
         assert_eq!(Page::parse(""), None);
     }
 

@@ -210,6 +210,7 @@ fn sales(s: &mut Session, t: Text) -> bool {
                 color: None,
                 secondary: false,
                 kind: None,
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             }];

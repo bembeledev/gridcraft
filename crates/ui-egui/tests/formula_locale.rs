@@ -237,3 +237,18 @@ fn new_workbooks_and_sheets_follow_the_language_before_any_frame() {
         assert_eq!(app.session.default_names().0, book, "{command}");
     }
 }
+
+#[test]
+fn turkish_interface_retains_its_canonical_formula_fallback() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
+    assert_eq!(app.ui.language, Language::Tr);
+    assert_eq!(app.ui.language.tr("Data"), "Veri");
+    assert_eq!(app.ui.language.tr("Formulas"), "Formüller");
+    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
+    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+    assert_eq!(restored.language, Language::Tr);
+}

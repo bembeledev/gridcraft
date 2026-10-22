@@ -162,7 +162,7 @@ fn cell_center(app: &SheetApp, c: CellRef) -> Option<egui::Pos2> {
     let d = app.session.active()?;
     let sh = d.wb.active()?;
     let rect = app.grid.rect?;
-    let geo = crate::grid::Geo::new(sh, rect, app.view().scroll);
+    let geo = crate::grid::Geo::with_density(sh, rect, app.view().scroll, crate::grid::Density::of(&d.wb, app.grid.mac_density));
     Some(geo.screen_cell_rect(sh, c).center())
 }
 

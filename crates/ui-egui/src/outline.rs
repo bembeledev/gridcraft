@@ -14,7 +14,7 @@ use gridcraft_engine::outline::{self, OutlineGroup};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 
-use crate::grid::{DISPLAY_SCALE, Geo};
+use crate::grid::Geo;
 use crate::theme::{self, Tokens};
 
 /// Width of one level's lane at 100% zoom (points).
@@ -130,7 +130,7 @@ impl Dir<'_> {
         if self.rows { self.geo.y(self.sh, line) } else { self.geo.x(self.sh, line) }
     }
     fn size(&self, line: u32) -> f32 {
-        self.geo.z * if self.rows { self.sh.row_height(line) } else { self.sh.col_width(line) }
+        if self.rows { self.geo.z * self.sh.row_height(line) } else { self.geo.col_w(self.sh, line) }
     }
     fn lane(&self, step: f32, k: u8) -> f32 {
         self.lane0 + (k as f32 - 0.5) * step
@@ -160,7 +160,7 @@ impl Dir<'_> {
 /// The band's buttons and brackets for this frame.
 pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
     let mut out = Layout::default();
-    let zoom = (geo.z / DISPLAY_SCALE).max(0.1);
+    let zoom = geo.zoom.max(0.1);
     let step = lane(zoom);
     let side = (step - 4.0).max(7.0);
     let corner_h = if geo.header_h > 0.0 { geo.header_h } else { geo.band_h };
@@ -266,7 +266,7 @@ pub fn paint(p: &Painter, geo: &Geo, sh: &Sheet, t: &Tokens) {
         }
     }
     // The outline levels grow with the zoom like the headings beside them.
-    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE)).max(7.5));
+    let font = theme::ui_font((10.0 * geo.zoom).max(7.5));
     for b in &l.buttons {
         let clip = match b.action {
             Action::Toggle { rows: true, .. } => row_clip,

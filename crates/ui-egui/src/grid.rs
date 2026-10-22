@@ -20,6 +20,34 @@ pub const COL_HEADER_H: f32 = 21.0;
 /// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
 pub const DISPLAY_SCALE: f32 = 0.8;
 
+/// How sheet units (96-dpi pixels) map to screen points at 100% zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Density {
+    /// Points per sheet unit for rows, text and objects.
+    pub scale: f32,
+    /// Extra factor for column widths.
+    pub cols: f32,
+}
+
+impl Density {
+    pub const DESKTOP: Density = Density { scale: DISPLAY_SCALE, cols: 1.0 };
+
+    /// Excel for Mac's density: a point is a pixel (sheet units × 0.75), and columns count in the
+    /// Normal font's digit width at 72 dpi instead of 96 (6 px for Calibri 11 and 12, so its columns
+    /// are wider next to the text than on Windows).
+    pub fn mac(wb: &Workbook) -> Density {
+        let f = &wb.styles.get(gridcraft_engine::model::StyleId::DEFAULT).font;
+        let digit72 = gridcraft_engine::model::max_digit_width_at(&f.name, f.size, 72.0);
+        let cols = digit72 / (wb.digit_width().max(1.0) * 0.75);
+        Density { scale: 0.75, cols: if cols.is_finite() { (cols as f32).clamp(0.5, 2.0) } else { 1.0 } }
+    }
+
+    /// The density the grid draws `wb` at: Excel for Mac's when `mac` is on.
+    pub fn of(wb: &Workbook, mac: bool) -> Density {
+        if mac { Density::mac(wb) } else { Density::DESKTOP }
+    }
+}
+
 /// The zoom percentages a Ctrl+wheel notch steps between: four per doubling (about 20% apart),
 /// so 25, 50, 100, 200 and 400 are on it. Excel steps 15 points a notch instead; the status bar's
 /// Zoom In / Zoom Out buttons keep their 10% steps.
@@ -117,6 +145,8 @@ pub struct FillTag {
 
 #[derive(Default)]
 pub struct GridState {
+    /// Draw the sheet at Excel for Mac's density (see `Density::mac`); the app turns it on on macOS.
+    pub mac_density: bool,
     pub drag: Drag,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
@@ -213,7 +243,12 @@ impl WheelZoom {
 pub struct Geo {
     pub rect: Rect,
     pub cells: Rect,
+    /// Screen points per sheet unit for rows, text and objects…
     pub z: f32,
+    /// …and for column widths (`z` unless the density widens columns).
+    pub zx: f32,
+    /// The zoom (1.0 at 100%), Page Layout's print scale included.
+    pub zoom: f32,
     pub header_w: f32,
     pub header_h: f32,
     /// The outline bands (grouped rows / columns): left of the row headers and above the column
@@ -241,8 +276,12 @@ pub struct Geo {
 
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
+        Geo::with_density(sh, rect, scroll, Density::DESKTOP)
+    }
+    pub fn with_density(sh: &Sheet, rect: Rect, scroll: egui::Vec2, density: Density) -> Geo {
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
-        let z = zoom * DISPLAY_SCALE;
+        let z = zoom * density.scale;
+        let zx = z * density.cols;
         let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
         let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
         let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
@@ -250,7 +289,7 @@ impl Geo {
         let digits = (last_row as f32).log10().floor() as i32 + 1;
         let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round() } else { 0.0 };
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
-        let frozen_w = (ci.start(fc) as f32) * z;
+        let frozen_w = (ci.start(fc) as f32) * zx;
         let frozen_h = (ri.start(fr) as f32) * z;
         let row_outline = Arc::new(crate::outline::Axis::new(&sh.rows));
         let col_outline = Arc::new(crate::outline::Axis::new(&sh.cols));
@@ -270,6 +309,8 @@ impl Geo {
             rect,
             cells,
             z,
+            zx,
+            zoom,
             header_w,
             header_h,
             band_w,
@@ -300,7 +341,9 @@ impl Geo {
     pub fn paged(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
         let mut g = Geo::new(sh, rect, scroll);
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
-        g.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
+        g.zoom = zoom * grid.scale.clamp(0.1, 4.0);
+        g.z = g.zoom * DISPLAY_SCALE;
+        g.zx = g.z;
         (g.fr, g.fc, g.frozen_w, g.frozen_h) = (0, 0, 0.0, 0.0);
         g.paper = Some(grid);
         g
@@ -312,7 +355,7 @@ impl Geo {
         }
         match &self.paper {
             Some(pg) => pg.on_cells(
-                self.scroll.x as f64 + ((p.x - self.cells.left()) / self.z) as f64,
+                self.scroll.x as f64 + ((p.x - self.cells.left()) / self.zx) as f64,
                 self.scroll.y as f64 + ((p.y - self.cells.top()) / self.z) as f64,
             ),
             None => true,
@@ -348,12 +391,12 @@ impl Geo {
     }
     pub fn x(&self, _sh: &Sheet, col: u32) -> f32 {
         if let Some(pg) = &self.paper {
-            return self.cells.left() + (pg.col_x(col) - self.scroll.x as f64) as f32 * self.z;
+            return self.cells.left() + (pg.col_x(col) - self.scroll.x as f64) as f32 * self.zx;
         }
         if col < self.fc {
-            self.cells.left() + self.ci.start(col) as f32 * self.z
+            self.cells.left() + self.ci.start(col) as f32 * self.zx
         } else {
-            self.cells.left() + self.frozen_w + (self.ci.start(col) as f32 - self.ci.start(self.fc) as f32 - self.scroll.x) * self.z
+            self.cells.left() + self.frozen_w + (self.ci.start(col) as f32 - self.ci.start(self.fc) as f32 - self.scroll.x) * self.zx
         }
     }
     pub fn y(&self, _sh: &Sheet, row: u32) -> f32 {
@@ -369,8 +412,12 @@ impl Geo {
     pub fn cell_rect(&self, sh: &Sheet, c: CellRef) -> Rect {
         Rect::from_min_max(
             pos2(self.x(sh, c.col), self.y(sh, c.row)),
-            pos2(self.x(sh, c.col) + sh.col_width(c.col) * self.z, self.y(sh, c.row) + sh.row_height(c.row) * self.z),
+            pos2(self.x(sh, c.col) + self.col_w(sh, c.col), self.y(sh, c.row) + sh.row_height(c.row) * self.z),
         )
+    }
+    /// On-screen width of a column.
+    pub fn col_w(&self, sh: &Sheet, col: u32) -> f32 {
+        sh.col_width(col) * self.zx
     }
     pub fn range_rect(&self, sh: &Sheet, r: RangeRef) -> Rect {
         let a = self.cell_rect(sh, r.start);
@@ -379,13 +426,13 @@ impl Geo {
     }
     pub fn col_at(&self, _sh: &Sheet, x: f32) -> u32 {
         if let Some(pg) = &self.paper {
-            return pg.col_at(self.scroll.x as f64 + ((x - self.cells.left()) / self.z) as f64);
+            return pg.col_at(self.scroll.x as f64 + ((x - self.cells.left()) / self.zx) as f64);
         }
-        let dx = (x - self.cells.left()) / self.z;
-        if dx < self.frozen_w / self.z {
+        let dx = (x - self.cells.left()) / self.zx;
+        if dx < self.frozen_w / self.zx {
             self.ci.at(dx.max(0.0) as f64)
         } else {
-            self.ci.at(self.ci.start(self.fc) + self.scroll.x as f64 + (dx - self.frozen_w / self.z) as f64)
+            self.ci.at(self.ci.start(self.fc) + self.scroll.x as f64 + (dx - self.frozen_w / self.zx) as f64)
         }
     }
     pub fn row_at(&self, _sh: &Sheet, y: f32) -> u32 {
@@ -412,7 +459,7 @@ impl Geo {
     fn scroll_cols(&self, _sh: &Sheet) -> (u32, u32) {
         let left = self.ci.start(self.fc) + self.scroll.x as f64;
         let c0 = self.ci.at(left).max(self.fc);
-        let c1 = self.ci.at(left + ((self.cells.width() - self.frozen_w) / self.z) as f64).min(MAX_COLS - 1);
+        let c1 = self.ci.at(left + ((self.cells.width() - self.frozen_w) / self.zx) as f64).min(MAX_COLS - 1);
         (c0, c1)
     }
     /// Screen areas of the panes (frozen rows/columns or the scrolling part) that hold part of `r`.
@@ -606,7 +653,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 return Geo::paged(sh, grid_rect, scroll, g);
             }
         }
-        Geo::new(sh, rect, scroll)
+        Geo::with_density(sh, rect, scroll, Density::of(&wb, app.grid.mac_density))
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
@@ -641,7 +688,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
-            let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
+            let g = make_geo(app, view.scroll);
             let mut d = scroll_delta;
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
@@ -651,7 +698,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             if modifiers.shift && d.x == 0.0 {
                 d = vec2(d.y, 0.0);
             }
-            view.scroll -= d / z;
+            view.scroll -= vec2(d.x / g.zx, d.y / g.z);
         }
     }
     // A one-finger touch drag pans the sheet, the content following the finger; it doesn't select.
@@ -660,12 +707,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.grid.touch_pan = true;
     }
     if app.grid.touch_pan && resp.dragged() && ui.input(|i| i.multi_touch().is_none()) {
-        let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
+        let g = make_geo(app, view.scroll);
         let mut d = resp.drag_delta();
         if sh.right_to_left {
             d.x = -d.x;
         }
-        view.scroll -= d / z;
+        view.scroll -= vec2(d.x / g.zx, d.y / g.z);
     }
     // The zoom glides to its step like egui eases a wheel notch (90% of the way in 0.1 s), or goes
     // there at once without animations (as for the selection outline below: View › Animations
@@ -691,7 +738,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         let g = make_geo(app, view.scroll);
         if let Some(pg) = &g.paper {
             let (ex, ey) = pg.extent();
-            max_x = if pg.cols_complete { (ex as f32 - g.cells.width() / g.z).max(0.0) } else { 1.0e9 };
+            max_x = if pg.cols_complete { (ex as f32 - g.cells.width() / g.zx).max(0.0) } else { 1.0e9 };
             max_y = if pg.rows_complete { (ey as f32 - g.cells.height() / g.z).max(0.0) } else { 1.0e9 };
         }
     }
@@ -724,9 +771,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         if target.col >= geo.fc {
             if cr.left() < area.left() {
-                view.scroll.x -= (area.left() - cr.left()) / geo.z;
+                view.scroll.x -= (area.left() - cr.left()) / geo.zx;
             } else if cr.right() > area.right() - 2.0 {
-                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.z).min(cr.left() - area.left());
+                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.zx).min(cr.left() - area.left());
             }
         } else if from.is_some_and(|f| f.col >= geo.fc) {
             view.scroll.x = 0.0;
@@ -942,7 +989,7 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let Some(geo) = app.grid.geo.clone() else { return };
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     let Some(sh) = wb.active() else { return };
-    let visible = ((geo.cells.width() - geo.frozen_w) / geo.z).max(0.0);
+    let visible = ((geo.cells.width() - geo.frozen_w) / geo.zx).max(0.0);
     let scroll = app.view().scroll.x;
     let last = sh.used_range().map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
     let content = geo.scroll_left_of(sh, last);
@@ -977,7 +1024,7 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     }
     if resp.hovered() {
         let d = ui.input(|i| i.smooth_scroll_delta);
-        next -= (if d.x != 0.0 { dir * d.x } else { d.y }) / geo.z;
+        next -= (if d.x != 0.0 { dir * d.x } else { d.y }) / geo.zx;
     }
     next = next.max(0.0);
     if next != scroll {
@@ -1541,7 +1588,7 @@ pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeadin
     let af = sh.autofilter.as_ref().filter(|af| af.range == tb.range);
     let mut out = Vec::new();
     for col in tb.range.start.col..=tb.range.end.col {
-        let w = sh.col_width(col) * geo.z;
+        let w = geo.col_w(sh, col);
         let off = col - tb.range.start.col;
         let Some(column) = tb.columns.get(off as usize) else { continue };
         if w <= 0.0 {
@@ -1860,7 +1907,7 @@ pub(crate) fn paint_headers(
     quads: &[((u32, u32), (u32, u32), Rect)],
     headings: &[TableHeading],
 ) {
-    let font = theme::ui_font(heading_font_size(geo.z));
+    let font = theme::ui_font(heading_font_size(geo.zoom));
     // The headers' own area: inside the outline bands.
     let r = Rect::from_min_max(pos2(geo.head_left(), geo.head_top()), geo.rect.max);
     let top = Rect::from_min_max(pos2(geo.cells.left(), r.top()), pos2(r.right(), geo.cells.top()));
@@ -1884,7 +1931,7 @@ pub(crate) fn paint_headers(
                 if !done_cols.insert((c, clip.left() as i32)) {
                     continue;
                 }
-                let w = sh.col_width(c) * geo.z;
+                let w = geo.col_w(sh, c);
                 if w <= 0.0 {
                     continue;
                 }
@@ -1907,7 +1954,7 @@ pub(crate) fn paint_headers(
                         // The name is cut off at the button, as a cell's text is at its neighbour.
                         let end = h.button.map_or(cr.right(), |b| b.left()) - 2.0;
                         let room = Rect::from_min_max(cr.min, pos2(end.max(cr.left()), cr.bottom())).intersect(pc.clip_rect());
-                        let pad = 4.0 * (geo.z / DISPLAY_SCALE).max(0.75);
+                        let pad = 4.0 * geo.zoom.max(0.75);
                         pc.with_clip_rect(room).text(pos2(cr.left() + pad, cr.center().y), Align2::LEFT_CENTER, &h.name, font.clone(), color);
                         if let Some(b) = h.button {
                             paint_filter_button(&pc, b, h.filtered);
@@ -2278,7 +2325,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         if in_col_header {
             if let Some((c, x)) = col_edge(geo, sh, p.x) {
-                app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z };
+                app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: (x - geo.x(sh, c)) / geo.zx };
                 return;
             }
             let c = geo.col_at(sh, p.x);
@@ -2505,14 +2552,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::MoveCols { source, .. } => {
                 let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
-                let midpoint = geo.x(sh, col) + sh.col_width(col) * geo.z * 0.5;
+                let midpoint = geo.x(sh, col) + geo.col_w(sh, col) * 0.5;
                 let before = (col + u32::from(p.x >= midpoint)).min(MAX_COLS - 1);
                 let before = (!(source.start.col..=source.end.col + 1).contains(&before)).then_some(before);
                 app.grid.drag = Drag::MoveCols { source, before };
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::ResizeCol { col, start, orig } => {
-                let w = (orig + (p.x - start) / geo.z).max(0.0);
+                let w = (orig + (p.x - start) / geo.zx).max(0.0);
                 let digit = app.session.active().map_or(gridcraft_engine::model::DEFAULT_DIGIT_WIDTH, |d| d.wb.digit_width());
                 let chars = gridcraft_engine::cmd::format::points_to_chars(w as f64, digit);
                 app.toast = Some((format!("Width: {chars:.2} ({} pixels)", w.round()), crate::now_ms()));
@@ -2564,11 +2611,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let params = if resize {
                     json!({"kind": kind, "id": id, "width": (w + d.x).max(20.0), "height": (h + d.y).max(20.0)})
                 } else {
-                    // Re-anchor at the cell under the new top-left.
-                    let x0 = sh.col_left(cell.col) as f32 + dx + d.x;
-                    let y0 = sh.row_top(cell.row) as f32 + dy + d.y;
-                    let nc = CellRef::new(sh.row_at(y0.max(0.0) as f64), sh.col_at(x0.max(0.0) as f64));
-                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0.max(0.0) - sh.col_left(nc.col) as f32, "dy": y0.max(0.0) - sh.row_top(nc.row) as f32})
+                    // Re-anchor at the cell under the new top-left, found on screen: columns can be
+                    // drawn at a different scale than the object's offsets (`Geo::zx`).
+                    let (x0, y0) = (geo.x(sh, cell.col) + (dx + d.x) * geo.z, geo.y(sh, cell.row) + (dy + d.y) * geo.z);
+                    let nc = CellRef::new(geo.row_at(sh, y0), geo.col_at(sh, x0));
+                    let ndx = ((x0 - geo.x(sh, nc.col)) / geo.z).max(0.0);
+                    let ndy = ((y0 - geo.y(sh, nc.row)) / geo.z).max(0.0);
+                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": ndx, "dy": ndy})
                 };
                 let _ = app.session.run("object.move", params);
                 coalesce_last_undo(app);
@@ -2826,7 +2875,7 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
         let c = geo.col_at(sh, p.x);
         let (l, r) = (geo.x(sh, c), geo.x(sh, c.saturating_add(1).min(MAX_COLS - 1)));
         let b = if p.x - l > r - p.x { c.saturating_add(1) } else { c };
-        let room = geo.ci.at((((geo.cells.width() - 40.0) / geo.z).max(0.0)) as f64);
+        let room = geo.ci.at((((geo.cells.width() - 40.0) / geo.zx).max(0.0)) as f64);
         b.min(room).min(MAX_COLS - 1)
     } else {
         if p.y <= geo.cells.top() {
@@ -2849,7 +2898,7 @@ fn paint_freeze_handles(p: &Painter, geo: &Geo, sh: &Sheet, drag: &Drag, t: &Tok
     if let Drag::Freeze { cols, to: Some(to) } = *drag {
         let stroke = Stroke::new(2.0, t.accent);
         if cols {
-            let x = geo.cells.left() + sh.col_left(to) as f32 * geo.z;
+            let x = geo.cells.left() + sh.col_left(to) as f32 * geo.zx;
             p.line_segment([pos2(x, geo.head_top()), pos2(x, geo.cells.bottom())], stroke);
         } else {
             let y = geo.cells.top() + sh.row_top(to) as f32 * geo.z;
@@ -2861,7 +2910,7 @@ fn paint_freeze_handles(p: &Painter, geo: &Geo, sh: &Sheet, drag: &Drag, t: &Tok
 fn col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<(u32, f32)> {
     let c = geo.col_at(sh, x);
     for cc in [c, c.saturating_sub(1)] {
-        let edge = geo.x(sh, cc) + sh.col_width(cc) * geo.z;
+        let edge = geo.x(sh, cc) + geo.col_w(sh, cc);
         if (x - edge).abs() <= 4.0 {
             return Some((cc, edge));
         }
@@ -4046,7 +4095,7 @@ fn painted_halign(h: HAlign, rtl: bool) -> HAlign {
 /// Row and column heading labels grow with the zoom as the cells do, as in Excel (at 400% the
 /// labels are four times their 100% size), and never get smaller than a readable 8.5 points.
 pub(crate) fn heading_font_size(zoom: f32) -> f32 {
-    (11.5 * (zoom / DISPLAY_SCALE)).max(8.5)
+    (11.5 * zoom).max(8.5)
 }
 
 #[cfg(test)]
@@ -4085,8 +4134,8 @@ mod tests {
 
     #[test]
     fn heading_labels_scale_with_the_zoom_without_a_cap() {
-        use super::{DISPLAY_SCALE, heading_font_size};
-        let at = |percent: f32| heading_font_size(percent / 100.0 * DISPLAY_SCALE);
+        use super::heading_font_size;
+        let at = |percent: f32| heading_font_size(percent / 100.0);
         assert!((at(400.0) / at(100.0) - 4.0).abs() < 1e-4, "four times as large at 400%");
         assert!(at(200.0) > at(100.0) && at(400.0) > at(200.0));
         assert_eq!(at(10.0), 8.5, "never below a readable size");
@@ -4425,6 +4474,41 @@ mod pane_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn mac_density_matches_excel_for_mac() {
+        use gridcraft_engine::model::{StyleTable, Workbook};
+        let book = |font: &str, size: f32| {
+            let mut wb = Workbook::new();
+            let mut normal = wb.styles.get(gridcraft_engine::model::StyleId::DEFAULT).clone();
+            (normal.font.name, normal.font.size) = (font.into(), size);
+            wb.styles = StyleTable::with_default(normal);
+            wb
+        };
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0));
+        // Measured in Excel for Mac at 100%: Calibri 11, a 14.80-character column (104 sheet px) is
+        // 89 px and a 15 pt row 15 px; Calibri 12, a 13-character column (104 sheet px) is 78 px.
+        for (font, size, px) in [("Calibri", 11.0, 89.0), ("Calibri", 12.0, 78.0)] {
+            let wb = book(font, size);
+            let mut sh = Sheet::new("S");
+            sh.cols.entry(1).or_default().size = Some(104.0);
+            let mac = Geo::with_density(&sh, rect, vec2(0.0, 0.0), Density::mac(&wb));
+            assert!((mac.col_w(&sh, 1) - px).abs() < 0.5, "{font} {size}: {}", mac.col_w(&sh, 1));
+            assert_eq!(mac.cell_rect(&sh, CellRef::new(0, 1)).height(), 15.0);
+            assert_eq!(mac.cell_rect(&sh, CellRef::new(0, 1)).left(), mac.x(&sh, 1));
+            // Hit testing follows the wider columns.
+            let mid = mac.cell_rect(&sh, CellRef::new(3, 1)).center();
+            assert_eq!(mac.cell_at(&sh, mid), CellRef::new(3, 1));
+        }
+        // The desktop density is unchanged: one scale for both axes.
+        let sh = Sheet::new("S");
+        let desk = Geo::with_density(&sh, rect, vec2(0.0, 0.0), Density::of(&book("Calibri", 11.0), false));
+        assert_eq!((desk.z, desk.zx, desk.zoom), (DISPLAY_SCALE, DISPLAY_SCALE, 1.0));
+        assert_eq!(Geo::new(&sh, rect, vec2(0.0, 0.0)).zx, DISPLAY_SCALE);
+        // A hostile Normal font size keeps a finite, bounded column factor.
+        let d = Density::mac(&book("Calibri", f32::NAN));
+        assert!(d.cols.is_finite() && (0.5..=2.0).contains(&d.cols));
     }
 
     /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.

@@ -2,7 +2,9 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--dialog 'name={json}'] [--hf-edit header|footer] [--density mac|desktop] out.png`
+//!
+//! The density defaults to the platform's, as in the app: Excel for Mac's on macOS.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -22,6 +24,7 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut mac_density = cfg!(target_os = "macos");
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -71,6 +74,10 @@ fn main() {
                 i += 1;
                 hf_edit = args.get(i).cloned();
             }
+            "--density" => {
+                i += 1;
+                mac_density = args.get(i).is_some_and(|d| d == "mac");
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -115,6 +122,7 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
+                app.grid.mac_density = mac_density;
                 app.selected_chart = chart;
                 if let Some(d) = &dialog {
                     let (name, p) =

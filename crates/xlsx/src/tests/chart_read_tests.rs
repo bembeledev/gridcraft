@@ -239,15 +239,19 @@ fn literal_series_keep_their_points_without_a_valid_pt_count() {
 
 #[test]
 fn chart_cache_counts_and_series_are_bounded() {
-    let sparse = r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="100000"/><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#;
+    let sparse = r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="40"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="9"><c:v>10</c:v></c:pt></c:numLit></c:val></c:ser>"#;
     let chart = read(&chart_xml(false, &format!("<c:pieChart>{sparse}</c:pieChart>"), ""));
-    assert_eq!(chart.series[0].values, "{#N/A,2}");
+    assert_eq!(chart.series[0].values.split(',').count(), 40);
+
+    let huge = r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="2000000"/><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#;
+    let chart = read(&chart_xml(false, &format!("<c:pieChart>{huge}</c:pieChart>"), ""));
+    assert_eq!(chart.series[0].values.split(',').count(), gridcraft_core::MAX_ROWS as usize);
 
     let series: String = (0..300)
         .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>{i}</c:v></c:pt></c:numLit></c:val></c:ser>"#))
         .collect();
     let chart = read(&chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), ""));
-    assert_eq!(chart.series.len(), 255);
+    assert_eq!(chart.series.len(), 300);
 }
 
 #[test]

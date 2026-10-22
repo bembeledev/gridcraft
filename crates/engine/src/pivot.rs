@@ -1651,17 +1651,26 @@ fn header_items(wb: &Workbook, si: usize, r: RangeRef, pivot_sheet: usize, repor
 /// GridCraft's joined name, or, when `value_item` (the last of `items` is a value field's name,
 /// which Excel can show above the column items), with that name at another level and the
 /// column items in the same order.
-fn same_items(key: &[String], items: &[String], value_item: bool) -> bool {
-    if key == items || key.join(" - ") == items.join(" - ") {
-        return true;
-    }
+fn joined_name_match(key: &[String], items: &[String]) -> bool {
+    key != items && key.join(" - ") == items.join(" - ")
+}
+
+fn value_item_match(key: &[String], items: &[String], value_item: bool) -> bool {
     let Some((value, columns)) = items.split_last().filter(|_| value_item && key.len() == items.len()) else { return false };
     key.iter().enumerate().any(|(p, k)| k == value && key.iter().enumerate().filter(|(i, _)| *i != p).map(|(_, x)| x).eq(columns))
 }
 
-/// Number of rebuilt item sequences matching a saved key under item or joined-name matching.
-fn joined_match_count(key: &[String], rebuilt: &[&[String]], value_item: bool) -> usize {
-    rebuilt.iter().filter(|items| same_items(key, items, value_item)).count()
+/// Whether a series `key` names the same pivot items as the rebuilt `items`: item by item, as
+/// GridCraft's joined name, or, when `value_item` (the last of `items` is a value field's name,
+/// which Excel can show above the column items), with that name at another level and the
+/// column items in the same order.
+fn same_items(key: &[String], items: &[String], value_item: bool) -> bool {
+    key == items || value_item_match(key, items, value_item) || joined_name_match(key, items)
+}
+
+/// Number of rebuilt item sequences matching a saved key under joined-name matching.
+fn joined_match_count(key: &[String], rebuilt: &[&[String]]) -> usize {
+    rebuilt.iter().filter(|items| joined_name_match(key, items)).count()
 }
 
 fn rebuilt_item_set<'a>(items: impl IntoIterator<Item = &'a [String]>) -> HashSet<&'a [String]> {
@@ -1776,7 +1785,7 @@ fn rebind_charts(
     let mut joined_counts: HashMap<Vec<String>, usize> = HashMap::new();
     for fmts in &label_formats {
         for (key, _) in &fmts.keyed {
-            joined_counts.entry(key.clone()).or_insert_with(|| joined_match_count(key, &items, value_item));
+            joined_counts.entry(key.clone()).or_insert_with(|| joined_match_count(key, &items));
         }
     }
     let mut pivot_labels: Option<HashSet<String>> = None;
@@ -1790,7 +1799,10 @@ fn rebind_charts(
                     let exact = fmts.keyed.iter().find(|(k, _)| k.as_slice() == *it);
                     exact
                         .or_else(|| {
-                            fmts.keyed.iter().find(|(k, _)| !rebuilt(k) && same_items(k, it, value_item) && joined_counts.get(k).copied() == Some(1))
+                            fmts.keyed.iter().find(|(k, _)| {
+                                !rebuilt(k)
+                                    && (value_item_match(k, it, value_item) || joined_name_match(k, it) && joined_counts.get(k).copied() == Some(1))
+                            })
                         })
                         .map(|(_, f)| f)
                 })
@@ -1846,7 +1858,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{data_cols_exceed_sheet, joined_match_count, rebuilt_item_set, same_items};
+    use super::{data_cols_exceed_sheet, joined_match_count, joined_name_match, rebuilt_item_set, same_items, value_item_match};
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
@@ -1858,10 +1870,10 @@ mod fit_tests {
     }
     #[test]
     fn joined_item_names_with_separator_are_rejected_when_ambiguous() {
-        let saved = ["A - B", "C"].map(String::from);
+        let saved = ["A - B - C"].map(String::from);
         let rebuilt = [["A", "B - C"].map(String::from), ["A - B", "C"].map(String::from)];
         let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
-        assert_eq!(joined_match_count(&saved, &candidates, false), 2);
+        assert_eq!(joined_match_count(&saved, &candidates), 2);
         assert!(same_items(&saved, &saved, false));
     }
     #[test]
@@ -1869,7 +1881,7 @@ mod fit_tests {
         let unique = [String::from("A - B - C")];
         let ambiguous = [String::from("A - B"), String::from("C")];
         let candidates = [unique.as_slice(), ambiguous.as_slice()];
-        assert_eq!(joined_match_count(&[String::from("A - B - C")], &candidates, false), 2);
+        assert_eq!(joined_match_count(&[String::from("A - B - C")], &candidates), 1);
     }
     #[test]
     fn unique_joined_item_name_matches_single_rebuilt_sequence() {
@@ -1878,7 +1890,18 @@ mod fit_tests {
         let second = [String::from("X"), String::from("Y")];
         let candidates = [first.as_slice(), second.as_slice()];
         assert!(same_items(&saved, &first, false));
-        assert_eq!(joined_match_count(&saved, &candidates, false), 1);
+        assert_eq!(joined_match_count(&saved, &candidates), 1);
+    }
+    #[test]
+    fn value_item_match_is_not_gated_by_joined_match() {
+        let saved = [String::from("Sales"), String::from("A")];
+        let value_items = [String::from("A"), String::from("Sales")];
+        let joined_items = [String::from("Sales - A")];
+        let candidates = [value_items.as_slice(), joined_items.as_slice()];
+        assert!(value_item_match(&saved, &value_items, true));
+        assert!(joined_name_match(&saved, &joined_items));
+        assert_eq!(joined_match_count(&saved, &candidates), 1);
+        assert!(same_items(&saved, &value_items, true));
     }
     #[test]
     fn rebuilt_item_set_matches_content() {

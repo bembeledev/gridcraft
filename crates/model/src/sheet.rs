@@ -166,6 +166,12 @@ pub fn base_col_width(base: f64, digit: f64) -> f32 {
     (((base * digit + 5.0) / 8.0).ceil() * 8.0) as f32
 }
 
+/// The widest column (px) for a digit width: 255 characters plus padding, Excel's limit.
+pub fn max_col_width(digit: f64) -> f32 {
+    let digit = if digit.is_finite() { digit.clamp(1.0, 1000.0) } else { DEFAULT_DIGIT_WIDTH };
+    (255.0 * digit + 5.0).trunc() as f32
+}
+
 /// Column width (px) → characters of the default font's digit width, without the cell padding:
 /// the value the Column Width dialog shows.
 pub fn points_to_chars(px: f64, digit: f64) -> f64 {

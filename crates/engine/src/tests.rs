@@ -2767,6 +2767,18 @@ fn circular_formula_from_a_file_keeps_its_values() {
     assert_eq!(v(&s, "B2"), Value::Number(1.0));
 }
 
+/// A circular dynamic-array formula opens, saves and reopens without spilling.
+#[test]
+fn circular_array_formula_keeps_its_value_through_save() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(3)+B1*0"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty() && v(&s, "B3").is_empty());
+}
+
 fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();

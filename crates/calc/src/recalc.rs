@@ -654,7 +654,13 @@ impl PassHost<'_> {
         };
         // A formula a loop closes on keeps the value it shows, so the loop doesn't advance with each
         // recalculation and a file's values survive opening it.
-        let v = if !self.iterate && self.cycle_seen.contains(&k) { self.previous(k) } else { v };
+        // Its new array doesn't spill either: the cells around it keep theirs.
+        let v = if !self.iterate && self.cycle_seen.contains(&k) {
+            self.spills.remove(&k);
+            self.previous(k)
+        } else {
+            v
+        };
         self.results.insert(k, v.clone());
         v
     }

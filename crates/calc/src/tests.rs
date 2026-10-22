@@ -392,6 +392,19 @@ fn circular_references_without_iterative_calculation() {
     assert_eq!(t.calc.circular, vec![(0, c("A1"))]);
 }
 
+/// A dynamic-array formula on a loop keeps the value it shows and doesn't spill its new array.
+#[test]
+fn circular_array_formula_does_not_spill() {
+    let mut t = T::new();
+    t.set("B1", "=SEQUENCE(3)+B1*0");
+    assert_eq!(t.num("B1"), 0.0);
+    assert!(t.get("B2").is_empty() && t.get("B3").is_empty(), "B2 {:?} B3 {:?}", t.get("B2"), t.get("B3"));
+    assert_eq!(t.calc.circular, vec![(0, c("B1"))]);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 0.0);
+    assert!(t.get("B2").is_empty());
+}
+
 /// A loop in a file keeps the values Excel saved: the formula a loop closes on shows its cached
 /// value, and the formulas reading it calculate from that value (#CIRC! hid them all before).
 #[test]

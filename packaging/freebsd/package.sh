@@ -24,12 +24,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  amd64 | x86_64) ARCH=x86_64 ;;
-  arm64 | aarch64) ARCH=aarch64 ;;
-  *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
-esac
+release_arch() {
+  case "$1" in
+    amd64 | x86_64) echo x86_64 ;;
+    arm64 | aarch64) echo aarch64 ;;
+    *) echo "unsupported architecture $1" >&2; return 2 ;;
+  esac
+}
+HOST_ARCH="$(release_arch "$(uname -m)")"
+# The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
+# aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+ARCH="$HOST_ARCH"
+if [ -n "${CARGO_BUILD_TARGET:-}" ]; then ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")"; fi
 BASENAME="gridcraft-$VERSION-freebsd-$ARCH"
 
 echo "==> GridCraft $VERSION for FreeBSD $ARCH"
@@ -37,7 +43,8 @@ echo "==> GridCraft $VERSION for FreeBSD $ARCH"
 if [ "$SKIP_BUILD" = 0 ]; then
   (cd "$ROOT" && cargo build --release --locked -p gridcraft -p gridcraft-cli)
 fi
-BIN="$CARGO_TARGET_DIR/release"
+# Cargo puts a cross build under target/<triple>/release.
+BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/freebsd-package"
 TREE="$WORK/$BASENAME"
 rm -rf "$WORK"
@@ -56,6 +63,10 @@ copy_docs "$TREE/share/doc/gridcraft"
 tar -C "$WORK" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $DIST/$BASENAME.tar.gz"
 
-"$TREE/bin/gridcraft-cli" --version
+if [ "$ARCH" = "$HOST_ARCH" ]; then
+  "$TREE/bin/gridcraft-cli" --version
+else
+  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+fi
 echo "==> done"
 ls -lh "$DIST/$BASENAME.tar.gz"

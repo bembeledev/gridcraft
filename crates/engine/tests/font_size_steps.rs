@@ -51,3 +51,27 @@ fn sizes_off_the_list_step_to_the_neighbouring_size() {
         assert_eq!(step(&mut s, up), to, "{from} {}", if up { "up" } else { "down" });
     }
 }
+
+/// The active cell's size picks the next one for the whole selection, as in Excel: 11 pt active
+/// makes every selected cell 12. At the end of the steps nothing changes, other cells included
+/// (with the active cell at 72 pt, an 11 pt cell used to become 72).
+#[test]
+fn a_selection_follows_the_active_cell_and_stays_put_at_either_end() {
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    let sizes = |s: &gridcraft_engine::Session| -> Vec<f32> {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        ["A1", "B1"].iter().map(|a| d.wb.styles.get(sh.style_id(gridcraft_engine::core::CellRef::parse(a).unwrap())).font.size).collect()
+    };
+    s.execute("home.fontSize", json!({"range": "A1", "size": 72})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("home.increaseFontSize", json!({})).unwrap();
+    assert_eq!(sizes(&s), [72.0, 11.0], "at 72 Increase changes nothing");
+    s.execute("home.fontSize", json!({"range": "A1", "size": 1})).unwrap();
+    s.execute("home.decreaseFontSize", json!({})).unwrap();
+    assert_eq!(sizes(&s), [1.0, 11.0], "at 1 Decrease changes nothing");
+    s.execute("selection.set", json!({"range": "A1:B1", "active": "B1"})).unwrap();
+    s.execute("home.increaseFontSize", json!({})).unwrap();
+    assert_eq!(sizes(&s), [12.0, 12.0], "the active cell's next size for every selected cell");
+}

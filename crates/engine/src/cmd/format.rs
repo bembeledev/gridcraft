@@ -342,7 +342,9 @@ const SIZES: [f32; 23] =
 fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
     let cur = active_style(s)?.font.size;
     let next = if up { SIZES.iter().copied().find(|x| *x > cur) } else { SIZES.iter().rev().copied().find(|x| *x < cur) };
-    let next = next.unwrap_or(cur);
+    // At either end nothing changes, not even other selected cells of other sizes (observed: Excel
+    // 16.0 leaves an 11 pt cell alone when the active cell is at 72 pt).
+    let Some(next) = next else { return Ok(json!({"size": cur})) };
     apply_style(s, p, |st| st.font.size = next)?;
     Ok(json!({"size": next}))
 }

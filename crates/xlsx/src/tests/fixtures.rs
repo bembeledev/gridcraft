@@ -607,7 +607,7 @@ fn edited_nested_group_keeps_member_scale_on_roundtrip() {
           <xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="4" name="Inner"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
             <xdr:grpSpPr><a:xfrm><a:off x="3390900" y="2381250"/><a:ext cx="2438400" cy="1905000"/><a:chOff x="0" y="0"/><a:chExt cx="12192000" cy="9525000"/></a:xfrm></xdr:grpSpPr>
             <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="5" name="Keep"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="3048000" y="2381250"/><a:ext cx="6096000" cy="4762500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Keep</a:t></a:r></a:p></xdr:txBody></xdr:sp>
-            <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="6" name="Erase"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="6096000" cy="2381250"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Erase</a:t></a:r></a:p></a:txBody></xdr:sp>
+            <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="6" name="Erase"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="6096000" cy="2381250"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>Erase</a:t></a:r></a:p></xdr:txBody></xdr:sp>
           </xdr:grpSp>
         </xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor>
     </xdr:wsDr>"#;

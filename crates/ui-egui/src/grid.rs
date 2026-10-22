@@ -2096,6 +2096,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
             // The eraser rubs out the stroke itself, grouped or not; the rest of a group stays.
             if let Some(p) = pos
+                && !crate::chartview::objects_hidden(wb)
                 && let Some(("shape", id, _)) = crate::chartview::hit_object(geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {

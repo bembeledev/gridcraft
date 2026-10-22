@@ -3,7 +3,7 @@
 
 use std::f64::consts::PI;
 
-use gridcraft_core::{Array, CellError, Value};
+use gridcraft_core::{Array, CellError, Collation, Value};
 
 use crate::criteria::Criterion;
 use crate::util::{
@@ -955,7 +955,8 @@ fn seriessum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // Criteria aggregates
 
 /// Values at the matched positions of `target` for every (range, criteria) pair.
-fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Vec<bool>> {
+/// Relational criteria order text by `coll`.
+fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize, coll: Collation) -> R<Vec<bool>> {
     let rest = a.get(first_pair..).unwrap_or(&[]);
     if rest.is_empty() || rest.len() % 2 != 0 {
         return Err(CellError::Value);
@@ -973,7 +974,7 @@ fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Ve
         let scalar = crit.value.scalar();
         let c = if single_pair { Criterion::parse_arg(&scalar)? } else { Criterion::parse_arg_truncated(&scalar) };
         for (m, v) in mask.iter_mut().zip(r.iter()) {
-            if *m && !c.matches(v) {
+            if *m && !c.matches(v, coll) {
                 *m = false;
             }
         }
@@ -997,48 +998,49 @@ fn masked_numbers(target: &Array, mask: &[bool]) -> R<Vec<f64>> {
     Ok(out)
 }
 
-fn countifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn countifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let first = as_array(&crate::util::arg(a, 0)?.value);
-    let mask = criteria_mask(a, 0, first.rows, first.cols)?;
+    let mask = criteria_mask(a, 0, first.rows, first.cols, c.collation())?;
     num_val(mask.iter().filter(|m| **m).count() as f64)
 }
 
 /// The values of the `*IFS` target range with the mask from its pairs.
-fn ifs_numbers(a: &[Arg]) -> R<Vec<f64>> {
+fn ifs_numbers(a: &[Arg], coll: Collation) -> R<Vec<f64>> {
     let target = as_array(&crate::util::arg(a, 0)?.value);
-    let mask = criteria_mask(a, 1, target.rows, target.cols)?;
+    let mask = criteria_mask(a, 1, target.rows, target.cols, coll)?;
     masked_numbers(&target, &mask)
 }
 
-fn sumifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(ifs_numbers(a)?.iter().sum())
+fn sumifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(ifs_numbers(a, c.collation())?.iter().sum())
 }
-fn averageifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn averageifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(a, c.collation())?;
     if v.is_empty() {
         return Err(CellError::Div0);
     }
     num_val(v.iter().sum::<f64>() / v.len() as f64)
 }
-fn maxifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn maxifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(a, c.collation())?;
     num_val(v.iter().copied().reduce(f64::max).unwrap_or(0.0))
 }
-fn minifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn minifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(a, c.collation())?;
     num_val(v.iter().copied().reduce(f64::min).unwrap_or(0.0))
 }
 
-fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn countif(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+    let coll = ctx.collation();
     let range = as_array(&crate::util::arg(a, 0)?.value);
     let c = Criterion::parse_arg(&crate::util::arg(a, 1)?.value.scalar())?;
-    num_val(range.iter().filter(|v| c.matches(v)).count() as f64)
+    num_val(range.iter().filter(|v| c.matches(v, coll)).count() as f64)
 }
 
 /// SUMIF / AVERAGEIF: matched numbers from the sum range, read at the criteria range's positions.
 /// Excel sizes a sum range reference like the criteria range, anchored at its own top-left cell;
 /// the evaluator does that resizing (it has the references), so cells line up one to one here.
-fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
+fn if_numbers(a: &[Arg], coll: Collation) -> R<Vec<f64>> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
     let c = Criterion::parse_arg(&crate::util::arg(a, 1)?.value.scalar())?;
     let sum_range = if has(a, 2) { Some(as_array(&crate::util::arg(a, 2)?.value)) } else { None };
@@ -1046,7 +1048,7 @@ fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
     for r in 0..range.rows {
         for col in 0..range.cols {
             let Some(v) = range.get(r, col) else { continue };
-            if !c.matches(v) {
+            if !c.matches(v, coll) {
                 continue;
             }
             let target = match &sum_range {
@@ -1062,11 +1064,11 @@ fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
     }
     Ok(out)
 }
-fn sumif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(if_numbers(a)?.iter().sum())
+fn sumif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(if_numbers(a, c.collation())?.iter().sum())
 }
-fn averageif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = if_numbers(a)?;
+fn averageif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = if_numbers(a, c.collation())?;
     if v.is_empty() {
         return Err(CellError::Div0);
     }
@@ -1773,5 +1775,29 @@ mod tests {
         // Comparisons treat it as sorting just above the 126 kept emoji.
         close(sumifs(format!(">={}", e.repeat(128))), 1.0 + 2.0);
         close(sumifs(format!("<={}", e.repeat(128))), 3.0);
+    }
+
+    const NFC: &str = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+    const NFD: &str = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+
+    fn col_t(xs: &[&str]) -> Value {
+        arr(xs.iter().map(|x| vec![tv(x)]).collect())
+    }
+
+    #[test]
+    fn countif_matches_nfc_and_nfd() {
+        let v = col_t(&[NFC, NFD]);
+        close(ev("COUNTIF", vec![rf(v.clone()), t(NFC)]), 2.0);
+        close(ev("COUNTIF", vec![rf(v), t(NFD)]), 2.0);
+        // Not-equal and wildcard patterns: `<>` is the complement, wildcards keep their per-char matching.
+        let w = col_t(&[NFC, NFD, "x"]);
+        close(ev("COUNTIF", vec![rf(w.clone()), t(&format!("<>{NFD}"))]), 1.0);
+        close(ev("COUNTIF", vec![rf(w), t("Nguy*")]), 2.0);
+    }
+
+    #[test]
+    fn relational_criteria_follow_root_order() {
+        let v = col_t(&["\u{1ea5}m", "b\u{e0}n", "Zebra"]);
+        close(ev("COUNTIF", vec![rf(v), t("<b")]), 1.0);
     }
 }

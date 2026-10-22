@@ -646,6 +646,7 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
+    let collation = s.collation();
     let d = s.doc_mut()?;
     let mut label = String::new();
     let now = d.wb.clone();
@@ -661,12 +662,16 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
+    // A step recorded before the sorting language changed holds the old order (and values
+    // computed with it): the session's language applies to whatever workbook is restored.
+    d.set_collation(collation);
     d.revision += 1;
     Ok(json!({"undone": label}))
 }
 
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
+    let collation = s.collation();
     let d = s.doc_mut()?;
     let mut label = String::new();
     let now = d.wb.clone();
@@ -681,6 +686,9 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
+    // A step recorded before the sorting language changed holds the old order (and values
+    // computed with it): the session's language applies to whatever workbook is restored.
+    d.set_collation(collation);
     d.revision += 1;
     Ok(json!({"redone": label}))
 }

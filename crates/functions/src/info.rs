@@ -1,8 +1,6 @@
 //! Information, logical, web and cube functions.
 
-use std::cmp::Ordering;
-
-use gridcraft_core::{Array, CellError, Value, compare_text};
+use gridcraft_core::{Array, CellError, Value, text_eq};
 
 use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
 use crate::{Arg, Ctx, FnSpec, VAR};
@@ -251,7 +249,7 @@ fn ifna(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 fn switch_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Text(x), Value::Text(y)) => compare_text(x, y) == Ordering::Equal,
+        (Value::Text(x), Value::Text(y)) => text_eq(x, y),
         (Value::Number(x), Value::Number(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Empty, Value::Empty) => true,
@@ -613,5 +611,12 @@ mod tests {
         is_err(ev("FILTERXML", vec![t("<a/>"), t("//a")]), CellError::Value);
         is_err(ev("CUBEVALUE", vec![t("conn")]), CellError::NA);
         is_err(ev("CUBESETCOUNT", vec![t("set")]), CellError::NA);
+    }
+
+    #[test]
+    fn switch_matches_nfd() {
+        let nfc = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+        let nfd = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+        close(ev("SWITCH", vec![t(nfd), t(nfc), n(1.0), n(0.0)]), 1.0);
     }
 }

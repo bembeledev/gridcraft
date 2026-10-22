@@ -288,8 +288,15 @@ impl Value {
 }
 
 /// Excel's comparison for `=`, `<`… operators. Text compares case-insensitively; empty acts as
-/// 0, "" or FALSE depending on the other side. Errors are handled by the caller.
+/// 0, "" or FALSE depending on the other side. Errors are handled by the caller. Text order is
+/// the Root order (ours, language-neutral, not CLDR root): `compare_with(a, b, Collation::Root)`.
 pub fn compare(a: &Value, b: &Value) -> Ordering {
+    compare_with(a, b, Collation::Root)
+}
+
+/// [`compare`] with text ordered by collation `c` ([`compare_text_with`]). The order of the
+/// classes and the treatment of empty do not depend on `c`, and neither does text equality.
+pub fn compare_with(a: &Value, b: &Value, c: Collation) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, Value::Number(n)) => compare_numbers(0.0, *n),
@@ -299,7 +306,7 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
         (Value::Empty, Value::Bool(b)) => false.cmp(b),
         (Value::Bool(b), Value::Empty) => b.cmp(&false),
         (Value::Number(x), Value::Number(y)) => compare_numbers(*x, *y),
-        (Value::Text(x), Value::Text(y)) => compare_text(x, y),
+        (Value::Text(x), Value::Text(y)) => compare_text_with(x, y, c),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Error(x), Value::Error(y)) => x.code().cmp(&y.code()),
         _ => a.rank().cmp(&b.rank()),
@@ -323,29 +330,23 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
     round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
-/// Case-insensitive text order (Unicode lowercase).
-pub fn compare_text(a: &str, b: &str) -> Ordering {
-    let mut ai = a.chars().flat_map(char::to_lowercase);
-    let mut bi = b.chars().flat_map(char::to_lowercase);
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x != y => return x.cmp(&y),
-            _ => {}
-        }
-    }
-}
+pub use crate::collate::{Collation, compare_text, compare_text_with};
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
+/// Text order is the Root order (ours, not CLDR root): `sort_compare_with(a, b, Collation::Root)`.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
+    sort_compare_with(a, b, Collation::Root)
+}
+
+/// [`sort_compare`] with text ordered by collation `c`; only the order inside the text class
+/// depends on `c`.
+pub fn sort_compare_with(a: &Value, b: &Value, c: Collation) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, _) => Ordering::Greater,
         (_, Value::Empty) => Ordering::Less,
         (Value::Error(_), Value::Error(_)) => Ordering::Equal,
-        _ => compare(a, b),
+        _ => compare_with(a, b, c),
     }
 }
 
@@ -432,6 +433,9 @@ mod tests {
         assert_eq!(compare(&Value::from("z"), &Value::Bool(false)), Ordering::Less);
         assert_eq!(compare(&Value::Empty, &Value::Number(0.0)), Ordering::Equal);
         assert_eq!(sort_compare(&Value::Empty, &Value::Number(1.0)), Ordering::Greater);
+        // Accented letters sort with their base letter, and NFC equals NFD.
+        assert_eq!(compare(&Value::from("Ánh"), &Value::from("bàn")), Ordering::Less);
+        assert_eq!(compare(&Value::from("Ánh"), &Value::from("A\u{301}NH")), Ordering::Equal);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Vietnamese sorting language; canonical-equivalent, accent-aware text comparison; defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -58,6 +58,55 @@ right-to-left sheets and full complex-script support. Part of
 - **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
   255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
   accepted as in Excel. Sheet names already counted characters (31).
+- **Text comparison is canonical-equivalent and accent-aware.** `compare_text` in
+  `crates/core/src/collate.rs` is case-insensitive, treats a letter typed precomposed and typed as
+  base plus combining marks as the same text (`ế` U+1EBF equals `e` U+0302 U+0301, and marks of
+  different combining classes match in either order), and puts accented letters next to their base
+  letter (`Ánh` beside `Anh`, ties broken by the accent) instead of after `z`. Accent-only ties
+  are broken by the code point of the combining mark (`hà` < `há`: grave U+0300 before acute
+  U+0301; `hâ` < `hă`), which is not ICU's root order (acute before grave): this order is
+  language-neutral, not a tailored one. It is our own order, not CLDR root: the primary key is the
+  code point of the lowercased base letter (`đ` counts as `d`), accents are secondary, and every
+  other character (`ø ł æ ß`, Cyrillic, CJK, digits, punctuation) orders by code point. Equality is the
+  same in `=`, `COUNTIF`/`SUMIF`/`COUNTIFS`, `MATCH`/`XMATCH`/`XLOOKUP`/`VLOOKUP`, `UNIQUE`,
+  `SWITCH`, D-function field labels, Remove Duplicates, AutoFilter and Slicer lists, data
+  validation lists, conditional formatting (duplicates, text rules), PivotTable items and
+  Consolidate. `EXACT` stays case-sensitive but sees NFC and NFD as the same text. Nothing
+  rewrites the user's text: the comparison builds keys and leaves the cells alone. Scope: the Latin
+  letters in U+00C0–U+024F and U+1E00–U+1EFF with combining marks in U+0300–U+036F (497
+  precomposed letters, plus the marks U+0340, U+0341, U+0343 and U+0344, which decompose to
+  other marks; data from Unicode 17.0, checked against ICU4X in a test). Other scripts
+  (Cyrillic й against и + U+0306, Greek ά) still compare as different. Letters with no
+  decomposition (such as ø, ł, æ, ß, ð, ħ, ı) sort by code point, after `z`. A run of more than 32
+  combining marks is left in input order. Not covered yet: wildcard patterns (`*`, `?`) and Find
+  and Replace still match one character at a time, so `COUNTIF(r,"Nguyễn*")` and the begins-with
+  criteria of D-functions do not unify NFC and NFD, and Advanced Filter header labels use
+  canonical equality while the engine's PivotTable source-header lookup and table column names
+  keep ASCII-case matching. The XLSX pivot writer names cache fields as the engine does (headers
+  equal only under canonical equality stay apart) and resolves a field by that exact name first,
+  then by canonical equality (`xlsx/src/pivot.rs` `find_field`, `same()`).
+- **Sorting language (`vi`).** `data.sortLanguage {lang?}` (Data › Sort & Filter; command search,
+  CLI and MCP; no ribbon control yet) reports or sets the language text is ordered by. `vi`,
+  `vi-VN` and `VI_vn` select the Vietnamese order of the CLDR `vi` standard collation
+  (`a ă â b c d đ e ê g h i k l m n o ô ơ p q r s t u ư v x y`, in which `ă`, `â`, `đ`, `ê`, `ô`, `ơ`
+  and `ư` are letters of their own); the tones are a second-level difference
+  (`ma < mà < mả < mã < má < mạ`), so `Hoà` (tone on `a`) sorts before `Hòa` (tone on `o`) and
+  `Hoà` is never equal to `Hòa`; accent-only ties follow that tone order as in CLDR `vi`, not the
+  mark code points of Root. Anything else, and the default, is the language-neutral Root order
+  above. It is one setting for the session and every open workbook: Data › Sort, `SORT` and
+  `SORTBY`, the `<`, `>`, `<=` and `>=` operators, approximate `MATCH`, `VLOOKUP`, `HLOOKUP`,
+  `XLOOKUP` and `XMATCH`, relational `COUNTIF` criteria, AutoFilter value lists, custom filter and Advanced Filter
+  comparisons, conditional formatting value rules and PivotTable item order all follow it,
+  and changing it recalculates the open workbooks. It is not an undo step and is never read from the
+  system locale; the desktop app keeps it with its other preferences (`prefs.json`), and it is not
+  saved in the workbook (OOXML `sortState` has no language field). Existing
+  PivotTables keep their item order until Refresh, and applied custom AutoFilters keep their result
+  until Reapply. Equality does not depend on the language. Under Root, the Latin letters with no
+  decomposition (such as ø, ł, æ, œ, ß, ð, ħ, ı) sort after `z`; under `vi` they follow their
+  base letter. The order was checked against ICU4X's `vi` collation (secondary strength) on
+  generated names and a tone matrix; it has not been observed in Excel with a Vietnamese
+  system language yet. Only Root and `vi` exist: other languages' alphabets (Spanish `ñ`, Swedish
+  `å`, Czech `ch`…) are not tailored.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -82,7 +131,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
+| Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified; text comparison done; CLDR `vi` sort order implemented (`data.sortLanguage`; not checked against Excel) | no | sorting only | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
 Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
@@ -115,6 +164,7 @@ language (none so far) and of localized function names.
 | 2026-10-20 | minor | Dutch (nl) interface catalog (`i18n/nl.rs`, 518 labels, ~24%): the shared key set every language must cover (ribbon, context menus, File view, dialog titles, Options page), matching the German, French and Czech catalogs; `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-20 | minor | XLSX: a theme's per-script typefaces (`<a:font script="Arab">`, Hebr, Jpan…) are kept through open + save, so Arabic Excel's theme fonts for shapes, charts and theme-font cells survive a GridCraft save |
 | 2026-10-20 | trivial | XLSX: a workbook theme's major/minor East Asian (`<a:ea>`) and complex-script (`<a:cs>`) typefaces are kept through open + save, so a Japanese workbook keeps its theme's East Asian font; rendering does not resolve them yet (follow-up) |
+| 2026-10-20 | trivial | Text comparison: the marks with a decomposition of their own (U+0340 and U+0341, the grave and acute tone marks; U+0343; U+0344) equal the marks they decompose to, so `a` + U+0341 is `á`; the ICU check now covers every mark of U+0300–U+036F |
 | 2026-10-19 | minor | XLSX fonts retain charset and family metadata so systems can select a substitute font with the intended script when the named font is unavailable |
 | 2026-10-19 | minor | Arabic CSV and text imports decode Windows-1256 text; Arabic shaping and bidirectional UI remain unsupported |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
@@ -123,6 +173,8 @@ language (none so far) and of localized function names.
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
+| 2026-10-19 | minor | Vietnamese sorting language: `data.sortLanguage` (session setting) selects the CLDR `vi` order for Sort, `SORT`, comparison operators, approximate lookups, filters and PivotTable items; Vietnamese row now "sorting only" |
+| 2026-10-19 | minor | Text comparison: NFC equals NFD and accented Latin letters sort next to their base letter in functions, filters, Remove Duplicates, PivotTables and validation (scope U+00C0–U+024F, U+1E00–U+1EFF, marks U+0300–U+036F; wildcards and Find / Replace not covered yet). Accent-only ties follow the mark's code point (`hà` < `há`), unlike ICU root |
 | 2026-10-17 | minor | Vietnamese catalog (`i18n/vi.rs`, every key in the master table); `vi` locale tags resolve to Vietnamese |
 | 2026-10-17 | minor | Lao text falls back to an installed Lao face (`sys-lao`) instead of tofu boxes |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |

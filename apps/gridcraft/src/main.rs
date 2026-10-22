@@ -118,6 +118,8 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
+        // The workbook opened before the preferences were read takes the saved sorting language.
+        app.session.apply_sort_language();
     }
 }
 

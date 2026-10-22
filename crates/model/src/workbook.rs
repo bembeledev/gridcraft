@@ -193,6 +193,11 @@ pub struct Workbook {
     /// the links in memory are still written for the old one. Not in JSON.
     #[serde(skip)]
     pub source_path: Option<std::path::PathBuf>,
+    /// The text order of this session (Sort, SORT/SORTBY, `<` and `>`, approximate lookups,
+    /// relational criteria). A runtime setting: never read from or written to XLSX or JSON (OOXML
+    /// has no field for it), and never taken from the OS locale. Root by default.
+    #[serde(skip)]
+    pub collation: gridcraft_core::Collation,
 }
 
 fn is_all(s: &ShowObjects) -> bool {
@@ -228,6 +233,7 @@ impl Workbook {
             preserved: None,
             source_dir: None,
             source_path: None,
+            collation: gridcraft_core::Collation::Root,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

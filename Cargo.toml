@@ -31,6 +31,11 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 rayon = "1"
+# Test-only oracle: the Unicode data behind the tables in crates/core/src/collate.rs. Never shipped.
+icu_normalizer = { version = "=2.3.0", default-features = false, features = ["compiled_data"] }
+# Test-only oracle: ICU4X `vi` collation, compared with ours in crates/core/tests/collate_icu.rs. Never shipped.
+icu_collator = { version = "=2.3.1", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "=2.3.0", default-features = false }
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }

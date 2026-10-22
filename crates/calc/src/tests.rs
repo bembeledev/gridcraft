@@ -1768,3 +1768,250 @@ fn a_dynamic_array_of_one_value_still_anchors_a_spill() {
     t.set("E11", "=ROWS(D1#)");
     assert_eq!(t.get("E11"), Value::Error(CellError::Ref));
 }
+
+// ---------------------------------------------------------------------------------------------
+// The workbook's collation in formulas: `<`/`>`, relational criteria, approximate lookups,
+// SORT/SORTBY and grouping follow `Workbook::collation`; equality never depends on it.
+
+/// Vietnamese names in input order (the oracle's V1 input).
+const V1_INPUT: &[&str] = &[
+    "Yến", "Ưng", "Uyên", "Út", "Phan", "Phạm", "Ơn", "Ông", "Oanh", "Nguyễn", "Ngô", "Huỳnh", "Hồ", "Hoàng", "Ê-đê", "Em", "Đỗ", "Đinh", "Đặng",
+    "Đào", "Dương", "Duy", "Dũng", "Bùi", "Bình", "Âu", "Ấn", "Ân", "Ăn", "Ắc", "Ánh", "Ảnh", "Anh", "An",
+];
+
+/// V1 sorted in the CLDR `vi` order (ICU oracle).
+const V1_EXPECTED: &[&str] = &[
+    "An", "Anh", "Ảnh", "Ánh", "Ắc", "Ăn", "Ân", "Ấn", "Âu", "Bình", "Bùi", "Dũng", "Duy", "Dương", "Đào", "Đặng", "Đinh", "Đỗ", "Em", "Ê-đê",
+    "Hoàng", "Hồ", "Huỳnh", "Ngô", "Nguyễn", "Oanh", "Ông", "Ơn", "Phạm", "Phan", "Út", "Uyên", "Ưng", "Yến",
+];
+
+fn with_collation(c: gridcraft_core::Collation) -> T {
+    let mut t = T::new();
+    t.wb.collation = c;
+    t
+}
+
+/// Puts `words` in column `col` from row 1 down.
+fn fill_column(t: &mut T, col: &str, words: &[&str]) {
+    for (i, w) in words.iter().enumerate() {
+        t.set(&format!("{col}{}", i + 1), w);
+    }
+}
+
+fn text_column(t: &T, col: &str, n: usize) -> Vec<String> {
+    (1..=n)
+        .map(|r| match t.get(&format!("{col}{r}")) {
+            Value::Text(s) => s.to_string(),
+            other => panic!("{col}{r} = {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn operators_follow_vi_collation() {
+    use gridcraft_core::Collation;
+    let cases = [
+        // (formula, Vi, Root)
+        ("=\"Đặng\"<\"Em\"", true, true),
+        ("=\"Dương\"<\"Đào\"", true, false),
+        ("=\"Đào\">\"Dương\"", true, false),
+        ("=\"Dương\">=\"Đào\"", false, true),
+        ("=\"Ư\">\"Uz\"", true, false),
+        ("=\"Ăn\"<\"Âu\"", true, true),
+        ("=\"Ân\"<=\"Ăn\"", false, true),
+        // ASCII is the same in every collation.
+        ("=\"abc\"<\"ABD\"", true, true),
+    ];
+    for (c, idx) in [(Collation::Vi, 1), (Collation::Root, 2)] {
+        let mut t = with_collation(c);
+        for (i, case) in cases.iter().enumerate() {
+            let at = format!("A{}", i + 1);
+            t.set(&at, case.0);
+            let want = if idx == 1 { case.1 } else { case.2 };
+            assert_eq!(t.get(&at), Value::Bool(want), "{} under {c:?}", case.0);
+        }
+        // Arrays go through the same comparison.
+        t.set("C1", "=SUM(--({\"Dương\";\"Đào\";\"Duy\"}<\"Đ\"))");
+        assert_eq!(t.num("C1"), if c == Collation::Vi { 2.0 } else { 0.0 }, "{c:?}");
+    }
+}
+
+#[test]
+fn countif_relational_follows_vi() {
+    use gridcraft_core::Collation;
+    let mut counts = Vec::new();
+    for c in [Collation::Vi, Collation::Root] {
+        let mut t = with_collation(c);
+        fill_column(&mut t, "A", V1_INPUT);
+        for r in 1..=V1_INPUT.len() {
+            t.set(&format!("B{r}"), "1");
+        }
+        t.set("D1", "=COUNTIF(A1:A34,\"<Đ\")");
+        t.set("D2", "=COUNTIFS(A1:A34,\">=Đ\",A1:A34,\"<E\")");
+        t.set("D3", "=SUMIF(A1:A34,\"<Đ\",B1:B34)");
+        t.set("D4", "=COUNTIF(A1:A34,\">Ư\")");
+        // A database criterion: "<Đ" under the label "Tên" in F1:F2; the database is H1:H35.
+        t.set("H1", "Tên");
+        for (i, w) in V1_INPUT.iter().enumerate() {
+            t.set(&format!("H{}", i + 2), w);
+        }
+        t.set("F1", "Tên");
+        t.set("F2", "<Đ");
+        t.set("D5", "=DCOUNTA(H1:H35,1,F1:F2)");
+        counts.push((c, [t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4"), t.num("D5")]));
+    }
+    // Vi: An … Dương (14 names) sort before Đ; Đào Đặng Đinh Đỗ are in [Đ, E); Ưng Yến after Ư.
+    assert_eq!(counts[0].1, [14.0, 4.0, 14.0, 2.0, 14.0], "Vi");
+    // Root: đ is a d with a stroke (a secondary difference) and ư a u with a horn, so only A… and
+    // B… (11 names) sort before "Đ", every D/Đ name is in [Đ, E), and Út Uyên Ưng Yến follow "Ư".
+    assert_eq!(counts[1].1, [11.0, 7.0, 11.0, 4.0, 11.0], "Root");
+}
+
+#[test]
+fn sort_function_follows_vi() {
+    use gridcraft_core::Collation;
+    let n = V1_INPUT.len();
+    let mut t = with_collation(Collation::Vi);
+    fill_column(&mut t, "A", V1_INPUT);
+    t.set("C1", "=SORT(A1:A34)");
+    t.set("D1", "=SORTBY(A1:A34,A1:A34)");
+    t.set("E1", "=SORT(A1:A34,1,-1)");
+    for r in 1..=n {
+        t.set(&format!("B{r}"), "1");
+    }
+    t.set("F1", "=GROUPBY(A1:A34,B1:B34,\"SUM\",0,0)");
+    let want: Vec<String> = V1_EXPECTED.iter().map(|s| s.to_string()).collect();
+    assert_eq!(text_column(&t, "C", n), want, "SORT");
+    assert_eq!(text_column(&t, "D", n), want, "SORTBY");
+    let rev: Vec<String> = want.iter().rev().cloned().collect();
+    assert_eq!(text_column(&t, "E", n), rev, "SORT descending");
+    assert_eq!(text_column(&t, "F", n), want, "GROUPBY");
+    // The input cells are untouched (Sort only moves values, it never rewrites them).
+    assert_eq!(text_column(&t, "A", n), V1_INPUT.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+
+    // Root sorts the same names by base letter: `đ` counts as `d`, `ă`/`â`/`ư` as `a`/`u`, and
+    // accents only break ties, by the mark's code point (`An < Ân < Ấn < Ăn`: circumflex U+0302
+    // before breve U+0306; `Anh < Ánh < Ảnh`: acute U+0301 before hook above U+0309).
+    let mut r = with_collation(Collation::Root);
+    fill_column(&mut r, "A", V1_INPUT);
+    r.set("C1", "=SORT(A1:A34)");
+    let root = [
+        "Ắc", "An", "Ân", "Ấn", "Ăn", "Anh", "Ánh", "Ảnh", "Âu", "Bình", "Bùi", "Đặng", "Đào", "Đinh", "Đỗ", "Dũng", "Dương", "Duy", "Ê-đê", "Em",
+        "Hồ", "Hoàng", "Huỳnh", "Ngô", "Nguyễn", "Oanh", "Ơn", "Ông", "Phạm", "Phan", "Ưng", "Út", "Uyên", "Yến",
+    ];
+    assert_eq!(root.len(), n);
+    assert_eq!(text_column(&r, "C", n), root, "SORT under Root");
+}
+
+#[test]
+fn sort_function_keeps_class_order_under_vi() {
+    use gridcraft_core::Collation;
+    let mut t = with_collation(Collation::Vi);
+    for (i, v) in ["Đào", "2", "TRUE", "Dương", "#N/A", "", "1", "Ăn"].iter().enumerate() {
+        if !v.is_empty() {
+            t.set(&format!("A{}", i + 1), v);
+        }
+    }
+    t.set("C1", "=SORT(A1:A8)");
+    let got: Vec<Value> = (1..=8).map(|r| t.get(&format!("C{r}"))).collect();
+    assert_eq!(
+        got,
+        vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::from("Ăn"),
+            Value::from("Dương"),
+            Value::from("Đào"),
+            Value::Bool(true),
+            Value::Error(CellError::NA),
+            // A blank sorts last and spills as 0.
+            Value::Number(0.0),
+        ]
+    );
+}
+
+#[test]
+fn approximate_match_on_vi_sorted_column() {
+    use gridcraft_core::Collation;
+    let mut t = with_collation(Collation::Vi);
+    fill_column(&mut t, "A", V1_EXPECTED);
+    for r in 1..=V1_EXPECTED.len() {
+        t.set(&format!("B{r}"), &r.to_string());
+    }
+    let pos = |w: &str| (V1_EXPECTED.iter().position(|x| *x == w).unwrap() + 1) as f64;
+    t.set("D1", "=MATCH(\"Đinh\",A1:A34,1)");
+    t.set("D2", "=MATCH(\"Đz\",A1:A34,1)");
+    t.set("D3", "=XLOOKUP(\"Ư\",A1:A34,A1:A34,,-1)");
+    t.set("D4", "=VLOOKUP(\"Đz\",A1:B34,2,TRUE)");
+    t.set("D5", "=XLOOKUP(\"Ư\",A1:A34,A1:A34,,-1,2)");
+    t.set("D6", "=XMATCH(\"Đ\",A1:A34,1)");
+    t.set("D7", "=XMATCH(\"Đ\",A1:A34,1,2)");
+    t.set("D8", "=LOOKUP(\"Dz\",A1:A34,B1:B34)");
+    t.set("D9", "=MATCH(\"Ăz\",A1:A34)");
+    assert_eq!(t.num("D1"), pos("Đinh"));
+    assert_eq!(t.num("D2"), pos("Đỗ"));
+    assert_eq!(t.get("D3"), Value::from("Uyên"));
+    assert_eq!(t.num("D4"), pos("Đỗ"));
+    assert_eq!(t.get("D5"), Value::from("Uyên"));
+    assert_eq!(t.num("D6"), pos("Đào"));
+    assert_eq!(t.num("D7"), pos("Đào"));
+    assert_eq!(t.num("D8"), pos("Dương"));
+    assert_eq!(t.num("D9"), pos("Ăn"));
+    // Every name finds itself with an approximate MATCH on the column sorted in its order.
+    for (i, w) in V1_EXPECTED.iter().enumerate() {
+        t.set("E1", &format!("=MATCH(\"{w}\",A1:A34,1)"));
+        assert_eq!(t.num("E1"), (i + 1) as f64, "{w}");
+    }
+    // A descending column (MATCH type -1) works the same way.
+    for (i, w) in V1_EXPECTED.iter().rev().enumerate() {
+        t.set(&format!("G{}", i + 1), w);
+    }
+    t.set("E2", "=MATCH(\"Đz\",G1:G34,-1)");
+    assert_eq!(t.num("E2"), (V1_EXPECTED.len() + 1) as f64 - pos("Em"));
+}
+
+#[test]
+fn equality_is_collation_independent() {
+    use gridcraft_core::Collation;
+    let nfd = "Nguye\u{302}\u{303}n";
+    let mut results = Vec::new();
+    for c in [Collation::Root, Collation::Vi] {
+        let mut t = with_collation(c);
+        fill_column(&mut t, "A", V1_INPUT);
+        t.set("B1", nfd);
+        t.set("C1", "=\"Nguyễn\"=B1");
+        t.set("C2", "=\"NGUYỄN\"<>B1");
+        t.set("C3", "=MATCH(B1,A1:A34,0)");
+        t.set("C4", "=COUNTIF(A1:A34,\"=\"&B1)");
+        t.set("C5", "=COUNTIF(A1:A34,\"<>\"&B1)");
+        t.set("C6", "=XMATCH(B1,A1:A34)");
+        t.set("C7", "=SWITCH(B1,\"Nguyen\",1,\"Nguyễn\",2,3)");
+        t.set("C8", "=\"Hoà\"=\"Hòa\"");
+        t.set("C9", "=\"Đào\"<=\"đÀo\"");
+        let row: Vec<Value> = (1..=9).map(|r| t.get(&format!("C{r}"))).collect();
+        results.push(row);
+    }
+    let want = vec![
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::Number(10.0),
+        Value::Number(1.0),
+        Value::Number(33.0),
+        Value::Number(10.0),
+        Value::Number(2.0),
+        Value::Bool(false),
+        Value::Bool(true),
+    ];
+    assert_eq!(results[0], want, "Root");
+    assert_eq!(results[1], want, "Vi");
+}
+
+#[test]
+fn standalone_evaluate_uses_the_workbook_collation() {
+    use gridcraft_core::Collation;
+    let mut wb = Workbook::new();
+    let f = "=\"Dương\"<\"Đào\"";
+    assert_eq!(crate::evaluate(&wb, 0, c("A1"), f), Value::Bool(false));
+    wb.collation = Collation::Vi;
+    assert_eq!(crate::evaluate(&wb, 0, c("A1"), f), Value::Bool(true));
+}

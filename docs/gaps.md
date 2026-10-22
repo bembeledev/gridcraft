@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (text comparison and sorting language: remaining gaps) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -108,6 +108,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   view and menus. The remaining dialogs, menus and messages are English; en-US function names and
   separators (#45); German in PR #163. **Estimate:**
   100–165 h including #5. [localization-parity.md](localization-parity.md)
+- Text comparison is canonical-equivalent and accent-aware for the Latin letters in U+00C0–U+024F and
+  U+1E00–U+1EFF. **Still missing:** wildcard patterns (`COUNTIF(r,"Nguyễn*")`, D-function
+  begins-with criteria) and Find / Replace match per character, so NFC and NFD text does not match
+  there yet; other scripts are not unified; no observation of Excel's own order for accented text.
+- Sorting language: `data.sortLanguage` selects the Vietnamese (`vi`) or the language-neutral order
+  for the session. **Still missing:** a ribbon control (command search, CLI and MCP only), a
+  per-file language (XLSX `sortState` has none), the alphabets of other languages (`ñ`, `å`, `ch`…),
+  and a check against Excel with a Vietnamese system language.
 
 ### 12. Get & Transform, external data, data model (F)
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
@@ -179,6 +187,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
+| 2026-10-19 | minor | §11: Vietnamese sorting language landed; ribbon control, other languages and the Excel check remain |
+| 2026-10-19 | minor | §11: text comparison landed for the Latin letters; wildcards and Find / Replace remain |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |

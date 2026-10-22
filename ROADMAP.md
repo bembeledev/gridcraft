@@ -94,7 +94,7 @@ and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, 
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Dialogs, menus and messages are English; formulas and other locales' number formats are
-en-US only, except Japanese 和暦 dates (`[$-411]`, era tokens, gannen 元年), which landed 10-17.
+en-US only, except Japanese 和暦 dates (`[$-411]`, era tokens, gannen 元年), which landed 10-20.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |

@@ -906,6 +906,9 @@ fn regional_display_formats() {
     assert_eq!(f(1234.5, "#,##0.00", "de-DE"), "1.234,50");
     assert_eq!(f(1.5, r#"0.00" Fr."#, "de-DE"), "1,50 Fr.");
     assert_eq!(f(0.5, "General", "de-DE"), "0,5");
+    // A number in a text section is shown as General is, regional decimal included; the
+    // section's own "." stays a point.
+    assert_eq!(f(1.5, r#"@" Nr.";0"#, "de-DE"), "1,5 Nr.");
     assert_eq!(f(1234567.0, "0.00E+00", "de-DE"), "1,23E+06");
     assert_eq!(f(1234.75, "#,##0 ?/?", "de-DE"), "1.234 3/4");
     // France groups with a narrow no-break space.

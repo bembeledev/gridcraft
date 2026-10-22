@@ -293,7 +293,7 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_default(), loc))),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
                 Some(render::render_general(sec, n.abs(), width, loc))

@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
-use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale, value_axis_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
@@ -969,18 +969,16 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         if members.is_empty() {
             continue;
         }
-        let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
         let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
-        let range = value_range(members.iter().flat_map(|i| {
-            let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
-        }));
+        // The plotted values: the top of each point, bar or stack segment. The 0 a bar or stack
+        // starts from doesn't count, so bars far from 0 don't force it onto the axis (#1688).
+        let range = value_range(members.iter().flat_map(|i| spans.get(*i).into_iter().flatten().flatten().map(|(_, t)| *t)));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            (nice_scale(lo, hi, force_zero), Fmt::new(code))
+            (value_axis_scale(lo, hi), Fmt::new(code))
         };
         axes.push((scale, fmt));
         if !axis && sec.iter().all(|s| !s) {
@@ -1012,6 +1010,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let cw = cat_len / ncat_slots as f32;
     let center = |j: usize| if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw };
     let vpos = |v: f64, sc: &Scale| if horizontal { plot.x + sc.frac(v) * plot.w } else { plot.bottom() - sc.frac(v) * plot.h };
+    // Bars and areas are cut off at the axis bounds: with an axis that leaves 0 out, a bar runs
+    // from the axis minimum (or hangs from the maximum), as in Excel, not from 0 off the plot.
+    let in_axis = |v: f64, sc: &Scale| if sc.min < sc.max { v.clamp(sc.min, sc.max) } else { v };
 
     // Column slots: each clustered series gets one, each stack group shares one.
     let mut slot_keys: Vec<(bool, Fam, usize)> = Vec::new();
@@ -1063,6 +1064,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let mut base = Vec::with_capacity(ncat);
                     for (j, sp) in row.iter().enumerate() {
                         let (b, t) = sp.unwrap_or((0.0, 0.0));
+                        let (b, t) = (in_axis(b, &sc), in_axis(t, &sc));
                         let c = center(j);
                         top.push([c, vpos(t, &sc)]);
                         base.push([c, vpos(b, &sc)]);
@@ -1093,7 +1095,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
-                        let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
+                        let (pb, pt) = (vpos(in_axis(*b, &sc), &sc), vpos(in_axis(*t, &sc), &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();

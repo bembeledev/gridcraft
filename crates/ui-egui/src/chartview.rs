@@ -247,10 +247,15 @@ pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
 }
 
 /// A shape's rectangle. Ink is drawn over the cells it was drawn on, so it is the bounds of its
-/// points mapped like the pen's; other objects keep the object scale `z`.
+/// points mapped like the pen's, widened by half the stroke so a flat stroke has a size and a
+/// wide one is hit on its edges; other objects keep the object scale `z`.
 pub(crate) fn shape_rect(geo: &Geo, sh: &Sheet, sp: &Shape) -> Rect {
     let pts = if sp.kind == ShapeKind::Ink { ink_screen_points(geo, sh, sp) } else { Vec::new() };
-    if pts.is_empty() { anchor_rect(geo, sh, &sp.anchor) } else { Rect::from_points(&pts) }
+    if pts.is_empty() {
+        anchor_rect(geo, sh, &sp.anchor)
+    } else {
+        Rect::from_points(&pts).expand(gridcraft_engine::cmd::draw::ink_width(sp) * geo.z * 0.5)
+    }
 }
 
 /// Logical screen points of an Ink stroke, each through `Geo::screen_point` (as the pen previews

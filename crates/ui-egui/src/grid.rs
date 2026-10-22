@@ -4535,6 +4535,8 @@ mod pane_tests {
         let drawn = [pos2(geo.x(&sh, 0) + 10.0, 60.0), pos2(geo.x(&sh, 1) + 20.0, 70.0), pos2(geo.x(&sh, 6) + 15.0, 90.0)];
         assert!(drawn[2].x > drawn[1].x, "column G is right of the freeze line");
         assert_ink_drawn_where_the_pen_was(&geo, &sh, &drawn);
+        // A flat stroke still has a height.
+        assert_ink_drawn_where_the_pen_was(&geo, &sh, &[pos2(geo.x(&sh, 6) + 5.0, 80.0), pos2(geo.x(&sh, 7) + 5.0, 80.0)]);
     }
 
     /// Saves a pen stroke through `drawn` as `draw.stroke` does, then checks that its painted points
@@ -4562,6 +4564,9 @@ mod pane_tests {
         }
         let r = crate::chartview::shape_rect(geo, sh, &ink);
         assert!(drawn.iter().all(|d| r.expand(0.2).contains(*d)), "{r:?} misses {drawn:?}");
+        // The rectangle covers the stroke's width too, so a flat stroke is never culled or missed.
+        let w = gridcraft_engine::cmd::draw::ink_width(&ink) * geo.z;
+        assert!(r.width() >= w && r.height() >= w, "{r:?} is thinner than the {w} px stroke");
     }
 
     /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.

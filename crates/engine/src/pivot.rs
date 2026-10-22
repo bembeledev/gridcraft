@@ -1659,21 +1659,9 @@ fn same_items(key: &[String], items: &[String], value_item: bool) -> bool {
     key.iter().enumerate().any(|(p, k)| k == value && key.iter().enumerate().filter(|(i, _)| *i != p).map(|(_, x)| x).eq(columns))
 }
 
-/// Whether `key` matches this rebuilt item sequence and no other rebuilt sequence.
-fn unique_item_match(key: &[String], target: &[String], rebuilt: &[&[String]], value_item: bool) -> bool {
-    if !same_items(key, target, value_item) {
-        return false;
-    }
-    let mut count = 0;
-    for items in rebuilt {
-        if same_items(key, items, value_item) {
-            count += 1;
-            if count > 1 {
-                return false;
-            }
-        }
-    }
-    count == 1
+/// Number of rebuilt item sequences matching a saved key under item or joined-name matching.
+fn joined_match_count(key: &[String], rebuilt: &[&[String]], value_item: bool) -> usize {
+    rebuilt.iter().filter(|items| same_items(key, items, value_item)).count()
 }
 
 fn rebuilt_item_set<'a>(items: impl IntoIterator<Item = &'a [String]>) -> HashSet<&'a [String]> {
@@ -1785,8 +1773,14 @@ fn rebind_charts(
     let (series, items): (Vec<Series>, Vec<&[String]>) = chart_series_items(sheet, origin, out).into_iter().unzip();
     let rebuilt_set = rebuilt_item_set(items.iter().copied());
     let rebuilt = |k: &[String]| rebuilt_set.contains(k);
-    // Each chart's formats for the rebuilt series, and whether they go by position.
+    let mut joined_counts: HashMap<Vec<String>, usize> = HashMap::new();
+    for fmts in &label_formats {
+        for (key, _) in &fmts.keyed {
+            joined_counts.entry(key.clone()).or_insert_with(|| joined_match_count(key, &items, value_item));
+        }
+    }
     let mut pivot_labels: Option<HashSet<String>> = None;
+    // Each chart's formats for the rebuilt series, and whether they go by position.
     let plans: Vec<(ChartFormats, Vec<Option<String>>, bool)> = label_formats
         .into_iter()
         .map(|fmts| {
@@ -1794,7 +1788,11 @@ fn rebind_charts(
                 .iter()
                 .map(|it| {
                     let exact = fmts.keyed.iter().find(|(k, _)| k.as_slice() == *it);
-                    exact.or_else(|| fmts.keyed.iter().find(|(k, _)| !rebuilt(k) && unique_item_match(k, it, &items, value_item))).map(|(_, f)| f)
+                    exact
+                        .or_else(|| {
+                            fmts.keyed.iter().find(|(k, _)| !rebuilt(k) && same_items(k, it, value_item) && joined_counts.get(k).copied() == Some(1))
+                        })
+                        .map(|(_, f)| f)
                 })
                 .collect();
             let by_position = fmts.by_position.as_ref().is_some_and(|p| p.len() == items.len() && matched.iter().all(Option::is_none)) && {
@@ -1848,7 +1846,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{data_cols_exceed_sheet, rebuilt_item_set, same_items, unique_item_match};
+    use super::{data_cols_exceed_sheet, joined_match_count, rebuilt_item_set, same_items};
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
@@ -1863,17 +1861,25 @@ mod fit_tests {
         let saved = ["A - B", "C"].map(String::from);
         let rebuilt = [["A", "B - C"].map(String::from), ["A - B", "C"].map(String::from)];
         let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
-        assert!(!unique_item_match(&saved, &rebuilt[0], &candidates, false));
+        assert_eq!(joined_match_count(&saved, &candidates, false), 2);
         assert!(same_items(&saved, &saved, false));
     }
     #[test]
-    fn unique_joined_item_name_matches_single_rebuilt_sequence() {
-        let saved = ["A - B - C"].map(String::from);
-        let rebuilt = [["A - B", "C"].map(String::from), ["X", "Y"].map(String::from)];
-        let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
-        assert!(unique_item_match(&saved, &rebuilt[0], &candidates, false));
+    fn joined_match_count_precomputes_key_matches() {
+        let unique = [String::from("A - B - C")];
+        let ambiguous = [String::from("A - B"), String::from("C")];
+        let candidates = [unique.as_slice(), ambiguous.as_slice()];
+        assert_eq!(joined_match_count(&[String::from("A - B - C")], &candidates, false), 2);
     }
-
+    #[test]
+    fn unique_joined_item_name_matches_single_rebuilt_sequence() {
+        let saved = [String::from("A - B - C")];
+        let first = [String::from("A - B"), String::from("C")];
+        let second = [String::from("X"), String::from("Y")];
+        let candidates = [first.as_slice(), second.as_slice()];
+        assert!(same_items(&saved, &first, false));
+        assert_eq!(joined_match_count(&saved, &candidates, false), 1);
+    }
     #[test]
     fn rebuilt_item_set_matches_content() {
         let first = [String::from("A")];

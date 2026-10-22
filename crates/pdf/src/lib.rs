@@ -1,7 +1,9 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text.
+//!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
+//!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
+//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -128,6 +130,9 @@ impl Font {
             Font::TimesBold | Font::TimesBoldItalic => Some(&metrics::TIMES_BOLD),
             _ => None,
         };
+        if needs_cid(c) {
+            return CID_WIDTH;
+        }
         let Some(table) = table else { return 600 };
         let ascii = |c: char| -> Option<u16> {
             let i = (c as u32).checked_sub(32)? as usize;
@@ -192,6 +197,31 @@ pub fn win_ansi(c: char) -> u8 {
     }
 }
 
+/// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
+const CID_FONT: usize = Font::ALL.len();
+/// Number of font resources a page can use.
+const FONT_SLOTS: usize = CID_FONT + 1;
+/// Base font of the CID font used for characters WinAnsiEncoding lacks.
+const CID_BASE_FONT: &str = "STSong-Light";
+/// Default glyph width of the CID font (full-width), in 1/1000 em.
+const CID_WIDTH: u16 = 1000;
+
+/// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
+fn needs_cid(c: char) -> bool {
+    !c.is_control() && c != '?' && win_ansi(c) == b'?'
+}
+
+/// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
+fn pdf_utf16_string(text: &str) -> String {
+    let mut s = String::with_capacity(text.len() * 4 + 2);
+    s.push('<');
+    for unit in text.encode_utf16() {
+        let _ = write!(s, "{unit:04X}");
+    }
+    s.push('>');
+    s
+}
+
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
     let mut s = String::with_capacity(text.len() + 2);
@@ -211,6 +241,19 @@ fn pdf_string(text: &str) -> String {
     }
     s.push(')');
     s
+}
+
+/// URI actions use byte strings. Percent-encode non-ASCII UTF-8 before PDF string escaping.
+fn pdf_uri_string(uri: &str) -> String {
+    let mut ascii = String::with_capacity(uri.len());
+    for byte in uri.bytes() {
+        if byte.is_ascii() {
+            ascii.push(byte as char);
+        } else {
+            let _ = write!(ascii, "%{byte:02X}");
+        }
+    }
+    pdf_string(&ascii)
 }
 
 /// A number for a content stream: finite, short.
@@ -316,12 +359,23 @@ struct Style {
     join: u8,
 }
 
+enum LinkTarget {
+    Uri(String),
+    Page { index: usize, x: f32, y: f32 },
+}
+
+struct LinkAnnotation {
+    /// PDF coordinates, with the origin at the bottom left.
+    rect: [f32; 4],
+    target: LinkTarget,
+}
+
 /// A page under construction. Obtain one with [`PdfDoc::add_page`].
 pub struct Page {
     width: f32,
     height: f32,
     content: String,
-    fonts: [bool; 12],
+    fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
     /// Style operators already in effect at the end of `content`.
     style: Style,
@@ -329,6 +383,7 @@ pub struct Page {
     saved: Vec<Style>,
     /// `save` calls refused at the nesting limit; the same number of `restore` calls are ignored.
     refused: u32,
+    links: Vec<LinkAnnotation>,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -341,6 +396,8 @@ const MAX_SAVE_DEPTH: usize = 28;
 /// Line join styles, as the `j` operator takes them.
 const JOIN_MITER: u8 = 0;
 const JOIN_ROUND: u8 = 1;
+const MAX_PAGE_LINKS: usize = 4096;
+const MAX_LINK_URI_BYTES: usize = 4096;
 
 impl Page {
     pub fn width(&self) -> f32 {
@@ -391,6 +448,42 @@ impl Page {
         if self.style.join != join {
             let _ = writeln!(s, "{join} j");
             self.style.join = join;
+        }
+    }
+
+    fn link_rect(&self, x: f32, y: f32, w: f32, h: f32) -> Option<[f32; 4]> {
+        if !finite(&[x, y, w, h]) || !extent(w) || !extent(h) || self.links.len() >= MAX_PAGE_LINKS {
+            return None;
+        }
+        let (right, bottom) = (x + w, y + h);
+        if !finite(&[right, bottom]) {
+            return None;
+        }
+        let (left, right) = (x.max(0.0), right.min(self.width));
+        let (top, bottom) = (y.max(0.0), bottom.min(self.height));
+        (right > left && bottom > top).then(|| [left, self.y(bottom), right, self.y(top)])
+    }
+
+    /// Adds an invisible clickable area for an external URI. Invalid or excessive links are ignored.
+    pub fn link_uri(&mut self, x: f32, y: f32, w: f32, h: f32, uri: &str) {
+        let allowed = uri
+            .split_once(':')
+            .is_some_and(|(scheme, rest)| matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https" | "mailto") && !rest.is_empty());
+        if !allowed || uri.len() > MAX_LINK_URI_BYTES || uri.chars().any(char::is_control) {
+            return;
+        }
+        if let Some(rect) = self.link_rect(x, y, w, h) {
+            self.links.push(LinkAnnotation { rect, target: LinkTarget::Uri(uri.to_string()) });
+        }
+    }
+
+    /// Adds a link to a location on another page of this document (zero-based page index).
+    pub fn link_page(&mut self, x: f32, y: f32, w: f32, h: f32, page: usize, target_x: f32, target_y: f32) {
+        if !finite(&[target_x, target_y]) {
+            return;
+        }
+        if let Some(rect) = self.link_rect(x, y, w, h) {
+            self.links.push(LinkAnnotation { rect, target: LinkTarget::Page { index: page, x: target_x, y: target_y } });
         }
     }
 
@@ -562,29 +655,36 @@ impl Page {
             return;
         }
         let fi = font.index();
-        if let Some(f) = self.fonts.get_mut(fi) {
-            *f = true;
+        let size = n(size.min(10_000.0));
+        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
+        let tm = format!("{} {} {} {} {} {} Tm\n", n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
+        // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
+        // advances the text position, so the runs follow each other on the baseline.
+        let mut runs = String::new();
+        let mut rest = text;
+        while let Some(first) = rest.chars().next() {
+            let cid = needs_cid(first);
+            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let (run, tail) = rest.split_at(end);
+            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+            if let Some(f) = self.fonts.get_mut(slot) {
+                *f = true;
+            }
+            let _ = writeln!(runs, "/F{} {} Tf", slot + 1, size);
+            if runs.matches("Tf\n").count() == 1 {
+                runs.push_str(&tm);
+            }
+            let _ = writeln!(runs, "{string} Tj");
+            rest = tail;
         }
         if self.full() {
             return;
         }
-        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // The colour goes in front of the text object, so it is tracked like any other style.
         let mut colour = String::new();
         self.set_fill(&mut colour, color);
-        // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
-        let s = format!(
-            "{colour}BT\n/F{} {} Tf\n{} {} {} {} {} {} Tm\n{} Tj\nET",
-            fi + 1,
-            n(size.min(10_000.0)),
-            n(cs),
-            n(-sn),
-            n(sn),
-            n(cs),
-            n(x),
-            n(self.y(y)),
-            pdf_string(text)
-        );
+        let s = format!("{colour}BT\n{runs}ET");
         self.op(&s);
     }
 
@@ -757,8 +857,9 @@ impl PdfDoc {
             width,
             height,
             content: String::new(),
-            fonts: [false; 12],
+            fonts: [false; FONT_SLOTS],
             images: Vec::new(),
+            links: Vec::new(),
             style: Style::default(),
             saved: Vec::new(),
             refused: 0,
@@ -794,31 +895,63 @@ impl PdfDoc {
             }
         }
         // Object numbering: 1 catalog, 2 page tree, 3 info, then fonts, then per page.
-        let mut used = [false; 12];
+        let mut used = [false; FONT_SLOTS];
         for p in &self.pages {
             for (u, f) in used.iter_mut().zip(p.fonts.iter()) {
                 *u |= *f;
             }
         }
         let mut next = 4u32;
-        let mut font_ids = [0u32; 12];
+        let mut font_ids = [0u32; FONT_SLOTS];
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;
-                next += 1;
+                // The CID font also needs its descendant font and font descriptor.
+                next += if i == CID_FONT { 3 } else { 1 };
             }
         }
         // Page contents are moved out so each one is freed as soon as it is in the output.
         let contents: Vec<String> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.content)).collect();
+        let page_links: Vec<Vec<LinkAnnotation>> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.links)).collect();
         let reserve = contents.iter().fold(4096usize, |acc, c| acc.saturating_add(c.len()).saturating_add(1024));
         let mut out: Vec<u8> = Vec::with_capacity(reserve);
         out.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
         let mut offsets: Vec<usize> = vec![0; 4];
         let mut kids = Vec::new();
+        let mut annotations = Vec::new();
+        let page_count = self.pages.len();
         let mut font_dict = String::new();
         for (i, id) in font_ids.iter().enumerate() {
             if *id != 0 {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
+                if i == CID_FONT {
+                    let (cid_id, desc_id) = (id + 1, id + 2);
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
+                        *id,
+                        &format!(
+                            "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
+                        ),
+                    );
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
+                        cid_id,
+                        &format!(
+                            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
+                        ),
+                    );
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
+                        desc_id,
+                        &format!(
+                            "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
+                        ),
+                    );
+                    continue;
+                }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
                 let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
                 dict_obj(&mut out, &mut offsets, *id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"));
@@ -827,7 +960,7 @@ impl PdfDoc {
         // Images already written, by content hash: (page, image, object id). A hash match is
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
-        for (pi, (page, content)) in self.pages.iter().zip(contents).enumerate() {
+        for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
                 let known = written.get(&img.hash).and_then(|c| {
@@ -872,20 +1005,49 @@ impl PdfDoc {
             stream_obj(&mut out, &mut offsets, content_id, "", content.as_bytes());
             drop(content);
             let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
+            let mut link_refs = String::new();
+            for link in links {
+                if matches!(&link.target, LinkTarget::Page { index, .. } if *index >= page_count) {
+                    continue;
+                }
+                let id = next;
+                next += 1;
+                let _ = write!(link_refs, "{id} 0 R ");
+                annotations.push((id, link));
+            }
+            let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
             dict_obj(
                 &mut out,
                 &mut offsets,
                 page_id,
                 &format!(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
                     font_dict,
                     xo,
-                    content_id
+                    content_id,
+                    annots
                 ),
             );
             kids.push(page_id);
+        }
+        for (id, link) in annotations {
+            let [x0, y0, x1, y1] = link.rect;
+            let action = match link.target {
+                LinkTarget::Uri(uri) => format!("/A << /S /URI /URI {} >>", pdf_uri_string(&uri)),
+                LinkTarget::Page { index, x, y } => {
+                    let Some(&page_id) = kids.get(index) else { continue };
+                    let height = self.pages.get(index).map_or(0.0, |p| p.height);
+                    format!("/Dest [{page_id} 0 R /XYZ {} {} null]", n(x), n(height - y))
+                }
+            };
+            dict_obj(
+                &mut out,
+                &mut offsets,
+                id,
+                &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)),
+            );
         }
         dict_obj(&mut out, &mut offsets, 1, "<< /Type /Catalog /Pages 2 0 R >>");
         let kids_s: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();

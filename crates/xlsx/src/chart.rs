@@ -117,6 +117,10 @@ fn data_ref(e: Option<&El>) -> Option<String> {
 
 /// Most cached points a PivotChart series keeps (the chart renderer's own cap).
 const MAX_CACHED_POINTS: usize = 100_000;
+/// Trailing gaps after the last present point are retained only within this bound.
+const MAX_TRAILING_GAPS: usize = 16;
+/// Maximum series retained from one chart, matching the renderer's series cap.
+const MAX_SERIES: usize = 255;
 
 /// The points of a cache or literal (`c` holds `ptCount`, `pts` the `<c:pt>`s), by index; missing
 /// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
@@ -125,8 +129,8 @@ fn read_points<'a>(c: &El, pts: &'a El) -> Option<Vec<Option<&'a str>>> {
     let at = |i: usize, p: &El| p.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(i);
     let placed = || pts.kids("pt").enumerate().map(|(i, p)| (at(i, p), p)).filter(|(i, _)| *i < MAX_CACHED_POINTS);
     let highest = placed().map(|(i, _)| i + 1).max().unwrap_or(0);
-    let count =
-        c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| (highest..=MAX_CACHED_POINTS).contains(n)).unwrap_or(highest);
+    let limit = highest.saturating_add(MAX_TRAILING_GAPS).min(MAX_CACHED_POINTS);
+    let count = c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| (highest..=limit).contains(n)).unwrap_or(highest);
     if count == 0 {
         return None;
     }
@@ -431,7 +435,8 @@ pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
     let mut series = vec![];
     let mut caches = vec![];
     for (gi, (g, k)) in groups.iter().enumerate() {
-        for s in g.kids("ser") {
+        let remaining = MAX_SERIES.saturating_sub(series.len());
+        for s in g.kids("ser").take(remaining) {
             let mut ser = read_series(s);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.

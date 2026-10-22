@@ -238,6 +238,19 @@ fn literal_series_keep_their_points_without_a_valid_pt_count() {
 }
 
 #[test]
+fn chart_cache_counts_and_series_are_bounded() {
+    let sparse = r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="100000"/><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#;
+    let chart = read(&chart_xml(false, &format!("<c:pieChart>{sparse}</c:pieChart>"), ""));
+    assert_eq!(chart.series[0].values, "{#N/A,2}");
+
+    let series: String = (0..300)
+        .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>{i}</c:v></c:pt></c:numLit></c:val></c:ser>"#))
+        .collect();
+    let chart = read(&chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), ""));
+    assert_eq!(chart.series.len(), 255);
+}
+
+#[test]
 fn a_deleted_automatic_title_stays_deleted() {
     let one = ser("<c:v>Vehicles</c:v>", &str_cache("S!$A$1:$A$2", &["a", "b"]), &num_cache("S!$B$1:$B$2", 2, &[]));
     let pie = format!("<c:pieChart>{one}</c:pieChart>");

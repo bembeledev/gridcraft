@@ -1231,6 +1231,22 @@ fn two_level_categories_resolve_and_draw() {
 }
 
 #[test]
+fn square_category_blocks_keep_their_declared_orientation_on_ties() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.name = "Data".into();
+    for (i, value) in ["A1", "B1", "A2", "B2", "A3", "B3"].iter().enumerate() {
+        s.set_value(CellRef::parse(value).unwrap(), Value::from(*value));
+        s.set_value(CellRef::new(3, i as u32), Value::Number(i as f64 + 1.0));
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Data!$A$1:$B$2".into()), values: "Data!$A$3:$B$3".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["A2", "B2"]);
+    assert_eq!(d.category_levels, vec![vec!["A1", "B1"]]);
+}
+
+#[test]
 fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let m = ApproxMeasure;
     let tc: Rgba = [1, 2, 3, 255];

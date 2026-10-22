@@ -169,9 +169,9 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, inne
     let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
     let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
     let value_count = eval_list(wb, sheet, values).len();
-    let by_columns = if value_count == h && w > 1 {
+    let by_columns = if value_count == h && w > 1 && h != w {
         true
-    } else if value_count == w && h > 1 {
+    } else if value_count == w && h > 1 && h != w {
         false
     } else {
         levels.by_columns

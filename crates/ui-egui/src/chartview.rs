@@ -1,9 +1,6 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
 //! we paint with egui), pictures and shapes.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
@@ -249,8 +246,6 @@ pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
 }
 
-static TEXTURES: std::sync::LazyLock<Mutex<HashMap<(u32, usize), egui::TextureHandle>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
 /// The shapes one floating object painted (indices into the painter's layer) and its logical
 /// rectangle, so a right-to-left sheet can move it as a whole instead of mirroring it.
 pub(crate) struct PaintedObject {
@@ -258,9 +253,20 @@ pub(crate) struct PaintedObject {
     pub rect: Rect,
 }
 
+/// Ctrl+6 (Options › Advanced › "For objects, show: Nothing"): objects are neither drawn nor
+/// clickable. Placeholders, which Excel no longer offers, show the objects.
+pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
+    wb.show_objects == gridcraft_engine::model::ShowObjects::None
+}
+
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
+    if objects_hidden(wb) {
+        return painted;
+    }
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
+    // The grid paints the active workbook: its pictures are cached under it.
+    let doc = app.session.active().map_or(0, |d| d.uid);
     for sp in &sh.shapes {
         let r = anchor_rect(geo, sh, &sp.anchor);
         if !r.intersects(p.clip_rect()) {
@@ -332,18 +338,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             continue;
         }
         let start = p.add(egui::Shape::Noop);
-        let key = (im.id, im.data.len());
-        let mut cache = TEXTURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cache.contains_key(&key)
-            && let Ok(img) = image::load_from_memory(&im.data)
-        {
-            let rgba = img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let tex = p.ctx().load_texture(format!("img{}", im.id), ci, egui::TextureOptions::LINEAR);
-            cache.insert(key, tex);
-        }
-        if let Some(tex) = cache.get(&key) {
+        if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Color32::from_gray(230));
@@ -386,15 +381,54 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
         }
     }
-    // A selected group is framed as a whole, like Excel.
-    if let Some(a) = app.selected_chart.and_then(|id| sh.group_anchor(id)) {
-        let r = anchor_rect(geo, sh, &a);
-        let start = p.add(egui::Shape::Noop);
-        selection_frame(p, r);
-        done(start, r);
-    }
     paint_slicers(app, p, geo, wb, si, sh);
     painted
+}
+/// The topmost object under `p`, a grouped one as itself: (kind, id, rect).
+pub fn hit_object(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
+    for sl in sh.slicers.iter().rev() {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if r.contains(p) && geo.cells.contains(p) {
+            return Some(("slicer", sl.id, r));
+        }
+    }
+    for ch in sh.charts.iter().rev() {
+        let r = anchor_rect(geo, sh, &ch.anchor);
+        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
+            return Some(("chart", ch.id, r));
+        }
+    }
+    for im in sh.images.iter().rev() {
+        let r = anchor_rect(geo, sh, &im.anchor);
+        if r.contains(p) && geo.cells.contains(p) {
+            return Some(("image", im.id, r));
+        }
+    }
+    for s in sh.shapes.iter().rev() {
+        let r = anchor_rect(geo, sh, &s.anchor);
+        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
+            return Some(("shape", s.id, r));
+        }
+    }
+    None
+}
+
+/// Returns the outermost group under `p`, so clicking a member selects its group like Excel.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let (kind, id, r) = hit_object(geo, sh, p)?;
+    let member = match kind {
+        "chart" => DrawingRef::Chart(id),
+        "image" => DrawingRef::Image(id),
+        "shape" => DrawingRef::Shape(id),
+        _ => return Some((kind, id, r)),
+    };
+    match sh.outer_group(member).and_then(|g| Some((g, sh.group_anchor(g)?))) {
+        Some((g, a)) => Some(("group", g, anchor_rect(geo, sh, &a))),
+        None => Some((kind, id, r)),
+    }
 }
 
 /// Geometry of a slicer's parts within its screen rect.
@@ -479,7 +513,7 @@ pub enum SlicerAction {
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
 pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
-    if !geo.cells.contains(p) {
+    if !geo.cells.contains(p) || objects_hidden(wb) {
         return None;
     }
     for sl in sh.slicers.iter().rev() {
@@ -509,50 +543,4 @@ fn selection_frame(p: &Painter, r: Rect) {
         p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
     }
     let _ = Align2::CENTER_CENTER;
-}
-
-/// The topmost object under `p`: (kind, id, rect). A grouped object is hit as its outermost
-/// group (`"group"`, the group's id and box), as clicking one selects the group in Excel.
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    let _ = app;
-    let (kind, id, r) = hit_object(geo, sh, p)?;
-    let member = match kind {
-        "chart" => DrawingRef::Chart(id),
-        "image" => DrawingRef::Image(id),
-        "shape" => DrawingRef::Shape(id),
-        _ => return Some((kind, id, r)),
-    };
-    match sh.outer_group(member).and_then(|g| Some((g, sh.group_anchor(g)?))) {
-        Some((g, a)) => Some(("group", g, anchor_rect(geo, sh, &a))),
-        None => Some((kind, id, r)),
-    }
-}
-
-/// The topmost object under `p`, a grouped one as itself: (kind, id, rect).
-pub fn hit_object(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    for sl in sh.slicers.iter().rev() {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("slicer", sl.id, r));
-        }
-    }
-    for ch in sh.charts.iter().rev() {
-        let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
-        }
-    }
-    for im in sh.images.iter().rev() {
-        let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
-        }
-    }
-    for s in sh.shapes.iter().rev() {
-        let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
-        }
-    }
-    None
 }

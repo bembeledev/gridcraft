@@ -281,7 +281,7 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
             };
             let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
             let id = cx.next_object_id();
-            sheet.images.push(Image { id, anchor, data, mime: mime_for(&target).to_string(), alt });
+            sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
             Ok(Some(DrawingRef::Image(id)))
         }
         "graphicFrame" => {

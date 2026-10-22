@@ -82,8 +82,9 @@ steps, so the wheel and the buttons now step differently. Whether they should sh
 (this one, Excel's, or another) is left to the maintainers.
 ## Number formats widen columns that weren't sized by hand (#1077)
 
-Increase/Decrease Decimal and the ribbon's other number formats (the Number Format list, Accounting,
-Percent, Comma) widen a column so the formatted numbers in the target fit, instead of showing `####`.
+Increase/Decrease Decimal, the ribbon's other number formats (the Number Format list, Accounting,
+Percent, Comma) and a number format set in Format Cells widen a column so the formatted numbers in
+the target fit, instead of showing `####`.
 Microsoft's support article "Stop showing rounded numbers" says only that "the column width adjusts
 automatically", so the rule comes from observing Excel 16.0 (build 17932, Windows) with synthetic
 workbooks:
@@ -105,6 +106,6 @@ width, so those columns open as set by hand and keep their width.
 
 The engine has no font metrics, so the width is the same estimate AutoFit Column Width uses, which
 errs on the wide side; a UI test checks that the real font then draws the number, not `####`.
-Excel also widens when a number format is set another way (observed through the `NumberFormat`
-property, as Format Cells sets it); GridCraft's Format Cells doesn't yet. That, and typing a number
-into a formatted cell, are left for later.
+Excel doesn't widen when a value is entered into a cell that already has the format (observed through
+the `Value` property: the cell shows `####`), and neither does GridCraft. Typing into such a cell
+wasn't observed.

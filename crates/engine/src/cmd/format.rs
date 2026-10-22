@@ -528,7 +528,12 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
         {
             *st = new;
         }
-    })
+    })?;
+    // A number format set here widens columns as the ribbon's do (observed: Excel 16.0).
+    if patch.get("num_fmt").is_some() {
+        widen_for_numbers(s, p)?;
+    }
+    ok()
 }
 
 /// The style patch with camelCase keys (`numFmt`, `diagDown`, as documented) renamed to the
@@ -712,9 +717,9 @@ fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
     widen_for_numbers(s, p)
 }
 
-/// After a number format from the ribbon (Increase Decimal, Comma Style, the Number Format list…),
-/// a column nobody sized by hand widens so the formatted numbers in the target fit, instead of
-/// showing ####. Observed in Excel 16.0 (build 17932): a column at the default width, AutoFitted, or
+/// After a number format from the ribbon (Increase Decimal, Comma Style, the Number Format list…) or
+/// Format Cells, a column nobody sized by hand widens so the formatted numbers in the target fit,
+/// instead of showing ####. Observed in Excel 16.0 (build 17932): a column at the default width, AutoFitted, or
 /// widened this way before widens to the widest number in the range, also with Wrap Text and a large
 /// font. A width set with Column Width (or by dragging) stays, even when it equals the default. Hidden
 /// columns, text, General numbers (they round to fit), shrink-to-fit and merged cells don't widen,
@@ -1373,6 +1378,19 @@ mod tests {
         s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
         s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
         assert!(col(&s, 0).0 > fitted, "after AutoFit, with Wrap Text, A widens again");
+    }
+
+    #[test]
+    fn format_cells_widens_for_a_number_format_only() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1234567.891, 1234567.891]]})).unwrap();
+        let (default, _) = col(&s, 0);
+        s.execute("home.formatCells", json!({"range": "B1", "style": {"font": {"bold": true}}})).unwrap();
+        assert_eq!(col(&s, 1).0, default, "no number format, no widening");
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"numFmt": "#,##0.000000"}})).unwrap();
+        assert!(col(&s, 0).0 > default, "A widens for 1,234,567.891000, as Excel's Format Cells does");
+        assert!(!col(&s, 0).1);
     }
 
     #[test]

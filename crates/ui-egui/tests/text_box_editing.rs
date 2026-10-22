@@ -1,6 +1,6 @@
 //! Text-box editing through real pointer and keyboard input, including document boundaries.
 
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
+use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape as EguiShape, pos2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_engine::model::{DrawingGroup, DrawingRef, Shape, Workbook};
@@ -100,6 +100,21 @@ fn shape_rect(h: &Harness, id: u32) -> Rect {
     Rect::from_min_size(pos2(geo.x(sh, a.cell.col) + a.dx * geo.z, geo.y(sh, a.cell.row) + a.dy * geo.z), vec2(a.width, a.height) * geo.z)
 }
 
+fn group_frame_painted(h: &Harness, group_id: u32) -> bool {
+    let app = h.state();
+    let sh = app.session.doc().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let anchor = sh.group_anchor(group_id).unwrap();
+    let expected = Rect::from_min_size(
+        pos2(geo.x(sh, anchor.cell.col) + anchor.dx * geo.z, geo.y(sh, anchor.cell.row) + anchor.dy * geo.z),
+        vec2(anchor.width, anchor.height.max(1.0)) * geo.z,
+    );
+    h.output()
+        .shapes
+        .iter()
+        .any(|s| matches!(&s.shape, EguiShape::Rect(frame) if frame.rect == expected && frame.stroke.color == Color32::from_gray(120)))
+}
+
 fn cell_center(h: &Harness, address: &str) -> Pos2 {
     let app = h.state();
     let sh = app.session.doc().unwrap().wb.active().unwrap();
@@ -186,6 +201,7 @@ fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() 
     let p = shape_rect(&h, id).center();
     click(&mut h, p);
     assert_eq!(h.state().selected_chart, Some(group_id), "single-click selection is promoted to the group");
+    assert!(group_frame_painted(&h, group_id), "single-click group selection paints the group frame");
     click(&mut h, p);
     assert_eq!(h.state().selected_chart, Some(id), "editing selects the member needed by the editor");
     assert_eq!(h.state().text_box_editor.as_ref().map(|e| e.id), Some(id), "editing targets the raw group member");

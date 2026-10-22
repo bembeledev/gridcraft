@@ -381,6 +381,14 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
         }
     }
+    // A selected group is framed as a whole, like Excel. The early return above ensures hidden
+    // objects, including groups, receive no frame.
+    if let Some(a) = app.selected_chart.and_then(|id| sh.group_anchor(id)) {
+        let r = anchor_rect(geo, sh, &a);
+        let start = p.add(egui::Shape::Noop);
+        selection_frame(p, r);
+        done(start, r);
+    }
     paint_slicers(app, p, geo, wb, si, sh);
     painted
 }

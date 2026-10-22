@@ -65,7 +65,9 @@ pub fn start() {
                     let browser = gridcraft_ui_egui::i18n::Language::system();
                     if !matches!(
                         browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
+                        gridcraft_ui_egui::i18n::Language::Zh
+                            | gridcraft_ui_egui::i18n::Language::Ja
+                            | gridcraft_ui_egui::i18n::Language::Ko
                             | gridcraft_ui_egui::i18n::Language::Ka
                     ) {
                         app.ui.language = browser;

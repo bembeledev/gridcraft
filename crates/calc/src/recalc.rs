@@ -89,7 +89,7 @@ fn reads_linked_name(wb: &Workbook, sheet: usize, name: &str, seen: &mut Vec<(Op
         return false;
     }
     seen.push(key);
-    let Ok(expr) = gridcraft_formula::parse(&def.formula) else { return false };
+    let Ok(expr) = gridcraft_formula::parse_name(&def.formula) else { return false };
     reads_linked_expr(wb, def.scope.unwrap_or(sheet), &expr, seen)
 }
 
@@ -1003,7 +1003,11 @@ fn saved_arrays(wb: &Workbook) -> HashMap<Key, Value> {
         .iter()
         .enumerate()
         .flat_map(|(sheet, sh)| {
-            sh.cells.iter().filter_map(move |(at, cell)| cell.formula.as_ref().filter(|f| reads_linked(wb, sheet, f)).map(|_| (sheet, at)))
+            sh.cells.iter().filter_map(move |(at, cell)| {
+                let formula = cell.formula.as_ref()?;
+                let block = sh.spill_ranges.get(&at).copied().or(formula.array);
+                (block.is_some_and(|range| !range.is_single()) && reads_linked(wb, sheet, formula)).then_some((sheet, at))
+            })
         })
         .collect();
     let mut saved = HashMap::with_capacity_and_hasher(linked_arrays.len(), Default::default());

@@ -1138,6 +1138,29 @@ fn name_referring_to_several_ranges() {
 }
 
 #[test]
+fn linked_saved_value_recalculates_through_union_name() {
+    use gridcraft_model::DefinedName;
+    let mut t = T::new();
+    t.wb.names.push(DefinedName {
+        name: "u".into(),
+        scope: None,
+        formula: "Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for (at, value) in [("A1", "1"), ("A2", "2"), ("C1", "5"), ("C2", "7")] {
+        t.set(at, value);
+    }
+    let mut cell = Cell::formula(Formula::new("=[1]!Broken+SUM(u)"));
+    cell.value = Value::Number(99.0);
+    t.wb.external_books = vec![gridcraft_model::ExternalBook { opaque: true, ..Default::default() }].into();
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E1"), cell);
+    t.calc.cells_changed(&mut t.wb, &[(0, c("E1"))]);
+    assert_eq!(t.get("E1"), Value::Number(99.0));
+    t.set("A1", "3");
+    assert_eq!(t.get("E1"), Value::Error(CellError::Ref));
+}
+#[test]
 fn legacy_array_formulas_fill_their_range() {
     let mut t = T::new();
     t.set("A1", "1");

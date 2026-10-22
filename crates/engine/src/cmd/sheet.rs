@@ -254,7 +254,7 @@ fn mark_changed_name_spans(cx: &mut Ctx, before: &[String], after: &[String]) {
         .wb
         .names
         .iter()
-        .filter_map(|n| gridcraft_formula::parse(&n.formula).ok().filter(|e| spans_changed(e, before, after)).map(|_| n.name.to_lowercase()))
+        .filter_map(|n| gridcraft_formula::parse_name(&n.formula).ok().filter(|e| spans_changed(e, before, after)).map(|_| n.name.to_lowercase()))
         .collect();
     cx.changed_names.extend(names);
 }

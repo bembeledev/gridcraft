@@ -2170,13 +2170,13 @@ fn collect_dynamic_reads(wb: &Workbook, sheet: usize, e: &Expr, out: &mut Dynami
         out.names.push(bare.to_string());
         if let Some(def) = wb.name(bare, scope_sheet) {
             let scope = def.scope.unwrap_or(sheet);
-            return match gridcraft_formula::parse(&def.formula) {
+            return match gridcraft_formula::parse_name(&def.formula) {
                 Ok(expr) if !gridcraft_formula::adjust::has_relative_refs(&expr) => {
                     out.areas.extend(precedents(wb, scope, &expr).0);
                     collect_dynamic_reads(wb, scope, &expr, out, depth + 1)
                 }
                 Ok(_) => false,
-                Err(_) => true,
+                Err(_) => false,
             };
         }
         if let Some((si, ti)) = wb.table(bare) {

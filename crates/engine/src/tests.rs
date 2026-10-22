@@ -3394,4 +3394,13 @@ fn a_number_entered_in_a_percent_formatted_cell_is_read_as_a_percentage() {
     assert_eq!(v(&s, "E1").as_f64(), Some(3.0), "positive in the plain section");
     s.execute("cell.set", json!({"cell": "E2", "input": "-3"})).unwrap();
     assert_eq!(v(&s, "E2").as_f64(), Some(-0.03), "negative in the percent section");
+
+    // A conditional percentage section keeps the value after scaling: the condition compares in
+    // the displayed (×100) units, so 3 lands in `[>=1]0%` and the stored 0.03 still shows as a
+    // percentage instead of falling through to the plain `0` section.
+    s.execute("home.numberFormat", json!({"range": "F1:F2", "code": "[>=1]0%;0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "F1").as_f64(), Some(0.03), "scaled into the conditional percent section");
+    s.execute("cell.set", json!({"cell": "F2", "input": "-3"})).unwrap();
+    assert_eq!(v(&s, "F2").as_f64(), Some(-3.0), "below the threshold the plain `0` section keeps the value");
 }

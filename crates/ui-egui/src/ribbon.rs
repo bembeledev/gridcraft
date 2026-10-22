@@ -1386,35 +1386,41 @@ fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     }
 }
 
+/// A style's gallery thumbnail: a 5x5 table (header row, banded rows) painted cell by cell from
+/// the same look the grid uses.
 fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, style: &str) {
-    let lk = gridcraft_engine::tables::look(style);
-    let res = |c: Option<gridcraft_engine::model::Color>| c.and_then(|c| c.resolve(&wb.theme)).map(theme::color32);
+    use gridcraft_engine::tables::{TableParts, cell_look, look};
+    let lk = look(style);
+    let parts = TableParts { header_row: true, totals_row: false, banded_rows: true, banded_cols: false, first_col: false, last_col: false };
+    let res = |c: gridcraft_engine::model::Color| c.resolve(&wb.theme).map(theme::color32);
+    let line = |l: gridcraft_engine::model::BorderLine| if l.is_none() { None } else { Some(res(l.color).unwrap_or(Color32::BLACK)) };
     let p = ui.painter();
     p.rect_filled(r, 0.0, Color32::WHITE);
-    let rows = 5;
-    let rh = r.height() / rows as f32;
-    for i in 0..rows {
-        let rr = Rect::from_min_size(pos2(r.left(), r.top() + i as f32 * rh), vec2(r.width(), rh));
-        let fill = if i == 0 {
-            res(lk.header_fill)
-        } else if i % 2 == 1 {
-            res(lk.band_fill)
-        } else {
-            res(lk.body_fill)
-        };
-        if let Some(f) = fill {
-            p.rect_filled(rr, 0.0, f);
-        }
-        if let Some(l) = res(lk.line) {
-            p.line_segment([rr.left_bottom(), rr.right_bottom()], Stroke::new(1.0, l));
-        }
-        for k in 0..3 {
-            let x = rr.left() + 4.0 + k as f32 * (r.width() - 8.0) / 3.0;
-            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(Color32::BLACK) } else { Color32::from_gray(120) };
-            p.line_segment([pos2(x, rr.center().y), pos2(x + 10.0, rr.center().y)], Stroke::new(1.0, col));
+    let n = 5u32;
+    let (cw, rh) = (r.width() / n as f32, r.height() / n as f32);
+    for row in 0..n {
+        for col in 0..n {
+            let cr = Rect::from_min_size(pos2(r.left() + col as f32 * cw, r.top() + row as f32 * rh), vec2(cw, rh));
+            let cl = cell_look(&lk, parts, row, col, n, n);
+            if let Some(f) = cl.fill.and_then(res) {
+                p.rect_filled(cr, 0.0, f);
+            }
+            let dash = res(cl.font).unwrap_or(Color32::BLACK);
+            let y = cr.center().y;
+            p.line_segment([pos2(cr.left() + 2.0, y), pos2(cr.right() - 2.0, y)], Stroke::new(1.0, dash));
+            let b = cl.borders;
+            for (side, edge) in [
+                (b.top, Rect::from_min_max(cr.left_top(), pos2(cr.right(), cr.top() + 1.0))),
+                (b.bottom, Rect::from_min_max(pos2(cr.left(), cr.bottom() - 1.0), cr.right_bottom())),
+                (b.left, Rect::from_min_max(cr.left_top(), pos2(cr.left() + 1.0, cr.bottom()))),
+                (b.right, Rect::from_min_max(pos2(cr.right() - 1.0, cr.top()), cr.right_bottom())),
+            ] {
+                if let Some(c) = line(side) {
+                    p.rect_filled(edge, 0.0, c);
+                }
+            }
         }
     }
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
 }
 
 fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {

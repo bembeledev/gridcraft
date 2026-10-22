@@ -636,7 +636,7 @@ struct Look {
 
 fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
     let mut style = match sh.table_at(c) {
-        Some(t) => crate::tables::table_cell_style(wb, si, t, c),
+        Some(t) => crate::tables::table_cell_shown_style(wb, si, t, c),
         None => wb.styles.get(sh.style_id(c)).clone(),
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));

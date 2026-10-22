@@ -1080,7 +1080,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
             if !(0.0..=255.0).contains(&c) {
                 return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
             }
-            chars_to_points(c)
+            chars_to_points(c, s.doc()?.wb.digit_width())
         }
         _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
@@ -1098,14 +1098,14 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
-pub fn chars_to_points(c: f64) -> f64 {
+/// Excel column width in characters (of the Normal font's digit width, `digit` px) → pixels.
+pub fn chars_to_points(c: f64, digit: f64) -> f64 {
     if c <= 0.0 {
         0.0
     } else if c < 1.0 {
-        (c * 12.0).round()
+        (c * (digit + 5.0)).round()
     } else {
-        (c * 7.0 + 5.0).round()
+        (c * digit + 5.0).round()
     }
 }
 
@@ -1292,7 +1292,10 @@ mod tests {
 
     #[test]
     fn width_units() {
-        assert_eq!(chars_to_points(8.43), 64.0);
-        assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
+        assert_eq!(chars_to_points(8.43, 7.0), 64.0);
+        assert!((points_to_chars(64.0, 7.0) - 8.43).abs() < 0.01);
+        // Calibri 12 counts in 8 px digits: 8.43 characters are 72 px.
+        assert_eq!(chars_to_points(8.43, 8.0), 72.0);
+        assert!((points_to_chars(72.0, 8.0) - 8.38).abs() < 0.01);
     }
 }

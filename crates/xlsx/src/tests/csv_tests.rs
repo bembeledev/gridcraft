@@ -367,3 +367,48 @@ fn sep_line_names_the_delimiter() {
     assert_eq!(delim("sep=\t\r\nA\tB"), Some(b'\t'));
     assert_eq!(delim("sep=|\r\nA|B"), None, "| isn't detected: saved with commas so it reopens in columns");
 }
+
+/// Review of #2270: the delimiter a `sep=` line names is kept for saving only if the text would be
+/// read with it again.
+#[test]
+fn a_named_delimiter_is_kept_only_if_it_would_be_detected_again() {
+    let opts = CsvOptions { delimiter: 0, parse_values: false, ..Default::default() };
+    let texts = |wb: &Workbook| -> Vec<String> {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).flat_map(|r| (0..2).map(move |c| CellRef::new(r, c))).map(|c| sh.value(c).as_text().unwrap_or("").to_string()).collect()
+    };
+    let save = |wb: &Workbook| {
+        let sh = wb.sheet(0).unwrap();
+        write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| sh.value(c).as_text().unwrap_or("").to_string()).unwrap()
+    };
+    // `;` named, but `a;b,c` would be detected as commas: saved with commas, it reopens the same.
+    let wb = read_csv(b"sep=;\na;b,c\n1;2,3\n", &opts).unwrap();
+    assert_eq!(texts(&wb), ["a", "b,c", "1", "2,3"]);
+    assert_eq!(wb.csv_delimiter, None);
+    let saved = save(&wb);
+    assert_eq!(saved, b"a,\"b,c\"\r\n1,\"2,3\"\r\n");
+    assert_eq!(texts(&read_csv(&saved, &opts).unwrap()), ["a", "b,c", "1", "2,3"]);
+    // `;` named and detected again: kept.
+    assert_eq!(read_csv(b"sep=;\na;b\n1;2\n", &opts).unwrap().csv_delimiter, Some(b';'));
+}
+
+/// Review of #2270: a first row that looks like a `sep=` line (a lone `sep=;` in A1) is data. Saved
+/// behind a `sep=,` line it opens as it was; Excel writes it bare and reads it back garbled.
+#[test]
+fn a_first_row_like_a_sep_line_survives_a_save() {
+    let opts = CsvOptions { delimiter: 0, parse_values: false, ..Default::default() };
+    let texts = |wb: &Workbook| -> Vec<String> {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).flat_map(|r| (0..2).map(move |c| CellRef::new(r, c))).map(|c| sh.value(c).as_text().unwrap_or("").to_string()).collect()
+    };
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("sep=;"));
+    sheet.set_value(CellRef::new(1, 0), Value::text("value"));
+    let saved = write_csv(&sheet, b',', |c| sheet.value(c).as_text().unwrap_or("").to_string()).unwrap();
+    assert_eq!(saved, b"sep=,\r\nsep=;\r\nvalue\r\n");
+    assert_eq!(texts(&read_csv(&saved, &opts).unwrap()), ["sep=;", "", "value", ""]);
+    // Other first rows are written as before.
+    let mut plain = Sheet::new("Sheet1");
+    plain.set_value(CellRef::new(0, 0), Value::text("separator"));
+    assert_eq!(write_csv(&plain, b',', |c| plain.value(c).as_text().unwrap_or("").to_string()).unwrap(), b"separator\r\n");
+}

@@ -282,9 +282,12 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let sep = if opts.delimiter == 0 { sep_line(&text, quote) } else { None };
     let (body, delim, quote) = match sep {
         Some((d, skip)) => {
-            // Saved again with it only when it would be detected without the line (Excel saves
-            // with its list separator and drops the line); else with the CSV default, comma.
-            wb.csv_delimiter = d.filter(|d| [',', ';', '\t'].contains(d)).and_then(|d| u8::try_from(d).ok());
+            // Saved again with it only when the text would be read with it again without the line
+            // (Excel saves with its list separator and drops the line); else with the CSV default,
+            // comma. `sep=;` over `a;b,c` keeps commas: detection would pick them.
+            let body = text.get(skip..).unwrap_or_default();
+            wb.csv_delimiter =
+                d.filter(|d| [',', ';', '\t'].contains(d) && sniff_delimiter(body, quote) as char == *d).and_then(|d| u8::try_from(d).ok());
             // `sep="`: Excel splits at the quotes, so nothing is quoted.
             (text.get(skip..).unwrap_or_default(), d, Some(quote).filter(|q| d != Some(*q)))
         }
@@ -400,6 +403,11 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
         if out.len() > limit {
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
+    }
+    // A first row that would read as Excel's `sep=` line (a lone `sep=;` cell) stays data behind a
+    // `sep=` line of its own naming the delimiter, which GridCraft and Excel both drop on opening.
+    if out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
+        out.insert_str(0, &format!("sep={delim}\r\n"));
     }
     Ok(out.into_bytes())
 }

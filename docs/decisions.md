@@ -93,9 +93,11 @@ Excel for Microsoft 365, de-DE; this build drops it.)
 
 A delimiter given by the caller wins and the line stays data, so a `.tsv`/`.txt` file (read with
 tabs) keeps it. Saving: Excel writes its list separator and drops the line. GridCraft saves a CSV
-with the separator it was read with, so it does that for `,` `;` and tab, which it detects again
-when the file is reopened; any other named delimiter (`|`) is saved as commas, because without the
-line the file would reopen as one column.
+with the separator it was read with, so it keeps a named `,` `;` or tab only when detection picks
+it again on reopening; otherwise (`|`, or `sep=;` over text with as many commas) it saves commas,
+which reopen in the same columns. A first row that would itself read as a `sep=` line (a lone
+`sep=;` cell) is written behind a `sep=` line naming the delimiter, so it stays data. Excel writes
+such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`, row 2 in one cell).
 
 From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour
 `sep=`) is another part of #1446.

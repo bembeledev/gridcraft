@@ -1122,14 +1122,14 @@ mod tests {
         }
         assert_eq!(seen.len(), catalog_keys().count());
         assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 562, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 954);
+        assert_eq!(DIALOGS.len(), 579, "the dialog, message and menu strings beyond it");
+        assert_eq!(catalog_keys().count(), 971);
     }
 
     #[test]
     fn covers_every_key_the_portuguese_catalog_translates() {
         let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 954, "pt.rs's arms changed: add the new keys here and update the count");
+        assert_eq!(portuguese.len(), 971, "pt.rs's arms changed: add the new keys here and update the count");
         let japanese: HashSet<&str> = catalog_keys().collect();
         for key in &portuguese {
             assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");

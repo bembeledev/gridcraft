@@ -58,6 +58,30 @@ fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
 }
 
 #[test]
+fn each_tab_keeps_a_scroll_offset_of_its_own() {
+    // Scrolling Home must not hide the first groups of another overflowing tab, and Home keeps
+    // its offset while the other tab is used.
+    let mut h = app_at(700.0, "Home");
+    h.get_by_label("Scroll ribbon right").click();
+    h.run_steps(3);
+    let home_offset = RibbonOverflow::get(&h.ctx).offset;
+    assert!(home_offset > 0.0);
+    let other = TABS.iter().copied().find(|t| *t != "Home" && RibbonOverflow::get(&app_at(700.0, t).ctx).overflows());
+    let other = other.expect("another tab overflows a 700 px window");
+    h.state_mut().ui.ribbon_tab = other.into();
+    h.run_steps(3);
+    let o = RibbonOverflow::get(&h.ctx);
+    assert!(o.overflows(), "{other} overflows");
+    assert_eq!(o.offset, 0.0, "{other} starts at its left edge");
+    h.get_by_label("Scroll ribbon right").click();
+    h.run_steps(3);
+    assert!(RibbonOverflow::get(&h.ctx).offset > 0.0);
+    h.state_mut().ui.ribbon_tab = "Home".into();
+    h.run_steps(3);
+    assert_eq!(RibbonOverflow::get(&h.ctx).offset, home_offset, "Home kept its offset");
+}
+
+#[test]
 fn the_scroll_arrows_stay_inside_a_narrow_window() {
     // The tab row can be wider than a narrow window (more so with wider system fonts); the card
     // and its arrows stay inside the window, and the right arrow still scrolls.

@@ -237,8 +237,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                // One scroll state per tab: a tab opened after scrolling another starts at its
+                // left edge, and a tab keeps its own offset while others are used.
                 let scroll = egui::ScrollArea::horizontal()
-                    .id_salt("ribbon_scroll")
+                    .id_salt(("ribbon_scroll", app.ui.ribbon_tab.as_str()))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {

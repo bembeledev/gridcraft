@@ -438,8 +438,6 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("digits as text", "桁"),
     ("Convert digits surrounding the letter \"E\" to a number in scientific notation", "文字「E」の前後の数字を指数表記の数値に変換する"),
     ("Off: 1244121406E6 stays text instead of becoming 1.24412E+15.", "オフ: 1244121406E6 は 1.24412E+15 にならず、文字列のままです。"),
-    ("Convert continuous letters and numbers to a date", "連続する文字と数字を日付に変換する"),
-    ("GridCraft never makes this conversion: 12JAN2026 stays text.", "GridCraft はこの変換を行いません: 12JAN2026 は文字列のままです。"),
     ("Remove trailing zeros after the decimal separator", "小数点記号の後の末尾のゼロを削除する"),
     (
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option.",
@@ -1122,14 +1120,14 @@ mod tests {
         }
         assert_eq!(seen.len(), catalog_keys().count());
         assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 581, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 973);
+        assert_eq!(DIALOGS.len(), 579, "the dialog, message and menu strings beyond it");
+        assert_eq!(catalog_keys().count(), 971);
     }
 
     #[test]
     fn covers_every_key_the_portuguese_catalog_translates() {
         let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 973, "pt.rs's arms changed: add the new keys here and update the count");
+        assert_eq!(portuguese.len(), 971, "pt.rs's arms changed: add the new keys here and update the count");
         let japanese: HashSet<&str> = catalog_keys().collect();
         for key in &portuguese {
             assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");

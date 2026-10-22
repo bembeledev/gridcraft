@@ -300,15 +300,17 @@ pub fn col_width_to_px(w: f64, digit: f64) -> f32 {
     if !w.is_finite() || w <= 0.0 {
         return 0.0;
     }
-    let w = w.min(255.0);
     let digit = digit.max(1.0);
+    // 255 characters plus their padding is the widest Excel saves.
+    let w = w.min(255.0 + 5.0 / digit);
     (((256.0 * w + (128.0 / digit).trunc()) / 256.0) * digit).trunc() as f32
 }
 
 /// Model width (px) → stored column width in characters of `digit` px.
 pub fn px_to_col_width(px: f32, digit: f64) -> f64 {
     let digit = digit.max(1.0);
-    let px = (px.max(0.0) as f64).round().min(255.0 * digit + 5.0);
+    // Wider than 255 characters can't be stored: the widest column that can.
+    let px = (px.max(0.0) as f64).round().min(f64::from(gridcraft_model::max_col_width(digit)));
     let back = |w: f64| col_width_to_px(w, digit) as f64;
     let chars = if px > digit + 5.0 { ((px - 5.0) / digit * 100.0 + 0.5).trunc() / 100.0 } else { px / (digit + 5.0) };
     let w = ((chars * digit + 5.0) / digit * 256.0).trunc() / 256.0;
@@ -345,13 +347,17 @@ mod tests {
         assert_eq!(col_width_to_px(13.0, 8.0), 104.0);
         assert_eq!(col_width_to_px(13.0, 7.0), 91.0);
         for digit in [5.0, 6.0, 7.0, 8.0, 9.0, 12.0, 16.0] {
-            for px in 0..400 {
+            let max = gridcraft_model::max_col_width(digit);
+            for px in 0..=max as u32 {
                 assert_eq!(col_width_to_px(px_to_col_width(px as f32, digit), digit), px as f32, "px {px} digit {digit}");
             }
+            // Wider is stored as the widest, 255 characters plus padding.
+            assert!(px_to_col_width(max + 300.0, digit) <= 255.0 + 5.0 / digit);
+            assert_eq!(col_width_to_px(px_to_col_width(max + 300.0, digit), digit), max);
         }
         // Hostile input stays finite and in range.
         assert_eq!(col_width_to_px(f64::NAN, 7.0), 0.0);
-        assert_eq!(col_width_to_px(1e300, 7.0), col_width_to_px(255.0, 7.0));
+        assert_eq!(col_width_to_px(1e300, 7.0), gridcraft_model::max_col_width(7.0));
         assert!(px_to_col_width(f32::INFINITY, 0.0).is_finite());
         assert_eq!(pt_to_px(15.0), 20.0);
         assert_eq!(px_to_pt(20.0), 15.0);

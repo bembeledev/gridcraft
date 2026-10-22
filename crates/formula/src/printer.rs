@@ -6,7 +6,19 @@ use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 
 use crate::ast::*;
 
-pub use gridcraft_core::{quote_sheet, sheet_needs_quotes as needs_quotes};
+use gridcraft_core::sheet_needs_quotes as core_sheet_needs_quotes;
+/// Whether a sheet name needs quotes, preserving the unquoted `[n]` workbook prefix form.
+pub fn needs_quotes(name: &str) -> bool {
+    match book_prefix(name) {
+        Some((_, "")) => false,
+        Some((_, sheet)) => core_sheet_needs_quotes(sheet),
+        None => core_sheet_needs_quotes(name),
+    }
+}
+
+pub fn quote_sheet(name: &str) -> String {
+    if needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+}
 
 fn sheet_prefix(s: &SheetSel) -> String {
     match s {

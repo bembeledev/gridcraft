@@ -6,38 +6,7 @@ use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 
 use crate::ast::*;
 
-/// Whether a sheet name needs quotes in a reference.
-pub fn needs_quotes(name: &str) -> bool {
-    // A sheet in a linked workbook, `[1]Prices`: Excel quotes it only when the sheet name needs it.
-    // `[1]` alone (`[1]!Rate`, or `[1]!A1` read from a file) is never quoted: `'[1]'` would name a
-    // sheet called `[1]`.
-    match book_prefix(name) {
-        Some((_, "")) => false,
-        Some((_, sheet)) => sheet_needs_quotes(sheet),
-        None => sheet_needs_quotes(name),
-    }
-}
-
-/// Whether a sheet name, without a linked workbook's `[n]`, needs quotes.
-fn sheet_needs_quotes(name: &str) -> bool {
-    if name.is_empty() {
-        return true;
-    }
-    let first = name.chars().next().unwrap_or('_');
-    if first == '.' || first.is_ascii_digit() || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
-        return true;
-    }
-    // Looks like an R1C1 reference or a cell ref (`A1`), or a boolean.
-    let r1c1 = name.len() > 2
-        && name.as_bytes()[0].eq_ignore_ascii_case(&b'R')
-        && name.as_bytes()[1..].contains(&b'C')
-        && name.as_bytes()[1..].iter().all(|c| c.is_ascii_digit() || c.eq_ignore_ascii_case(&b'C'));
-    gridcraft_core::CellRef::parse(name).is_some() || r1c1 || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
-}
-
-pub fn quote_sheet(name: &str) -> String {
-    if needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
-}
+pub use gridcraft_core::{quote_sheet, sheet_needs_quotes as needs_quotes};
 
 fn sheet_prefix(s: &SheetSel) -> String {
     match s {
@@ -46,7 +15,7 @@ fn sheet_prefix(s: &SheetSel) -> String {
         SheetSel::Span(a, b) => {
             // `[1]Jan:Dec!A1`: a linked workbook's index can start the range, not its second sheet.
             let joined = format!("{a}:{b}");
-            if needs_quotes(a) || sheet_needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
+            if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
         }
     }
 }

@@ -724,6 +724,9 @@ fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
 /// font. A width set with Column Width (or by dragging) stays, even when it equals the default. Hidden
 /// columns, text, General numbers (they round to fit), shrink-to-fit and merged cells don't widen,
 /// and columns never narrow.
+/// How many stored cells [`widen_for_numbers`] looks at in one command.
+const MAX_WIDEN_CELLS: usize = 1_000_000;
+
 fn widen_for_numbers(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -734,17 +737,43 @@ fn widen_for_numbers(s: &mut Session, p: &Json) -> Result<Json> {
         if sh.show_formulas {
             return Ok(Json::Null);
         }
+        let targets: Vec<RangeRef> = ranges.iter().filter_map(|r| r.intersection(&used)).collect();
+        // Merged areas over the targets as sorted row intervals per column, so each cell is checked
+        // with a binary search rather than a scan of every merge.
+        let mut merged: std::collections::HashMap<u32, Vec<(u32, u32)>> = Default::default();
+        for m in sh.merges.iter().filter(|m| !m.is_single()) {
+            for x in targets.iter().filter_map(|r| m.intersection(r)) {
+                for col in x.start.col..=x.end.col {
+                    merged.entry(col).or_default().push((m.start.row, m.end.row));
+                }
+            }
+        }
+        for v in merged.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+        }
+        let in_merge = |c: CellRef| {
+            merged.get(&c.col).is_some_and(|v| {
+                let i = v.partition_point(|&(r0, _)| r0 <= c.row);
+                i > 0 && v.get(i - 1).is_some_and(|&(_, r1)| c.row <= r1)
+            })
+        };
         let mut need: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
         // Measured as AutoFit Column Width measures (the UI's font when it supplies one).
         let mut measured: std::collections::HashMap<(StyleId, String), f32> = Default::default();
-        for r in ranges.iter().filter_map(|r| r.intersection(&used)) {
-            if r.count() > 4_000_000 {
-                continue;
-            }
-            for (c, cell) in sh.cells.iter_range(r) {
-                if !matches!(cell.value, gridcraft_core::Value::Number(_))
+        // The stored cells looked at are capped, not the area: a sparse target as tall as the sheet
+        // still widens for the numbers it holds. Spilled values count as the grid shows them.
+        let mut budget = MAX_WIDEN_CELLS;
+        for r in &targets {
+            let spilled = sh.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c));
+            for c in sh.cells.iter_range(*r).map(|(c, _)| c).chain(spilled) {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                if !matches!(sh.value_ref(c), Some(gridcraft_core::Value::Number(_)))
                     || sh.cols.get(&c.col).is_some_and(|i| i.custom || i.hidden)
-                    || sh.merge_at(c).is_some_and(|m| !m.is_single())
+                    || in_merge(c)
                 {
                     continue;
                 }
@@ -1378,6 +1407,43 @@ mod tests {
         s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
         s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
         assert!(col(&s, 0).0 > fitted, "after AutoFit, with Wrap Text, A widens again");
+    }
+
+    fn book() -> (crate::Session, f32) {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let (default, _) = col(&s, 0);
+        (s, default)
+    }
+
+    /// Whole columns as tall as the sheet with two numbers: the cells are looked at, not the area.
+    #[test]
+    fn a_sparse_target_widens_for_the_numbers_it_holds() {
+        let (mut s, default) = book();
+        s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1000000", "input": "1234567.891"})).unwrap();
+        s.execute("home.comma", json!({"range": "A:E"})).unwrap();
+        assert!(col(&s, 4).0 > default, "E widens for 1,234,567.89 a million rows down");
+    }
+
+    /// A spilled number counts as the grid shows it: G1's formula spills 1,234,567.891 into H1.
+    #[test]
+    fn a_spilled_number_widens_its_column() {
+        let (mut s, default) = book();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=SEQUENCE(1,2,1,1234566.891)"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "H1", "code": "#,##0.000"})).unwrap();
+        assert!(col(&s, 7).0 > default, "H widens for the value it shows");
+    }
+
+    /// A merged area keeps its columns; the cell beside it widens.
+    #[test]
+    fn a_merged_area_keeps_its_columns() {
+        let (mut s, default) = book();
+        s.execute("range.setValues", json!({"range": "J1", "values": [[1234567.891, null, 1234567.891]]})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "J1:K1"})).unwrap();
+        s.execute("home.comma", json!({"range": "J1:L1"})).unwrap();
+        assert_eq!((col(&s, 9).0, col(&s, 10).0), (default, default), "the merged J1:K1 doesn't widen J or K");
+        assert!(col(&s, 11).0 > default, "L does");
     }
 
     #[test]

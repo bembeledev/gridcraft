@@ -28,15 +28,7 @@ pub(crate) fn canonical(
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
-        let mut body = body.to_string();
-        let mut expr = formula::parse_input(&body, locale, known);
-        for _ in 0..8 {
-            if expr.is_ok() {
-                break;
-            }
-            body.push(')');
-            expr = formula::parse_input(&body, locale, known);
-        }
+        let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.

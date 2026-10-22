@@ -958,14 +958,45 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-georgian", "sys-symbols", "sys-symbols-2"]
+            [
+                "sys-cjk-han-ja",
+                "sys-cjk-han-zh",
+                "sys-cjk-hangul",
+                "sys-thai",
+                "sys-lao",
+                "sys-hebrew",
+                "sys-georgian",
+                "sys-symbols",
+                "sys-symbols-2"
+            ]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-georgian", "sys-symbols", "sys-symbols-2"]
+            [
+                "sys-cjk-han-zh",
+                "sys-cjk-han-ja",
+                "sys-cjk-hangul",
+                "sys-thai",
+                "sys-lao",
+                "sys-hebrew",
+                "sys-georgian",
+                "sys-symbols",
+                "sys-symbols-2"
+            ]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
-        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr, Language::Ka] {
+        for l in [
+            Language::En,
+            Language::Zh,
+            Language::Ko,
+            Language::Ru,
+            Language::PtBr,
+            Language::De,
+            Language::Cs,
+            Language::Fr,
+            Language::Tr,
+            Language::Ka,
+        ] {
             assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
         }
     }

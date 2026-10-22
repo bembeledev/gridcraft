@@ -6,7 +6,7 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos
 use gridcraft_chart::{HAlign, Prim, VAlign};
 use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Slicer, Workbook};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 
 use crate::SheetApp;
 use crate::grid::Geo;

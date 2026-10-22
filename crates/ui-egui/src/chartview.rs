@@ -269,6 +269,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     let doc = app.session.active().map_or(0, |d| d.uid);
     for sp in &sh.shapes {
         let r = anchor_rect(geo, sh, &sp.anchor);
+        let p = &p.with_clip_rect(geo.object_area(sp.anchor.cell));
         if !r.intersects(p.clip_rect()) {
             continue;
         }
@@ -334,6 +335,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     }
     for im in &sh.images {
         let r = anchor_rect(geo, sh, &im.anchor);
+        let p = &p.with_clip_rect(geo.object_area(im.anchor.cell));
         if !r.intersects(p.clip_rect()) {
             continue;
         }
@@ -350,6 +352,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     }
     for ch in &sh.charts {
         let r = anchor_rect(geo, sh, &ch.anchor);
+        let (cells, p) = (p, &p.with_clip_rect(geo.object_area(ch.anchor.cell)));
         if !r.intersects(p.clip_rect()) {
             continue;
         }
@@ -374,7 +377,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 {
                     let rr = geo.range_rect(sh, rf.range());
                     for pane in geo.range_panes(rf.range()) {
-                        let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
+                        let pp = cells.with_clip_rect(pane);
                         pp.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
                     }
                 }
@@ -422,6 +425,7 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
+        let p = &p.with_clip_rect(geo.object_area(sl.anchor.cell));
         if !r.intersects(p.clip_rect()) {
             continue;
         }
@@ -472,7 +476,7 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
-        if !r.contains(p) {
+        if !r.contains(p) || !geo.object_area(sl.anchor.cell).contains(p) {
             continue;
         }
         let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
@@ -506,25 +510,25 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
     }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
+        if r.contains(p) && geo.object_area(sl.anchor.cell).contains(p) {
             return Some(("slicer", sl.id, r));
         }
     }
     for ch in sh.charts.iter().rev() {
         let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
+        if r.expand(4.0).contains(p) && geo.object_area(ch.anchor.cell).contains(p) {
             return Some(("chart", ch.id, r));
         }
     }
     for im in sh.images.iter().rev() {
         let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
+        if r.contains(p) && geo.object_area(im.anchor.cell).contains(p) {
             return Some(("image", im.id, r));
         }
     }
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
+        if r.expand(3.0).contains(p) && geo.object_area(s.anchor.cell).contains(p) {
             return Some(("shape", s.id, r));
         }
     }

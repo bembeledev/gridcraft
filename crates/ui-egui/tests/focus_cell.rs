@@ -58,6 +58,24 @@ fn a_quadrant_without_the_active_column_draws_no_column_band() {
 }
 
 #[test]
+fn a_frozen_quadrant_keeps_its_bands_when_the_sheet_scrolls() {
+    // Frozen at C3: rows 1-2 and columns A-B stay put while the rest scrolls away.
+    let mut s = session();
+    s.execute("view.freezePanes", json!({"cell": "C3"})).unwrap();
+    let sheet = s.active().unwrap().wb.active().unwrap();
+    let g = Geo::new(sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1200.0, 800.0)), vec2(400.0, 300.0));
+    let b2 = g.cell_rect(sheet, CellRef::parse("B2").unwrap());
+    let a1 = g.cell_rect(sheet, CellRef::parse("A1").unwrap());
+    let (col, row) = focus_bands(&g, sheet, CellRef::parse("B2").unwrap(), (0, 1), (0, 1));
+    let col = col.expect("the column band");
+    let row = row.expect("the row band");
+    same((col.left(), col.right()), (b2.left(), b2.right()), "the column band keeps column B's width");
+    same((col.top(), col.bottom()), (a1.top(), b2.bottom()), "and reaches the last frozen row");
+    same((row.top(), row.bottom()), (b2.top(), b2.bottom()), "the row band keeps row 2's height");
+    same((row.left(), row.right()), (a1.left(), b2.right()), "and reaches the last frozen column");
+}
+
+#[test]
 fn a_hidden_active_row_draws_no_row_band() {
     let mut s = session();
     s.execute("home.hideRows", json!({"rows": "3:3"})).unwrap();

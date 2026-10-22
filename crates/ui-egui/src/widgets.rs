@@ -196,7 +196,7 @@ fn split_button_state(ui: &mut Ui, icon: Icon, accent: Option<Color32>, on: bool
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
+    (m.on_hover_text(tip_text(ui, tip)), a)
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is

@@ -1356,6 +1356,8 @@ fn focus_cell_and_its_color_roundtrip() {
     assert_eq!(back.sheets[0].focus_cell_color, Some(Color::Rgb(0x5FC8D8)), "the color survives");
     assert!(!back.sheets[1].focus_cell, "the other sheet stays off");
     assert_eq!(back.sheets[1].focus_cell_color, None, "and keeps the theme default");
+}
+
 /// Japanese paper sizes survive an XLSX save and reopen. IDs 12/13 are the JIS B4/B5; the
 /// Japanese postcards and envelopes have their own IDs, and `B4 (ISO)` keeps ISO B4. The ISO B5/B6
 /// names only exist in the engine: ECMA-376 has no `paperSize` id for them (only ISO B4), so they

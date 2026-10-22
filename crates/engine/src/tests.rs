@@ -4177,6 +4177,9 @@ fn view_focus_cell_color_rejects_a_bad_hex() {
     assert!(s.execute("view.focusCellColor", json!({"color": "#12345"})).is_err());
     assert!(s.execute("view.focusCellColor", json!({})).is_err());
     assert_eq!(s.doc().unwrap().wb.active().unwrap().focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "the old color stays");
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {

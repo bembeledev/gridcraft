@@ -208,6 +208,9 @@ fn focus_cell_color(s: &mut Session, p: &Json) -> Result<Json> {
         sh.focus_cell_color = color;
         let hex = color.and_then(|c| c.hex(&cx.wb.theme)).unwrap_or_else(|| "default".into());
         Ok(json!({"color": hex}))
+    })
+}
+
 /// Ctrl+6: hides every object, or shows them again. Placeholders (from a file) count as shown.
 fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
     use gridcraft_model::ShowObjects;

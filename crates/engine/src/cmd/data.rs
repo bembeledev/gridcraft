@@ -924,6 +924,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
     let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
     let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
@@ -949,7 +950,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &conv).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),
@@ -1156,8 +1157,22 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     }
 }
 
-/// Checks typed input against the validation of a cell. `Ok(None)` = valid.
-pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+/// Checks typed input against the validation of a cell. `Ok(None)` = valid. The input is read
+/// under the Automatic Data Conversion options, as typing it would store it.
+pub fn check_validation(
+    wb: &Workbook,
+    sheet: usize,
+    at: CellRef,
+    input: &str,
+    conv: &gridcraft_core::parse::DataConversion,
+) -> Option<(Validation, String)> {
+    let v = gridcraft_core::parse::parse_input_with(input, wb.date_system, conv).value;
+    check_value(wb, sheet, at, v, input)
+}
+
+/// Checks a value against the validation of a cell; `input` is how it's written (List and Text
+/// length rules read it).
+fn check_value(wb: &Workbook, sheet: usize, at: CellRef, v: Value, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -1166,7 +1181,6 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
     // The formulas are written for the first cell of the range and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
@@ -1258,7 +1272,7 @@ fn validate_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let input = str_param(p, "input").unwrap_or("");
-    match check_validation(&d.wb, d.wb.active_sheet, at, input) {
+    match check_validation(&d.wb, d.wb.active_sheet, at, input, &s.prefs.data_conversion) {
         None => Ok(json!({"ok": true})),
         Some((dv, msg)) => Ok(json!({"ok": false, "message": msg, "title": dv.error_title, "style": format!("{:?}", dv.error_style)})),
     }
@@ -1275,7 +1289,15 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
+                if text.is_empty() {
+                    continue;
+                }
+                // What the cell holds, whatever the options say now; a formula is still judged by its text.
+                let bad = match sh.cell(c) {
+                    Some(cell) if cell.formula.is_none() => check_value(&d.wb, sheet, c, cell.value.clone(), &text),
+                    _ => check_validation(&d.wb, sheet, c, &text, &s.prefs.data_conversion),
+                };
+                if bad.is_some() {
                     bad_cells.push(c.a1());
                 }
             }
@@ -1833,8 +1855,11 @@ mod tests {
         let check = |wb: &Workbook| {
             for (cell, input) in accepted {
                 let at = CellRef::parse(cell).unwrap();
-                assert!(check_validation(wb, 0, at, input).is_none(), "{cell} refuses {input}");
-                assert!(check_validation(wb, 0, at, "Pending").is_some(), "{cell} accepts Pending");
+                assert!(check_validation(wb, 0, at, input, &gridcraft_core::parse::DataConversion::default()).is_none(), "{cell} refuses {input}");
+                assert!(
+                    check_validation(wb, 0, at, "Pending", &gridcraft_core::parse::DataConversion::default()).is_some(),
+                    "{cell} accepts Pending"
+                );
             }
         };
         let wb = s.doc().unwrap().wb.clone();
@@ -1881,6 +1906,9 @@ mod tests {
         }
         let sh = s.doc().unwrap().wb.active().unwrap().clone();
         assert_eq!(sh.validations.len(), 3);
-        assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
+        assert!(
+            check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0", &gridcraft_core::parse::DataConversion::default())
+                .is_some()
+        );
     }
 }

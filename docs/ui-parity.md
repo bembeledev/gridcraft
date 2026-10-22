@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (File › Options › Data: Automatic Data Conversion and trailing decimal zeros; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -27,6 +27,8 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); New sheet (+) right after the last tab, the strip capped at 60% of the bar (#943); manual wheel/trackpad browsing preserved; next/previous skips Hidden and VeryHidden sheets and retains the current sheet and selection when no visible destination exists; rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
+| Task panes (Format Chart, Comments, Watch, Selection, PivotTable fields) | yes | yes | element-level Format pane for shapes and pictures missing |
+| Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | partial | Options page has General, Save, Data (Automatic Data Conversion) and Formulas; Excel's other Options pages and the template gallery missing |
 | Task panes (Format Chart, Comments, Watch, Selection, PivotTable fields) | yes | yes; PivotTable source-field list scrollbar sits at the right edge of its pane | element-level Format pane for shapes and pictures missing |
 | Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | partial | Options dialog and template gallery missing |
 | Dark mode, system appearance | yes | yes | done (10-09); follows the system on first run, title-bar switch and File › Display theme (#194, #239) |
@@ -213,6 +215,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | minor | Outline band for grouped rows and columns, Show / Hide Detail on the Data tab, numpad navigation keys in shortcuts (#373) |
 | 2026-10-11 | minor | Shift+Space / Ctrl+Space no longer start an edit; Control+Space selects the column on Mac (#338) |
 | 2026-10-11 | minor | Selected whole columns can be reordered by dragging their headers to an insertion point |
+| 2026-10-12 | minor | File › Options › Data: "Remove trailing zeros after the decimal separator" (GridCraft addition to the list) |
+| 2026-10-12 | minor | File › Options › Data: Automatic Data Conversion checkboxes with a digit limit for long numbers |
 | 2026-10-11 | minor | Page Layout view with rulers and in-place headers and footers (#329) |
 | 2026-10-11 | minor | Forecast Sheet dialog (#322) |
 | 2026-10-11 | minor | Delete and Backspace now remove the selected chart, picture or shape (#213) |

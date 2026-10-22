@@ -88,10 +88,10 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | Typed number formats (`sourceLinked="0"`) on value axes (primary, secondary, scatter/bubble X) and on data labels (per series, or the group's) are read, drawn and saved; PivotChart refresh keeps label formats by the series' pivot items (read from Excel's header-cell names below the "Column Labels" caption; by position only if no name matches, the series count is unchanged, and the names show no row or column item of the pivot and aren't only value field names), also for series a refresh dropped and brought back |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |
+| 2026-10-13 | minor | Typed number formats (`sourceLinked="0"`) on value axes (primary, secondary, scatter/bubble X) and on data labels (per series, or the group's) are read, drawn and saved; PivotChart refresh keeps label formats by the series' pivot items (read from Excel's header-cell names below the "Column Labels" caption; by position only if no name matches, the series count is unchanged, and the names show no row or column item of the pivot and aren't only value field names), also for series a refresh dropped and brought back |
 | 2026-10-13 | minor | Multi-level category axes: read, drawn (outer levels under or beside the labels), written back with level caches |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |

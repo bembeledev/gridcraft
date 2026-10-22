@@ -291,7 +291,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), body)
         }
     };
-    let parsed = gridcraft_formula::parse(&refers).map_err(|_| EngineError::Other("There's a problem with this formula.".into()))?;
+    let parsed = gridcraft_formula::parse_name(&refers).map_err(|_| EngineError::Other("There's a problem with this formula.".into()))?;
     super::edit::check_linked_books(&parsed, d.wb.external_books.len())?;
     // A workbook prefix is stored as the parser reads it: `[0]Sheet1!$C$1` as `Sheet1!$C$1`, so
     // it follows the sheet when it's renamed.

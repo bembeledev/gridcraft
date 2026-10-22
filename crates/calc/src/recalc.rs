@@ -1705,7 +1705,7 @@ pub(crate) mod tests {
             put(&mut wb, format!("B{r}"), format!("={r}*2"));
         }
         let mut rng = 1u64;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0, None);
         host.calculate((0, CellRef::parse("A1").unwrap()));
         let total = (WIDTH * (WIDTH + 1)) as f64;
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));

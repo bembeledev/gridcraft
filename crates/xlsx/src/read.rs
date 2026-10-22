@@ -1,5 +1,6 @@
 //! Reading the workbook part and everything hanging off it.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
@@ -30,6 +31,9 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Cells stored so far, across every sheet. Capped so a streamed part cannot build an
+    /// unbounded grid.
+    pub cells: u64,
 }
 
 impl Ctx<'_> {
@@ -62,6 +66,19 @@ impl Ctx<'_> {
     }
 }
 
+/// Shared-string items kept (indexes). Duplicate text shares one `Arc`.
+const MAX_SHARED_STRINGS: usize = 50_000_000;
+
+/// One `Arc` per distinct string. Lookup borrows the map key as `str`.
+fn intern_shared(index: &mut HashMap<Arc<str>, ()>, text: &str) -> Arc<str> {
+    if let Some((existing, _)) = index.get_key_value(text) {
+        return Arc::clone(existing);
+    }
+    let arc: Arc<str> = Arc::from(text);
+    index.insert(Arc::clone(&arc), ());
+    arc
+}
+
 pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
@@ -82,6 +99,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -140,21 +158,25 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     {
         wb.theme = crate::theme::read_theme(&x);
     }
-    // Shared strings, streamed item by item.
+    // Shared strings, parsed from the inflate stream. Identical entries share one allocation.
     if let Some(r) = find_rel(&wb_rels, "sharedStrings").cloned() {
-        match cx.pkg.read(&r.target)? {
-            Some(b) => {
-                let mut sst = Vec::new();
-                let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    sst.push(Arc::from(xml::rich_text(&si)));
-                    Ok(())
-                });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
-                }
+        let mut sst = Vec::new();
+        let mut intern: HashMap<Arc<str>, ()> = HashMap::new();
+        let res = cx.pkg.parse_xml_streaming(&r.target, &["si"], &mut |si| {
+            if sst.len() >= MAX_SHARED_STRINGS {
+                return Err(IoError::TooLarge(format!("more than {MAX_SHARED_STRINGS} shared strings")));
+            }
+            sst.push(intern_shared(&mut intern, &xml::rich_text(&si)));
+            Ok(())
+        });
+        match res {
+            Ok(Some(_)) => cx.sst = sst,
+            Ok(None) => cx.warn(format!("missing part {}", r.target)),
+            Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+            Err(e) => {
+                cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
                 cx.sst = sst;
             }
-            None => cx.warn(format!("missing part {}", r.target)),
         }
     }
 

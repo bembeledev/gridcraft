@@ -752,7 +752,24 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_else(|| (r.start.col..=r.end.col).collect());
     let sheet = d.wb.active_sheet;
     let start = r.start.row + header as u32;
-    let mut removed = 0;
+    // A whole column whose used range reaches the last row is a tall bounding box of blanks.
+    // Compare the stored rows only, so the command does not allocate one key per blank row.
+    let tall = r.height() > 10_000;
+    let scan_rows: Vec<u32> = if tall {
+        let mut rows = Vec::new();
+        let mut last = u32::MAX;
+        for (c, _) in sh.cells.iter_range(r) {
+            if c.row >= start && c.row != last {
+                rows.push(c.row);
+                last = c.row;
+            }
+        }
+        rows
+    } else {
+        (start..=r.end.row).collect()
+    };
+    let mut removed = 0usize;
+    let mut remaining = 0usize;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut seen = std::collections::HashSet::new();
@@ -760,10 +777,10 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         // Cells are compared by the text they show, as in Excel: the same date in two formats
         // isn't a duplicate, while 1.01 and 1.02 shown as 1.0 are.
         let shown = |c: CellRef| crate::display::format(&sh.value(c), cx.wb.styles.get(sh.style_id(c)).num_fmt.as_str(), &cx.wb).text;
-        for row in start..=r.end.row {
-            let key: Vec<String> = cols.iter().map(|c| shown(CellRef::new(row, *c)).to_lowercase()).collect();
+        for row in &scan_rows {
+            let key: Vec<String> = cols.iter().map(|c| shown(CellRef::new(*row, *c)).to_lowercase()).collect();
             if seen.insert(key) {
-                keep.push(row);
+                keep.push(*row);
             } else {
                 removed += 1;
             }
@@ -772,32 +789,56 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
             .iter()
             .enumerate()
             .flat_map(|(i, row)| {
-                (r.start.col..=r.end.col)
-                    .filter_map(move |col| sh.cell_pictures.get(&CellRef::new(*row, col)).map(|p| (CellRef::new(start + i as u32, col), p.clone())))
+                (r.start.col..=r.end.col).filter_map(move |col| {
+                    let at = CellRef::new(start.saturating_add(i as u32), col);
+                    sh.cell_pictures.get(&CellRef::new(*row, col)).map(|p| (at, p.clone()))
+                })
             })
             .collect();
         let rows: Vec<Vec<Option<Cell>>> =
             keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
+        // A short range keeps blank rows (they compare as blanks). A tall range only touched
+        // the stored rows, then packs those that remain into consecutive rows. Either way the
+        // work is the rows that were compared, not height×width.
+        remaining = if tall { keep.len() } else { (r.end.row + 1 - start) as usize - removed };
+        let mut touched = Vec::new();
         let shm = cx.sheet_mut(sheet)?;
-        for row in start..=r.end.row {
-            for c in r.start.col..=r.end.col {
-                shm.remove_cell(CellRef::new(row, c));
+        if tall {
+            for row in &scan_rows {
+                for c in r.start.col..=r.end.col {
+                    let at = CellRef::new(*row, c);
+                    shm.remove_cell(at);
+                    touched.push(at);
+                }
+            }
+        } else {
+            for row in start..=r.end.row {
+                for c in r.start.col..=r.end.col {
+                    shm.remove_cell(CellRef::new(row, c));
+                }
             }
         }
         for (i, cells) in rows.into_iter().enumerate() {
             for (j, cell) in cells.into_iter().enumerate() {
+                let at = CellRef::new(start.saturating_add(i as u32), r.start.col.saturating_add(j as u32));
                 if let Some(cell) = cell {
-                    shm.set_cell(CellRef::new(start + i as u32, r.start.col + j as u32), cell);
+                    shm.set_cell(at, cell);
+                }
+                if tall {
+                    touched.push(at);
                 }
             }
         }
         shm.cell_pictures.extend(pictures);
-        for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
-            cx.changed.push((sheet, c));
+        if tall {
+            cx.changed.extend(touched.into_iter().map(|c| (sheet, c)));
+        } else {
+            for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
+                cx.changed.push((sheet, c));
+            }
         }
         Ok(())
     })?;
-    let remaining = (r.end.row + 1 - start) as usize - removed;
     Ok(json!({"removed": removed, "remaining": remaining}))
 }
 

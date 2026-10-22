@@ -6,6 +6,7 @@ mod csv_tests;
 mod encrypted_tests;
 mod fixtures;
 mod ink_roundtrip;
+mod large_stream;
 mod literal_category_roundtrip;
 mod malformed;
 mod ods_tests;

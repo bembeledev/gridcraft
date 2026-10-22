@@ -1131,6 +1131,23 @@ pub(crate) fn paint_quadrant(
     }
     // Focus Cell: the active cell's row and column, over the fills and under the text.
     paint_focus_bands(p, geo, wb, sh, active, rows, cols, t);
+    let focus: Vec<Rect> = if sh.focus_cell {
+        let (col, row) = focus_bands(geo, sh, active, rows, cols);
+        col.into_iter().chain(row).collect()
+    } else {
+        Vec::new()
+    };
+    let tint = focus_tint(sh, wb, t);
+    // Clears the gridlines under overflowing text. The Focus Cell tint goes on again there.
+    let clear = |area: Rect| {
+        p.rect_filled(area, 0.0, t.grid_bg);
+        for band in &focus {
+            let part = band.intersect(area);
+            if part.is_positive() {
+                p.rect_filled(part, 0.0, tint);
+            }
+        }
+    };
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
@@ -1329,10 +1346,10 @@ pub(crate) fn paint_quadrant(
                 let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
                 let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
                 if extra_l.width() > 0.0 {
-                    p.rect_filled(extra_l, 0.0, t.grid_bg);
+                    clear(extra_l);
                 }
                 if extra_r.width() > 0.0 {
-                    p.rect_filled(extra_r, 0.0, t.grid_bg);
+                    clear(extra_r);
                 }
             }
         }

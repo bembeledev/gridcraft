@@ -117,6 +117,46 @@ fn click_at(h: &mut Harness, pos: Pos2) {
     h.run_steps(2);
 }
 
+/// Every filled rectangle of the last frame, in paint order.
+fn fills(shapes: &[egui::epaint::ClippedShape]) -> Vec<(Rect, egui::Color32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(r) => out.push((r.rect, r.fill)),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+#[test]
+fn overflowing_text_keeps_the_tint_under_it() {
+    // A1's text runs on into the active row: clearing the gridlines must not clear the tint.
+    let mut s = session();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["A long label that runs across many empty columns of the sheet"]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "F1"})).unwrap();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCellColor", json!({"color": "#C00000"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        SheetApp::new(s, Default::default()),
+    );
+    h.run_steps(4);
+    let app = h.state();
+    let sheet = active(&h);
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let d1 = geo.cell_rect(sheet, CellRef::parse("D1").unwrap());
+    let probe = pos2(d1.center().x, d1.top() + 3.0);
+    let last = fills(&h.output().shapes).into_iter().rfind(|(r, c)| r.contains(probe) && *c != egui::Color32::TRANSPARENT);
+    let tint = egui::Color32::from_rgba_unmultiplied(0xC0, 0x00, 0x00, 0x24);
+    assert_eq!(last.map(|(_, c)| c), Some(tint), "the row tint is the top fill under the text in D1");
+}
+
 #[test]
 fn the_view_ribbon_focus_cell_button_toggles_the_setting() {
     let mut h = view_harness();

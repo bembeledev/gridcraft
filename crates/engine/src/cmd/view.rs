@@ -37,13 +37,13 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
-        cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
-        cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
+        cmd!(noundo "view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
+        cmd!(noundo "view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
-        cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
+        cmd!(noundo "view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
         cmd!(
             "pageLayout.size",
@@ -198,6 +198,28 @@ fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
     }
     Ok(json!({"zoom": z}))
+}
+
+/// Zoom belongs to the window, not to the edits (Excel doesn't undo it, #2313): undo and redo keep
+/// each sheet's current zoom when they swap in another snapshot of the workbook. Back at the saved
+/// state, the zoom alone doesn't make the workbook dirty, as with `view.zoom`.
+pub(crate) fn keep_zoom(d: &mut crate::DocState, now: &Workbook) {
+    let current = |name: &str| now.sheets.iter().find(|sh| sh.name == name).map(|sh| sh.zoom);
+    let changed: Vec<(usize, u16)> =
+        d.wb.sheets.iter().enumerate().filter_map(|(i, sh)| current(&sh.name).filter(|z| *z != sh.zoom).map(|z| (i, z))).collect();
+    if changed.is_empty() {
+        return;
+    }
+    let saved = std::sync::Arc::ptr_eq(&d.wb, &d.saved);
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    for (i, z) in changed {
+        if let Some(sh) = wb.sheet_mut(i) {
+            sh.zoom = z;
+        }
+    }
+    if saved {
+        d.saved = d.wb.clone();
+    }
 }
 
 fn zoom_selection(s: &mut Session, p: &Json) -> Result<Json> {
@@ -464,6 +486,49 @@ mod tests {
         s.execute("view.zoom", json!({"percent": 150})).unwrap();
         assert_eq!(s.execute("view.zoom100", json!({})).unwrap()["zoom"], 100);
         assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+    }
+
+    #[test]
+    fn zooming_is_not_an_undo_step() {
+        // Excel keeps zoom on the window, not in the edit history (#2313): wheel, slider, dialog,
+        // 100% and Zoom to Selection leave Undo and Redo alone.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "y"})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let (undo, redo) = s.doc().map(|d| (d.undo.len(), d.redo.len())).unwrap();
+        for (id, params, zoom) in [
+            ("view.zoom", json!({"percent": 150}), 150),
+            ("view.zoomToSelection", json!({"viewWidth": 1200, "viewHeight": 700}), 400),
+            ("view.zoom100", json!({}), 100),
+        ] {
+            s.execute(id, params).unwrap();
+            let d = s.doc().unwrap();
+            assert_eq!(d.wb.active().unwrap().zoom, zoom, "{id}");
+            assert_eq!((d.undo.len(), d.redo.len()), (undo, redo), "{id} touched the history");
+        }
+        let a1 = CellRef::parse("A1").unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.doc().unwrap().wb.active().unwrap().value(a1).is_empty(), "Ctrl+Z after zooming undoes the last edit");
+    }
+
+    #[test]
+    fn undo_and_redo_keep_the_current_zoom() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let zoom = |s: &Session| s.doc().unwrap().wb.active().unwrap().zoom;
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("view.zoom", json!({"percent": 200})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A1").unwrap()).is_empty());
+        assert_eq!(zoom(&s), 200, "undo keeps the zoom");
+        // Back at the state on disk: the zoom alone doesn't make the workbook dirty, as in `zoom`.
+        assert!(!s.doc().unwrap().is_dirty());
+        s.execute("view.zoom", json!({"percent": 50})).unwrap();
+        s.execute("edit.redo", json!({})).unwrap();
+        assert!(!s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A1").unwrap()).is_empty());
+        assert_eq!(zoom(&s), 50, "redo keeps the zoom");
     }
 
     #[test]

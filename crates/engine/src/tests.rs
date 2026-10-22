@@ -606,6 +606,7 @@ fn kept_values_give_way_when_a_deleted_row_changes_a_formula_or_a_name_they_read
     // D30 `=[1]!Broken+B31` read nothing that changed.
     assert_eq!(v(&s, "D30"), Value::Number(4.0));
 }
+#[test]
 fn evaluate_refuses_what_entry_refuses_and_says_why() {
     // `formulas.evaluate` (the CLI's `eval`, MCP's evaluate_formula) gave #NAME? for any formula
     // that didn't parse, which hid the cause: `=SUM(1;2)`, with the `;` a French or German Excel

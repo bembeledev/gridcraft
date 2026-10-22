@@ -10,6 +10,7 @@ fn smooth_line_setting_round_trips() {
     let mut wb = Workbook::default();
     let mut s = Sheet::new("Data");
     let base_series = Series {
+        format: Default::default(),
         name: Some("Data!$A$1".into()),
         categories: Some("Data!$A$2:$A$5".into()),
         values: "Data!$B$2:$B$5".into(),
@@ -22,6 +23,7 @@ fn smooth_line_setting_round_trips() {
         trendlines: Vec::new(),
     };
     s.charts.push(Chart {
+        format: Default::default(),
         id: 1,
         kind: ChartKind::Line,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
@@ -40,6 +42,7 @@ fn smooth_line_setting_round_trips() {
     let mut smooth_series = base_series.clone();
     smooth_series.smooth = true;
     s.charts.push(Chart {
+        format: Default::default(),
         id: 2,
         kind: ChartKind::ScatterLines,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(15, 3), width: 480.0, height: 300.0, ..Anchor::default() },

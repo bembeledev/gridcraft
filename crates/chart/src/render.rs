@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{AxisScale, Chart, ChartKind, LegendPos, LineDash, MarkerSymbol, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -161,13 +161,21 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
+            let deleted = &chart.format.legend_deleted;
             let mut out: Vec<(String, Rgba, Swatch)> = series
                 .clone()
-                .map(|s| {
+                .enumerate()
+                .filter(|(i, _)| !deleted.iter().any(|d| *d as usize == *i))
+                .map(|(_, s)| {
                     let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
+                        ChartKind::Scatter | ChartKind::ScatterLines => match scatter_look(chart, s) {
+                            (true, true) => Swatch::LineMarker,
+                            (true, false) => Swatch::Line,
+                            _ => Swatch::Marker,
+                        },
+                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar => Swatch::Line,
                         ChartKind::LineMarkers => Swatch::LineMarker,
-                        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
+                        ChartKind::Bubble => Swatch::Marker,
                         _ => Swatch::Box,
                     };
                     (s.name.clone(), s.color, sw)
@@ -208,8 +216,12 @@ fn sanitize(d: &ChartData) -> ChartData {
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
                 number_format: s.number_format.clone(),
+                no_line: s.no_line,
+                marker: s.marker,
+                marker_fill: s.marker_fill,
             })
             .collect(),
+        areas: d.areas,
     }
 }
 
@@ -228,7 +240,8 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     }
     let data = sanitize(data);
     let mut ctx = Ctx { out: Vec::new(), m };
-    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
+    let (fill, border) = (data.areas.chart_fill.unwrap_or(WHITE), data.areas.chart_border.unwrap_or(GRID));
+    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(fill), stroke: Some((border, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
@@ -241,7 +254,20 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     }
     let entries = legend_entries(chart, &data);
     if !entries.is_empty() && area.ok() {
-        area = draw_legend(&mut ctx, &entries, chart.legend, area);
+        match chart.format.legend_layout {
+            // Placed by hand (fractions of the chart): drawn there, over the plot, taking no room.
+            Some([lx, ly, lw, lh]) => {
+                let (lx, ly) = (lx.clamp(0.0, 1.0) * w, ly.clamp(0.0, 1.0) * h);
+                let lw = if lw > 0.0 { lw * w } else { w - lx };
+                let lh = if lh > 0.0 { lh * h } else { h - ly };
+                let pos = if matches!(chart.legend, LegendPos::Top | LegendPos::Bottom) { LegendPos::Top } else { LegendPos::Left };
+                let boxed = Bx { x: lx, y: ly, w: lw.min(w - lx).max(0.0), h: lh.min(h - ly).max(0.0) };
+                if boxed.ok() {
+                    draw_legend(&mut ctx, &entries, pos, boxed, 1.0);
+                }
+            }
+            None => area = draw_legend(&mut ctx, &entries, chart.legend, area, 0.35),
+        }
     }
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
@@ -322,7 +348,8 @@ fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) 
     }
 }
 
-fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
+/// `share`: the part of the area's width a side legend may take (all of a box placed by hand).
+fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx, share: f32) -> Bx {
     let size = LABEL_SIZE;
     let row_h = size * 1.6;
     let s = size * 0.8;
@@ -370,7 +397,7 @@ fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos
             if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
         }
         LegendPos::Left | LegendPos::Right => {
-            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * 0.35);
+            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * share);
             let max_rows = ((area.h / row_h).floor() as usize).max(1);
             let n = entries.len().min(max_rows);
             let lh = n as f32 * row_h;
@@ -687,6 +714,69 @@ fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, colo
     }
 }
 
+/// Whether a scatter series draws its line and its markers: the line unless hidden (and the chart
+/// type has lines), the markers unless their symbol is `none`.
+fn scatter_look(chart: &Chart, s: &SeriesData) -> (bool, bool) {
+    let lines = (chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines) && !s.no_line;
+    (lines, s.marker != MarkerSymbol::None)
+}
+
+/// Markers of a symbol (`Auto` is a circle), filled with `color`, `r` from centre to edge.
+fn draw_symbols(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, color: Rgba, symbol: MarkerSymbol) {
+    if matches!(symbol, MarkerSymbol::Auto | MarkerSymbol::Circle) {
+        return draw_markers(ctx, pts, r, color);
+    }
+    let mut seen = HashSet::new();
+    for [x, y] in pts {
+        if seen.len() >= MAX_MARKERS {
+            break;
+        }
+        if !seen.insert(((x * 0.5) as i32, (y * 0.5) as i32)) {
+            continue;
+        }
+        let poly = |pts: Vec<[f32; 2]>| Prim::Polygon { pts, fill: color, stroke: Some((WHITE, 0.75)) };
+        let line = |pts: Vec<[f32; 2]>| Prim::Line { pts, color, width: 1.5, dash: false };
+        match symbol {
+            MarkerSymbol::Square => {
+                ctx.out.push(Prim::Rect { x: x - r, y: y - r, w: 2.0 * r, h: 2.0 * r, fill: Some(color), stroke: Some((WHITE, 0.75)), radius: 0.0 })
+            }
+            MarkerSymbol::Diamond => ctx.out.push(poly(vec![[x, y - r * 1.2], [x + r * 1.2, y], [x, y + r * 1.2], [x - r * 1.2, y]])),
+            MarkerSymbol::Triangle => ctx.out.push(poly(vec![[x, y - r * 1.2], [x + r * 1.1, y + r * 0.8], [x - r * 1.1, y + r * 0.8]])),
+            MarkerSymbol::Dot => ctx.out.push(Prim::Circle { cx: x, cy: y, r: r * 0.5, fill: Some(color), stroke: None }),
+            MarkerSymbol::Dash => ctx.out.push(line(vec![[x - r, y], [x + r, y]])),
+            MarkerSymbol::Plus => {
+                ctx.out.push(line(vec![[x - r, y], [x + r, y]]));
+                ctx.out.push(line(vec![[x, y - r], [x, y + r]]));
+            }
+            MarkerSymbol::X | MarkerSymbol::Star => {
+                ctx.out.push(line(vec![[x - r, y - r], [x + r, y + r]]));
+                ctx.out.push(line(vec![[x - r, y + r], [x + r, y - r]]));
+                if symbol == MarkerSymbol::Star {
+                    ctx.out.push(line(vec![[x, y - r], [x, y + r]]));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// [`nice_scale`] with an axis's fixed bounds and major unit applied, as Excel's Format Axis does:
+/// a fixed bound replaces the automatic one, and a major unit (at most 50 steps) the gridline step.
+fn scale_for(fixed: AxisScale, lo: f64, hi: f64, force_zero: bool) -> Scale {
+    let a = fixed.sanitized();
+    let auto = nice_scale(a.min.unwrap_or(lo), a.max.unwrap_or(hi), force_zero && a.min.is_none());
+    let (mut min, mut max) = (a.min.unwrap_or(auto.min), a.max.unwrap_or(auto.max));
+    if max <= min {
+        (min, max) = (auto.min, auto.max);
+    }
+    let step = match a.major {
+        Some(u) if (max - min) / u <= 50.0 => u,
+        _ if a.min.is_some() || a.max.is_some() => nice_scale(min, max, false).step,
+        _ => auto.step,
+    };
+    Scale { min, max, step }
+}
+
 fn value_range(it: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
     it.fold(None, |acc, v| match acc {
         None => Some((v, v)),
@@ -980,7 +1070,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            (nice_scale(lo, hi, force_zero), Fmt::new(code))
+            let fixed = if axis { chart.format.y2_axis } else { chart.format.y_axis };
+            (scale_for(fixed, lo, hi, force_zero), Fmt::new(code))
         };
         axes.push((scale, fmt));
         if !axis && sec.iter().all(|s| !s) {
@@ -1200,20 +1291,50 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             xhi = xhi.max(hi + max_forward(s));
         }
     }
-    let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
-    let xs = nice_scale(xlo, xhi, false);
-    let ys = nice_scale(ylo, yhi, false);
+    // Series on the secondary axis get its own scale, when some are on the primary one.
+    let any_primary = data.series.iter().any(|s| !s.secondary);
+    let on2 = |s: &SeriesData| s.secondary && any_primary;
+    let yrange =
+        |second: bool| value_range(data.series.iter().zip(&all).filter(|(s, _)| on2(s) == second).flat_map(|(_, p)| p.iter().flatten().map(|p| p.1)));
+    let Some((ylo, yhi)) = yrange(false) else { return };
+    let xs = scale_for(chart.format.x_axis, xlo, xhi, false);
+    let ys = scale_for(chart.format.y_axis, ylo, yhi, false);
+    let ys2 = yrange(true).map(|(lo, hi)| scale_for(chart.format.y2_axis, lo, hi, false));
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
+    let fy2 = Fmt::new(data.series.iter().find(|s| on2(s)).map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let y2 = ys2.map(|scale| ValAxis { scale, fmt: &fy2 });
+    let under = ctx.out.len();
+    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, y2.as_ref(), false, chart.gridlines);
     if !plot.ok() {
         return;
     }
-    let map = |(x, y): (f64, f64)| [plot.x + xs.frac(x) * plot.w, plot.bottom() - ys.frac(y) * plot.h];
+    // The plot area's fill goes under the gridlines; its border is drawn with it.
+    if data.areas.plot_fill.is_some() || data.areas.plot_border.is_some() {
+        let rect = Prim::Rect {
+            x: plot.x,
+            y: plot.y,
+            w: plot.w,
+            h: plot.h,
+            fill: data.areas.plot_fill,
+            stroke: data.areas.plot_border.map(|c| (c, 1.0)),
+            radius: 0.0,
+        };
+        ctx.out.insert(under.min(ctx.out.len()), rect);
+    }
+    if chart.format.x_gridlines {
+        for t in xs.ticks() {
+            ctx.vline(plot.x + xs.frac(t) * plot.w, plot.y, plot.bottom(), GRID, 0.75);
+        }
+    }
+    let map2 = |second: bool| {
+        let sy = if second { ys2.unwrap_or(ys) } else { ys };
+        move |(x, y): (f64, f64)| [plot.x + xs.frac(x) * plot.w, plot.bottom() - sy.frac(y) * plot.h]
+    };
     let bubble = chart.kind == ChartKind::Bubble;
     let rmax = plot.w.min(plot.h) * 0.12;
     for (s, pts) in data.series.iter().zip(&all) {
-        let px: Vec<Option<[f32; 2]>> = pts.iter().map(|p| p.map(map)).collect();
+        let px: Vec<Option<[f32; 2]>> = pts.iter().map(|p| p.map(map2(on2(s)))).collect();
         if bubble {
             let sizes = s.sizes.as_deref().unwrap_or(&[]);
             let smax = sizes.iter().flatten().fold(0.0f64, |a, b| a.max(*b));
@@ -1237,12 +1358,12 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some((WHITE, 0.75)) });
             }
         } else {
-            let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
+            let (lines, markers) = scatter_look(chart, s);
             if lines {
                 draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
             }
-            if !lines || px.len() <= 500 {
-                draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
+            if markers && (!lines || px.len() <= 500) {
+                draw_symbols(ctx, px.iter().flatten().copied(), 3.5, s.marker_fill.unwrap_or(s.color), s.marker);
             }
         }
         if chart.data_labels && pts.len() <= MAX_LABELS {

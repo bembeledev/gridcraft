@@ -35,11 +35,13 @@ fn all_trendlines() -> Vec<Trendline> {
 
 fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
     Chart {
+        format: Default::default(),
         id,
         kind,
         anchor: Anchor { cell: CellRef::new(id * 16, 3), width: 480.0, height: 300.0, ..Anchor::default() },
         title: None,
         series: vec![Series {
+            format: Default::default(),
             name: Some("Data!$B$1".into()),
             categories: Some("Data!$A$2:$A$6".into()),
             values: "Data!$B$2:$B$6".into(),

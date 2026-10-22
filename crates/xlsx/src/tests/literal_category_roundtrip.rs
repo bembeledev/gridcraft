@@ -21,6 +21,7 @@ fn literal_category_with_separators_survives_save() {
     let series: Vec<Series> = cats
         .iter()
         .map(|(c, _)| Series {
+            format: Default::default(),
             name: Some("North, South".into()),
             categories: Some((*c).into()),
             values: "{1,2,3}".into(),
@@ -34,6 +35,7 @@ fn literal_category_with_separators_survives_save() {
         })
         .collect();
     s.charts.push(Chart {
+        format: Default::default(),
         id: 1,
         kind: ChartKind::ColumnClustered,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },

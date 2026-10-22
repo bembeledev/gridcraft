@@ -524,6 +524,7 @@ fn chartex_parts_as_excel_expects_them() {
     let mut wb = gridcraft_model::Workbook::new();
     let mut sheet = gridcraft_model::Sheet::new("Data");
     sheet.charts.push(Chart {
+        format: Default::default(),
         id: 1,
         kind: ChartKind::Waterfall,
         anchor: Default::default(),

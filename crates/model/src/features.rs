@@ -463,6 +463,117 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Line and marker formatting.
+    #[serde(default)]
+    pub format: SeriesFormat,
+}
+
+/// Marker symbol of a line or scatter series (`c:marker/c:symbol`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkerSymbol {
+    /// The chart type's default (a circle where markers show).
+    #[default]
+    Auto,
+    None,
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+    X,
+    Star,
+    Dash,
+    Dot,
+    Plus,
+}
+
+impl MarkerSymbol {
+    pub const ALL: [(MarkerSymbol, &'static str); 11] = [
+        (MarkerSymbol::Auto, "auto"),
+        (MarkerSymbol::None, "none"),
+        (MarkerSymbol::Circle, "circle"),
+        (MarkerSymbol::Square, "square"),
+        (MarkerSymbol::Diamond, "diamond"),
+        (MarkerSymbol::Triangle, "triangle"),
+        (MarkerSymbol::X, "x"),
+        (MarkerSymbol::Star, "star"),
+        (MarkerSymbol::Dash, "dash"),
+        (MarkerSymbol::Dot, "dot"),
+        (MarkerSymbol::Plus, "plus"),
+    ];
+    pub fn parse(s: &str) -> Option<MarkerSymbol> {
+        Self::ALL.iter().find(|(_, n)| *n == s).map(|(m, _)| *m)
+    }
+    pub fn as_str(self) -> &'static str {
+        Self::ALL.iter().find(|(m, _)| *m == self).map_or("auto", |(_, n)| n)
+    }
+}
+
+/// How a series is drawn beyond its colour (DrawingML `c:spPr` and `c:marker`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SeriesFormat {
+    /// No line (`a:ln/a:noFill`): a line or scatter series drawn as markers only.
+    #[serde(default)]
+    pub no_line: bool,
+    #[serde(default)]
+    pub marker: MarkerSymbol,
+    /// Marker fill, when it isn't the series colour.
+    #[serde(default)]
+    pub marker_fill: Option<Color>,
+}
+
+/// An axis's fixed bounds and major unit (`c:scaling/c:min`, `c:max`, `c:majorUnit`); `None` is
+/// automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AxisScale {
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub major: Option<f64>,
+}
+
+impl AxisScale {
+    /// Bounds and unit that are finite (the unit positive), the others automatic.
+    pub fn sanitized(self) -> AxisScale {
+        let ok = |v: Option<f64>| v.filter(|x| x.is_finite() && x.abs() <= 1e300);
+        let (min, max) = match (ok(self.min), ok(self.max)) {
+            (Some(a), Some(b)) if a >= b => (None, None),
+            m => m,
+        };
+        AxisScale { min, max, major: ok(self.major).filter(|u| *u > 0.0) }
+    }
+}
+
+/// Chart formatting beyond the chart type: axis scales, legend, chart and plot areas.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartFormat {
+    /// Horizontal (category or X value) axis.
+    #[serde(default)]
+    pub x_axis: AxisScale,
+    /// Primary vertical value axis.
+    #[serde(default)]
+    pub y_axis: AxisScale,
+    /// Secondary vertical value axis (series with `secondary`).
+    #[serde(default)]
+    pub y2_axis: AxisScale,
+    /// Vertical major gridlines (the horizontal ones are [`Chart::gridlines`]).
+    #[serde(default)]
+    pub x_gridlines: bool,
+    /// Legend entries deleted (`c:legendEntry/c:delete`), by series index.
+    #[serde(default)]
+    pub legend_deleted: Vec<u32>,
+    /// The legend's manual position and size, as fractions of the chart: x, y, w, h.
+    #[serde(default)]
+    pub legend_layout: Option<[f32; 4]>,
+    #[serde(default)]
+    pub chart_fill: Option<Color>,
+    #[serde(default)]
+    pub chart_border: Option<Color>,
+    #[serde(default)]
+    pub plot_fill: Option<Color>,
+    #[serde(default)]
+    pub plot_border: Option<Color>,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
@@ -553,6 +664,9 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Axis scales, legend placement, chart and plot area formatting.
+    #[serde(default)]
+    pub format: ChartFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

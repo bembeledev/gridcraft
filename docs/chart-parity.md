@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-22 · **Change:** minor (scatter series line/marker formatting, axis bounds and units, legend entries and placement, chart and plot area colours; stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -90,6 +90,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Chart formatting Excel saves is read, drawn and written back: markers-only and line-only scatter series, marker symbols (circle, square, diamond, triangle, x, star, dash, dot, plus) and fills, preset and system colours (`prstClr`, `sysClr` without a cached value), fixed axis min/max and major unit (scatter X/Y, column/bar/line value axes, the secondary axis), vertical gridlines, deleted legend entries, a legend placed by hand (drawn over the plot), chart and plot area fill and border; scatter groups on two value axes stay a scatter chart with the secondary axis drawn on the right |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

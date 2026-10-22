@@ -81,8 +81,17 @@ pub fn dml_color(e: &El) -> Option<Color> {
     if let Some(c) = e.child("srgbClr").and_then(|c| c.attr("val")) {
         return Color::from_hex(c);
     }
-    if let Some(c) = e.child("sysClr").and_then(|c| c.attr("lastClr")) {
-        return Color::from_hex(c);
+    if let Some(s) = e.child("sysClr") {
+        // The cached value, else the usual Windows colour of the common names.
+        return match (s.attr("lastClr"), s.attr("val")) {
+            (Some(c), _) => Color::from_hex(c),
+            (None, Some("windowText" | "btnText" | "menuText" | "captionText")) => Some(Color::Rgb(0x000000)),
+            (None, Some("window" | "btnFace" | "menu")) => Some(Color::Rgb(0xFFFFFF)),
+            _ => None,
+        };
+    }
+    if let Some(c) = e.child("prstClr").and_then(|c| c.attr("val")) {
+        return preset_color(c).map(Color::Rgb);
     }
     if let Some(c) = e.child("schemeClr").and_then(|c| c.attr("val")) {
         let i = match c {
@@ -103,6 +112,35 @@ pub fn dml_color(e: &El) -> Option<Color> {
         return Some(Color::Theme(i, 0));
     }
     None
+}
+
+/// The common DrawingML preset colour names (`a:prstClr`), which are the CSS colour names.
+fn preset_color(name: &str) -> Option<u32> {
+    Some(match name {
+        "black" => 0x000000,
+        "white" => 0xFFFFFF,
+        "red" => 0xFF0000,
+        "green" => 0x008000,
+        "lime" => 0x00FF00,
+        "blue" => 0x0000FF,
+        "yellow" => 0xFFFF00,
+        "cyan" | "aqua" => 0x00FFFF,
+        "magenta" | "fuchsia" => 0xFF00FF,
+        "gray" | "grey" => 0x808080,
+        "dkGray" | "darkGray" | "dkGrey" | "darkGrey" => 0xA9A9A9,
+        "ltGray" | "lightGray" | "ltGrey" | "lightGrey" => 0xD3D3D3,
+        "silver" => 0xC0C0C0,
+        "maroon" => 0x800000,
+        "navy" => 0x000080,
+        "olive" => 0x808000,
+        "purple" => 0x800080,
+        "teal" => 0x008080,
+        "orange" => 0xFFA500,
+        "brown" => 0xA52A2A,
+        "pink" => 0xFFC0CB,
+        "gold" => 0xFFD700,
+        _ => return None,
+    })
 }
 
 fn mime_for(name: &str) -> &'static str {

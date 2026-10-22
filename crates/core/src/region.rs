@@ -18,8 +18,13 @@
 //! - Short dates use a four-digit year (`dd/mm/yyyy`, where CLDR has `dd/MM/y` or `dd/MM/yy`):
 //!   Excel's short date is the system's, Windows writes four digits, and a two-digit year would
 //!   not read back to the same date.
-//! - The long date is CLDR's *full* date (with the weekday), like Windows en-US.
-//! - Month names for `mmm` are CLDR's abbreviated names (so en-GB has `Sept`).
+//! - The long date is CLDR's *full* date (with the weekday), like Windows en-US, except where
+//!   Windows' long date differs: Russian, Japanese and Chinese have no weekday (`23 августа
+//!   2005 г.`, `2005年8月23日`), as in Microsoft's National Language Support tables.
+//! - Korean writes the short date `yyyy-mm-dd` (CLDR: `yy. M. d.`), also as in Microsoft's
+//!   National Language Support tables.
+//! - Month names for `mmm` are CLDR's abbreviated names (so en-GB has `Sept`), except
+//!   Portuguese, which drops CLDR's period (`jan`, not `jan.`) as Excel in Brazil shows it.
 //! - French and Portuguese (Portugal) group digits with U+00A0 (Windows), not CLDR's U+202F.
 //!   Parsing accepts every space-like grouping character in those regions.
 //!

@@ -4524,6 +4524,23 @@ mod pane_tests {
         assert_eq!(sh.col_at(q[0] as f64), 1);
         let back = geo.screen_point(&sh, q);
         assert!((back - p).length() < 0.01, "{p:?} drew back at {back:?}");
+        // A saved stroke from B to D lies where the pen drew it, not at the object scale.
+        use gridcraft_engine::model::{Anchor, AnchorMode, Color, Shape, ShapeKind};
+        let (a, b) = (geo.sheet_point(&sh, pos2(geo.x(&sh, 1) + 5.0, 60.0)), geo.sheet_point(&sh, pos2(geo.x(&sh, 3) + 20.0, 90.0)));
+        let cell = CellRef::new(sh.row_at(a[1] as f64), sh.col_at(a[0] as f64));
+        let anchor = Anchor {
+            cell,
+            dx: a[0] - sh.col_left(cell.col) as f32,
+            dy: a[1] - sh.row_top(cell.row) as f32,
+            width: b[0] - a[0],
+            height: b[1] - a[1],
+            mode: AnchorMode::Absolute,
+        };
+        let ink =
+            Shape { id: 1, kind: ShapeKind::Ink, anchor, fill: Color::Auto, line: Color::Auto, text: String::new(), format: Default::default() };
+        let r = crate::chartview::shape_rect(&geo, &sh, &ink);
+        assert!((r.left_top() - geo.screen_point(&sh, a)).length() < 0.01, "{r:?}");
+        assert!((r.right_bottom() - geo.screen_point(&sh, b)).length() < 0.01, "{r:?}");
     }
 
     /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.

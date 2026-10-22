@@ -9,6 +9,9 @@ use gridcraft_model::Theme;
 
 use crate::xml::{El, esc_attr};
 
+const MAX_SCRIPT_FONTS: usize = 64;
+const MAX_SCRIPT_FONT_CHARS: usize = 256;
+
 const SLOTS: [(&str, usize); 12] = [
     ("dk1", 1),
     ("lt1", 0),
@@ -81,8 +84,21 @@ pub fn read_theme(root: &El) -> Theme {
         if let Some(f) = typeface(fs, "minorFont", "cs") {
             t.minor_font_cs = f.to_string();
         }
+        t.major_font_scripts = fs.child("majorFont").map(script_fonts).unwrap_or_default();
+        t.minor_font_scripts = fs.child("minorFont").map(script_fonts).unwrap_or_default();
     }
     t
+}
+
+/// The `<a:font script typeface>` entries of a font collection, in file order. A hostile file is
+/// held to [`MAX_SCRIPT_FONTS`] entries of at most [`MAX_SCRIPT_FONT_CHARS`] characters each.
+fn script_fonts(collection: &El) -> Vec<(String, String)> {
+    let capped = |v: Option<&str>| v.unwrap_or_default().chars().take(MAX_SCRIPT_FONT_CHARS).collect::<String>();
+    collection.kids("font").take(MAX_SCRIPT_FONTS).map(|e| (capped(e.attr("script")), capped(e.attr("typeface")))).collect()
+}
+
+fn script_fonts_xml(fonts: &[(String, String)]) -> String {
+    fonts.iter().map(|(script, face)| format!("<a:font script=\"{}\" typeface=\"{}\"/>", esc_attr(script), esc_attr(face))).collect()
 }
 
 /// A minimal, schema-complete theme part for `t`.
@@ -98,14 +114,16 @@ pub fn write_theme(t: &Theme) -> String {
     s.push_str("</a:clrScheme>");
     let _ = write!(
         s,
-        "<a:fontScheme name=\"{}\"><a:majorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/></a:majorFont><a:minorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/></a:minorFont></a:fontScheme>",
+        "<a:fontScheme name=\"{}\"><a:majorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/>{}</a:majorFont><a:minorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/>{}</a:minorFont></a:fontScheme>",
         esc_attr(name),
         esc_attr(&t.major_font),
         esc_attr(&t.major_font_ea),
         esc_attr(&t.major_font_cs),
+        script_fonts_xml(&t.major_font_scripts),
         esc_attr(&t.minor_font),
         esc_attr(&t.minor_font_ea),
-        esc_attr(&t.minor_font_cs)
+        esc_attr(&t.minor_font_cs),
+        script_fonts_xml(&t.minor_font_scripts)
     );
     // Format scheme: three entries per list, as the schema requires.
     s.push_str("<a:fmtScheme name=\"Craft\"><a:fillStyleLst>");
@@ -202,5 +220,35 @@ mod tests {
         assert!(x.contains(r#"<a:ea typeface="游&amp;ゴシック"/>"#), "{x}");
         assert!(x.contains(r#"<a:cs typeface="A&lt;B&gt;&quot;C&quot;"/>"#), "{x}");
         assert_eq!(read_theme(&crate::xml::parse(x.as_bytes()).unwrap()), t);
+    }
+
+    /// An Arabic Office theme: Arabic, Hebrew and Japanese faces in the per-script lists.
+    const SCRIPT_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"><a:themeElements><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface="Times New Roman"/><a:font script="Arab" typeface="Times New Roman"/><a:font script="Hebr" typeface="Times New Roman"/><a:font script="Jpan" typeface="游ゴシック Light"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface="Arial"/><a:font script="Arab" typeface="Arial"/><a:font script="Hebr" typeface="Arial"/><a:font script="Jpan" typeface="游ゴシック"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+
+    #[test]
+    fn per_script_typefaces_roundtrip_in_file_order() {
+        let t = read_theme(&crate::xml::parse(SCRIPT_THEME.as_bytes()).unwrap());
+        let pairs = |v: &[(String, String)]| v.iter().map(|(s, f)| (s.clone(), f.clone())).collect::<Vec<_>>();
+        let expect =
+            |a: &str, j: &str| vec![("Arab".to_string(), a.to_string()), ("Hebr".to_string(), a.to_string()), ("Jpan".to_string(), j.to_string())];
+        assert_eq!(pairs(&t.major_font_scripts), expect("Times New Roman", "游ゴシック Light"));
+        assert_eq!(pairs(&t.minor_font_scripts), expect("Arial", "游ゴシック"));
+        let x = write_theme(&t);
+        assert!(
+            x.contains(r#"<a:cs typeface="Times New Roman"/><a:font script="Arab" typeface="Times New Roman"/><a:font script="Hebr" typeface="Times New Roman"/><a:font script="Jpan" typeface="游ゴシック Light"/></a:majorFont>"#),
+            "{x}"
+        );
+        assert_eq!(read_theme(&crate::xml::parse(x.as_bytes()).unwrap()), t);
+    }
+
+    #[test]
+    fn hostile_per_script_lists_are_capped() {
+        let entries: String = (0..100).map(|i| format!(r#"<a:font script="S{i}" typeface="{}"/>"#, "x".repeat(300))).collect();
+        let xml = format!(
+            r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme><a:majorFont><a:latin typeface="Calibri"/>{entries}</a:majorFont></a:fontScheme></a:themeElements></a:theme>"#
+        );
+        let t = read_theme(&crate::xml::parse(xml.as_bytes()).unwrap());
+        assert_eq!(t.major_font_scripts.len(), 64);
+        assert!(t.major_font_scripts.iter().all(|(script, face)| script.chars().count() <= 256 && face.chars().count() <= 256));
     }
 }

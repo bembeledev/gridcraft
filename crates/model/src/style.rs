@@ -131,6 +131,13 @@ pub struct Theme {
     /// The body font's complex-script typeface (`<a:cs>`); empty when the file did not set one.
     #[serde(default)]
     pub minor_font_cs: String,
+    /// The heading font's per-script typefaces (`<a:font script="Arab" typeface="…"/>`), as
+    /// (script, typeface) in file order.
+    #[serde(default)]
+    pub major_font_scripts: Vec<(String, String)>,
+    /// The body font's per-script typefaces, as (script, typeface) in file order.
+    #[serde(default)]
+    pub minor_font_scripts: Vec<(String, String)>,
 }
 
 impl Default for Theme {
@@ -146,6 +153,8 @@ impl Default for Theme {
             minor_font_ea: String::new(),
             major_font_cs: String::new(),
             minor_font_cs: String::new(),
+            major_font_scripts: Vec::new(),
+            minor_font_scripts: Vec::new(),
         }
     }
 }
@@ -178,6 +187,12 @@ pub struct Font {
     pub strike: bool,
     pub color: Color,
     pub vert: VertAlign,
+    /// Windows character set the font was chosen for (178 = Arabic); kept so Excel substitutes a font for the same script.
+    #[serde(default)]
+    pub charset: Option<u8>,
+    /// Font family class (1 roman, 2 swiss, 3 modern…); `None` is swiss, the default.
+    #[serde(default)]
+    pub family: Option<u8>,
 }
 
 impl Eq for Font {}
@@ -185,7 +200,7 @@ impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
         self.size.to_bits().hash(h);
-        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert).hash(h);
+        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family).hash(h);
     }
 }
 
@@ -200,6 +215,8 @@ impl Default for Font {
             strike: false,
             color: Color::Auto,
             vert: VertAlign::Baseline,
+            charset: None,
+            family: None,
         }
     }
 }
@@ -356,6 +373,27 @@ pub struct Style {
     /// Number format code; "General" by default.
     pub num_fmt: NumFmt,
     pub protection: Protection,
+    /// Differential formats only.
+    #[serde(default)]
+    pub dxf_stated: DxfStated,
+}
+
+/// The parts a differential format states at a value its `Style` can't tell from unset: a dxf's
+/// default parts are unset, so a bold turned off, a face, a size or a protection that matches the
+/// defaults would otherwise read as nothing. The values are the style's own; this records that
+/// the format states them, and only where they match the defaults, so a format built in the app
+/// and the same format read back from a file stay equal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DxfStated {
+    pub bold: bool,
+    pub italic: bool,
+    pub strike: bool,
+    pub underline: bool,
+    pub size: bool,
+    pub name: bool,
+    /// `<scheme val>`: the theme font the face follows (`major`, `minor` or `none`).
+    pub scheme: Option<String>,
+    pub protection: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -450,6 +488,14 @@ mod tests {
         assert_eq!(t.derive(bold, |s| s.font.bold = false), StyleId::DEFAULT);
         assert_eq!(t.len(), 2);
         assert!(!t.get(StyleId(999)).font.bold);
+    }
+
+    #[test]
+    fn a_theme_saved_before_per_script_fonts_still_opens() {
+        let mut json = serde_json::to_value(Theme::default()).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        assert!(fields.remove("major_font_scripts").is_some() && fields.remove("minor_font_scripts").is_some());
+        assert_eq!(serde_json::from_value::<Theme>(json).unwrap(), Theme::default());
     }
 
     #[test]

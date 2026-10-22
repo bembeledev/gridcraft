@@ -24,11 +24,15 @@ fn sheet_needs_quotes(name: &str) -> bool {
         return true;
     }
     let first = name.chars().next().unwrap_or('_');
-    if first.is_ascii_digit() || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
+    if first == '.' || first.is_ascii_digit() || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
         return true;
     }
-    // Looks like a cell ref (`A1`, `R1C1`) or a boolean.
-    gridcraft_core::CellRef::parse(name).is_some() || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
+    // Looks like an R1C1 reference or a cell ref (`A1`), or a boolean.
+    let r1c1 = name.len() > 2
+        && name.as_bytes()[0].eq_ignore_ascii_case(&b'R')
+        && name.as_bytes()[1..].contains(&b'C')
+        && name.as_bytes()[1..].iter().all(|c| c.is_ascii_digit() || c.eq_ignore_ascii_case(&b'C'));
+    gridcraft_core::CellRef::parse(name).is_some() || r1c1 || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
 }
 
 pub fn quote_sheet(name: &str) -> String {

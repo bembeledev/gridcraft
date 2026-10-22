@@ -1460,3 +1460,17 @@ fn review_secondary_series_trendline_follows_its_points() {
     });
     assert!((tlo - mlo).abs() < 3.0 && (thi - mhi).abs() < 3.0, "trendline {tlo}..{thi} through markers {mlo}..{mhi}");
 }
+
+#[test]
+fn review_hand_placed_row_legend_uses_its_whole_box() {
+    // A top legend placed by hand in a narrow box: one entry per row, all ten drawn (30% of the
+    // box would hold five).
+    let mut c = chart(ChartKind::ScatterLines);
+    c.legend = LegendPos::Top;
+    c.format.legend_layout = Some([0.05, 0.05, 0.12, 0.4]);
+    let names: Vec<String> = (1..=10).map(|i| format!("Series number {i}")).collect();
+    let d = scatter_data(names.iter().map(|n| xy(n, &[1.0, 2.0], &[1.0, 2.0], RED)).collect());
+    let prims = render(&c, &d, 800.0, 600.0, &ApproxMeasure);
+    let drawn = prims.iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.starts_with("Series") || text.starts_with("Se"))).count();
+    assert!(drawn >= 10, "every entry of the hand-placed legend is drawn: {drawn}");
+}

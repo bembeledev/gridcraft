@@ -254,7 +254,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     }
     let entries = legend_entries(chart, &data);
     if !entries.is_empty() && area.ok() && chart.format.legend_layout.is_none() {
-        area = draw_legend(&mut ctx, &entries, chart.legend, area, 0.35);
+        area = draw_legend(&mut ctx, &entries, chart.legend, area, false);
     }
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
@@ -267,7 +267,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         let pos = if matches!(chart.legend, LegendPos::Top | LegendPos::Bottom) { LegendPos::Top } else { LegendPos::Left };
         let boxed = Bx { x: lx, y: ly, w: lw.min(w - lx).max(0.0), h: lh.min(h - ly).max(0.0) };
         if boxed.ok() {
-            draw_legend(&mut ctx, &entries, pos, boxed, 1.0);
+            draw_legend(&mut ctx, &entries, pos, boxed, true);
         }
     }
     finalize(ctx.out, w, h)
@@ -346,8 +346,9 @@ fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) 
     }
 }
 
-/// `share`: the part of the area's width a side legend may take (all of a box placed by hand).
-fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx, share: f32) -> Bx {
+/// `manual`: a box placed by hand, all of which the legend may use; otherwise a side legend takes
+/// at most 35% of the area's width and a top or bottom one 30% of its height.
+fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx, manual: bool) -> Bx {
     let size = LABEL_SIZE;
     let row_h = size * 1.6;
     let s = size * 0.8;
@@ -357,7 +358,7 @@ fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos
     match pos {
         LegendPos::None => area,
         LegendPos::Top | LegendPos::Bottom => {
-            let max_rows = ((area.h * 0.3 / row_h).floor() as usize).max(1);
+            let max_rows = ((area.h * if manual { 1.0 } else { 0.3 } / row_h).floor() as usize).max(1);
             let mut rows: Vec<Vec<(usize, f32)>> = vec![vec![]];
             let mut cur = 0.0f32;
             for (i, e) in entries.iter().enumerate() {
@@ -395,7 +396,7 @@ fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos
             if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
         }
         LegendPos::Left | LegendPos::Right => {
-            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * share);
+            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * if manual { 1.0 } else { 0.35 });
             let max_rows = ((area.h / row_h).floor() as usize).max(1);
             let n = entries.len().min(max_rows);
             let lh = n as f32 * row_h;

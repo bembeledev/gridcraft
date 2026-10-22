@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, PhoneticString, RichText, Sheet, ShowObjects, Style, StyleId, StyleTable, TextRun, Visibility, Workbook,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -15,6 +17,8 @@ pub struct Ctx<'a> {
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
+    /// Formatted runs of the shared strings that have any, by index (same length as `sst`).
+    pub sst_rich: Vec<Option<Arc<RichText>>>,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
     /// Cell format index → model style.
@@ -32,6 +36,33 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+}
+
+/// The formatted runs of a string item (`<si>` or `<is>`): `None` when it has no run with
+/// formatting of its own.
+pub fn read_rich(e: &El, palette: &[u32]) -> Option<Arc<RichText>> {
+    if !e.kids("r").any(|r| r.child("rPr").is_some()) {
+        return None;
+    }
+    let mut runs: Vec<TextRun> = Vec::new();
+    for c in &e.children {
+        let (text, font) = match c.name.as_str() {
+            "t" => (xml::decode_xstring(&c.text), None),
+            "r" => (
+                xml::decode_xstring(&c.kids("t").map(|t| t.text.as_str()).collect::<String>()),
+                c.child("rPr").map(|p| crate::styles::read_font(p, palette)),
+            ),
+            _ => continue,
+        };
+        let len = u32::try_from(text.chars().count()).unwrap_or(u32::MAX);
+        let full = runs.len() >= RichText::MAX_RUNS;
+        match runs.last_mut() {
+            // Past the cap, the rest joins the last run.
+            Some(last) if full => last.len = last.len.saturating_add(len),
+            _ => runs.push(TextRun { len, font }),
+        }
+    }
+    Some(Arc::new(RichText { runs }))
 }
 
 impl Ctx<'_> {
@@ -102,6 +133,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         pkg,
         report: ReadReport::default(),
         sst: vec![],
+        sst_rich: vec![],
         phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
@@ -179,7 +211,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
+                let mut sst_rich = Vec::new();
                 let mut phonetics = Vec::new();
+                let palette = cx.palette.clone();
                 let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
                     let text = xml::rich_text(&si);
@@ -190,6 +224,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                         phonetics.push(PhoneticString { text: text.clone(), runs, props });
                     }
                     sst.push(Arc::from(text));
+                    sst_rich.push(read_rich(&si, &palette));
                     Ok(())
                 });
                 if let Err(e) = res {
@@ -199,6 +234,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
                 }
                 cx.sst = sst;
+                cx.sst_rich = sst_rich;
                 cx.keep_phonetics(phonetics);
             }
             None => cx.warn(format!("missing part {}", r.target)),

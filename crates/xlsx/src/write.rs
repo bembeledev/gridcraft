@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook};
+use std::sync::Arc;
+
+use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, RichText, ShowObjects, Style, Visibility, Workbook};
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -86,20 +88,28 @@ impl Rels {
 /// Shared string table being built.
 #[derive(Default)]
 pub struct Sst {
-    list: Vec<String>,
+    /// Each string once, with its formatted runs when it has them.
+    list: Vec<(String, Option<Arc<RichText>>)>,
     map: HashMap<String, u32>,
     pub count: u64,
 }
 
 impl Sst {
-    pub fn index(&mut self, s: &str) -> u32 {
+    /// The index of `s` with the runs `rich` (dropped unless they describe `s`): the same text
+    /// formatted differently is a different item.
+    pub fn index_rich(&mut self, s: &str, rich: Option<&Arc<RichText>>) -> u32 {
         self.count += 1;
-        if let Some(&i) = self.map.get(s) {
+        let rich = rich.filter(|r| r.spans(s).is_some());
+        let key = match rich {
+            Some(r) => format!("{s}\u{0}{r:?}"),
+            None => s.to_string(),
+        };
+        if let Some(&i) = self.map.get(&key) {
             return i;
         }
         let i = self.list.len() as u32;
-        self.list.push(s.to_string());
-        self.map.insert(s.to_string(), i);
+        self.list.push((s.to_string(), rich.cloned()));
+        self.map.insert(key, i);
         i
     }
 }
@@ -416,8 +426,12 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
     let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
     let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
-    for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
+    for (t, rich) in &out.sst.list {
+        let body = match rich {
+            Some(r) => crate::styles::rich_si_body(t, r),
+            None => crate::xml::si_body(t, phonetics.get(t.as_str()).copied()),
+        };
+        let _ = write!(sst, "<si>{body}</si>");
     }
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());

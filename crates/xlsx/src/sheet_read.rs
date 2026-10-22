@@ -452,10 +452,14 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
+    let mut rich = None;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
-                Some(s) => Value::Text(s.clone()),
+                Some(s) => {
+                    rich = cx.sst_rich.get(i).cloned().flatten();
+                    Value::Text(s.clone())
+                }
                 None => {
                     cx.warn("some cells refer to missing shared strings");
                     Value::Empty
@@ -465,6 +469,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         },
         "str" => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
         "inlineStr" => {
+            rich = c.child("is").and_then(|is| crate::read::read_rich(is, &cx.palette));
             c.child("is").map(|is| Value::text(xml::rich_text(is))).or_else(|| v.map(|v| Value::text(xml::decode_xstring(v)))).unwrap_or(Value::Empty)
         }
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
@@ -512,7 +517,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    // Runs only describe a text constant.
+    let rich = rich.filter(|_| formula.is_none() && matches!(value, Value::Text(_)));
+    sheet.cells.set(pos, Cell { rich, value, formula: formula.map(Arc::new), style });
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

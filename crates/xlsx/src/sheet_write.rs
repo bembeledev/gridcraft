@@ -746,7 +746,7 @@ fn write_cell(
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
         Value::Text(t) => {
-            let i = out.sst.index(t);
+            let i = out.sst.index_rich(t, cell.and_then(|c| c.rich.as_ref()));
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
         }
         Value::Bool(b) => {

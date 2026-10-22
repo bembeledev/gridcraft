@@ -124,12 +124,12 @@ pub fn specs() -> Vec<CommandSpec> {
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
-        let c = Cell { value: Value::Empty, formula: None, style };
+        let c = Cell { rich: Default::default(), value: Value::Empty, formula: None, style };
         return Ok(if c.is_blank() { None } else { Some(c) });
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { rich: Default::default(), value: Value::text(input), formula: None, style }));
     }
     let is_formula = input.starts_with('=')
         || (input.len() > 1
@@ -187,7 +187,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if input.contains('\n') && !wb.styles.get(style).align.wrap {
         style = wb.styles.derive(style, |s| s.align.wrap = true);
     }
-    Ok(Some(Cell { value: parsed.value, formula: None, style }))
+    Ok(Some(Cell { rich: Default::default(), value: parsed.value, formula: None, style }))
 }
 
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
@@ -324,13 +324,17 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                 let input = json_to_input(v);
                 let cell = match v {
                     Json::Number(n) => Some(Cell {
+                        rich: Default::default(),
                         value: Value::number(n.as_f64().unwrap_or(0.0)),
                         formula: None,
                         style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
                     }),
-                    Json::Bool(b) => {
-                        Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
-                    }
+                    Json::Bool(b) => Some(Cell {
+                        rich: Default::default(),
+                        value: Value::Bool(*b),
+                        formula: None,
+                        style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
+                    }),
                     // Text as given: no date or number reading, and a leading `'` is part of the
                     // text rather than the marker that makes it text. A formula is still a
                     // formula, which is what the ticket asks for and what `=` means in a cell.
@@ -340,7 +344,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                             style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                         }
-                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
+                        Some(Cell { rich: Default::default(), value: Value::Text(text.as_str().into()), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
@@ -797,7 +801,7 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
         for c in cells {
             let Some(to) = c.offset(dr, dc) else { continue };
             let style = src.cell(c).map(|x| x.style).unwrap_or_default();
-            dst.set_cell(to, Cell { value: src.value(c), formula: None, style });
+            dst.set_cell(to, Cell { rich: Default::default(), value: src.value(c), formula: None, style });
             if let Some(picture) = src.cell_pictures.get(&c) {
                 dst.cell_pictures.insert(to, picture.clone());
             }

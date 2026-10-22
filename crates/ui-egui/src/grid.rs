@@ -451,6 +451,50 @@ struct Look {
     text_color: Color32,
 }
 
+/// A cell's rich-text runs laid out, each in its own font, size and colour (the cell's for a run
+/// without one) at the cell text's scale; on one line (breaks dropped) or wrapped at `wrap_w`.
+/// `None` when the runs don't describe `text`.
+#[allow(clippy::too_many_arguments)]
+fn rich_job(
+    rich: &gridcraft_engine::model::RichText,
+    text: &str,
+    base: &FontId,
+    base_color: Color32,
+    wb: &Workbook,
+    z: f32,
+    one_line: bool,
+    wrap_w: f32,
+) -> Option<egui::text::LayoutJob> {
+    use gridcraft_engine::model::VertAlign;
+    let spans = rich.spans(text)?;
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_w;
+    for (t, f) in spans {
+        let t: String = if one_line { t.chars().filter(|&ch| ch != '\n' && ch != '\r').collect() } else { t.to_string() };
+        if t.is_empty() {
+            continue;
+        }
+        let mut fmt = egui::TextFormat { font_id: base.clone(), color: base_color, ..Default::default() };
+        if let Some(f) = f {
+            let mut size = if f.size.is_finite() { f.size.clamp(1.0, 409.0) * 96.0 / 72.0 * z } else { base.size };
+            if f.vert != VertAlign::Baseline {
+                size *= 0.66;
+                fmt.valign = if f.vert == VertAlign::Superscript { egui::Align::TOP } else { egui::Align::BOTTOM };
+            }
+            fmt.font_id = FontId::new(size.max(1.0), theme::cell_family(&f.name, f.bold, f.italic));
+            fmt.color = col32(f.color, wb, base_color);
+            if f.underline != Underline::None {
+                fmt.underline = Stroke::new(1.0, fmt.color);
+            }
+            if f.strike {
+                fmt.strikethrough = Stroke::new(1.0, fmt.color);
+            }
+        }
+        job.append(&t, 0.0, fmt);
+    }
+    Some(job)
+}
+
 fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }
@@ -1265,10 +1309,19 @@ pub(crate) fn paint_quadrant(
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+        // Rich text: runs in fonts of their own, when the cell shows its own text unchanged.
+        let rich = if rotated || sh.show_formulas || fill_char.is_some() || st.align.shrink {
+            None
+        } else {
+            sh.cell(c).and_then(|cell| cell.rich.clone()).filter(|_| matches!(&v, Value::Text(t) if t.as_ref() == text.as_str()))
+        };
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
+            let mut job = rich
+                .as_deref()
+                .and_then(|r| rich_job(r, &text, &font, color, wb, z, false, wrap_w))
+                .unwrap_or_else(|| egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w));
             job.halign = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
                 HAlign::Right => egui::Align::RIGHT,
@@ -1295,7 +1348,10 @@ pub(crate) fn paint_quadrant(
             .flatten();
         let shrunk = small.is_some();
         let font = small.unwrap_or(font);
-        let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+        let mut galley = match rich.as_deref().and_then(|r| rich_job(r, &text, &font, color, wb, z, true, f32::INFINITY)) {
+            Some(job) => p.layout_job(job),
+            None => p.layout_no_wrap(first_line.clone(), font.clone(), color),
+        };
         let mut w = galley.size().x;
         // Numbers and dates never overflow: they show #### when too narrow.
         let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;

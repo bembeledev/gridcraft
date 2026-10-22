@@ -405,6 +405,59 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
 
 // ---------------------------------------------------------------- writing
 
+/// A rich string item's runs: `<r>` with its `<rPr>` font (none for the cell's own font) and text.
+pub fn rich_si_body(text: &str, rich: &gridcraft_model::RichText) -> String {
+    let Some(spans) = rich.spans(text) else { return crate::xml::t_el(text) };
+    let mut s = String::new();
+    for (t, font) in spans {
+        s.push_str("<r>");
+        if let Some(f) = font {
+            s.push_str(&rpr_xml(f));
+        }
+        s.push_str(&crate::xml::t_el(t));
+        s.push_str("</r>");
+    }
+    s
+}
+
+/// `<rPr>` (CT_RPrElt, children in schema order) for a run's font.
+fn rpr_xml(f: &Font) -> String {
+    let mut s = String::from("<rPr>");
+    if !f.name.is_empty() {
+        let _ = write!(s, "<rFont val=\"{}\"/>", esc_attr(&f.name));
+    }
+    if let Some(c) = f.charset {
+        let _ = write!(s, "<charset val=\"{c}\"/>");
+    }
+    if let Some(fam) = f.family {
+        let _ = write!(s, "<family val=\"{fam}\"/>");
+    }
+    for (on, tag) in [(f.bold, "b"), (f.italic, "i"), (f.strike, "strike")] {
+        if on {
+            let _ = write!(s, "<{tag}/>");
+        }
+    }
+    let _ = write!(s, "<color {}/>", color_attrs(&f.color));
+    let _ = write!(s, "<sz val=\"{}\"/>", crate::xml::num(f64::from(f.size)));
+    let u = match f.underline {
+        Underline::None => None,
+        Underline::Double => Some("double"),
+        Underline::SingleAccounting => Some("singleAccounting"),
+        Underline::DoubleAccounting => Some("doubleAccounting"),
+        _ => Some("single"),
+    };
+    if let Some(u) = u {
+        let _ = write!(s, "<u val=\"{u}\"/>");
+    }
+    match f.vert {
+        VertAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
+        VertAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
+        _ => {}
+    }
+    s.push_str("</rPr>");
+    s
+}
+
 pub fn color_attrs(c: &Color) -> String {
     match *c {
         Color::Auto => "auto=\"1\"".into(),

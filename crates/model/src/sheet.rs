@@ -163,7 +163,8 @@ pub fn max_digit_width(name: &str, size_pt: f32) -> f64 {
 /// column width for a sheet's `baseColWidth` (8 unless the file says otherwise).
 pub fn base_col_width(base: f64, digit: f64) -> f32 {
     let base = if base.is_finite() { base.clamp(0.0, 255.0) } else { 8.0 };
-    (((base * digit + 5.0) / 8.0).ceil() * 8.0) as f32
+    // Rounding up could pass the widest column (255 digits rounds 1790 px up to 1792).
+    ((((base * digit + 5.0) / 8.0).ceil() * 8.0) as f32).min(max_col_width(digit))
 }
 
 /// The widest column (px) for a digit width: 255 characters plus padding, Excel's limit.
@@ -527,6 +528,7 @@ mod tests {
         assert_eq!(base_col_width(8.0, 7.0), DEFAULT_COL_WIDTH);
         assert_eq!(base_col_width(8.0, 8.0), 72.0);
         assert_eq!(base_col_width(f64::NAN, 7.0), DEFAULT_COL_WIDTH);
+        assert_eq!(base_col_width(255.0, 7.0), max_col_width(7.0));
         assert!((points_to_chars(DEFAULT_COL_WIDTH as f64, 7.0) - 8.43).abs() < 0.01);
         assert_eq!(points_to_chars(6.0, 7.0), 0.5);
     }

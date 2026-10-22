@@ -236,7 +236,7 @@ impl Dialog {
                 "Standard Width",
                 "home.defaultWidth",
                 vec![Number { key: "width", label: "Standard column width (pixels):" }],
-                json!({"width": 64}),
+                json!({"width": app.session.active().and_then(|d| d.wb.active().map(|s| s.default_col_width)).unwrap_or(64.0)}),
             ),
             "renameSheet" => Dialog::form(
                 "renameSheet",

@@ -213,6 +213,10 @@ pub struct PhoneticString {
     pub props: Option<PhoneticProps>,
 }
 
+fn is_all(s: &ShowObjects) -> bool {
+    *s == ShowObjects::All
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,

@@ -419,6 +419,17 @@ impl Geo {
     pub fn col_w(&self, sh: &Sheet, col: u32) -> f32 {
         sh.col_width(col) * self.zx
     }
+    /// Sheet point under a logical screen point, through the cell under it, so frozen panes and
+    /// pages map right. Horizontal offsets count in `zx`, so a point stays inside its column.
+    pub fn sheet_point(&self, sh: &Sheet, p: Pos2) -> [f32; 2] {
+        let c = self.cell_at(sh, p);
+        [sh.col_left(c.col) as f32 + (p.x - self.x(sh, c.col)) / self.zx, sh.row_top(c.row) as f32 + (p.y - self.y(sh, c.row)) / self.z]
+    }
+    /// Logical screen point of a sheet point: the inverse of `sheet_point`.
+    pub fn screen_point(&self, sh: &Sheet, q: [f32; 2]) -> Pos2 {
+        let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
+        pos2(self.x(sh, col) + (q[0] - sh.col_left(col) as f32) * self.zx, self.y(sh, row) + (q[1] - sh.row_top(row) as f32) * self.z)
+    }
     pub fn range_rect(&self, sh: &Sheet, r: RangeRef) -> Rect {
         let a = self.cell_rect(sh, r.start);
         let b = self.cell_rect(sh, r.end);
@@ -2147,26 +2158,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             if let Some(p) = pos
                 && resp.dragged()
             {
-                // Through the cell under the pointer, so frozen panes and pages map right.
-                let c = geo.cell_at(sh, p);
-                let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
-                let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
-                app.grid.ink.push([sx, sy]);
+                app.grid.ink.push(geo.sheet_point(sh, p));
             }
             if !app.grid.ink.is_empty() {
                 // Live preview.
-                let pts: Vec<Pos2> = app
-                    .grid
-                    .ink
-                    .iter()
-                    .map(|q| {
-                        let (col, row) = (sh.col_at(q[0].max(0.0) as f64), sh.row_at(q[1].max(0.0) as f64));
-                        geo.mirror_pos(pos2(
-                            geo.x(sh, col) + (q[0] - sh.col_left(col) as f32) * geo.z,
-                            geo.y(sh, row) + (q[1] - sh.row_top(row) as f32) * geo.z,
-                        ))
-                    })
-                    .collect();
+                let pts: Vec<Pos2> = app.grid.ink.iter().map(|q| geo.mirror_pos(geo.screen_point(sh, *q))).collect();
                 ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0 * geo.z, Color32::from_rgb(0x1F, 0x5F, 0xC9))));
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
@@ -4509,6 +4505,25 @@ mod pane_tests {
         // A hostile Normal font size keeps a finite, bounded column factor.
         let d = Density::mac(&book("Calibri", f32::NAN));
         assert!(d.cols.is_finite() && (0.5..=2.0).contains(&d.cols));
+    }
+
+    #[test]
+    fn ink_points_stay_in_their_column_at_mac_density() {
+        use gridcraft_engine::model::{StyleTable, Workbook};
+        let mut wb = Workbook::new();
+        let mut normal = wb.styles.get(gridcraft_engine::model::StyleId::DEFAULT).clone();
+        (normal.font.name, normal.font.size) = ("Calibri".into(), 11.0);
+        wb.styles = StyleTable::with_default(normal);
+        let sh = Sheet::new("S");
+        let geo = Geo::with_density(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0)), vec2(0.0, 0.0), Density::mac(&wb));
+        assert!(geo.zx > geo.z);
+        // Just inside column B's right edge: the point is in B on the sheet and draws back there.
+        let r = geo.cell_rect(&sh, CellRef::new(3, 1));
+        let p = pos2(r.right() - 1.0, r.center().y);
+        let q = geo.sheet_point(&sh, p);
+        assert_eq!(sh.col_at(q[0] as f64), 1);
+        let back = geo.screen_point(&sh, q);
+        assert!((back - p).length() < 0.01, "{p:?} drew back at {back:?}");
     }
 
     /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.

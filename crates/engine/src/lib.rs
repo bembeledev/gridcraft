@@ -372,7 +372,7 @@ impl Session {
             // `self`.
             if !self.applying_remote
                 && collab::shareable(id)
-                && self.collab_uid.is_none_or(|uid| self.active().is_some_and(|d| d.uid == uid))
+                && self.collab_uid.is_some_and(|uid| self.active().is_some_and(|d| d.uid == uid))
                 && let Some(sink) = self.collab.clone()
             {
                 sink.on_local(id, &params);

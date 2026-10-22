@@ -56,8 +56,6 @@ impl eframe::App for App {
         if self.collab.is_none() {
             match self.collab_rx.as_ref().map(std::sync::mpsc::Receiver::try_recv) {
                 Some(Ok(link)) => {
-                    let uid = self.sheet.session.active().map(|d| d.uid);
-                    link.bind(&mut self.sheet.session, uid);
                     self.collab = Some(link);
                     self.collab_rx = None;
                 }
@@ -69,18 +67,27 @@ impl eframe::App for App {
             }
         }
         if let Some(link) = &mut self.collab {
-            link.pump(&mut self.sheet.session);
-            // Who else is here, straight from the relay's roster. The whole set
-            // is handed over rather than a change, so somebody who left stops
-            // being shown without waiting for a reconnection.
-            self.sheet.presence.set(link.roster.iter().map(|(id, display)| craft_ui::presence::Peer::new(id.clone(), display.clone())).collect());
-            for notice in std::mem::take(&mut link.notices) {
-                self.sheet.toast = Some((notice, gridcraft_ui_egui::now_ms()));
+            if self.sheet.session.collab.is_none() {
+                if let Some(uid) = self.sheet.session.active().map(|d| d.uid) {
+                    link.bind(&mut self.sheet.session, Some(uid));
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
             }
-            // egui only draws when something happens locally, and another
-            // person typing is not a local event. Without this a remote edit
-            // sits in the socket until the mouse moves.
-            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+            if self.sheet.session.collab.is_some() {
+                link.pump(&mut self.sheet.session);
+                // Who else is here, straight from the relay's roster. The whole set
+                // is handed over rather than a change, so somebody who left stops
+                // being shown without waiting for a reconnection.
+                self.sheet.presence.set(link.roster.iter().map(|(id, display)| craft_ui::presence::Peer::new(id.clone(), display.clone())).collect());
+                for notice in std::mem::take(&mut link.notices) {
+                    self.sheet.toast = Some((notice, gridcraft_ui_egui::now_ms()));
+                }
+                // egui only draws when something happens locally, and another
+                // person typing is not a local event. Without this a remote edit
+                // sits in the socket until the mouse moves.
+                ctx.request_repaint_after(std::time::Duration::from_millis(120));
+            }
         }
         self.sheet.logic(ctx);
         self.sheet.poll_printing(ctx);
@@ -337,7 +344,7 @@ fn main() -> eframe::Result<()> {
     {
         log::warn!("sample {s}: {e}");
     }
-    if session.documents().is_empty() {
+    if session.documents().is_empty() && cloud::CloudToken::from_env().is_none() {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());

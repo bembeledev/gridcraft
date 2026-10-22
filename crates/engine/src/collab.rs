@@ -83,6 +83,7 @@ mod tests {
         let mut s = book();
         let heard = Arc::new(Heard::default());
         s.collab = Some(heard.clone());
+        s.collab_uid = s.active().map(|d| d.uid);
         s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
         s.execute("file.new", json!({})).unwrap();
         let heard = heard.0.lock().unwrap();
@@ -123,6 +124,7 @@ mod tests {
         let mut s = book();
         let heard = Arc::new(Heard::default());
         s.collab = Some(heard.clone());
+        s.collab_uid = s.active().map(|d| d.uid);
         s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
         s.execute("edit.undo", json!({})).unwrap();
         let heard = heard.0.lock().unwrap();

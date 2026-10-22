@@ -436,3 +436,52 @@ fn a_control_request_keeps_a_pending_user_quit() {
     let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.commands", &serde_json::json!({}));
     assert!(h.state().quit_requested, "a quit the user asked for still happens");
 }
+
+/// Runs `n` frames feeding the app's control-queued synthetic input, as the host's raw-input hook
+/// does; whether any frame sent `ViewportCommand::Close`.
+fn steps_with_control_input(h: &mut egui_kittest::Harness<'static, SheetApp>, n: usize) -> bool {
+    let mut closed = false;
+    for _ in 0..n {
+        let mut raw = egui::RawInput::default();
+        h.state_mut().raw_input_hook(&mut raw);
+        h.input_mut().events.extend(raw.events);
+        h.step();
+        closed |= h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    }
+    closed
+}
+
+/// A control client's `ui.key` close shortcut, dispatched frames later, closes the last workbook
+/// but keeps the app running.
+#[test]
+fn a_scripted_close_shortcut_does_not_quit() {
+    // Ctrl+F4 everywhere; Control+W on macOS (the review's case), where the keymap runs it.
+    let mut keys = vec![serde_json::json!({"key": "F4", "cmd": true})];
+    if cfg!(target_os = "macos") {
+        keys.push(serde_json::json!({"key": "W", "ctrl": true}));
+    }
+    for params in keys {
+        let mut h = harness(Services::default());
+        if cfg!(target_os = "macos") {
+            h.ctx.set_os(egui::os::OperatingSystem::Mac);
+            h.run_steps(2);
+        }
+        let ctx = h.ctx.clone();
+        let _ = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.key", &params);
+        let closed = steps_with_control_input(&mut h, 4);
+        assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.close"), "{params}: the shortcut ran Close");
+        assert!(!closed, "{params}: a scripted shortcut keeps the app running");
+        assert!(!h.state().quit_requested, "{params}: the dropped quit does not linger");
+    }
+}
+
+/// The same shortcut typed by the user still quits after the last workbook closes.
+#[test]
+fn a_user_close_shortcut_still_quits() {
+    let mut h = harness(Services::default());
+    let m = egui::Modifiers::COMMAND;
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::Key { key: egui::Key::F4, physical_key: Some(egui::Key::F4), pressed, repeat: false, modifiers: m });
+    }
+    assert!(steps_with_control_input(&mut h, 4), "the user's Ctrl+F4 on the last workbook quits");
+}

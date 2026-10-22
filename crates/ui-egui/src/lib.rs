@@ -249,6 +249,11 @@ pub struct SheetApp {
     /// Set when the last workbook was closed (or Close was pressed with none open): `logic` then
     /// closes the window once, so the app quits like closing its last window.
     pub quit_requested: bool,
+    /// Whether this frame's input carried a control client's synthetic events (`ui.key`,
+    /// `ui.click`, ...): set by [`Self::raw_input_hook`] every frame, so it never sticks.
+    control_input: bool,
+    /// [`Self::control_input`] of the previous frame, whose `ui` produced any quit `logic` sees now.
+    control_input_last: bool,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
@@ -314,6 +319,8 @@ impl SheetApp {
             backstage: None,
             message: None,
             quit_requested: false,
+            control_input: false,
+            control_input_last: false,
             toast: None,
             notice: None,
             services,
@@ -1163,7 +1170,11 @@ impl SheetApp {
             let ctx = ctx.clone();
             self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));
         }
-        if std::mem::take(&mut self.quit_requested) {
+        // A quit requested by the previous frame's `ui` is dropped when that frame dispatched a
+        // control client's synthetic input: a script's Cmd+W keeps the app running, as a direct
+        // control command does (see `control::handle`).
+        let from_control = std::mem::replace(&mut self.control_input_last, self.control_input);
+        if std::mem::take(&mut self.quit_requested) && !from_control {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
@@ -1271,7 +1282,9 @@ impl SheetApp {
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        self.control_input = false;
         if let Some(mut batch) = self.synthetic.pop_front() {
+            self.control_input = !batch.is_empty();
             raw.events.append(&mut batch);
         }
     }

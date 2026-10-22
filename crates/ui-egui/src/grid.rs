@@ -591,7 +591,9 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
     (Look { style, fill, text_color }, cfl)
 }
 
-/// Text for a value with General narrowing to the available width.
+/// Text for a value with General narrowing to the available width: `width_px` (sheet px) holds as
+/// many digits of `char_w` (the font's maximum digit width, in sheet px) as Excel counts in it,
+/// after its 5 px of cell padding: an n-character column fits an n-digit number.
 fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -617,7 +619,7 @@ fn display_text(
     if code == "General"
         && let Value::Number(n) = v
     {
-        let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
+        let max_chars = ((width_px - 5.0) / char_w.max(1.0) + 0.01).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
@@ -1302,8 +1304,12 @@ pub(crate) fn paint_quadrant(
         let font = FontId::new(size, fam);
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
+        // Excel counts digits in the font's hinted maximum digit width (7 px for Calibri 11), which
+        // the drawn glyphs can exceed (Carlito's is 7.43 px): numbers fit by that count.
+        let digit_px = gridcraft_engine::model::max_digit_width_at(&st.font.name, st.font.size, 96.0) as f32;
+        let digit_w = (digit_px * geo.zx).max(0.1);
         let avail_w = rect.right() - text_left;
-        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / geo.zx.max(0.001), digit_px);
         if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
             text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
         }
@@ -1355,8 +1361,12 @@ pub(crate) fn paint_quadrant(
         let font = small.unwrap_or(font);
         let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
         let mut w = galley.size().x;
-        // Numbers and dates never overflow: they show #### when too narrow.
-        let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
+        let is_number = numeric || matches!(v, Value::Number(_));
+        // Numbers and dates never overflow: they show #### when too narrow, measured as Excel
+        // measures them (in hinted digits, give or take a pixel). One that fits only that way uses the
+        // cell padding.
+        let excel_w = if char_w > digit_w { w * digit_w / char_w } else { w };
+        let hashed = !shrunk && is_number && excel_w > avail_w - 2.0 * pad + geo.zx && st.align.h != HAlign::Fill;
         if hashed {
             // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
             let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
@@ -1364,6 +1374,8 @@ pub(crate) fn paint_quadrant(
             galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
             w = galley.size().x;
         }
+        let pad =
+            if is_number && !shrunk && fill_char.is_none() && w > avail_w - 2.0 * pad { ((avail_w - indent - w) / 2.0).clamp(0.0, pad) } else { pad };
         // Repeat fill (`*` in number formats) / Fill alignment. A number already shown as #### keeps
         // it: rebuilding it from the text would overflow and clip its leading digits.
         if let Some((ch, pos)) = fill_char

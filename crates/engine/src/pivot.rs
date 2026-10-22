@@ -1652,11 +1652,16 @@ fn header_items(wb: &Workbook, si: usize, r: RangeRef, pivot_sheet: usize, repor
 /// which Excel can show above the column items), with that name at another level and the
 /// column items in the same order.
 fn same_items(key: &[String], items: &[String], value_item: bool) -> bool {
-    if key == items || key.join(" - ") == items.join(" - ") {
+    let unambiguous = |values: &[String]| values.iter().all(|value| !value.contains(" - "));
+    if key == items || (key.join(" - ") == items.join(" - ") && unambiguous(items) && (key.len() == 1 || unambiguous(key))) {
         return true;
     }
     let Some((value, columns)) = items.split_last().filter(|_| value_item && key.len() == items.len()) else { return false };
     key.iter().enumerate().any(|(p, k)| k == value && key.iter().enumerate().filter(|(i, _)| *i != p).map(|(_, x)| x).eq(columns))
+}
+
+fn rebuilt_item_set<'a>(items: impl IntoIterator<Item = &'a [String]>) -> HashSet<&'a [String]> {
+    items.into_iter().collect()
 }
 
 /// One PivotChart's data label formats, read before its report is rewritten.
@@ -1762,7 +1767,8 @@ fn rebind_charts(
     }
     let value_item = out.chart_value_item;
     let (series, items): (Vec<Series>, Vec<&[String]>) = chart_series_items(sheet, origin, out).into_iter().unzip();
-    let rebuilt = |k: &[String]| items.contains(&k);
+    let rebuilt_set = rebuilt_item_set(items.iter().copied());
+    let rebuilt = |k: &[String]| rebuilt_set.contains(k);
     // Each chart's formats for the rebuilt series, and whether they go by position.
     let mut pivot_labels: Option<HashSet<String>> = None;
     let plans: Vec<(ChartFormats, Vec<Option<String>>, bool)> = label_formats
@@ -1826,7 +1832,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::data_cols_exceed_sheet;
+    use super::{data_cols_exceed_sheet, rebuilt_item_set, same_items};
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
@@ -1835,5 +1841,22 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(64, false, 256));
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
+    }
+    #[test]
+    fn joined_item_names_with_separator_are_not_ambiguous_matches() {
+        let saved = ["A - B", "C"].map(String::from);
+        let rebuilt = ["A", "B - C"].map(String::from);
+        assert!(!same_items(&saved, &rebuilt, false));
+        assert!(same_items(&saved, &saved, false));
+    }
+
+    #[test]
+    fn rebuilt_item_set_matches_content() {
+        let first = [String::from("A")];
+        let second = [String::from("B")];
+        let items = [first.as_slice(), second.as_slice()];
+        let set = rebuilt_item_set(items);
+        assert!(set.contains(first.as_slice()));
+        assert!(!set.contains([String::from("C")].as_slice()));
     }
 }

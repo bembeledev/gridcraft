@@ -58,12 +58,10 @@ impl Service {
                 post(Event::Linked(answer));
             }
             Job::SignOut => {
-                match fetch_logout().await {
-                    Ok(()) => {
-                        let _ = web_sys::window().and_then(|w| w.location().reload().ok());
-                    }
-                    Err(e) => log::warn!("cloud sign-out failed: {e}"),
+                if let Err(e) = fetch_logout().await {
+                    log::warn!("cloud sign-out failed: {e}");
                 }
+                let _ = web_sys::window().and_then(|w| w.location().reload().ok());
             }
             Job::List(path) => {
                 let entries = self.client.list(&path).await.map_err(fault);

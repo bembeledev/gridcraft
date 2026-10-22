@@ -1,9 +1,11 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use craft_cloud::{Entry, EntryKind};
+use craft_cloud::Entry;
+use craft_cloud_client::Client;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::cloud::{self, open_entry};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use std::sync::{Arc, Mutex};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
@@ -86,7 +88,15 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     let pending_file = if invited { None } else { query_param("file") };
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, pending_file, opened_file: false }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        bridge: app_bridge,
+                        pending_file,
+                        file_stat: Arc::new(Mutex::new(None)),
+                        file_stat_started: false,
+                        opened_file: false,
+                    }))
                 }),
             )
             .await;
@@ -137,6 +147,9 @@ struct WebShell {
     bridge: Option<crate::host::Bridge>,
     /// Nextcloud file handle from `?file=`, opened once the account arrives.
     pending_file: Option<String>,
+    /// `stat` of that handle, so Open uses the provider's name and writable flag.
+    file_stat: Arc<Mutex<Option<Result<Entry, String>>>>,
+    file_stat_started: bool,
     opened_file: bool,
 }
 
@@ -161,24 +174,24 @@ impl eframe::App for WebShell {
         if !self.opened_file {
             if let Some(id) = self.pending_file.clone() {
                 if self.app.cloud.account.as_ref().is_some_and(|a| a.provider_linked) {
-                    self.opened_file = true;
-                    open_entry(
-                        &mut self.app,
-                        Entry {
-                            id,
-                            room: String::new(),
-                            name: "workbook.xlsx".to_owned(),
-                            path: String::new(),
-                            kind: EntryKind::File,
-                            size: None,
-                            modified: None,
-                            mime: Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_owned()),
-                            etag: None,
-                            writable: true,
-                            shared_by: None,
-                        },
-                        None,
-                    );
+                    if !self.file_stat_started {
+                        self.file_stat_started = true;
+                        let slot = self.file_stat.clone();
+                        let ctx = ctx.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let result = Client::from_page().stat(&id).await.map_err(|e| e.to_string());
+                            if let Ok(mut slot) = slot.lock() {
+                                *slot = Some(result);
+                            }
+                            ctx.request_repaint();
+                        });
+                    } else if let Some(result) = self.file_stat.lock().ok().and_then(|mut g| g.take()) {
+                        self.opened_file = true;
+                        match result {
+                            Ok(entry) => open_entry(&mut self.app, entry, None),
+                            Err(e) => log::error!("couldn't open cloud file {id}: {e}"),
+                        }
+                    }
                 }
             } else if self.app.cloud.account.is_some() {
                 self.opened_file = true;

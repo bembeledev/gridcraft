@@ -7,7 +7,7 @@
 
 use gridcraft_core::CellError;
 
-use crate::{Expr, ParseError, parser};
+use crate::{Expr, ParseError, parser, same_name};
 
 mod es;
 
@@ -77,7 +77,7 @@ impl FormulaLocale {
 
     /// The canonical name of a local function name, case-insensitively (itself when it isn't one).
     pub fn canonical_name(self, localized: &str) -> &str {
-        self.dialect().and_then(|d| d.functions.iter().find(|(_, local)| eq_ignore_case(local, localized))).map_or(localized, |(en, _)| *en)
+        self.dialect().and_then(|d| d.functions.iter().find(|(_, local)| same_name(local, localized))).map_or(localized, |(en, _)| *en)
     }
 
     /// `(canonical, local)` for every function this language spells differently from English,
@@ -100,9 +100,9 @@ impl FormulaLocale {
     /// booleans in every language, so only the local words are matched here.
     pub(crate) fn boolean(self, word: &str) -> Option<bool> {
         let d = self.dialect()?;
-        if eq_ignore_case(word, d.bool_true) {
+        if same_name(word, d.bool_true) {
             Some(true)
-        } else if eq_ignore_case(word, d.bool_false) {
+        } else if same_name(word, d.bool_false) {
             Some(false)
         } else {
             None
@@ -147,11 +147,6 @@ fn cmp_ascii_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
     a.bytes().map(|c| c.to_ascii_uppercase()).cmp(b.bytes().map(|c| c.to_ascii_uppercase()))
 }
 
-/// Unicode case-insensitive equality (`zählenwenn` = `ZÄHLENWENN`, `сумм` = `СУММ`).
-fn eq_ignore_case(a: &str, b: &str) -> bool {
-    a.chars().flat_map(char::to_uppercase).eq(b.chars().flat_map(char::to_uppercase))
-}
-
 /// Whether `text` starts with `prefix`, compared case-insensitively in any script.
 fn starts_with_ignore_case(text: &str, prefix: &str) -> bool {
     text.chars().take(prefix.chars().count()).flat_map(char::to_uppercase).eq(prefix.chars().flat_map(char::to_uppercase))
@@ -160,7 +155,7 @@ fn starts_with_ignore_case(text: &str, prefix: &str) -> bool {
 /// Rewrites specifiers (`#Headers` <-> `#Kopfzeilen`) and the separator between bracketed
 /// items, leaving column names and `'` escapes alone.
 fn translate_struct(inner: &str, from: &[&'static str; 5], to: &[&'static str; 5], from_sep: char, to_sep: char) -> String {
-    let item = |text: &str| -> Option<&'static str> { from.iter().position(|f| eq_ignore_case(text.trim(), f)).and_then(|i| to.get(i).copied()) };
+    let item = |text: &str| -> Option<&'static str> { from.iter().position(|f| same_name(text.trim(), f)).and_then(|i| to.get(i).copied()) };
     // Excel allows spaces around bracketed items (`Tabla1[ [#Datos]; [Col1] ]`).
     if !inner.trim_start().starts_with('[') {
         return item(inner).map_or_else(|| inner.to_string(), str::to_string);
@@ -222,8 +217,9 @@ pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -
 /// Prints canonical expressions for editing. Name collisions retain the canonical spelling
 /// so displaying then committing a formula never changes a defined-name reference.
 pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<String, ParseError> {
-    // Check before cloning/printing: a flat operator chain can produce a deep AST even
-    // though the parser itself did not recurse deeply.
+    // Check before cloning/printing. A flat operator chain such as A1+A2+… nests on its left
+    // without nesting in the text: cloning, printing and `normalize` follow that left spine in
+    // a loop, so it does not count (Excel accepts 4,096 operands, #916). Other nesting does.
     let mut pending = vec![(expr, 0usize)];
     while let Some((node, depth)) = pending.pop() {
         if depth > parser::MAX_DEPTH {
@@ -232,7 +228,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
         match node {
             Expr::Unary(_, child) | Expr::Paren(child) => pending.push((child, depth + 1)),
             Expr::Binary(_, left, right) => {
-                pending.push((left, depth + 1));
+                pending.push((left, depth));
                 pending.push((right, depth + 1));
             }
             Expr::Call(_, args) => pending.extend(args.iter().map(|e| (e, depth + 1))),
@@ -295,7 +291,7 @@ fn normalize(
         return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
     }
     // Names ignore case in any script, so a binding `zählenwenn` shadows the call `ZÄHLENWENN(…)`.
-    let bound = |name: &str, bindings: &[String]| bindings.iter().rev().any(|n| eq_ignore_case(n, name)) || known_name(name);
+    let bound = |name: &str, bindings: &[String]| bindings.iter().rev().any(|n| same_name(n, name)) || known_name(name);
     match expr {
         Expr::Bool(value) if display => {
             let alias = locale.boolean_name(*value);
@@ -366,9 +362,15 @@ fn normalize(
             }
         }
         Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, locale, known_name, bindings, depth + 1, display)?,
-        Expr::Binary(_, left, right) => {
-            normalize(left, locale, known_name, bindings, depth + 1, display)?;
-            normalize(right, locale, known_name, bindings, depth + 1, display)?;
+        Expr::Binary(..) => {
+            // Follow the left spine of a flat chain (A1+A2+…) in a loop: it is not nesting.
+            // Each call leaves `bindings` as it found them, so the order does not matter.
+            let mut node = expr;
+            while let Expr::Binary(_, left, right) = node {
+                normalize(right, locale, known_name, bindings, depth + 1, display)?;
+                node = left;
+            }
+            normalize(node, locale, known_name, bindings, depth, display)?;
         }
         Expr::Array(rows) if display => {
             for row in rows {

@@ -2,8 +2,8 @@
 //! structured-reference specifiers) and its formula separators.
 //!
 //! The function names are the ten the Spanish formula syntax already had (`VERDADERO()` and
-//! `FALSO()` are the TRUE and FALSE functions). Functions not listed
-//! keep their English name.
+//! `FALSO()` are the TRUE and FALSE functions) plus the financial block added upstream in #2000
+//! (`VNA`, `TIR`, `PAGO`, `VA`, `VF`). Functions not listed keep their English name.
 //!
 //! Sources for the other words:
 //! - bool: https://support.microsoft.com/es-es/excel/functions/true-function | https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/master/src/PhpSpreadsheet/Calculation/locale/es/functions | https://raw.githubusercontent.com/handsontable/hyperformula/master/src/i18n/languages/esES.ts
@@ -42,7 +42,12 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("COUNT", "CONTAR"),
         ("COUNTIF", "CONTAR.SI"),
         ("FALSE", "FALSO"),
+        ("FV", "VF"),
         ("IF", "SI"),
+        ("IRR", "TIR"),
+        ("NPV", "VNA"),
+        ("PMT", "PAGO"),
+        ("PV", "VA"),
         ("SUM", "SUMA"),
         ("SUMIF", "SUMAR.SI"),
         ("TODAY", "HOY"),

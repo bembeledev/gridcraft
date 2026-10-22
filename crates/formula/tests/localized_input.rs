@@ -112,14 +112,18 @@ fn language_tables_are_sorted_unique_and_unambiguous() {
     }
 }
 
-/// Malformed local input is a parse error, and deep boolean chains hit the nesting limit.
+/// Malformed local input is a parse error. A long flat chain is not nesting (#916), but nested
+/// parentheses past the limit are.
 #[test]
 fn malformed_localized_input_is_an_error() {
     for bad in ["#¡VALOR", "Tabla1[[#Encabezados];", "SUMA({1\\}", "{SUMA(1)}"] {
         assert!(parse_input(bad, Es, |_| false).is_err(), "{bad}");
     }
     for locale in localized() {
-        let chain = format!("{}+", locale.boolean_name(true)).repeat(300) + "1";
-        assert!(parse_input(&chain, locale, |_| false).is_err(), "{locale:?}");
+        let word = locale.boolean_name(true);
+        let chain = format!("{word}+").repeat(300) + "1";
+        assert!(parse_input(&chain, locale, |_| false).is_ok(), "{locale:?}: a flat chain is not nesting");
+        let nested = format!("{}{word}{}", "(".repeat(300), ")".repeat(300));
+        assert!(parse_input(&nested, locale, |_| false).is_err(), "{locale:?}");
     }
 }

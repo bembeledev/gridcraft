@@ -743,8 +743,17 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
         || d.font.underline != Underline::None
         || d.font.color != Color::Auto
         || d.font.vert != VertAlign::Baseline
+        || d.font.size != def.font.size
+        || d.font.name != def.font.name
+        || d.dxf_stated.bold
+        || d.dxf_stated.italic
+        || d.dxf_stated.strike
+        || d.dxf_stated.underline
+        || d.dxf_stated.size
+        || d.dxf_stated.name
+        || d.dxf_stated.scheme.is_some()
     {
-        dx.push_str(&font_xml(&d.font, true, false));
+        dx.push_str(&font_xml(&d.font, Some(&d.dxf_stated), false));
     }
     if d.num_fmt != def.num_fmt {
         let id = nf.id(d.num_fmt.as_str());

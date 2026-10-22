@@ -137,7 +137,7 @@ fn value_text(v: &Value) -> String {
 /// the outer levels of a multi-level axis: a category range wider than a column of values (or
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
-fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (Vec<String>, Vec<Vec<String>>) {
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, innermost: bool) -> (Vec<String>, Vec<Vec<String>>) {
     let vals = eval_list(wb, sheet, formula);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
@@ -177,11 +177,12 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
         levels.by_columns
     };
     let outer = if by_columns { w.saturating_sub(1).min(3) } else { h.saturating_sub(1).min(3) };
-    if by_columns {
+    let result = if by_columns {
         (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
     } else {
         (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
-    }
+    };
+    if innermost { (result.0, vec![]) } else { result }
 }
 
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
@@ -250,7 +251,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let (c, outer) = category_table(wb, sheet, f, &s.values);
+            let (c, outer) = category_table(wb, sheet, f, &s.values, s.innermost_categories);
             if !c.is_empty() {
                 categories = Some(c);
                 category_levels = outer;

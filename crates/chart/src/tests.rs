@@ -1140,14 +1140,20 @@ fn a_multi_level_category_block_draws_its_innermost_level() {
         innermost_categories: true,
         ..Series::default()
     }];
-    assert_eq!(resolve(&wb, 0, &c).categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
     // A block with a column per point: its last row is the innermost level.
     c.series[0].categories = Some("Graph!$A$6:$D$7".into());
-    assert_eq!(resolve(&wb, 0, &c).categories, vec!["Canada", "", "USA", ""]);
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Canada", "", "USA", ""]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
     // Without the flag, every cell is a label, as for any other chart.
     c.series[0].categories = Some("Graph!$A$1:$B$4".into());
     c.series[0].innermost_categories = false;
-    assert_eq!(resolve(&wb, 0, &c).categories.len(), 4);
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert_eq!(data.category_levels, vec![vec!["Canada", "", "USA", ""]]);
 }
 
 #[test]

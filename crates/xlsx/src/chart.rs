@@ -132,17 +132,22 @@ const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
 /// The points of a cache or literal (`c` holds `ptCount`, `pts` the `<c:pt>`s), by index; missing
 /// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
 /// in document order. A missing, unreadable or too small `ptCount` gives way to the points present.
+///
+/// The per-chart budget is checked before allocation. If the requested count would exceed the
+/// remaining budget, all present points are retained when they fit; only trailing gaps are
+/// clamped. If present points extend past the remaining budget, points beyond that boundary are
+/// dropped as well, and the caller is warned.
 fn read_points<'a>(c: &El, pts: &'a El, budget: &mut ChartReadBudget) -> Option<Vec<Option<&'a str>>> {
     let at = |i: usize, p: &El| p.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(i);
     let placed = || pts.kids("pt").enumerate().map(|(i, p)| (at(i, p), p)).filter(|(i, _)| *i < MAX_CACHED_POINTS);
     let highest = placed().map(|(i, _)| i + 1).max().unwrap_or(0);
     let requested =
         c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).map(|n| n.min(MAX_CACHED_POINTS).max(highest)).unwrap_or(highest);
-    let count = if requested > budget.remaining {
-        budget.exceeded = true;
-        highest.min(budget.remaining)
-    } else {
+    let count = if requested <= budget.remaining {
         requested
+    } else {
+        budget.exceeded = true;
+        if highest <= budget.remaining { highest } else { budget.remaining }
     };
     budget.remaining = budget.remaining.saturating_sub(count);
     if count == 0 {
@@ -438,7 +443,7 @@ fn axis_ids(g: &El) -> Vec<String> {
 }
 
 /// A chart part, with the cached points of each series when it is a PivotChart (empty otherwise),
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
     read_chart_with_budget(root).map(|(chart, caches, _)| (chart, caches))
 }

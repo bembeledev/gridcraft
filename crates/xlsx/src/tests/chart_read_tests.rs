@@ -267,6 +267,19 @@ fn chart_cache_budget_bounds_many_empty_series() {
 }
 
 #[test]
+fn chart_cache_budget_drops_points_beyond_boundary() {
+    let series: String = (0..17)
+        .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1048576"/><c:pt idx="1048575"><c:v>{i}</c:v></c:pt></c:numLit></c:val></c:ser>"#))
+        .collect();
+    let root = crate::xml::parse(chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), "").as_bytes()).unwrap();
+    let (chart, _, warned) = crate::chart::read_chart_with_budget(&root).unwrap();
+    assert_eq!(chart.series.len(), 17);
+    assert!(chart.series.iter().take(16).all(|s| !s.values.is_empty()));
+    assert_eq!(chart.series[16].values, "");
+    assert!(warned);
+}
+
+#[test]
 fn a_deleted_automatic_title_stays_deleted() {
     let one = ser("<c:v>Vehicles</c:v>", &str_cache("S!$A$1:$A$2", &["a", "b"]), &num_cache("S!$B$1:$B$2", 2, &[]));
     let pie = format!("<c:pieChart>{one}</c:pieChart>");

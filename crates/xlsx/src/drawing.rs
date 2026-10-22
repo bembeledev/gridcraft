@@ -176,7 +176,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
                                     if budget_exceeded {
-                                        cx.warn("chart cached points exceeded the per-chart import budget; trailing gaps were truncated");
+                                        cx.warn("cached chart points were dropped after the per-chart import budget was exceeded");
                                     }
                                     if !caches.is_empty() {
                                         cx.pivot_charts.push((ch.id, caches));

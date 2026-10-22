@@ -117,7 +117,8 @@ fn is_cp1256_arabic(b: u8) -> bool {
 
 /// Decodes CSV bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Windows-1256 when the bytes read as
 /// Arabic (see [`Cp1256Evidence`]), else Windows-1252.
-pub fn decode_text(bytes: &[u8]) -> String {
+#[cfg(test)]
+pub(crate) fn decode_text(bytes: &[u8]) -> String {
     decode_text_as(bytes).0
 }
 

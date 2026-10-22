@@ -852,12 +852,34 @@ fn resolve_target(source_dir: &str, target: &str) -> String {
 
 type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 
-fn zip_names(zip: &mut Zip<'_>) -> Vec<String> {
-    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string())).collect()
+/// Where each listed name is in the archive (the first entry, for a repeated name).
+type ZipIndex = HashMap<String, usize>;
+
+/// The package's files by name, and where each is. zip 9 looks names up by their raw bytes, which
+/// a decoded CP437 name doesn't match, so parts are opened by index.
+fn zip_names(zip: &mut Zip<'_>) -> (Vec<String>, ZipIndex) {
+    let (mut names, mut index) = (Vec::new(), ZipIndex::new());
+    for i in 0..zip.len().min(MAX_ENTRIES) {
+        let Some(name) = zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| entry_name(&f)) else { continue };
+        index.entry(name.clone()).or_insert(i);
+        names.push(name);
+    }
+    (names, index)
 }
 
-fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
-    let f = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
+/// An entry's name decoded (UTF-8, or CP437 when not flagged UTF-8), or its raw bytes made lossy
+/// when they don't decode, so such an entry is still listed and reported.
+fn entry_name<R: std::io::Read>(f: &zip::read::ZipFile<'_, R>) -> String {
+    f.name().map(|n| n.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned())
+}
+
+/// The entry [`zip_names`] lists as `name`.
+fn zip_entry<'z, 'b>(zip: &'z mut Zip<'b>, index: &ZipIndex, name: &str) -> zip::result::ZipResult<zip::read::ZipFile<'z, Cursor<&'b [u8]>>> {
+    zip.by_index(*index.get(name).ok_or(zip::result::ZipError::FileNotFound)?)
+}
+
+fn read_zip_part(zip: &mut Zip<'_>, index: &ZipIndex, name: &str) -> Result<Vec<u8>, String> {
+    let f = zip_entry(zip, index, name).map_err(|e| format!("{name}: {e}"))?;
     let mut buf = Vec::new();
     f.take(MAX_XML_PART).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     Ok(buf)
@@ -867,11 +889,11 @@ fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
 /// libraries that don't calculate write it, and store 0 or nothing as every formula's value.
 fn full_calc_on_load(bytes: &[u8]) -> bool {
     let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else { return false };
-    let names = zip_names(&mut zip);
+    let (names, index) = zip_names(&mut zip);
     let find = |key: &str| names.iter().find(|n| part_key(n) == key).cloned();
     let mut workbook = "xl/workbook.xml".to_string();
     if let Some(rels) = find("_rels/.rels")
-        && let Ok(xml) = read_zip_part(&mut zip, &rels)
+        && let Ok(xml) = read_zip_part(&mut zip, &index, &rels)
         && let Ok(els) = xml_elements(&xml)
         && let Some(target) = els
             .iter()
@@ -881,7 +903,7 @@ fn full_calc_on_load(bytes: &[u8]) -> bool {
         workbook = resolve_target("", target);
     }
     let Some(name) = find(&part_key(&workbook)) else { return false };
-    let Ok(xml) = read_zip_part(&mut zip, &name) else { return false };
+    let Ok(xml) = read_zip_part(&mut zip, &index, &name) else { return false };
     xml_elements(&xml)
         .ok()
         .into_iter()
@@ -889,14 +911,15 @@ fn full_calc_on_load(bytes: &[u8]) -> bool {
         .any(|(e, a)| e == "calcPr" && attr(&a, "fullCalcOnLoad").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")))
 }
 
-/// Problems Excel would repair in a written package: parts without a content type, content-type
-/// overrides for missing parts, relationship files for missing parts, duplicate relationship ids
-/// and internal relationships pointing at missing parts. `Err` when the package can't be read.
+/// Problems Excel would repair in a written package: parts listed twice, parts without a content
+/// type, content-type overrides for missing parts, relationship files for missing parts, duplicate
+/// relationship ids and internal relationships pointing at missing parts. `Err` when the package
+/// can't be read.
 pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
-    let names = zip_names(&mut zip);
+    let (names, index) = zip_names(&mut zip);
     let parts: HashSet<String> = names.iter().map(|n| part_key(n)).collect();
-    let mut read_part = |name: &str| read_zip_part(&mut zip, name);
+    let mut read_part = |name: &str| read_zip_part(&mut zip, &index, name);
     let mut issues = Vec::new();
     let ct_name = names.iter().find(|n| part_key(n) == "[content_types].xml").cloned();
     let (mut defaults, mut overrides) = (HashSet::new(), HashSet::new());
@@ -922,6 +945,11 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
     }
     let mut sorted: Vec<&String> = names.iter().collect();
     sorted.sort();
+    // Two entries can decode to one name (one CP437, one UTF-8); only the first would be read.
+    let repeated: BTreeSet<&String> = sorted.windows(2).filter_map(|w| (w[0] == w[1]).then_some(w[0])).collect();
+    for n in repeated {
+        issues.push(format!("part {n} is in the package more than once"));
+    }
     for n in &sorted {
         let key = part_key(n);
         if key == "[content_types].xml" {
@@ -979,12 +1007,12 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
 /// (`#Sheet1!A1`, written as a cell's `location`) and a target part with nothing in it.
 fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
-    let names = zip_names(&mut zip);
+    let (names, index) = zip_names(&mut zip);
     let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
     let mut kinds = BTreeMap::new();
     for n in names.iter().filter(|n| part_key(n).ends_with(".rels")) {
         let Some(src_dir) = rels_source_dir(&part_key(n)) else { continue };
-        let Ok(els) = read_zip_part(&mut zip, n).and_then(|xml| xml_elements(&xml)) else { continue };
+        let Ok(els) = read_zip_part(&mut zip, &index, n).and_then(|xml| xml_elements(&xml)) else { continue };
         for (_, attrs) in els.iter().filter(|(el, _)| el == "Relationship") {
             let Some(kind) = attr(attrs, "Type").and_then(|t| t.rsplit('/').next()) else { continue };
             let target = attr(attrs, "Target").unwrap_or("");
@@ -994,7 +1022,7 @@ fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> 
             let external = attr(attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
             if !external
                 && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
-                && !holds_something(&mut zip, part, kind)
+                && !holds_something(&mut zip, &index, part, kind)
             {
                 continue;
             }
@@ -1013,9 +1041,9 @@ fn rels_source_dir(key: &str) -> Option<String> {
 
 /// Whether a part has content: an element under its root, or for comments (whose authors list
 /// comes first) a comment, for VML a shape. Read only as far as needed; an unreadable part counts.
-fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str) -> bool {
+fn holds_something(zip: &mut Zip<'_>, index: &ZipIndex, name: &str, kind: &str) -> bool {
     use quick_xml::events::Event;
-    let Ok(f) = zip.by_name(name) else { return true };
+    let Ok(f) = zip_entry(zip, index, name) else { return true };
     let mut reader = quick_xml::Reader::from_reader(std::io::BufReader::new(f.take(MAX_XML_PART)));
     let wanted: Option<&[u8]> = match kind.to_ascii_lowercase().as_str() {
         "comments" => Some(b"comment"),
@@ -1578,6 +1606,53 @@ mod tests {
         assert_eq!(validate_package(&own).unwrap(), Vec::<String>::new());
     }
 
+    /// zip 9 looks entries up by raw name bytes; a CP437 name (not flagged UTF-8) is listed
+    /// decoded and must still be readable under that name.
+    #[test]
+    fn package_validation_reads_parts_with_cp437_names() {
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            ("[Content_Types].xml", r#"<Types><Default Extension="rels" ContentType="r"/><Override PartName="/xl/éé.xml" ContentType="x"/></Types>"#),
+            ("xl/QQ.xml", "<x/>"),
+            ("xl/_rels/QQ.xml.rels", r#"<Relationships><Relationship Id="rId1" Type="x/styles" Target="styles.xml"/></Relationships>"#),
+        ] {
+            z.start_file(name, stored).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        let mut bytes = z.finish().unwrap().into_inner();
+        // 0x82 is `é` in CP437 and not valid UTF-8 on its own.
+        for i in 0..bytes.len() - 1 {
+            if &bytes[i..i + 2] == b"QQ" {
+                bytes[i..i + 2].copy_from_slice(&[0x82, 0x82]);
+            }
+        }
+        assert_eq!(validate_package(&bytes).unwrap(), ["xl/_rels/éé.xml.rels: rId1 (styles) targets missing part xl/styles.xml"]);
+    }
+
+    /// A CP437 name and a UTF-8 name can decode to the same part name; the checker reads one entry
+    /// per name, so it reports the repeat instead of checking the first entry twice.
+    #[test]
+    fn package_validation_reports_a_part_name_used_twice() {
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            ("[Content_Types].xml", r#"<Types><Override PartName="/xl/éé.xml" ContentType="x"/></Types>"#),
+            ("xl/éé.xml", "<x/>"),
+            ("xl/QQ.xml", "<y/>"),
+        ] {
+            z.start_file(name, stored).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        let mut bytes = z.finish().unwrap().into_inner();
+        for i in 0..bytes.len() - 1 {
+            if &bytes[i..i + 2] == b"QQ" {
+                bytes[i..i + 2].copy_from_slice(&[0x82, 0x82]);
+            }
+        }
+        assert_eq!(validate_package(&bytes).unwrap(), ["part xl/éé.xml is in the package more than once"]);
+    }
+
     const WB_RELS: &str = "xl/_rels/workbook.xml.rels";
     const SHEET_RELS: &str = "xl/worksheets/_rels/sheet1.xml.rels";
     const MADE_UP: &str = r#"<Relationship Id="rId90" Type="http://example.com/relationships/madeUp" Target="madeUp.xml"/>"#;
@@ -1591,7 +1666,7 @@ mod tests {
         let mut pending: Vec<(&str, &str)> = rels.to_vec();
         for i in 0..src.len() {
             let mut f = src.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().unwrap().to_string();
             let mut body = String::new();
             f.read_to_string(&mut body).unwrap();
             if let Some(at) = pending.iter().position(|(r, _)| *r == name) {

@@ -1,4 +1,4 @@
-//! Cells show numbers and dates in the grid's region (`GridState::number_locale`): its
+//! Cells show numbers and dates in the display region (`Session::display_locale`): its
 //! separators for a format's `.` and `,`, its short date for the built-in date format. The
 //! values, codes and everything outside the grid stay en-US.
 
@@ -21,7 +21,7 @@ fn harness(tag: Option<&str>) -> Harness {
     s.execute("selection.set", json!({"range": "H20"})).unwrap();
     let mut app = SheetApp::new(s, Default::default());
     if let Some(tag) = tag {
-        app.grid.number_locale = Locale::from_tag(tag);
+        app.session.display_locale = Locale::from_tag(tag);
     }
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {

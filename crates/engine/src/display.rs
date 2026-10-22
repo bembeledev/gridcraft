@@ -114,13 +114,19 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    cell_text_in(wb, sheet, c, &Locale::EN_US)
+}
+
+/// [`cell_text`] in a region's separators and short date, as the grid shows it.
+pub fn cell_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, loc: &Locale) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
         return format!("={}", f.text);
     }
-    value_text(wb, sheet, c)
+    let style = wb.styles.get(sheet.style_id(c));
+    value_text_in(wb, &sheet.value(c), style.num_fmt.as_str(), loc)
 }
 
 /// A cell's value with its number format applied, independent of column width: no `#####`
@@ -133,7 +139,11 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// [`value_text`] for a value and a format code given apart from a cell (print takes the code
 /// from the cell's effective look, which a conditional format can override).
 pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
-    let f = format(v, code, wb);
+    value_text_in(wb, v, code, &Locale::EN_US)
+}
+
+fn value_text_in(wb: &Workbook, v: &Value, code: &str, loc: &Locale) -> String {
+    let f = format_in(v, code, wb, loc);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;

@@ -299,7 +299,7 @@ fn main() -> eframe::Result<()> {
     }
     let mut app = SheetApp::new(session, services());
     // Cells show numbers and dates in the system's region (separators, short date).
-    app.grid.number_locale = gridcraft_ui_egui::grid::system_number_locale();
+    app.session.display_locale = gridcraft_ui_egui::grid::system_number_locale();
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;

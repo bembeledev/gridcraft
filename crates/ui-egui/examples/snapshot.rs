@@ -122,7 +122,7 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.grid.number_locale = number_locale;
+                app.session.display_locale = number_locale;
                 app.selected_chart = chart;
                 if let Some(d) = &dialog {
                     let (name, p) =

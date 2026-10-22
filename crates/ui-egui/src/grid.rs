@@ -117,8 +117,6 @@ pub struct FillTag {
 
 #[derive(Default)]
 pub struct GridState {
-    /// The region cells are shown in (separators, short date); the app takes it from the system.
-    pub number_locale: gridcraft_engine::numfmt::Locale,
     pub drag: Drag,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
@@ -886,7 +884,7 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, &app.grid.number_locale);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, &app.session.display_locale);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.

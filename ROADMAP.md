@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (Polish formula language; Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -220,6 +220,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Polish formula language (`FormulaLocale::Pl`: 434 function names, PRAWDA/FAŁSZ, error values, table specifiers, `;` arguments, decimal comma) |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |

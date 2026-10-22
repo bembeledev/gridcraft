@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Polish formula language; the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -37,10 +37,14 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **en-US formats; formulas en-US outside the formula bar.** Function names, `,` argument
+  separator, `.` decimal separator, en-US number and date formats (`crates/numfmt` says "en-US
+  only"). Users ask for localized function names and `;` separators (#45). German with localized
+  numbers and formulas is in PR #163 (open). Polish formula entry is supported in the formula bar
+  (`FormulaLocale::Pl`: 434 Excel-Polish function names, PRAWDA/FAŁSZ, Polish error values and
+  table specifiers, `;` argument and `\` array-column separators, decimal comma; see
+  `formula-input.md`); no interface language selects it until a Polish catalog lands (#1807).
+  Function help and number and date formats stay English (en-US) in Polish too.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -109,6 +113,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | `FormulaLocale::Pl`: 434 Excel-Polish function names (every function whose Polish Excel name differs), PRAWDA/FAŁSZ, error values (`#DZIEL/0!`, `#N/D`…), table specifiers with `;` between parts, `;` separators and decimal comma; locale tables generalised (`aliases()`, `boolean_names()`); alias matching folds non-ASCII case (`jeżeli` = `JEŻELI`) |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
 | 2026-10-20 | minor | Japanese catalog (`i18n/ja.rs`) covers every key the Brazilian Portuguese catalog translates: the 398-label shared core moved verbatim plus 545 dialog, message, Backstage and menu strings — 943 keys, ~12% → ~43%. A test parses `pt.rs`'s source, so the two catalogs can't drift apart again. Portuguese re-measured at 943 (was 923) |

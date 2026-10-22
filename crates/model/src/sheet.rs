@@ -154,9 +154,15 @@ const DIGIT_EM: [(&str, f64); 16] = [
 /// Maximum digit width (whole pixels at 96 dpi) of a font: the unit XLSX column widths are counted
 /// in, taken from the workbook's Normal font. Unknown fonts use Calibri's digit.
 pub fn max_digit_width(name: &str, size_pt: f32) -> f64 {
+    max_digit_width_at(name, size_pt, 96.0)
+}
+
+/// Maximum digit width of a font in whole pixels at `dpi` (Excel for Mac lays columns out at 72).
+pub fn max_digit_width_at(name: &str, size_pt: f32, dpi: f64) -> f64 {
     let size = if size_pt.is_finite() && size_pt > 0.0 { f64::from(size_pt).min(409.0) } else { 11.0 };
+    let dpi = if dpi.is_finite() { dpi.clamp(1.0, 1200.0) } else { 96.0 };
     let em = DIGIT_EM.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map_or(0.5068, |&(_, e)| e);
-    (size * 4.0 / 3.0 * em).round().max(1.0)
+    (size * dpi / 72.0 * em).round().max(1.0)
 }
 
 /// Width (px) of a column `base` digits wide plus padding, rounded up to 8 px: the default
@@ -519,6 +525,11 @@ mod tests {
         assert_eq!(max_digit_width(" Helvetica Neue ", 10.0), 7.0);
         assert_eq!(max_digit_width("Courier New", 10.0), 8.0);
         assert_eq!(max_digit_width("Arial", 16.0), 12.0);
+        // At 72 dpi (Excel for Mac) Calibri 11 and 12 both have 6 px digits.
+        assert_eq!(max_digit_width_at("Calibri", 11.0, 72.0), 6.0);
+        assert_eq!(max_digit_width_at("Calibri", 12.0, 72.0), 6.0);
+        assert_eq!(max_digit_width_at("Arial", 16.0, 72.0), 9.0);
+        assert_eq!(max_digit_width_at("Calibri", 11.0, f64::NAN), 7.0);
         // Unknown fonts and hostile sizes stay finite and at least a pixel.
         assert_eq!(max_digit_width("", 11.0), 7.0);
         assert_eq!(max_digit_width("Calibri", f32::NAN), 7.0);

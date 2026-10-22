@@ -76,7 +76,14 @@ fn main() {
             }
             "--density" => {
                 i += 1;
-                mac_density = args.get(i).is_some_and(|d| d == "mac");
+                mac_density = match args.get(i).map(String::as_str) {
+                    Some("mac") => true,
+                    Some("desktop") => false,
+                    other => {
+                        eprintln!("--density takes mac or desktop, not {other:?}");
+                        std::process::exit(2);
+                    }
+                };
             }
             "--language" => {
                 i += 1;

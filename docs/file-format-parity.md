@@ -117,9 +117,9 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-19 | minor | .xls import skips dialog sheets (WsBool `fDialog`), which share the worksheet BOF type and were read as empty worksheets |
 | 2026-10-19 | minor | `.xls` import reads WINDOW2: right-to-left sheets (common in older Arabic and Hebrew files) open right-to-left, and hidden gridlines, headings and zero values and Show Formulas carry over |
 | 2026-10-19 | trivial | XLSX text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`, ECMA-376 Part 1 §21.1.2.2.7): read from the first paragraph and written on every paragraph; output without it is unchanged |
+| 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-18 | trivial | `file.open {csvAsText: true}` keeps every CSV/TSV/TXT field as the text the file holds, so identifiers (GTINs, SKUs, ZIP codes) keep their digits and leading zeros (#1808; a preference and a CLI flag are separate work) |
 | 2026-10-18 | trivial | XLSX PivotTables: `rowGrandTotals` is the Grand Total row and `colGrandTotals` the Grand Total column. Both were read and written the other way round, which a GridCraft round trip hid, so an Excel file with only one grand total opened showing the other |
-| 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-16 | trivial | XLSX charts: `[0]!Name` (a workbook-scoped defined name) in series references is read as the name, so the series resolve instead of showing `#NAME?`. Names in chart references are written qualified (`[0]!Name`, or `Sheet!Name` for a sheet-scoped name): Excel draws a chart with a bare name blank (#1686) |
 | 2026-10-16 | trivial | XLSX reads and writes the workbook's show-objects setting (`workbookPr showObjects`: all, placeholders, none), which Ctrl+6 switches; a file without it is saved without it |
 | 2026-10-16 | trivial | XLSX: pictures in headers and footers (`&G`, the VML drawing `<legacyDrawingHF>` names and its images) are kept on save; they are still not shown (#1257) |

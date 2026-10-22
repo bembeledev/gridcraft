@@ -27,7 +27,7 @@ fn sheet_prefix(s: &SheetSel) -> String {
         SheetSel::Span(a, b) => {
             // `[1]Jan:Dec!A1`: a linked workbook's index can start the range, not its second sheet.
             let joined = format!("{a}:{b}");
-            if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
+            if needs_quotes(a) || core_sheet_needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
         }
     }
 }

@@ -18,6 +18,17 @@ pub enum CalcMode {
     Manual,
 }
 
+/// Options › Advanced › "For objects, show" (`<workbookPr showObjects>`, ECMA-376 `ST_Objects`):
+/// whether charts, pictures, shapes and slicers are drawn. Ctrl+6 switches between `All` and
+/// `None`; `Placeholders` only comes from files and is kept as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShowObjects {
+    #[default]
+    All,
+    Placeholders,
+    None,
+}
+
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
@@ -134,6 +145,8 @@ pub struct Workbook {
     pub theme: Theme,
     pub date_system: DateSystem,
     pub calc: CalcSettings,
+    #[serde(default, skip_serializing_if = "is_all")]
+    pub show_objects: ShowObjects,
     pub active_sheet: usize,
     pub props: DocProps,
     /// Workbook structure protection.
@@ -158,9 +171,10 @@ pub struct Workbook {
     pub phonetics: Vec<PhoneticString>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
-    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros.
+    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros. Shared, so a
+    /// copy of the workbook (every edit's undo step) doesn't copy it.
     #[serde(default, with = "crate::b64::opt")]
-    pub vba_project: Option<Vec<u8>>,
+    pub vba_project: Option<Arc<Vec<u8>>>,
     /// Field separator of the CSV this workbook was read from, so saving it as CSV writes the same
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +186,17 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
+    /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
+    /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
+    /// links are relative to and must keep naming it after a Save As into another folder, since
+    /// the links in memory are still written for the old one. Not in JSON.
+    #[serde(skip)]
+    pub source_path: Option<std::path::PathBuf>,
+}
+
+fn is_all(s: &ShowObjects) -> bool {
+    *s == ShowObjects::All
 }
 
 impl Default for Workbook {
@@ -190,6 +215,7 @@ impl Workbook {
             theme: Theme::default(),
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
+            show_objects: ShowObjects::All,
             active_sheet: 0,
             props: DocProps::default(),
             protected_structure: false,
@@ -201,6 +227,7 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            source_path: None,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
@@ -272,7 +299,7 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(ne) }))
                 })
                 .collect();
             if fixed.is_empty() {
@@ -286,7 +313,7 @@ impl Workbook {
             }
         }
         for n in self.names.iter_mut() {
-            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
                 let ne = spell_calls(e.clone(), &lambdas);
                 if ne != e {
                     n.formula = gridcraft_formula::print(&ne);

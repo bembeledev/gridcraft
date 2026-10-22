@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -154,9 +154,11 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         if let Some(x) = cx.optional_xml(&r.target)? {
             let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes);
             cx.num_fmts = num_fmts;
-            // Cell format 0 is the Normal style: its font is what every unformatted cell shows.
+            // Cell format 0 is the Normal cell format: everything on it (font, number format,
+            // fill, borders, alignment, protection) is what a cell without its own format shows
+            // (#1013).
             if let Some(normal) = xfs.first() {
-                cx.styles = StyleTable::with_default(Style { font: normal.font.clone(), ..Style::default() });
+                cx.styles = StyleTable::with_default(normal.clone());
             }
             cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
             cx.dxfs = dxfs;
@@ -214,10 +216,15 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     // Workbook properties.
-    if let Some(p) = wb_xml.child("workbookPr")
-        && p.flag("date1904", false)
-    {
-        cx.date_system = DateSystem::D1904;
+    if let Some(p) = wb_xml.child("workbookPr") {
+        if p.flag("date1904", false) {
+            cx.date_system = DateSystem::D1904;
+        }
+        wb.show_objects = match p.attr("showObjects") {
+            Some("none") => ShowObjects::None,
+            Some("placeholders") => ShowObjects::Placeholders,
+            _ => ShowObjects::All,
+        };
     }
     wb.date_system = cx.date_system;
     if let Some(c) = wb_xml.child("calcPr") {
@@ -310,7 +317,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 continue;
             }
             if lname.starts_with("_xlchart.") {
-                chart_names.push((lname, crate::fmla::from_file(text)));
+                chart_names.push((lname, crate::fmla::from_file(&crate::chart::chart_ref_from_file(text))));
                 continue;
             }
             if lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
@@ -376,7 +383,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if let Some(r) = find_rel(&wb_rels, "vbaProject").cloned() {
         match cx.pkg.read(&r.target) {
             Ok(Some(data)) => {
-                wb.vba_project = Some(data);
+                wb.vba_project = Some(data.into());
                 cx.warn("macros (VBA project) were kept but not executed");
             }
             Ok(None) => cx.warn("macros (VBA project) reference a missing part and were dropped"),

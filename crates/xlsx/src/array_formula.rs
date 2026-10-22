@@ -56,7 +56,6 @@ enum Ctx {
     /// Array evaluation of everything inside (SUMPRODUCT's arguments): nothing is intersected.
     Array,
 }
-
 /// A function parameter's legacy evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Param {
@@ -689,6 +688,7 @@ impl<'a> Legacy<'a> {
 fn positive(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n >= 1.0)
 }
+
 
 fn one(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n == 1.0)

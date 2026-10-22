@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (object context menu: Bring to Front and Send to Back submenus with Bring Forward and Send Backward) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -67,7 +67,7 @@ this logic, with one undo step.
 | Copy as HTML table for other apps | done (#36, 10-10) |
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
 | Move and resize charts, pictures and shapes | charts can't be resized (#190) |
-| Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
+| Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done. Objects partial: a right-click on a chart, picture, shape or slicer opens its menu (#2067) with Delete; charts add Select Data and Format Chart Area; charts, pictures and shapes have Bring to Front ▸ and Send to Back ▸ submenus with Bring Forward and Send Backward, which reorder among objects of the same kind only (shapes are always drawn under pictures, pictures under charts; their tooltip says so) |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); the tabs/scrollbar split can't be dragged yet |
 | Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
@@ -176,6 +176,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | The chart, picture and shape context menu has Bring to Front ▸ and Send to Back ▸ submenus, as in Excel, which also hold Bring Forward and Send Backward (one step). The menu is an egui menu popup, so it stays on screen near the window edges and closes on Escape or a click elsewhere |
 | 2026-10-21 | minor | Background error checking, first part (#1994): a constant whose text would be a number if typed (signs, thousands, currency, percent, exponent, parenthesised negative) gets Excel's green corner triangle; the active cell then shows a warning button whose menu names the problem and offers Convert to Number for the selection (`formulas.convertToNumber`). Dates, times and fractions kept as text and formula results are not flagged, as in Excel |
 | 2026-10-21 | minor | Paste Special laid out as Excel's: Paste and Operation options each in two columns inside a frame, Skip blanks and Transpose side by side, Paste Link as a button that pastes references at once; labels translated (the generic form didn't translate them) and the window no longer runs past the screen |
 | 2026-10-21 | minor | Form dialogs (conditional-format quick rules, New Name, Remove Duplicates, Text to Columns and every other `Dialog::form`) fit their content: OK and Cancel sit in a row under the last field instead of a right-to-left layout that took the screen's whole height and left the buttons floating halfway down |

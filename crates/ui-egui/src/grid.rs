@@ -3356,45 +3356,83 @@ fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     }
 }
 
-/// The right-click menu of a chart, picture, shape or slicer.
+/// Bring to Front and Send to Back reorder an object among objects of its own kind: shapes,
+/// pictures, charts and slicers are drawn in that order, each kind over the one before.
+const ARRANGE_TIP: &str = "Moves it among objects of the same kind: shapes are drawn under pictures, pictures under charts.";
+
+/// The right-click menu of a chart, picture, shape or slicer. Bring to Front and Send to Back are
+/// submenus that also hold Bring Forward and Send Backward, as in Excel.
 fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some((at, kind, id)) = app.grid.object_menu else { return };
-    let mut close = false;
-    let resp = egui::Area::new(egui::Id::new("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
-            let mut items = vec![("Delete", "object.delete")];
-            if kind == "chart" {
-                items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
-            }
-            let lang = crate::i18n::current(ui.ctx());
+    let mut items = vec![("Delete", "object.delete")];
+    if kind == "chart" {
+        items.extend([("-", ""), ("Select Data…", "ui:selectData")]);
+    }
+    // Slicers aren't in the stacking order `arrange.*` changes.
+    if kind != "slicer" {
+        items.extend([("-", ""), ("Bring to Front", "front"), ("Send to Back", "back")]);
+    }
+    if kind == "chart" {
+        items.extend([("-", ""), ("Format Chart Area…", "ui:formatChart")]);
+    }
+    let lang = crate::i18n::current(ui.ctx());
+    let mut open = true;
+    let mut chosen = None;
+    // A new id for each opening, so the click that reopens it on another object doesn't close it.
+    let popup_id = egui::Id::new(("object_context", id, at.x.to_bits(), at.y.to_bits()));
+    egui::Popup::new(popup_id, ui.ctx().clone(), at, ui.layer_id())
+        .kind(egui::PopupKind::Menu)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .style(egui::containers::menu::menu_style)
+        .open_bool(&mut open)
+        .show(|ui| {
+            ui.set_min_width(190.0);
             for (label, action) in items {
+                let submenu: &[(&str, &str)] = match action {
+                    "front" => &[("Bring to Front", "toFront"), ("Bring Forward", "forward")],
+                    "back" => &[("Send to Back", "toBack"), ("Send Backward", "backward")],
+                    _ => &[],
+                };
                 if label == "-" {
                     ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
-                    close = true;
-                    match action {
-                        "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
-                        "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
-                        _ => {
-                            app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_chart = None;
+                } else if !submenu.is_empty() {
+                    egui::containers::menu::SubMenuButton::new(lang.tr(label)).ui(ui, |ui| {
+                        for &(label, action) in submenu {
+                            // On the items: egui hides the tooltip of a button whose submenu is open.
+                            if ui.button(lang.tr(label)).on_hover_text(lang.tr(ARRANGE_TIP)).clicked() {
+                                chosen = Some(action);
+                            }
                         }
-                    }
+                    });
+                } else if ui.button(lang.tr(label)).clicked() {
+                    chosen = Some(action);
                 }
             }
         });
-    });
-    if close
-        || ui.input(|i| i.key_pressed(egui::Key::Escape))
-        || (ui.input(|i| i.pointer.any_pressed())
-            && !resp.response.contains_pointer()
-            && !resp.response.hovered()
-            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
-    {
+    if chosen.is_some() || !open {
         app.grid.object_menu = None;
+    }
+    let Some(action) = chosen else { return };
+    // `toFront`/`toBack` move it all the way; without them it moves one step. Each kind is its own
+    // stack (see `ARRANGE_TIP`): the order changes among charts, pictures or shapes only.
+    let arrange = |extreme: Option<&str>| {
+        let mut params = json!({"kind": kind, "id": id});
+        if let Some(key) = extreme {
+            params[key] = json!(true);
+        }
+        params
+    };
+    match action {
+        "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
+        "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+        "toFront" => app.run_or_alert("arrange.bringForward", arrange(Some("toFront"))),
+        "forward" => app.run_or_alert("arrange.bringForward", arrange(None)),
+        "toBack" => app.run_or_alert("arrange.sendBackward", arrange(Some("toBack"))),
+        "backward" => app.run_or_alert("arrange.sendBackward", arrange(None)),
+        _ => {
+            app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+            app.selected_chart = None;
+        }
     }
 }
 

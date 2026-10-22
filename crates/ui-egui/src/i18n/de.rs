@@ -433,6 +433,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Link…" => "Link…",
         "Hide" => "Ausblenden",
         "Unhide" => "Einblenden",
+        // grid.rs chart, picture and shape context menu.
+        "Bring to Front" => "In den Vordergrund",
+        "Bring Forward" => "Eine Ebene nach vorne",
+        "Send to Back" => "In den Hintergrund",
+        "Send Backward" => "Eine Ebene nach hinten",
+        "Moves it among objects of the same kind: shapes are drawn under pictures, pictures under charts." => {
+            "Verschiebt es unter Objekten derselben Art: Formen liegen unter Bildern, Bilder unter Diagrammen."
+        }
         "Insert Sheet" => "Blatt einfügen",
         "Rename" => "Umbenennen",
         "Move or Copy…" => "Verschieben oder kopieren…",

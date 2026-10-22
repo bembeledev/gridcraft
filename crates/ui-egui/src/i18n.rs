@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn german_cell_and_header_context_menus_are_fully_translated() {
+    fn german_cell_header_and_object_context_menus_are_fully_translated() {
         for label in [
             "Cut",
             "Copy",
@@ -500,6 +500,10 @@ mod tests {
             "Hide",
             "Unhide",
             "Group",
+            "Bring to Front",
+            "Bring Forward",
+            "Send to Back",
+            "Send Backward",
         ] {
             assert_ne!(Language::De.tr(label), label, "German context menu label missing: {label}");
         }

@@ -4525,22 +4525,43 @@ mod pane_tests {
         let back = geo.screen_point(&sh, q);
         assert!((back - p).length() < 0.01, "{p:?} drew back at {back:?}");
         // A saved stroke from B to D lies where the pen drew it, not at the object scale.
+        let drawn = [pos2(geo.x(&sh, 1) + 5.0, 60.0), pos2(geo.x(&sh, 2) + 30.0, 75.0), pos2(geo.x(&sh, 3) + 20.0, 90.0)];
+        assert_ink_drawn_where_the_pen_was(&geo, &sh, &drawn);
+        // So does one across the freeze line, with the columns under the frozen ones scrolled away.
+        let mut sh = Sheet::new("S");
+        sh.freeze = Some((2, 2));
+        let scroll = vec2(3.0 * sh.default_col_width + 8.0, 0.0);
+        let geo = Geo::with_density(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0)), scroll, Density::mac(&wb));
+        let drawn = [pos2(geo.x(&sh, 0) + 10.0, 60.0), pos2(geo.x(&sh, 1) + 20.0, 70.0), pos2(geo.x(&sh, 6) + 15.0, 90.0)];
+        assert!(drawn[2].x > drawn[1].x, "column G is right of the freeze line");
+        assert_ink_drawn_where_the_pen_was(&geo, &sh, &drawn);
+    }
+
+    /// Saves a pen stroke through `drawn` as `draw.stroke` does, then checks that its painted points
+    /// and its rectangle are where the pen was.
+    fn assert_ink_drawn_where_the_pen_was(geo: &Geo, sh: &Sheet, drawn: &[Pos2]) {
         use gridcraft_engine::model::{Anchor, AnchorMode, Color, Shape, ShapeKind};
-        let (a, b) = (geo.sheet_point(&sh, pos2(geo.x(&sh, 1) + 5.0, 60.0)), geo.sheet_point(&sh, pos2(geo.x(&sh, 3) + 20.0, 90.0)));
-        let cell = CellRef::new(sh.row_at(a[1] as f64), sh.col_at(a[0] as f64));
+        let pts: Vec<[f32; 2]> = drawn.iter().map(|p| geo.sheet_point(sh, *p)).collect();
+        let (minx, miny) = (pts.iter().map(|q| q[0]).fold(f32::INFINITY, f32::min), pts.iter().map(|q| q[1]).fold(f32::INFINITY, f32::min));
+        let (maxx, maxy) = (pts.iter().map(|q| q[0]).fold(0.0, f32::max), pts.iter().map(|q| q[1]).fold(0.0, f32::max));
+        let cell = CellRef::new(sh.row_at(miny as f64), sh.col_at(minx as f64));
         let anchor = Anchor {
             cell,
-            dx: a[0] - sh.col_left(cell.col) as f32,
-            dy: a[1] - sh.row_top(cell.row) as f32,
-            width: b[0] - a[0],
-            height: b[1] - a[1],
+            dx: minx - sh.col_left(cell.col) as f32,
+            dy: miny - sh.row_top(cell.row) as f32,
+            width: maxx - minx,
+            height: maxy - miny,
             mode: AnchorMode::Absolute,
         };
-        let ink =
-            Shape { id: 1, kind: ShapeKind::Ink, anchor, fill: Color::Auto, line: Color::Auto, text: String::new(), format: Default::default() };
-        let r = crate::chartview::shape_rect(&geo, &sh, &ink);
-        assert!((r.left_top() - geo.screen_point(&sh, a)).length() < 0.01, "{r:?}");
-        assert!((r.right_bottom() - geo.screen_point(&sh, b)).length() < 0.01, "{r:?}");
+        let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
+        let ink = Shape { id: 1, kind: ShapeKind::Ink, anchor, fill: Color::Auto, line: Color::Auto, text, format: Default::default() };
+        let painted = crate::chartview::ink_screen_points(geo, sh, &ink);
+        assert_eq!(painted.len(), drawn.len());
+        for (p, d) in painted.iter().zip(drawn) {
+            assert!((*p - *d).length() < 0.2, "drawn at {d:?}, painted at {p:?}");
+        }
+        let r = crate::chartview::shape_rect(geo, sh, &ink);
+        assert!(drawn.iter().all(|d| r.expand(0.2).contains(*d)), "{r:?} misses {drawn:?}");
     }
 
     /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.

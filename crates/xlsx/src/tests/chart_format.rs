@@ -109,3 +109,26 @@ fn hostile_axis_values_are_dropped() {
     assert_eq!(s, AxisScale::default());
     let _ = Series::default();
 }
+
+#[test]
+fn review_category_gridlines_markers_only_scatter_and_legend_size_round_trip() {
+    let chart_of = |kind: ChartKind, format: SeriesFormat| Chart {
+        kind,
+        series: vec![Series { values: "D!$B$1:$B$3".into(), categories: Some("D!$A$1:$A$3".into()), format, ..Series::default() }],
+        ..read_chart(&parse(XML.as_bytes()).unwrap()).unwrap()
+    };
+    // Category-axis gridlines on a column chart.
+    let mut col = chart_of(ChartKind::ColumnClustered, SeriesFormat::default());
+    col.format.x_gridlines = true;
+    let (back, _) = read_xlsx(&write_xlsx(&book(col)).unwrap()).unwrap();
+    assert!(back.sheets[0].charts[0].format.x_gridlines);
+    // A markers-only scatter series with a marker set stays markers only.
+    let sq = chart_of(ChartKind::Scatter, SeriesFormat { no_line: false, marker: MarkerSymbol::Square, marker_fill: None });
+    let (back, _) = read_xlsx(&write_xlsx(&book(sq)).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].charts[0].kind, ChartKind::Scatter);
+    // A legend placed without a size is written without one.
+    let mut placed = chart_of(ChartKind::ScatterLines, SeriesFormat::default());
+    placed.format.legend_layout = Some([0.1, 0.2, 0.0, 0.0]);
+    let xml = chart_xml(&write_xlsx(&book(placed)).unwrap());
+    assert!(xml.contains("<c:x val=\"0.1\"/>") && !xml.contains("<c:w ") && !xml.contains("<c:h "), "{xml}");
+}

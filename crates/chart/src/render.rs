@@ -253,24 +253,22 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         area.h -= used;
     }
     let entries = legend_entries(chart, &data);
-    if !entries.is_empty() && area.ok() {
-        match chart.format.legend_layout {
-            // Placed by hand (fractions of the chart): drawn there, over the plot, taking no room.
-            Some([lx, ly, lw, lh]) => {
-                let (lx, ly) = (lx.clamp(0.0, 1.0) * w, ly.clamp(0.0, 1.0) * h);
-                let lw = if lw > 0.0 { lw * w } else { w - lx };
-                let lh = if lh > 0.0 { lh * h } else { h - ly };
-                let pos = if matches!(chart.legend, LegendPos::Top | LegendPos::Bottom) { LegendPos::Top } else { LegendPos::Left };
-                let boxed = Bx { x: lx, y: ly, w: lw.min(w - lx).max(0.0), h: lh.min(h - ly).max(0.0) };
-                if boxed.ok() {
-                    draw_legend(&mut ctx, &entries, pos, boxed, 1.0);
-                }
-            }
-            None => area = draw_legend(&mut ctx, &entries, chart.legend, area, 0.35),
-        }
+    if !entries.is_empty() && area.ok() && chart.format.legend_layout.is_none() {
+        area = draw_legend(&mut ctx, &entries, chart.legend, area, 0.35);
     }
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
+    }
+    // A legend placed by hand (fractions of the chart) is drawn there, over the plot, taking no room.
+    if let (Some([lx, ly, lw, lh]), false) = (chart.format.legend_layout, entries.is_empty()) {
+        let (lx, ly) = (lx.clamp(0.0, 1.0) * w, ly.clamp(0.0, 1.0) * h);
+        let lw = if lw > 0.0 { lw * w } else { w - lx };
+        let lh = if lh > 0.0 { lh * h } else { h - ly };
+        let pos = if matches!(chart.legend, LegendPos::Top | LegendPos::Bottom) { LegendPos::Top } else { LegendPos::Left };
+        let boxed = Bx { x: lx, y: ly, w: lw.min(w - lx).max(0.0), h: lh.min(h - ly).max(0.0) };
+        if boxed.ok() {
+            draw_legend(&mut ctx, &entries, pos, boxed, 1.0);
+        }
     }
     finalize(ctx.out, w, h)
 }
@@ -714,6 +712,15 @@ fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, colo
     }
 }
 
+/// The plot area's fill and border, inserted at `under` so the fill lies beneath the gridlines.
+fn plot_area_rect(ctx: &mut Ctx, data: &ChartData, plot: Bx, under: usize) {
+    if plot.ok() && (data.areas.plot_fill.is_some() || data.areas.plot_border.is_some()) {
+        let stroke = data.areas.plot_border.map(|c| (c, 1.0));
+        let rect = Prim::Rect { x: plot.x, y: plot.y, w: plot.w, h: plot.h, fill: data.areas.plot_fill, stroke, radius: 0.0 };
+        ctx.out.insert(under.min(ctx.out.len()), rect);
+    }
+}
+
 /// Whether a scatter series draws its line and its markers: the line unless hidden (and the chart
 /// type has lines), the markers unless their symbol is `none`.
 fn scatter_look(chart: &Chart, s: &SeriesData) -> (bool, bool) {
@@ -1094,7 +1101,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
+    let under = ctx.out.len();
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines);
+    plot_area_rect(ctx, data, plot, under);
     if !plot.ok() {
         return;
     }
@@ -1184,7 +1193,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
-                        let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
+                        // A fixed axis minimum above a value would put its end outside the plot.
+                        let (lo_edge, hi_edge) = if horizontal { (plot.x, plot.right()) } else { (plot.y, plot.bottom()) };
+                        let (pb, pt) = (vpos(*b, &sc).clamp(lo_edge, hi_edge), vpos(*t, &sc).clamp(lo_edge, hi_edge));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
@@ -1309,19 +1320,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     if !plot.ok() {
         return;
     }
-    // The plot area's fill goes under the gridlines; its border is drawn with it.
-    if data.areas.plot_fill.is_some() || data.areas.plot_border.is_some() {
-        let rect = Prim::Rect {
-            x: plot.x,
-            y: plot.y,
-            w: plot.w,
-            h: plot.h,
-            fill: data.areas.plot_fill,
-            stroke: data.areas.plot_border.map(|c| (c, 1.0)),
-            radius: 0.0,
-        };
-        ctx.out.insert(under.min(ctx.out.len()), rect);
-    }
+    plot_area_rect(ctx, data, plot, under);
     if chart.format.x_gridlines {
         for t in xs.ticks() {
             ctx.vline(plot.x + xs.frac(t) * plot.w, plot.y, plot.bottom(), GRID, 0.75);
@@ -1380,7 +1379,9 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             continue;
         }
         let pts: Vec<(f64, f64)> = pts.iter().flatten().copied().collect();
-        let frac = |x: f64, y: f64| ((x - xs.min) / (xs.max - xs.min), (y - ys.min) / (ys.max - ys.min));
+        // On the series' own axis, like its points.
+        let sy = if on2(s) { ys2.unwrap_or(ys) } else { ys };
+        let frac = |x: f64, y: f64| ((x - xs.min) / (xs.max - xs.min), (y - sy.min) / (sy.max - sy.min));
         let px = |(fx, fy): (f64, f64)| [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h];
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }

@@ -578,7 +578,8 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     let markered = matches!(g, G::Line { .. } | G::Radar | G::Scatter { .. });
     if markered && (f.no_line || f.marker != MarkerSymbol::Auto || f.marker_fill.is_some()) {
         // Formatted lines and markers: the line (or none), then the marker symbol and its fill.
-        if f.no_line {
+        // A markers-only scatter group has no line, whatever the series says.
+        if f.no_line || g == (G::Scatter { lines: false }) {
             x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>");
         } else if let Some(c) = &color {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
@@ -945,7 +946,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 cross: 2,
                 pos: "l",
                 delete: false,
-                grid: false,
+                grid: ch.format.x_gridlines,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
                 scale: ch.format.x_axis,
@@ -969,7 +970,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 cross: 2,
                 pos: "b",
                 delete: false,
-                grid: false,
+                grid: ch.format.x_gridlines,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
                 scale: ch.format.x_axis,
@@ -1010,14 +1011,21 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             let _ = write!(s, "<c:legendEntry><c:idx val=\"{i}\"/><c:delete val=\"1\"/></c:legendEntry>");
         }
         if let Some([x, y, w, h]) = ch.format.legend_layout {
+            // The fractions are f32: written to 6 places, not as f64 noise (0.1 → 0.10000000149…).
+            let num = |v: f32| num((f64::from(v) * 1e6).round() / 1e6);
             let _ = write!(
                 s,
-                "<c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"{}\"/><c:y val=\"{}\"/><c:w val=\"{}\"/><c:h val=\"{}\"/></c:manualLayout></c:layout>",
-                num(f64::from(x)),
-                num(f64::from(y)),
-                num(f64::from(w)),
-                num(f64::from(h))
+                "<c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"{}\"/><c:y val=\"{}\"/>",
+                num(x),
+                num(y)
             );
+            // A size of 0 is automatic: left out, as files without one have it.
+            for (k, v) in [("w", w), ("h", h)] {
+                if v > 0.0 {
+                    let _ = write!(s, "<c:{k} val=\"{}\"/>", num(v));
+                }
+            }
+            s.push_str("</c:manualLayout></c:layout>");
         }
         s.push_str("<c:overlay val=\"0\"/></c:legend>");
     }

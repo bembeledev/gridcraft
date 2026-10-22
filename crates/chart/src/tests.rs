@@ -1401,3 +1401,62 @@ fn scatter_secondary_axis_and_vertical_gridlines() {
     c.format.x_gridlines = true;
     assert!(vlines(&render(&c, &d, 640.0, 400.0, &ApproxMeasure)) > before);
 }
+
+#[test]
+fn review_hand_placed_legend_is_drawn_over_the_plot() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.legend = LegendPos::Right;
+    c.format.legend_layout = Some([0.2, 0.2, 0.3, 0.3]);
+    let d = scatter_data(vec![xy("Data", &[1.0, 2.0, 3.0], &[1.0, 3.0, 2.0], RED)]);
+    let prims = render(&c, &d, 500.0, 400.0, &ApproxMeasure);
+    let legend = prims.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "Data")).expect("legend text");
+    let line = prims.iter().rposition(|p| matches!(p, Prim::Line { color, width, .. } if *color == RED && *width >= 2.0)).expect("series line");
+    assert!(legend > line, "the legend comes after the series");
+}
+
+#[test]
+fn review_columns_stay_in_the_plot_and_get_its_colours() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.format.y_axis = AxisScale { min: Some(20000.0), max: None, major: None };
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.areas.plot_border = Some(BLUE);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let plot = prims.iter().find_map(|p| match p {
+        Prim::Rect { x, y, w, h, fill: None, stroke: Some((s, _)), .. } if *s == BLUE => Some((*x, *y, x + w, y + h)),
+        _ => None,
+    });
+    let (_, top, _, bottom) = plot.expect("the plot-area border on a column chart");
+    for p in &prims {
+        // Columns start inside the plot (the legend's swatches sit below it).
+        if let Prim::Rect { y, h, fill: Some(f), .. } = p
+            && (*f == [20, 96, 130, 255] || *f == [25, 107, 36, 255])
+            && *y < bottom
+        {
+            assert!(*y >= top - 0.5 && y + h <= bottom + 0.5, "column {y}..{} inside {top}..{bottom}", y + h);
+        }
+    }
+}
+
+#[test]
+fn review_secondary_series_trendline_follows_its_points() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.y2_axis = AxisScale { min: None, max: Some(1000.0), major: None };
+    let mut sun = xy("Sun", &[1.0, 2.0, 3.0], &[100.0, 500.0, 900.0], BLUE);
+    sun.secondary = true;
+    sun.no_line = true;
+    sun.trendlines = vec![TrendlineData { spec: Trendline::default(), color: [0, 150, 0, 255] }];
+    let d = scatter_data(vec![xy("Air", &[1.0, 2.0, 3.0], &[10.0, 25.0, 18.0], RED), sun]);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let ys = |pred: &dyn Fn(&Prim) -> Option<Vec<f32>>| {
+        prims.iter().filter_map(pred).flatten().fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)))
+    };
+    let (mlo, mhi) = ys(&|p| match p {
+        Prim::Circle { cy, fill: Some(f), .. } if *f == BLUE => Some(vec![*cy]),
+        _ => None,
+    });
+    let (tlo, thi) = ys(&|p| match p {
+        Prim::Line { pts, color, .. } if *color == [0, 150, 0, 255] => Some(pts.iter().map(|q| q[1]).collect()),
+        _ => None,
+    });
+    assert!((tlo - mlo).abs() < 3.0 && (thi - mhi).abs() < 3.0, "trendline {tlo}..{thi} through markers {mlo}..{mhi}");
+}

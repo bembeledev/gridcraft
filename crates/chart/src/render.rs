@@ -1028,7 +1028,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot =
+        frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
@@ -1121,7 +1122,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     }
                 }
                 1 => {
+                    // A reversed category axis mirrors the whole frame, so a cluster's slots flip too:
+                    // Excel draws the second series left of the first (#1895 review).
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    let k = if chart.cat_reverse { nslots - 1.0 - k } else { k };
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
@@ -1341,7 +1345,17 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
     let fc = Fmt::new("General");
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot = frame(
+        ctx,
+        area,
+        CatAxis::Labels(&labels, &[]),
+        &ValAxis { scale: ys, fmt: &fc },
+        None,
+        false,
+        chart.gridlines,
+        chart.cat_reverse,
+        chart.val_reverse,
+    );
     if !plot.ok() {
         return;
     }
@@ -1395,7 +1409,17 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
     let f = Fmt::new(&s.number_format);
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot = frame(
+        ctx,
+        area,
+        CatAxis::Labels(&labels, &[]),
+        &ValAxis { scale: ys, fmt: &f },
+        None,
+        false,
+        chart.gridlines,
+        chart.cat_reverse,
+        chart.val_reverse,
+    );
     if !plot.ok() {
         return;
     }
@@ -1698,7 +1722,17 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot = frame(
+        ctx,
+        area,
+        CatAxis::Labels(&labels, &[]),
+        &ValAxis { scale: ys, fmt: &f },
+        None,
+        false,
+        chart.gridlines,
+        chart.cat_reverse,
+        chart.val_reverse,
+    );
     if !plot.ok() {
         return;
     }
@@ -1751,7 +1785,17 @@ fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot = frame(
+        ctx,
+        area,
+        CatAxis::Labels(&labels, &[]),
+        &ValAxis { scale: ys, fmt: &f },
+        None,
+        false,
+        chart.gridlines,
+        chart.cat_reverse,
+        chart.val_reverse,
+    );
     if !plot.ok() {
         return;
     }

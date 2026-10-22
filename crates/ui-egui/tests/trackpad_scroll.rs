@@ -8,9 +8,14 @@ use gridcraft_ui_egui::SheetApp;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness() -> Harness {
+    harness_at(1.0 / 60.0)
+}
+
+/// A harness whose frames are `dt` seconds apart (a slow one stands in for a heavy workbook).
+fn harness_at(dt: f32) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -130,4 +135,56 @@ fn a_short_diagonal_swipe_keeps_both_directions() {
     swipe(&mut h, vec2(-3.0, -3.0), 1);
     let after = scroll(&h);
     assert!(after.x > before.x && after.y > before.y, "{before:?} -> {after:?}");
+}
+
+#[test]
+fn releasing_shift_mid_swipe_keeps_scrolling() {
+    // egui keeps a swipe's modifiers after they're released (more of the gesture may arrive), so
+    // the delta stays horizontal while the trackpad still reports vertical movement. The rail
+    // must not pick the vertical axis from those reports and drop the horizontal delta.
+    let mut h = harness();
+    let before = scroll(&h);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    wheel(&mut h, TouchPhase::Start, Vec2::ZERO);
+    for _ in 0..5 {
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, -12.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::SHIFT,
+        });
+        h.step();
+    }
+    let midway = scroll(&h);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    for _ in 0..5 {
+        wheel(&mut h, TouchPhase::Move, vec2(0.0, -12.0));
+    }
+    wheel(&mut h, TouchPhase::End, Vec2::ZERO);
+    let after = scroll(&h);
+    assert!(midway.x > before.x + 50.0, "Shift+swipe scrolls right: {before:?} -> {midway:?}");
+    assert!(after.x > midway.x + 50.0, "and keeps scrolling right after Shift is released: {midway:?} -> {after:?}");
+    assert_eq!(after.y, before.y, "never down: {before:?} -> {after:?}");
+}
+
+#[test]
+fn a_slow_frame_does_not_swallow_a_wheel_notch() {
+    // egui smooths a wheel notch over a few frames. A frame longer than the pause that ends a
+    // swipe (a heavy workbook) must not drop what's still being smoothed.
+    // Enough frames for egui's smoothing to settle at either frame rate (about a second).
+    let notch = |h: &mut Harness, frames: usize| {
+        let before = scroll(h);
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -3.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(frames);
+        scroll(h).y - before.y
+    };
+    let fast = notch(&mut harness(), 60);
+    let slow = notch(&mut harness_at(0.3), 4);
+    assert!(fast > 50.0, "a notch scrolls: {fast}");
+    assert!((slow - fast).abs() < 1.0, "the same notch over slow frames: {slow} vs {fast}");
 }

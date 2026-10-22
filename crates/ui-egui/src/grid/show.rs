@@ -52,7 +52,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // The trackpad starting a gesture starts a new swipe, even while the last one's momentum runs
     // (the start can come in a frame with no movement yet).
     if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { phase: egui::TouchPhase::Start, .. }))) {
-        app.grid.scroll_rail = ScrollRail::default();
+        app.grid.scroll_rail.begin(now);
     }
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
@@ -105,12 +105,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             let forced = ui.ctx().options(|o| {
                 modifiers.matches_any(o.input_options.horizontal_scroll_modifier) || modifiers.matches_any(o.input_options.vertical_scroll_modifier)
             });
-            let mut d = if forced {
-                app.grid.scroll_rail = ScrollRail::default();
-                scroll_delta
-            } else {
-                app.grid.scroll_rail.steer(scroll_delta, reported, wheel, now)
-            };
+            let mut d = app.grid.scroll_rail.steer(scroll_delta, reported, wheel || forced, now);
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {

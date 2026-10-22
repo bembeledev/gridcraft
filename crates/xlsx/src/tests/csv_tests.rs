@@ -313,16 +313,57 @@ fn parser_stops_collecting_fields_at_max_cols() {
     let mut text = ",".repeat((MAX_COLS + extra) as usize - 1);
     text.push_str("end\nx,y\n");
     let mut lens = vec![];
-    parse_records(&text, ',', '"', |rec| {
+    parse_records(&text, Some(','), Some('"'), |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize, 2]);
     // An unterminated last row is capped the same way.
     let mut lens = vec![];
-    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', |rec| {
+    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), Some(','), Some('"'), |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
+}
+
+/// #1446: a first line `sep=` plus one character names the delimiter and isn't data, as Excel 16.0
+/// reads it when it opens a CSV file. Each case: file → first two rows.
+#[test]
+fn sep_line_names_the_delimiter() {
+    let read = |src: &str| -> Vec<String> {
+        let wb = read_csv(src.as_bytes(), &CsvOptions { delimiter: 0, parse_values: false, ..Default::default() }).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        let cell = |r, c| sh.value(CellRef::new(r, c)).as_text().map(|t| t.to_string()).unwrap_or_default();
+        (0..2).map(|r| (0..3).map(|c| cell(r, c)).collect::<Vec<_>>().join("|").trim_end_matches('|').to_string()).collect()
+    };
+    // Named delimiters, whatever the text would suggest.
+    assert_eq!(read("sep=|\r\nA|B\r\n1|2\r\n"), ["A|B", "1|2"]);
+    assert_eq!(read("sep=;\nA;B,C\n"), ["A|B,C", ""]);
+    assert_eq!(read("sep=,\r\n1,5;2\r\n"), ["1|5;2", ""]);
+    assert_eq!(read("sep=\t\r\nA\tB\r\n"), ["A|B", ""]);
+    assert_eq!(read("sep=x\r\nAxB\r\n"), ["A|B", ""]);
+    // Spaces anywhere, upper case, the line quoted as a field, a BOM before it.
+    for src in ["sep= |\r\nA|B", "sep =|\r\nA|B", " sep=|  \r\nA|B", "SEP=|\r\nA|B", "\"sep=|\"\r\nA|B", "\u{feff}sep=|\r\nA|B"] {
+        assert_eq!(read(src), ["A|B", ""], "{src:?}");
+    }
+    // `sep=` naming nothing (or a space) is dropped and splits nothing.
+    assert_eq!(read("sep=\r\nA;B\tC,D\r\n"), ["A;B\tC,D", ""]);
+    assert_eq!(read("sep= \r\nA,B\r\n"), ["A,B", ""]);
+    assert_eq!(read("sep=|"), ["", ""], "only the line: an empty sheet");
+    // `sep="`: split at the quotes.
+    assert_eq!(read("sep=\"\r\nA\"B\r\n"), ["A|B", ""]);
+    // Data: two characters after `=` (a tab counts), the line anywhere but first, an unclosed quote.
+    assert_eq!(read("sep=ab\r\nAaB\r\n"), ["sep=ab", "AaB"]);
+    assert_eq!(read("sep=|\t\r\nA|B\r\n"), ["sep=|\t", "A|B"]);
+    assert!(read("sep=;,\r\nA;B,C\r\n")[0].starts_with("sep=;"), "data, split as the text suggests");
+    assert_eq!(read("A,B\r\nsep=,\r\n"), ["A|B", "sep="], "a data row, split at its comma");
+    // A delimiter that was given wins, and the line stays data.
+    let wb = read_csv(b"sep=|\r\nA|B\r\n", &CsvOptions { delimiter: b',', ..Default::default() }).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("sep=|"));
+    // Saved again with the named delimiter only when it would be detected without the line.
+    let delim = |src: &str| read_csv(src.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap().csv_delimiter;
+    assert_eq!(delim("sep=;\r\nA;B"), Some(b';'));
+    assert_eq!(delim("sep=\t\r\nA\tB"), Some(b'\t'));
+    assert_eq!(delim("sep=|\r\nA|B"), None, "| isn't detected: saved with commas so it reopens in columns");
 }

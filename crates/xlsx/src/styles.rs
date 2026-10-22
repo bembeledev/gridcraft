@@ -768,8 +768,8 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
     if d.borders != def.borders {
         dx.push_str(&border_xml(&d.borders));
     }
-    if let Some(p) = protection_xml(&d.protection) {
-        dx.push_str(&p);
+    if d.dxf_stated.protection || d.protection != def.protection {
+        let _ = write!(dx, "<protection locked=\"{}\" hidden=\"{}\"/>", d.protection.locked as u8, d.protection.hidden as u8);
     }
     let _ = write!(dx, "</{tag}>");
     dx

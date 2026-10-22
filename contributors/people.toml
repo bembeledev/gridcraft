@@ -93,3 +93,6 @@ sync_github_name = false
 
 [people.bilalmughal]
 sync_github_name = true
+
+[people.RohanBhattacharyya]
+real_name = "Rohan Bhattacharyya"

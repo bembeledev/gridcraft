@@ -50,6 +50,15 @@ pub fn specs() -> Vec<CommandSpec> {
             move_chart
         ),
         cmd!(
+            noundo "chart.saveAsPicture",
+            "Save as Picture…",
+            [],
+            None,
+            "{chart?, path?: \"chart.svg\"} → writes the chart as SVG to `path`, or returns {svg, width, height} without one",
+            has_doc,
+            save_as_picture
+        ),
+        cmd!(
             "chart.formatSelection",
             "Format Selection",
             ["Format", "Current Selection"],
@@ -528,6 +537,23 @@ fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
         cx.sheet_mut(dest)?.charts.push(chart);
         Ok(Json::Null)
     })
+}
+
+/// Save as Picture: the chart drawn at its size as SVG, text kept as text.
+fn save_as_picture(s: &mut Session, p: &Json) -> Result<Json> {
+    let (si, ci) = find_chart(s, p)?;
+    let d = s.doc()?;
+    let chart = d.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).ok_or_else(|| bad("chart.saveAsPicture", "no such chart"))?;
+    let (w, h) = (chart.anchor.width, chart.anchor.height);
+    let data = gridcraft_chart::resolve(&d.wb, si, chart);
+    let svg = gridcraft_chart::to_svg(&gridcraft_chart::render(chart, &data, w, h, &super::print::PdfMeasure), w, h);
+    match str_param(p, "path").filter(|x| !x.is_empty()) {
+        Some(path) => {
+            crate::io::write_file(path, svg.as_bytes())?;
+            Ok(json!({"path": path, "bytes": svg.len(), "width": w, "height": h}))
+        }
+        None => Ok(json!({"svg": svg, "width": w, "height": h})),
+    }
 }
 
 fn format_series(s: &mut Session, p: &Json) -> Result<Json> {

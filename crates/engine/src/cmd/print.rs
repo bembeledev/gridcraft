@@ -683,8 +683,8 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     Look { style, fill, cf: cfl }
 }
 
-/// PDF measurement for chart layout.
-struct PdfMeasure;
+/// PDF measurement for chart layout (Helvetica metrics; the SVG export uses them too).
+pub(crate) struct PdfMeasure;
 
 impl gridcraft_chart::Measure for PdfMeasure {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32 {

@@ -337,6 +337,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("json") => "application/json",
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     }
 }

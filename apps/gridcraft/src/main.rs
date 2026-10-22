@@ -181,6 +181,11 @@ fn services() -> Services {
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+            // A chart's Save as Picture writes SVG and nothing else.
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+                let dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.svg")).add_filter("Scalable Vector Graphics (.svg)", &["svg"]);
+                return dialog.save_file().and_then(|p| p.to_str().map(str::to_string));
+            }
             // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
             const TYPES: [(&str, &str); 4] =
                 [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];

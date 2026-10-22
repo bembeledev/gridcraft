@@ -165,6 +165,41 @@ fn chart_uses_text_first_area_as_categories_for_later_areas() {
 }
 
 #[test]
+fn chart_save_as_picture_returns_svg_and_writes_it_only_to_a_named_path() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples & Pears", 5], ["Plums", 3]]})).unwrap();
+    let id = s.execute("insert.chart", json!({"range": "A1:B3", "type": "column", "width": 320, "height": 200})).unwrap()["chart"].clone();
+    let revision = s.doc().unwrap().revision;
+    for params in [json!({}), json!({"chart": id}), json!({"chart": id, "path": ""})] {
+        let r = s.execute("chart.saveAsPicture", params).unwrap();
+        assert!(r.get("path").is_none(), "no file is written without a path");
+        let svg = r["svg"].as_str().unwrap();
+        assert!(svg.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200""#), "{svg}");
+        assert!(svg.contains(">Apples &amp; Pears</text>"), "category labels are text: {svg}");
+    }
+    assert_eq!(s.doc().unwrap().revision, revision, "saving a picture doesn't change the workbook");
+    assert!(s.ui_requests.is_empty(), "programmatic calls never open a dialog");
+    assert!(s.execute("chart.saveAsPicture", json!({"chart": 999})).is_err());
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn chart_save_as_picture_writes_the_svg_file() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp file name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("gridcraft-chart-{}-{nonce}.svg", std::process::id()));
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:A2", "type": "pie"})).unwrap();
+    let r = s.execute("chart.saveAsPicture", json!({"path": path})).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(r["bytes"].as_u64(), Some(written.len() as u64));
+    assert!(written.starts_with("<svg ") && written.ends_with("</svg>\n"));
+    assert!(r.get("svg").is_none());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn chart_category_axis_from_blank_corner_and_select_data() {
     // #287: numeric X values must be the category axis, not a series of their own.
     let mut s = s();

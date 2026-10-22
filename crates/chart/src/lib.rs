@@ -4,7 +4,8 @@
 //! - [`render`] lays a chart out into a list of drawing primitives ([`Prim`]) that any UI
 //!   toolkit (or the built-in [`rasterize`]) can paint,
 //! - [`render_sparkline`] draws in-cell sparklines,
-//! - [`rasterize`] turns primitives into RGBA pixels for PNG export and tests.
+//! - [`rasterize`] turns primitives into RGBA pixels for PNG export and tests,
+//! - [`to_svg`] writes primitives as an SVG document (Save as Picture).
 //!
 //! The look (palette, greys, spacing) is GridCraft's own design.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -15,6 +16,7 @@ mod raster;
 mod render;
 mod resolve;
 mod sparkline;
+mod svg;
 mod trend;
 
 #[cfg(test)]
@@ -28,6 +30,7 @@ pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
 pub use resolve::{default_palette, resolve, series_color, series_plot_kind};
 pub use sparkline::render_sparkline;
+pub use svg::to_svg;
 
 /// Straight (non-premultiplied) RGBA colour.
 pub type Rgba = [u8; 4];

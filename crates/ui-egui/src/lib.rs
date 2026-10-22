@@ -574,6 +574,29 @@ impl SheetApp {
         }
     }
 
+    /// Save as Picture on a chart's menu: asks where to save (the browser downloads the file
+    /// instead), then writes the chart as SVG with `chart.saveAsPicture`. A cancelled picker
+    /// does nothing.
+    pub fn save_chart_as_picture(&mut self, chart: u32) {
+        let name = format!("Chart {chart}.svg");
+        match self.services.pick_save.as_ref().map(|pick| pick(&name)) {
+            Some(None) => {}
+            Some(Some(path)) => {
+                let path = std::path::Path::new(&path).with_extension("svg").to_string_lossy().into_owned();
+                if let Err(e) = self.run("chart.saveAsPicture", json!({"chart": chart, "path": path})) {
+                    self.alert(e);
+                }
+            }
+            None => match self.run("chart.saveAsPicture", json!({"chart": chart})) {
+                Ok(r) => match (&self.services.download, r.get("svg").and_then(Json::as_str)) {
+                    (Some(download), Some(svg)) => download(&name, svg.as_bytes()),
+                    _ => self.alert("Saving pictures isn't available here.".into()),
+                },
+                Err(e) => self.alert(e),
+            },
+        }
+    }
+
     /// Shows a command error: a toast for an unavailable command, else a message box.
     fn alert(&mut self, e: String) {
         if e.contains("is not available right now") {

@@ -1215,3 +1215,77 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+#[test]
+fn svg_writes_every_chart_kind_as_one_element_per_primitive() {
+    for kind in ALL_KINDS {
+        let prims = render(&chart(kind), &sample(kind), 480.0, 300.0, &ApproxMeasure);
+        let svg = to_svg(&prims, 480.0, 300.0);
+        let lines: Vec<&str> = svg.lines().collect();
+        assert_eq!(lines.first().copied(), Some(r#"<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" viewBox="0 0 480 300">"#));
+        assert_eq!(lines.last().copied(), Some("</svg>"));
+        assert_eq!(lines.len(), prims.len() + 2, "{kind:?}");
+        for line in &lines[1..lines.len() - 1] {
+            assert!(line.starts_with('<') && (line.ends_with("/>") || line.ends_with("</text>")), "{kind:?}: {line}");
+        }
+        let texts = prims.iter().filter(|p| matches!(p, Prim::Text { .. })).count();
+        assert_eq!(svg.matches("<text ").count(), texts, "{kind:?}: text stays text");
+        assert!(!svg.contains("NaN") && !svg.contains("inf"), "{kind:?}");
+    }
+}
+
+#[test]
+fn svg_escapes_text_and_places_it_like_the_pdf_export() {
+    let text = |rotation: f32| Prim::Text {
+        x: 10.0,
+        y: 20.0,
+        text: "Q1 & <Q2> \"East\"\u{7}".into(),
+        size: 10.0,
+        color: [0x40, 0x40, 0x40, 255],
+        bold: true,
+        align: HAlign::Center,
+        valign: VAlign::Top,
+        rotation,
+    };
+    let svg = to_svg(&[text(0.0), text(-std::f32::consts::FRAC_PI_2)], 100.0, 50.0);
+    assert!(svg.contains(
+        r##"<text xml:space="preserve" transform="translate(10 20)" y="7.8" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="bold" text-anchor="middle" fill="#404040">Q1 &amp; &lt;Q2&gt; &quot;East&quot;</text>"##
+    ));
+    assert!(svg.contains(r#"transform="translate(10 20) rotate(-90)""#));
+    // Repeated and leading spaces in a label are kept, not collapsed by the SVG reader.
+    let spaced = Prim::Text {
+        x: 0.0,
+        y: 0.0,
+        text: "  Q1   total".into(),
+        size: 10.0,
+        color: [0, 0, 0, 255],
+        bold: false,
+        align: HAlign::Left,
+        valign: VAlign::Top,
+        rotation: 0.0,
+    };
+    let svg = to_svg(&[spaced], 10.0, 10.0);
+    assert!(svg.contains(r#"<text xml:space="preserve" "#) && svg.contains(">  Q1   total</text>"), "{svg}");
+}
+
+#[test]
+fn svg_draws_wedges_as_arcs_and_survives_hostile_numbers() {
+    let wedge = |r_inner: f32, a1: f32| Prim::Wedge { cx: 50.0, cy: 50.0, r_outer: 40.0, r_inner, a0: 0.0, a1, fill: [255, 0, 0, 128], stroke: None };
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    let svg = to_svg(&[wedge(0.0, half_pi), wedge(20.0, half_pi), wedge(0.0, std::f32::consts::TAU)], 100.0, 100.0);
+    // A quarter of a pie: from 12 o'clock clockwise to 3 o'clock.
+    assert!(svg.contains(r##"<path d="M 50 50 L 50 10 A 40 40 0 0 1 90 50 Z" fill-rule="evenodd" fill="#ff0000" fill-opacity="0.5"/>"##), "{svg}");
+    // A doughnut sector comes back along the inner radius.
+    assert!(svg.contains("M 50 10 A 40 40 0 0 1 90 50 L 70 50 A 20 20 0 0 0 50 30 Z"), "{svg}");
+    // A whole pie is a full circle.
+    assert!(svg.contains("M 50 10 A 40 40 0 1 1 50 90 A 40 40 0 1 1 50 10 Z"), "{svg}");
+
+    let hostile = [
+        Prim::Rect { x: f32::NAN, y: 5.0, w: -10.0, h: f32::INFINITY, fill: None, stroke: Some(([0, 0, 0, 255], -1.0)), radius: 0.0 },
+        Prim::Wedge { cx: 0.0, cy: 0.0, r_outer: 1.0, r_inner: 0.0, a0: f32::NAN, a1: 1.0, fill: [0; 4], stroke: None },
+        Prim::Line { pts: vec![[f32::NEG_INFINITY, 0.0]], color: [0; 4], width: 1.0, dash: true },
+    ];
+    let svg = to_svg(&hostile, f32::NAN, -0.0);
+    assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+    assert!(svg.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0""#));
+}

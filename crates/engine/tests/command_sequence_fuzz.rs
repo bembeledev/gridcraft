@@ -58,6 +58,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.exportHtml", "writes files"),
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
+    ("chart.saveAsPicture", "may write files"),
     ("window.activate", "switches documents"),
     ("view.newWindow", "opens another document"),
     ("insert.picture", "reads files"),

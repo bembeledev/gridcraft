@@ -255,6 +255,18 @@ fn chart_cache_counts_and_series_are_bounded() {
 }
 
 #[test]
+fn chart_cache_budget_bounds_many_empty_series() {
+    let series: String = (0..1_000)
+        .map(|i| format!(r#"<c:ser><c:idx val="{i}"/><c:order val="{i}"/><c:val><c:numLit><c:ptCount val="1048576"/></c:numLit></c:val></c:ser>"#))
+        .collect();
+    let root = crate::xml::parse(chart_xml(false, &format!("<c:pieChart>{series}</c:pieChart>"), "").as_bytes()).unwrap();
+    let (chart, _, warned) = crate::chart::read_chart_with_budget(&root).unwrap();
+    assert_eq!(chart.series.len(), 1_000);
+    assert!(chart.series.iter().map(|s| s.values.split(',').count()).sum::<usize>() <= 16_777_216 + chart.series.len());
+    assert!(warned);
+}
+
+#[test]
 fn a_deleted_automatic_title_stays_deleted() {
     let one = ser("<c:v>Vehicles</c:v>", &str_cache("S!$A$1:$A$2", &["a", "b"]), &num_cache("S!$B$1:$B$2", 2, &[]));
     let pie = format!("<c:pieChart>{one}</c:pieChart>");

@@ -98,18 +98,29 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
     }
     out
 }
+const MAX_CHART_CACHED_POINTS: usize = 16_777_216;
 
-fn data_ref(e: Option<&El>) -> Option<String> {
+struct ChartReadBudget {
+    remaining: usize,
+    exceeded: bool,
+}
+
+impl ChartReadBudget {
+    fn new() -> Self {
+        Self { remaining: MAX_CHART_CACHED_POINTS, exceeded: false }
+    }
+}
+
+fn data_ref(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<String> {
     let e = e?;
     for k in ["numRef", "strRef", "multiLvlStrRef"] {
         if let Some(f) = e.child(k).and_then(|r| r.child("f")) {
             return Some(chart_ref_from_file(&f.text));
         }
     }
-    // Literal values become an array constant.
     for k in ["numLit", "strLit"] {
         if let Some(l) = e.child(k) {
-            return read_points(l, l).map(|p| literal(&p, k == "numLit"));
+            return read_points(l, l, budget).map(|p| literal(&p, k == "numLit"));
         }
     }
     None
@@ -121,11 +132,19 @@ const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
 /// The points of a cache or literal (`c` holds `ptCount`, `pts` the `<c:pt>`s), by index; missing
 /// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
 /// in document order. A missing, unreadable or too small `ptCount` gives way to the points present.
-fn read_points<'a>(c: &El, pts: &'a El) -> Option<Vec<Option<&'a str>>> {
+fn read_points<'a>(c: &El, pts: &'a El, budget: &mut ChartReadBudget) -> Option<Vec<Option<&'a str>>> {
     let at = |i: usize, p: &El| p.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(i);
     let placed = || pts.kids("pt").enumerate().map(|(i, p)| (at(i, p), p)).filter(|(i, _)| *i < MAX_CACHED_POINTS);
     let highest = placed().map(|(i, _)| i + 1).max().unwrap_or(0);
-    let count = c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).map(|n| n.min(MAX_CACHED_POINTS).max(highest)).unwrap_or(highest);
+    let requested =
+        c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).map(|n| n.min(MAX_CACHED_POINTS).max(highest)).unwrap_or(highest);
+    let count = if requested > budget.remaining {
+        budget.exceeded = true;
+        highest.min(budget.remaining)
+    } else {
+        requested
+    };
+    budget.remaining = budget.remaining.saturating_sub(count);
     if count == 0 {
         return None;
     }
@@ -175,25 +194,25 @@ pub(crate) struct PivotSeriesCache {
 }
 
 /// `numCache`, `strCache`, or the innermost level of a `multiLvlStrCache`, under `cat` or `val`.
-fn cached_points(e: Option<&El>) -> Option<CachedPoints> {
+fn cached_points(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<CachedPoints> {
     let e = e?;
     let owned = |p: Vec<Option<&str>>| p.into_iter().map(|v| v.map(str::to_string)).collect();
     if let Some(c) = e.path(&["numRef", "numCache"]) {
-        Some(CachedPoints { points: owned(read_points(c, c)?), numeric: true, multi_level: false })
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: true, multi_level: false })
     } else if let Some(c) = e.path(&["strRef", "strCache"]) {
-        Some(CachedPoints { points: owned(read_points(c, c)?), numeric: false, multi_level: false })
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: false, multi_level: false })
     } else {
         let c = e.path(&["multiLvlStrRef", "multiLvlStrCache"])?;
         let multi_level = c.kids("lvl").nth(1).is_some();
-        Some(CachedPoints { points: owned(read_points(c, c.child("lvl")?)?), numeric: false, multi_level })
+        Some(CachedPoints { points: owned(read_points(c, c.child("lvl")?, budget)?), numeric: false, multi_level })
     }
 }
 
-fn pivot_series_cache(s: &El) -> PivotSeriesCache {
+fn pivot_series_cache(s: &El, budget: &mut ChartReadBudget) -> PivotSeriesCache {
     PivotSeriesCache {
         name: s.path(&["tx", "strRef", "strCache", "pt", "v"]).map(|v| v.text.clone()),
-        categories: cached_points(s.child("cat")),
-        values: cached_points(s.child("val")),
+        categories: cached_points(s.child("cat"), budget),
+        values: cached_points(s.child("val"), budget),
         number_format: s
             .path(&["val", "numRef", "numCache", "formatCode"])
             .map(|c| c.text.trim())
@@ -313,7 +332,7 @@ pub(crate) fn plot_pivot_caches(wb: &mut Workbook, pending: &[(u32, Vec<PivotSer
     }
 }
 
-fn read_series(s: &El) -> Series {
+fn read_series(s: &El, budget: &mut ChartReadBudget) -> Series {
     let name = s
         .child("tx")
         .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
@@ -326,9 +345,9 @@ fn read_series(s: &El) -> Series {
     let values = s.child("val").or_else(|| s.child("yVal"));
     Series {
         name,
-        categories: data_ref(s.child("cat")).or_else(|| data_ref(s.child("xVal"))),
-        values: data_ref(s.child("val")).or_else(|| data_ref(s.child("yVal"))).unwrap_or_default(),
-        bubble_sizes: data_ref(s.child("bubbleSize")),
+        categories: data_ref(s.child("cat"), budget).or_else(|| data_ref(s.child("xVal"), budget)),
+        values: data_ref(s.child("val"), budget).or_else(|| data_ref(s.child("yVal"), budget)).unwrap_or_default(),
+        bubble_sizes: data_ref(s.child("bubbleSize"), budget),
         color,
         secondary: false,
         kind: None,
@@ -419,8 +438,12 @@ fn axis_ids(g: &El) -> Vec<String> {
 }
 
 /// A chart part, with the cached points of each series when it is a PivotChart (empty otherwise),
-/// for [`plot_cached`] once the workbook's cells are read.
+#[allow(dead_code)]
 pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
+    read_chart_with_budget(root).map(|(chart, caches, _)| (chart, caches))
+}
+
+pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>, bool)> {
     let chart = root.child("chart")?;
     let plot = chart.child("plotArea")?;
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
@@ -429,9 +452,10 @@ pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
     let pivot = root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty());
     let mut series = vec![];
     let mut caches = vec![];
+    let mut budget = ChartReadBudget::new();
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
-            let mut ser = read_series(s);
+            let mut ser = read_series(s, &mut budget);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
                 ser.kind = Some(*k);
@@ -441,7 +465,7 @@ pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
             }
             series.push(ser);
             if pivot.is_some() {
-                caches.push(pivot_series_cache(s));
+                caches.push(pivot_series_cache(s, &mut budget));
             }
         }
     }
@@ -488,7 +512,7 @@ pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
         by_rows: false,
         pivot,
     };
-    Some((ch, caches))
+    Some((ch, caches, budget.exceeded))
 }
 
 // ---------------------------------------------------------------- writing

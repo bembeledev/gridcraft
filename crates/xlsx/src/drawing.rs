@@ -167,14 +167,17 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         if let Some(cx_xml) = cx.optional_xml(&target)? {
                             let chartex = uri.contains("chartex");
                             let read = if chartex {
-                                crate::chartex::read_chartex(&cx_xml).map(|c| (c, Vec::new()))
+                                crate::chartex::read_chartex(&cx_xml).map(|c| (c, Vec::new(), false))
                             } else {
-                                crate::chart::read_chart(&cx_xml)
+                                crate::chart::read_chart_with_budget(&cx_xml)
                             };
                             match read {
-                                Some((mut ch, caches)) => {
+                                Some((mut ch, caches, budget_exceeded)) => {
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
+                                    if budget_exceeded {
+                                        cx.warn("chart cached points exceeded the per-chart import budget; trailing gaps were truncated");
+                                    }
                                     if !caches.is_empty() {
                                         cx.pivot_charts.push((ch.id, caches));
                                     }

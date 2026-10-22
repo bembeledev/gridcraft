@@ -1,5 +1,14 @@
 # Decisions
 
+## Bound repeated XLSX column expansion (#1022)
+
+Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.
+This allows more than 60 full-grid passes while bounding repeated work on overlapping spans;
+counting only the final map size would not limit that work. Charge each clipped span before
+inserting it, after the existing default-record skip. Exceeding the limit returns the existing
+`IoError::TooLarge`, which aborts the import instead of silently dropping a partially read sheet.
+Keep the current last-wins semantics rather than introduce interval storage or normalization.
+
 ## Formula localization uses the existing interface preference
 
 PR #98 builds on the persisted `UiState.language` introduced by #31 and extended by #104.
@@ -75,14 +84,14 @@ steps, so the wheel and the buttons now step differently. Whether they should sh
 ## Text files save back in the encoding and line ends they were opened with
 
 A CSV or tab-separated file is read in the encoding its bytes show (a UTF-8 or UTF-16 byte order
-mark, else UTF-8, else Windows-1252), and the workbook remembers it with the line end of the first
+mark, else UTF-8, else Windows-1256 when the bytes read as Arabic, else Windows-1252), and the workbook remembers it with the line end of the first
 record (`Workbook::csv_format`, next to the separator in `csv_delimiter`). Saving or exporting it as
 text writes the same encoding, byte order mark and line ends back, so a file another program wrote
 comes back as that program expects: before, every text file was written as UTF-8 without a BOM with
 CRLF, which turned an ANSI file's `é` into two bytes and a UTF-16 file into UTF-8. A workbook not
 read from text still gets UTF-8 without a BOM and CRLF.
 
-Windows-1252 holds 256 characters. When the text has others (`č`, `ć`, an emoji), nothing is
+Windows-1252 and Windows-1256 hold 256 characters each. When the text has others (`č`, `ć`, an emoji), nothing is
 written: `file.save` and `file.exportCsv` answer `{saved: false, encoding, unencodable, suggested}`
 and the interface asks which encoding to use, suggesting UTF-8, which holds every character. Excel
 writes `?` for them; here that happens only when someone picks Windows-1252 in that dialog (or

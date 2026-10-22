@@ -42,6 +42,7 @@ const MAX_FIELDS: usize = 16_384;
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 /// Extension carrying a cache's id for slicer caches.
 const EXT_X14_CACHE_ID: &str = "{725AE2AE-9491-48be-B2B4-4EB974FC3084}";
+const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -462,10 +463,7 @@ fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -
         let xml = if valid { format!("<worksheetSource name=\"{}\"/>", esc_attr(&tb.name)) } else { range_source_xml(&sh.name, r) };
         return Some((si, r, xml));
     }
-    let (sheet, body) = match t.rsplit_once('!') {
-        Some((sh, body)) => (Some(sh.trim_matches('\'').replace("''", "'")), body),
-        None => (None, t),
-    };
+    let (sheet, body) = gridcraft_core::split_sheet(t);
     if let Some(r) = RangeRef::parse(body) {
         let si = match &sheet {
             Some(n) => wb.sheet_index(n)?,
@@ -1007,7 +1005,14 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
     } else {
         row_levels.max(1)
     };
-    let _ = write!(s, "<location ref=\"{}\" firstHeaderRow=\"1\" firstDataRow=\"{first_data_row}\" firstDataCol=\"{first_data_col}\"", loc.a1());
+    // Two or more value fields in Columns alone: Excel 365 would add a `Values` caption row.
+    let hide_values_row = col_values.is_some() && col_idx.is_empty();
+    let first_header_row = usize::from(!hide_values_row);
+    let _ = write!(
+        s,
+        "<location ref=\"{}\" firstHeaderRow=\"{first_header_row}\" firstDataRow=\"{first_data_row}\" firstDataCol=\"{first_data_col}\"",
+        loc.a1()
+    );
     if !pages.is_empty() {
         let _ = write!(s, " rowPageCount=\"{}\" colPageCount=\"1\"", pages.len());
     }
@@ -1164,6 +1169,12 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
+    if hide_values_row {
+        let _ = write!(
+            s,
+            "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext></extLst>"
+        );
+    }
     s.push_str("</pivotTableDefinition>");
     s
 }

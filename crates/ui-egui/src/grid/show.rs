@@ -97,7 +97,20 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     })
                     .fold(egui::Vec2::ZERO, |a, b| a + b)
             });
-            let mut d = app.grid.scroll_rail.steer(scroll_delta, reported, now);
+            let wheel = ui.input(|i| {
+                i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, .. }))
+            });
+            // Shift (horizontal) or Alt (vertical) already puts the scroll on one axis; egui
+            // moves it there after the event, so the reported axis would be the wrong one.
+            let forced = ui.ctx().options(|o| {
+                modifiers.matches_any(o.input_options.horizontal_scroll_modifier) || modifiers.matches_any(o.input_options.vertical_scroll_modifier)
+            });
+            let mut d = if forced {
+                app.grid.scroll_rail = ScrollRail::default();
+                scroll_delta
+            } else {
+                app.grid.scroll_rail.steer(scroll_delta, reported, wheel, now)
+            };
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {

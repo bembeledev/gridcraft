@@ -97,3 +97,37 @@ fn each_swipe_picks_its_own_axis() {
     let after = scroll(&h);
     assert!(after.y > before.y + 100.0 && after.x == before.x, "{before:?} -> {after:?}");
 }
+
+#[test]
+fn shift_turns_a_vertical_wheel_sideways() {
+    // Off the Mac, Shift+wheel arrives as vertical movement and egui turns it horizontal; the
+    // axis rail must not hold it to the vertical axis it was reported on.
+    let mut h = harness();
+    let before = scroll(&h);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    for _ in 0..3 {
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -2.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::SHIFT,
+        });
+        h.run_steps(4);
+    }
+    h.run_steps(30);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+    let after = scroll(&h);
+    assert!(after.x > before.x + 50.0, "Shift+wheel scrolls right: {before:?} -> {after:?}");
+    assert_eq!(after.y, before.y, "and not down: {before:?} -> {after:?}");
+}
+
+#[test]
+fn a_short_diagonal_swipe_keeps_both_directions() {
+    // Before a swipe has gone far enough to pick an axis, a diagonal movement moves both ways.
+    let mut h = harness();
+    let before = scroll(&h);
+    swipe(&mut h, vec2(-3.0, -3.0), 1);
+    let after = scroll(&h);
+    assert!(after.x > before.x && after.y > before.y, "{before:?} -> {after:?}");
+}

@@ -257,6 +257,8 @@ pub struct ScrollRail {
     axis: RailAxis,
     /// When the swipe last moved.
     last: f64,
+    /// The scroll comes from a mouse wheel's notches, not a trackpad: it passes unchanged.
+    wheel: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -278,13 +280,18 @@ const RAIL_RATIO: f32 = 2.0;
 impl ScrollRail {
     /// The part of `d` (one frame's scroll) to apply: along the swipe's axis only, or all of it
     /// for a diagonal swipe. `reported` is the movement the device reported this frame, by axis;
-    /// it decides the axis, so the smoothed tail of an earlier swipe can't.
-    pub fn steer(&mut self, d: egui::Vec2, reported: egui::Vec2, now: f64) -> egui::Vec2 {
+    /// it decides the axis, so the smoothed tail of an earlier swipe can't. `wheel` when this
+    /// frame brought mouse-wheel notches (line or page units), which are left alone.
+    pub fn steer(&mut self, d: egui::Vec2, reported: egui::Vec2, wheel: bool, now: f64) -> egui::Vec2 {
         let since = now - self.last;
         if since.is_nan() || since > RAIL_GAP {
             *self = ScrollRail::default();
         }
         self.last = now;
+        self.wheel |= wheel;
+        if self.wheel {
+            return d;
+        }
         if self.axis == RailAxis::Undecided {
             self.travel += reported.abs();
             let t = self.travel;
@@ -302,12 +309,13 @@ impl ScrollRail {
             RailAxis::Vertical => vec2(0.0, d.y),
             RailAxis::Horizontal => vec2(d.x, 0.0),
             RailAxis::Free => d,
-            // Until it's decided, the swipe moves along the way it has mostly gone so far. Before
-            // it has moved at all, what's left of an earlier swipe's glide stops, as fingers
-            // touching the trackpad stop it.
+            // Until it's decided, the swipe moves along an axis it already clearly follows, and
+            // both ways otherwise. Before it has moved at all, what's left of an earlier swipe's
+            // glide stops, as fingers touching the trackpad stop it.
             RailAxis::Undecided if self.travel == egui::Vec2::ZERO => egui::Vec2::ZERO,
-            RailAxis::Undecided if self.travel.y >= self.travel.x => vec2(0.0, d.y),
-            RailAxis::Undecided => vec2(d.x, 0.0),
+            RailAxis::Undecided if self.travel.y >= RAIL_RATIO * self.travel.x => vec2(0.0, d.y),
+            RailAxis::Undecided if self.travel.x >= RAIL_RATIO * self.travel.y => vec2(d.x, 0.0),
+            RailAxis::Undecided => d,
         }
     }
 }

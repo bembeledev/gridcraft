@@ -49,6 +49,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // The trackpad starting a gesture starts a new swipe, even while the last one's momentum runs
+    // (the start can come in a frame with no movement yet).
+    if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { phase: egui::TouchPhase::Start, .. }))) {
+        app.grid.scroll_rail = ScrollRail::default();
+    }
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -81,7 +86,18 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-            let mut d = scroll_delta;
+            // What the device reported this frame (egui's smoothed delta can still carry the tail
+            // of an earlier swipe): it alone decides a new swipe's axis.
+            let reported = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::MouseWheel { delta, phase: egui::TouchPhase::Move, .. } => Some(delta.abs()),
+                        _ => None,
+                    })
+                    .fold(egui::Vec2::ZERO, |a, b| a + b)
+            });
+            let mut d = app.grid.scroll_rail.steer(scroll_delta, reported, now);
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {

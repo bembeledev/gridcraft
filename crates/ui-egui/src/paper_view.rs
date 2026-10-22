@@ -165,6 +165,8 @@ pub(crate) fn paint_pages(
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
+            // The fade covers the Focus Cell bands, so they go on again above it.
+            grid::paint_focus_bands(&pc, geo, wb, sh, sel.active, rows, cols, t);
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }

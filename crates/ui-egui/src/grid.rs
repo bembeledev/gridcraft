@@ -1130,13 +1130,7 @@ pub(crate) fn paint_quadrant(
         looks.push((anchor, rect, lk, cfl));
     }
     // Focus Cell: the active cell's row and column, over the fills and under the text.
-    if sh.focus_cell {
-        let (col, row) = focus_bands(geo, sh, active, rows, cols);
-        let tint = focus_tint(sh, wb, t);
-        for band in col.into_iter().chain(row) {
-            p.rect_filled(band, 0.0, tint);
-        }
-    }
+    paint_focus_bands(p, geo, wb, sh, active, rows, cols, t);
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
@@ -1688,6 +1682,18 @@ pub fn focus_bands(geo: &Geo, sh: &Sheet, active: CellRef, rows: (u32, u32), col
         in_cols.then(|| band(geo.x(sh, active.col), x_end(active.col.saturating_add(1)), top, bottom)),
         in_rows.then(|| band(left, right, geo.y(sh, active.row), y_end(active.row.saturating_add(1)))),
     )
+}
+
+/// Paints the Focus Cell bands of one quadrant, when the sheet has Focus Cell on.
+pub(crate) fn paint_focus_bands(p: &Painter, geo: &Geo, wb: &Workbook, sh: &Sheet, active: CellRef, rows: (u32, u32), cols: (u32, u32), t: &Tokens) {
+    if !sh.focus_cell {
+        return;
+    }
+    let (col, row) = focus_bands(geo, sh, active, rows, cols);
+    let tint = focus_tint(sh, wb, t);
+    for band in col.into_iter().chain(row) {
+        p.rect_filled(band, 0.0, tint);
+    }
 }
 
 /// The alpha of the Focus Cell tint. The selection fill's own alpha, so the two read alike.

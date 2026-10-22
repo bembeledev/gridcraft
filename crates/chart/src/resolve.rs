@@ -1,7 +1,7 @@
 //! Pulls chart data (names, categories, values, formats, colours) out of a workbook.
 
 use gridcraft_calc::evaluate;
-use gridcraft_core::{CellRef, RangeRef, Value, number_to_text};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, category_levels, number_to_text};
 use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
@@ -50,7 +50,7 @@ fn parse_ref(wb: &Workbook, sheet: usize, formula: &str) -> Option<(usize, Range
     let (sh, addr) = match f.rfind('!') {
         Some(i) => {
             let name = f.get(..i)?.trim();
-            let name = name.strip_prefix('\'').and_then(|n| n.strip_suffix('\'')).map(|n| n.replace("''", "'")).unwrap_or_else(|| name.to_string());
+            let name = gridcraft_core::unquote_sheet(name);
             (wb.sheet_index(&name)?, f.get(i + 1..)?)
         }
         None => (sheet, f),
@@ -93,24 +93,41 @@ fn eval_list(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Value> {
 /// sheet's used range (`FULL_SIZE_CELLS` in `gridcraft_calc::eval`). A clipped reference must stay
 /// above it, or the clip would turn a trimmed read into a full-size one with trailing blanks.
 const CALC_FULL_SIZE_CELLS: u64 = 16_384;
+/// Bounded references up to this many cells are read at their full size too
+/// (`FULL_SIZE_BOUNDED_CELLS` in `gridcraft_calc::eval`).
+const CALC_FULL_SIZE_BOUNDED_CELLS: u64 = 1_048_576;
 
 /// `formula` as a plain reference (`Sheet!A1:A1000000`) cut after the rows that can still hold
 /// one of the first `limit` points, so that calc never reads the rest; `None` when `formula` is
 /// no reference or already small enough. Values are read row by row, and calc trims only the
 /// bottom and right of a reference, so keeping `limit` rows keeps the first `limit` values.
 fn clipped_reference(wb: &Workbook, sheet: usize, formula: &str, limit: usize) -> Option<String> {
-    let (_, r) = parse_ref(wb, sheet, formula)?;
-    let (h, w) = (u64::from(r.height()), u64::from(r.width()));
-    if h.saturating_mul(w) <= CALC_FULL_SIZE_CELLS {
-        return None;
+    let (sh, mut r) = parse_ref(wb, sheet, formula)?;
+    let cells = u64::from(r.height()).saturating_mul(u64::from(r.width()));
+    // calc trims a block that runs to the sheet's edge, and any block over a column's worth, to
+    // the used range. Do it here, or the clipped block below would be read at its full size.
+    let to_edge = r.end.row == MAX_ROWS - 1 || r.end.col == MAX_COLS - 1;
+    let trimmed = cells > CALC_FULL_SIZE_CELLS && (to_edge || cells > CALC_FULL_SIZE_BOUNDED_CELLS);
+    let mut changed = false;
+    if trimmed {
+        let end = match wb.sheet(sh).and_then(|s| s.used_range()) {
+            Some(u) => CellRef::new(r.end.row.min(u.end.row.max(r.start.row)), r.end.col.min(u.end.col.max(r.start.col))),
+            None => r.start,
+        };
+        changed = end != r.end;
+        r = RangeRef::new(r.start, end);
     }
-    let keep = (limit as u64).max(CALC_FULL_SIZE_CELLS / w + 1);
-    if h <= keep {
-        return None;
-    }
-    let end = CellRef::new(r.start.row.saturating_add(u32::try_from(keep).ok()?).saturating_sub(1), r.end.col);
     let prefix = formula.rfind('!').and_then(|i| formula.get(..=i)).unwrap_or("");
-    Some(format!("{prefix}{}", RangeRef::new(r.start, end)))
+    let (h, w) = (u64::from(r.height()), u64::from(r.width()));
+    if h.saturating_mul(w) > CALC_FULL_SIZE_CELLS {
+        let keep = (limit as u64).max(CALC_FULL_SIZE_CELLS / w + 1);
+        if h > keep {
+            let end = CellRef::new(r.start.row.saturating_add(u32::try_from(keep).ok()?).saturating_sub(1), r.end.col);
+            r = RangeRef::new(r.start, end);
+            changed = true;
+        }
+    }
+    changed.then(|| format!("{prefix}{r}"))
 }
 
 fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, limit: usize, depth: u32) -> Vec<Value> {
@@ -167,12 +184,16 @@ fn value_text(v: &Value) -> String {
     }
 }
 
-/// Category labels, formatted with each source cell's number format (dates, currency…).
-fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
-    let vals = eval_list(wb, sheet, formula);
+/// Category labels, formatted with each source cell's number format (dates, currency…), and
+/// the outer levels of a multi-level axis: a category range wider than a column of values (or
+/// taller than a row of values) groups its innermost labels, year beside month. Each outer level
+/// has one entry per category, non-empty where a group starts, as the cells are.
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limit: usize) -> (Vec<String>, Vec<Vec<String>>) {
+    let vals = eval_list_in(wb, sheet, formula, limit, 0);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
-    vals.iter()
+    let texts: Vec<String> = vals
+        .iter()
         .enumerate()
         .map(|(i, v)| {
             if let (Some((s, r)), Value::Number(_)) = (src, v) {
@@ -187,16 +208,42 @@ fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
             }
             value_text(v)
         })
-        .collect()
+        .collect();
+    let Some((_, r)) = src else { return (texts, vec![]) };
+    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
+    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
+    let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
+    if texts.len() != w.saturating_mul(h) {
+        return (texts, vec![]); // truncated or not a plain block: a flat list
+    }
+    let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
+    let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
+    let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
+    let outer = levels.outer as usize;
+    if levels.by_columns {
+        (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
+    } else {
+        (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
+    }
 }
 
-/// A series name: a reference/formula is evaluated, a quoted or bare literal is used as is.
+/// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
+/// that sheet), the way the evaluator looks names up.
+fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
+    match t.split_once('!') {
+        Some((s, bare)) => wb.sheet_index(s.trim_matches('\'')).is_some_and(|i| wb.name(bare, i).is_some()),
+        None => wb.name(t, sheet).is_some(),
+    }
+}
+
+/// A series name: a reference/formula or a defined name (`[0]!Title` in a file) is evaluated,
+/// a quoted or other bare literal is used as is.
 fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     let t = name.trim();
     if let Some(q) = t.strip_prefix('"').and_then(|q| q.strip_suffix('"')) {
         return q.replace("\"\"", "\"");
     }
-    if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') {
+    if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') || is_defined_name(wb, sheet, t) {
         let vals = eval_list(wb, sheet, t);
         let parts: Vec<String> = vals.iter().map(value_text).filter(|s| !s.is_empty()).take(8).collect();
         return parts.join(" ");
@@ -233,6 +280,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut categories: Option<Vec<String>> = None;
     let limit = points_per_series(chart.series.len());
     let mut trend_left = MAX_TRENDLINES;
+    let mut category_levels = Vec::new();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values, limit);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
@@ -249,10 +297,11 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let mut c = category_texts(wb, sheet, f);
+            let (mut c, outer) = category_table(wb, sheet, f, &s.values, limit);
             c.truncate(limit);
             if !c.is_empty() {
                 categories = Some(c);
+                category_levels = outer;
             }
         }
         let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f, limit));
@@ -282,7 +331,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, series, palette }
+    ChartData { categories, category_levels, series, palette }
 }
 
 #[cfg(test)]
@@ -306,7 +355,7 @@ mod tests {
 
     #[test]
     fn a_long_reference_is_clipped_before_it_is_evaluated() {
-        let wb = book(1, 1);
+        let wb = book(120_000, 3);
         let rows = |f: &str, limit| {
             let g = clipped_reference(&wb, 0, f, limit)?;
             let (_, r) = parse_ref(&wb, 0, &g)?;

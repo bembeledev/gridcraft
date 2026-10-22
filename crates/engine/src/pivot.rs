@@ -1652,12 +1652,28 @@ fn header_items(wb: &Workbook, si: usize, r: RangeRef, pivot_sheet: usize, repor
 /// which Excel can show above the column items), with that name at another level and the
 /// column items in the same order.
 fn same_items(key: &[String], items: &[String], value_item: bool) -> bool {
-    let unambiguous = |values: &[String]| values.iter().all(|value| !value.contains(" - "));
-    if key == items || (key.join(" - ") == items.join(" - ") && unambiguous(items) && (key.len() == 1 || unambiguous(key))) {
+    if key == items || key.join(" - ") == items.join(" - ") {
         return true;
     }
     let Some((value, columns)) = items.split_last().filter(|_| value_item && key.len() == items.len()) else { return false };
     key.iter().enumerate().any(|(p, k)| k == value && key.iter().enumerate().filter(|(i, _)| *i != p).map(|(_, x)| x).eq(columns))
+}
+
+/// Whether `key` matches this rebuilt item sequence and no other rebuilt sequence.
+fn unique_item_match(key: &[String], target: &[String], rebuilt: &[&[String]], value_item: bool) -> bool {
+    if !same_items(key, target, value_item) {
+        return false;
+    }
+    let mut count = 0;
+    for items in rebuilt {
+        if same_items(key, items, value_item) {
+            count += 1;
+            if count > 1 {
+                return false;
+            }
+        }
+    }
+    count == 1
 }
 
 fn rebuilt_item_set<'a>(items: impl IntoIterator<Item = &'a [String]>) -> HashSet<&'a [String]> {
@@ -1778,7 +1794,7 @@ fn rebind_charts(
                 .iter()
                 .map(|it| {
                     let exact = fmts.keyed.iter().find(|(k, _)| k.as_slice() == *it);
-                    exact.or_else(|| fmts.keyed.iter().find(|(k, _)| !rebuilt(k) && same_items(k, it, value_item))).map(|(_, f)| f)
+                    exact.or_else(|| fmts.keyed.iter().find(|(k, _)| !rebuilt(k) && unique_item_match(k, it, &items, value_item))).map(|(_, f)| f)
                 })
                 .collect();
             let by_position = fmts.by_position.as_ref().is_some_and(|p| p.len() == items.len() && matched.iter().all(Option::is_none)) && {
@@ -1832,7 +1848,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{data_cols_exceed_sheet, rebuilt_item_set, same_items};
+    use super::{data_cols_exceed_sheet, rebuilt_item_set, same_items, unique_item_match};
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
@@ -1843,11 +1859,19 @@ mod fit_tests {
         assert!(data_cols_exceed_sheet(16_385, false, 0));
     }
     #[test]
-    fn joined_item_names_with_separator_are_not_ambiguous_matches() {
+    fn joined_item_names_with_separator_are_rejected_when_ambiguous() {
         let saved = ["A - B", "C"].map(String::from);
-        let rebuilt = ["A", "B - C"].map(String::from);
-        assert!(!same_items(&saved, &rebuilt, false));
+        let rebuilt = [["A", "B - C"].map(String::from), ["A - B", "C"].map(String::from)];
+        let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
+        assert!(!unique_item_match(&saved, &rebuilt[0], &candidates, false));
         assert!(same_items(&saved, &saved, false));
+    }
+    #[test]
+    fn unique_joined_item_name_matches_single_rebuilt_sequence() {
+        let saved = ["A - B - C"].map(String::from);
+        let rebuilt = [["A - B", "C"].map(String::from), ["X", "Y"].map(String::from)];
+        let candidates: Vec<&[String]> = rebuilt.iter().map(|items| &items[..]).collect();
+        assert!(unique_item_match(&saved, &rebuilt[0], &candidates, false));
     }
 
     #[test]

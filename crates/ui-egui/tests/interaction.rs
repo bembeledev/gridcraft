@@ -582,6 +582,38 @@ fn recommended_charts_command_without_a_type_opens_the_dialog() {
 }
 
 #[test]
+fn hovering_a_chart_type_does_not_move_the_list() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("recommendedCharts", json!({"tab": "All Charts"}));
+    h.run_steps(4);
+    let rows = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        // The list entry, not the preview's heading of the same name to its right.
+        ["Clustered Column", "Stacked Column", "Clustered Bar", "Line", "Pie"]
+            .map(|label| h.get_all_by_label(label).map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left())).unwrap())
+    };
+    let before = rows(&h);
+    // Hover an unselected type, then click it: neither moves a row.
+    let target = before[1].center();
+    h.input_mut().events.push(egui::Event::PointerMoved(target));
+    h.run_steps(3);
+    assert_eq!(rows(&h), before, "hovering a type keeps every row in place");
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.list_index), Some(1));
+    assert_eq!(rows(&h), before, "selecting a type keeps every row in place");
+}
+
+#[test]
 fn select_data_dialog_sets_the_category_axis_labels() {
     // #287: Chart Design › Select Data edits the Horizontal (Category) Axis Labels and removes the
     // series the X values were plotted as.

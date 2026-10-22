@@ -2468,7 +2468,10 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
                         .horizontal(|ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
                             icons::paint(ui.painter(), r.shrink(2.0), chart_icon(kind), t.text);
-                            ui.selectable_label(i == d.list_index, label.as_str())
+                            // Without a stroke every state is the same height: the theme's 1 px
+                            // inactive border is taken off the padding, but egui draws no frame on
+                            // an unselected item, so hovering one grew it and moved the rows below.
+                            ui.add(egui::Button::selectable(i == d.list_index, label.as_str()).stroke(Stroke::NONE))
                         })
                         .inner;
                     if resp.clicked() {

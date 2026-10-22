@@ -44,6 +44,16 @@ fn harness(name: &str) -> Harness {
     h
 }
 
+/// Underline and strikeout widths of each section of the painted text `text`.
+fn decorations(h: &Harness, text: &str) -> Option<Vec<(f32, f32)>> {
+    h.output().shapes.iter().find_map(|s| match &s.shape {
+        Shape::Text(t) if t.galley.job.text == text => {
+            Some(t.galley.job.sections.iter().map(|sec| (sec.format.underline.width, sec.format.strikethrough.width)).collect())
+        }
+        _ => None,
+    })
+}
+
 /// (section text, colour, font size) of the painted text whose whole text is `text`.
 fn sections(h: &Harness, text: &str) -> Option<Vec<(String, Color32, f32)>> {
     h.output().shapes.iter().find_map(|s| match &s.shape {
@@ -83,4 +93,35 @@ fn wrapped_rich_text_keeps_its_runs() {
     let s = sections(&h, "F 1 /1.00\nNote").expect("A3 is painted wrapped, its line break kept");
     assert_eq!(s.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["F 1 /1.00\n", "Note"]);
     assert_eq!(s[1].1, Color32::from_rgb(0xFF, 0, 0));
+}
+
+#[test]
+fn the_cells_underline_and_strikeout_go_with_its_own_runs() {
+    let mut h = harness("decorated");
+    h.state_mut().session.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"underline": "Single", "strike": true}}})).unwrap();
+    h.run_steps(3);
+    // "Grade " has no font of its own: the cell's underline and strikeout. "5.5" has its own font
+    // without them, and no full-width line is drawn across it.
+    let d = decorations(&h, "Grade 5.5").expect("A1 is painted as one text");
+    assert!(d[0].0 > 0.0 && d[0].1 > 0.0, "{d:?}");
+    assert_eq!(d[1], (0.0, 0.0));
+    let full_width = h.output().shapes.iter().filter(|s| matches!(&s.shape, Shape::LineSegment { .. })).count();
+    let mut plain = harness("decorated-plain");
+    plain
+        .state_mut()
+        .session
+        .execute("home.formatCells", json!({"range": "A1", "style": {"font": {"underline": "Single", "strike": true}}}))
+        .unwrap();
+    plain.state_mut().session.execute("cell.set", json!({"cell": "A1", "input": "Grade 5.5"})).unwrap();
+    plain.run_steps(3);
+    let plain_lines = plain.output().shapes.iter().filter(|s| matches!(&s.shape, Shape::LineSegment { .. })).count();
+    assert_eq!(plain_lines, full_width + 2, "a plain cell draws its underline and strikeout as lines; a rich one doesn't");
+}
+
+#[test]
+fn show_formulas_keeps_the_runs_of_constants() {
+    let mut h = harness("formulas");
+    h.state_mut().session.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(sections(&h, "Grade 5.5").map(|s| s.len()), Some(2));
 }

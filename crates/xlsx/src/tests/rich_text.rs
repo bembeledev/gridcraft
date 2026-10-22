@@ -86,3 +86,39 @@ fn runs_that_no_longer_fit_the_text_are_not_written() {
     assert_eq!(a1.value, Value::from("changed"));
     assert!(a1.rich.is_none());
 }
+
+#[test]
+fn runs_are_not_written_onto_a_replacement_text() {
+    use gridcraft_model::{Cell, Font, RichText, Table, TableColumn, TextRun, TotalsFn};
+    use std::sync::Arc;
+    // A table header cell is saved with its column's name; a rich "abcd" there must not lend its
+    // runs to a header named "wxyz" (same length).
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let red = Font { color: Color::Rgb(0xFF0000), ..Font::default() };
+    let rich = RichText { runs: vec![TextRun { len: 2, font: None }, TextRun { len: 2, font: Some(red) }] };
+    sh.cells.set(CellRef::parse("A1").unwrap(), Cell { rich: Some(Arc::new(rich)), ..Cell::value(Value::from("abcd")) });
+    sh.cells.set(CellRef::parse("A2").unwrap(), Cell::value(Value::Number(1.0)));
+    let column = TableColumn { name: "wxyz".into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+    sh.tables.push(Table {
+        id: 1,
+        name: "T".into(),
+        range: gridcraft_core::RangeRef::parse("A1:A2").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![column],
+        style: "TableStyleLight1".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let a1 = back.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap();
+    assert_eq!(a1.value, Value::from("wxyz"));
+    assert!(a1.rich.is_none());
+}

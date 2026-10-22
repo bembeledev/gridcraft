@@ -459,6 +459,7 @@ fn rich_job(
     rich: &gridcraft_engine::model::RichText,
     text: &str,
     base: &FontId,
+    base_font: &gridcraft_engine::model::Font,
     base_color: Color32,
     wb: &Workbook,
     z: f32,
@@ -475,6 +476,15 @@ fn rich_job(
             continue;
         }
         let mut fmt = egui::TextFormat { font_id: base.clone(), color: base_color, ..Default::default() };
+        // A run without a font of its own takes the cell's, decorations included.
+        if f.is_none() {
+            if base_font.underline != Underline::None {
+                fmt.underline = Stroke::new(1.0, base_color);
+            }
+            if base_font.strike {
+                fmt.strikethrough = Stroke::new(1.0, base_color);
+            }
+        }
         if let Some(f) = f {
             let mut size = if f.size.is_finite() { f.size.clamp(1.0, 409.0) * 96.0 / 72.0 * z } else { base.size };
             if f.vert != VertAlign::Baseline {
@@ -1310,7 +1320,8 @@ pub(crate) fn paint_quadrant(
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
         // Rich text: runs in fonts of their own, when the cell shows its own text unchanged.
-        let rich = if rotated || sh.show_formulas || fill_char.is_some() || st.align.shrink {
+        // Show Formulas changes only formula cells' text, which the equality check leaves out.
+        let rich = if rotated || fill_char.is_some() || st.align.shrink {
             None
         } else {
             sh.cell(c).and_then(|cell| cell.rich.clone()).filter(|_| matches!(&v, Value::Text(t) if t.as_ref() == text.as_str()))
@@ -1320,7 +1331,7 @@ pub(crate) fn paint_quadrant(
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
             let mut job = rich
                 .as_deref()
-                .and_then(|r| rich_job(r, &text, &font, color, wb, z, false, wrap_w))
+                .and_then(|r| rich_job(r, &text, &font, &st.font, color, wb, z, false, wrap_w))
                 .unwrap_or_else(|| egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w));
             job.halign = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
@@ -1348,7 +1359,10 @@ pub(crate) fn paint_quadrant(
             .flatten();
         let shrunk = small.is_some();
         let font = small.unwrap_or(font);
-        let mut galley = match rich.as_deref().and_then(|r| rich_job(r, &text, &font, color, wb, z, true, f32::INFINITY)) {
+        let rich_layout = rich.as_deref().and_then(|r| rich_job(r, &text, &font, &st.font, color, wb, z, true, f32::INFINITY));
+        // Run by run, each run carries its own underline and strikeout.
+        let decorated = rich_layout.is_some();
+        let mut galley = match rich_layout {
             Some(job) => p.layout_job(job),
             None => p.layout_no_wrap(first_line.clone(), font.clone(), color),
         };
@@ -1451,6 +1465,7 @@ pub(crate) fn paint_quadrant(
         }
         let baseline = y + gh * 0.82;
         match st.font.underline {
+            _ if decorated => {}
             Underline::None => {}
             Underline::Double | Underline::DoubleAccounting => {
                 cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
@@ -1460,7 +1475,7 @@ pub(crate) fn paint_quadrant(
                 cp.line_segment([pos2(x, baseline + 1.0), pos2(x + w, baseline + 1.0)], Stroke::new(1.0, color));
             }
         }
-        if st.font.strike {
+        if st.font.strike && !decorated {
             cp.line_segment([pos2(x, y + gh * 0.55), pos2(x + w, y + gh * 0.55)], Stroke::new(1.0, color));
         }
     }

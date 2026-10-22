@@ -746,7 +746,9 @@ fn write_cell(
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
         Value::Text(t) => {
-            let i = out.sst.index_rich(t, cell.and_then(|c| c.rich.as_ref()));
+            // The cell's runs describe its own text, not a replacement for it.
+            let rich = if ov.is_none() && extra.is_none() { cell.and_then(|c| c.rich.as_ref()) } else { None };
+            let i = out.sst.index_rich(t, rich);
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
         }
         Value::Bool(b) => {

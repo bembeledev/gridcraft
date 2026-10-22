@@ -370,6 +370,348 @@ impl Graph {
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
     }
+
+    /// Orders `dirty` into levels: a formula's level is one past the highest level of the dirty
+    /// formulas it reads (statically), so the formulas of a level don't read one another and
+    /// can be calculated in any order, or at once. Formulas on a cycle, and those behind one,
+    /// never reach a level and come last (see [`Plan::rest`]). `None` when planning would cost
+    /// more than it saves (a budget of index work), and the caller calculates in row-major order.
+    ///
+    /// Each formula waits for the dirty formulas inside its precedent areas, counted through a
+    /// per-column index of the dirty formulas (a binary search per column an area covers, not a
+    /// report per cell: a formula over a column of 25K formulas costs one search, not 25K
+    /// reports). A formula with few precedents gets an exact release list from them; one with
+    /// many (a whole column of formulas) is recounted when a level completes, through the index
+    /// of the formulas not leveled yet. A formula that spills now also holds back the readers of
+    /// its spill range, so they come after it and read the new array rather than the old one.
+    pub(crate) fn levels(&self, wb: &Workbook, dirty: &[Key]) -> Option<Plan> {
+        self.levels_within(wb, dirty, None)
+    }
+
+    /// [`Graph::levels`] with the index work capped at `cap` (tests force the row-major fallback).
+    pub(crate) fn levels_within(&self, wb: &Workbook, dirty: &[Key], cap: Option<usize>) -> Option<Plan> {
+        /// Precedents up to this many get an exact release list; more are recounted per level.
+        const EXACT: usize = 64;
+        /// Index work per dirty formula before planning is given up: columns visited (twice for
+        /// a formula with an exact list), up to `EXACT` entries pushed and later released, and
+        /// recounts. A few microseconds a formula, a small part of calculating it.
+        const BUDGET_PER_FORMULA: usize = 4 * EXACT;
+        let mut index: HashMap<Key, u32> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+        let mut keys: Vec<Key> = Vec::with_capacity(dirty.len());
+        for &k in dirty {
+            if let std::collections::hash_map::Entry::Vacant(e) = index.entry(k) {
+                let i = u32::try_from(keys.len()).ok()?;
+                e.insert(i);
+                keys.push(k);
+            }
+        }
+        let n = keys.len();
+        let budget = n.saturating_mul(BUDGET_PER_FORMULA).saturating_add(1 << 20).min(cap.unwrap_or(usize::MAX));
+        // The dirty formulas by (sheet, column), rows sorted, with the formula's index; and per
+        // sheet the columns that hold any, for areas wider than that list.
+        let mut by_col: Vec<(usize, u32, u32, u32)> = keys.iter().enumerate().map(|(i, k)| (k.0, k.1.col, k.1.row, i as u32)).collect();
+        by_col.sort_unstable();
+        let mut cols: HashMap<(usize, u32), ColIndex> = HashMap::default();
+        let mut sheet_cols: HashMap<usize, Vec<u32>> = HashMap::default();
+        let mut pos: Vec<((usize, u32), usize)> = vec![((0, 0), 0); n];
+        for &(sheet, col, row, i) in &by_col {
+            let c = cols.entry((sheet, col)).or_insert_with(|| {
+                sheet_cols.entry(sheet).or_default().push(col);
+                ColIndex::default()
+            });
+            if let Some(p) = pos.get_mut(i as usize) {
+                *p = ((sheet, col), c.rows.len());
+            }
+            c.rows.push(row);
+            c.keys.push(i);
+        }
+        for c in cols.values_mut() {
+            c.pending = Fenwick::ones(c.rows.len());
+        }
+        let mut work = 0usize;
+        // Visits each column of the index that `area` covers.
+        fn visit(
+            cols: &HashMap<(usize, u32), ColIndex>,
+            sheet_cols: &HashMap<usize, Vec<u32>>,
+            area: &Area,
+            work: &mut usize,
+            f: &mut dyn FnMut(&ColIndex),
+        ) {
+            let (c0, c1) = (area.range.start.col, area.range.end.col);
+            let Some(list) = sheet_cols.get(&area.sheet) else { return };
+            if ((c1 - c0) as usize) < list.len() {
+                for col in c0..=c1 {
+                    *work += 1;
+                    if let Some(c) = cols.get(&(area.sheet, col)) {
+                        f(c);
+                    }
+                }
+            } else {
+                let from = list.partition_point(|c| *c < c0);
+                for col in list.get(from..).unwrap_or(&[]).iter().take_while(|c| **c <= c1) {
+                    *work += 1;
+                    if let Some(c) = cols.get(&(area.sheet, *col)) {
+                        f(c);
+                    }
+                }
+            }
+        }
+        let mut waits = vec![0usize; n];
+        let mut spill_waits = vec![0usize; n];
+        let mut release: Vec<Vec<u32>> = vec![Vec::new(); n];
+        let mut spill_release: Vec<Vec<u32>> = vec![Vec::new(); n];
+        let mut big: Vec<u32> = Vec::new();
+        let mut deps = Vec::new();
+        for (i, k) in keys.iter().enumerate() {
+            let areas = self.nodes.get(k).map(|nd| nd.areas.as_slice()).unwrap_or(&[]);
+            let mut total = 0usize;
+            for a in areas {
+                let (r0, r1) = (a.range.start.row, a.range.end.row);
+                visit(&cols, &sheet_cols, a, &mut work, &mut |c| total += c.span(r0, r1).len());
+            }
+            if total <= EXACT {
+                // The entries are charged as they are pushed, so a plan that can't fit the budget
+                // is given up here, before the lists are built in full.
+                work += total;
+                for a in areas {
+                    let (r0, r1) = (a.range.start.row, a.range.end.row);
+                    visit(&cols, &sheet_cols, a, &mut work, &mut |c| {
+                        for &j in c.keys.get(c.span(r0, r1)).unwrap_or(&[]) {
+                            if let Some(r) = release.get_mut(j as usize) {
+                                r.push(i as u32);
+                            }
+                        }
+                    });
+                }
+            } else {
+                big.push(i as u32);
+            }
+            if let Some(w) = waits.get_mut(i) {
+                *w = total;
+            }
+            // Readers of the range this formula spills over now. The query walks the range's
+            // cells, or the whole cell index past 4,096 of them, and the row intervals of the
+            // columns: charged to the budget like the rest.
+            if let Some(r) = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
+                deps.clear();
+                self.dependents_of_range(k.0, *r, &mut deps);
+                deps.sort_unstable();
+                deps.dedup();
+                let cells = usize::try_from(r.count()).unwrap_or(usize::MAX);
+                work += deps.len() + if cells > 4096 { self.cell_deps.len() } else { cells } + (r.width() as usize).min(self.col_deps.len());
+                for d in &deps {
+                    if let Some(&j) = index.get(d)
+                        && j as usize != i
+                        && let Some(w) = spill_waits.get_mut(j as usize)
+                    {
+                        *w += 1;
+                        if let Some(r) = spill_release.get_mut(i) {
+                            r.push(j);
+                        }
+                    }
+                }
+            }
+            if work > budget {
+                return None;
+            }
+        }
+        let is_big: HashSet<u32> = big.iter().copied().collect();
+        // A wide reader with `left` precedents pending can't be ready before `left` more
+        // formulas complete, anywhere: it is counted again only then, so the readers of a long
+        // chain's end are recounted once per `left` waves, not every wave.
+        // Kept by the completion count they are due at, so a wave only looks at the due ones.
+        let mut big: std::collections::BinaryHeap<std::cmp::Reverse<(usize, u32)>> =
+            big.iter().map(|&i| std::cmp::Reverse((waits.get(i as usize).copied().unwrap_or(0), i))).collect();
+        let mut completed = 0usize;
+        let mut order: Vec<Key> = Vec::with_capacity(n);
+        let mut bounds: Vec<usize> = Vec::new();
+        let mut done = vec![false; n];
+        let mut wave: Vec<u32> = (0..n).filter(|&i| waits.get(i) == Some(&0) && spill_waits.get(i) == Some(&0)).map(|i| i as u32).collect();
+        let mut next: Vec<u32> = Vec::new();
+        while !wave.is_empty() {
+            completed += wave.len();
+            for &i in &wave {
+                let Some(&k) = keys.get(i as usize) else { continue };
+                order.push(k);
+                if let Some(d) = done.get_mut(i as usize) {
+                    *d = true;
+                }
+                if let Some((col, p)) = pos.get(i as usize)
+                    && let Some(c) = cols.get_mut(col)
+                {
+                    c.pending.decrement(*p);
+                }
+            }
+            for &i in &wave {
+                let ready = |j: u32, waits: &[usize], spill_waits: &[usize], next: &mut Vec<u32>| {
+                    let j = j as usize;
+                    if waits.get(j) == Some(&0) && spill_waits.get(j) == Some(&0) && !is_big.contains(&(j as u32)) && done.get(j) == Some(&false) {
+                        next.push(j as u32);
+                    }
+                };
+                for &j in release.get(i as usize).map(Vec::as_slice).unwrap_or(&[]) {
+                    work += 1;
+                    if let Some(w) = waits.get_mut(j as usize)
+                        && *w > 0
+                    {
+                        *w -= 1;
+                        ready(j, &waits, &spill_waits, &mut next);
+                    }
+                }
+                for &j in spill_release.get(i as usize).map(Vec::as_slice).unwrap_or(&[]) {
+                    work += 1;
+                    if let Some(w) = spill_waits.get_mut(j as usize)
+                        && *w > 0
+                    {
+                        *w -= 1;
+                        ready(j, &waits, &spill_waits, &mut next);
+                    }
+                }
+            }
+            // Wide readers: counted again through what is still pending, once enough formulas
+            // have completed for the count to have reached zero.
+            while let Some(&std::cmp::Reverse((due, i))) = big.peek() {
+                if due > completed {
+                    break;
+                }
+                big.pop();
+                let Some(k) = keys.get(i as usize) else { continue };
+                work += 1;
+                let mut left = waits.get(i as usize).copied().unwrap_or(0);
+                if left > 0 {
+                    let areas = self.nodes.get(k).map(|nd| nd.areas.as_slice()).unwrap_or(&[]);
+                    left = 0;
+                    for a in areas {
+                        let (r0, r1) = (a.range.start.row, a.range.end.row);
+                        visit(&cols, &sheet_cols, a, &mut work, &mut |c| left += c.pending_in(c.span(r0, r1)));
+                    }
+                    if let Some(w) = waits.get_mut(i as usize) {
+                        *w = left;
+                    }
+                }
+                // A count of zero stays zero; the reader may still wait on a spill range, which
+                // is looked at again next wave.
+                if left == 0 && spill_waits.get(i as usize) == Some(&0) {
+                    next.push(i);
+                } else {
+                    big.push(std::cmp::Reverse((completed.saturating_add(left.max(1)), i)));
+                }
+            }
+            if work > budget {
+                return None;
+            }
+            bounds.push(order.len());
+            // Row-major within the level (`dirty` is sorted so), whatever order released them:
+            // the same order on one thread and on many, and the sequence RAND draws in.
+            next.sort_unstable();
+            std::mem::swap(&mut wave, &mut next);
+            next.clear();
+        }
+        let leveled = order.len();
+        if leveled < n {
+            order.extend(keys.iter().zip(&done).filter(|(_, d)| !**d).map(|(k, _)| *k));
+        }
+        if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+            let sizes: Vec<usize> = std::iter::once(0).chain(bounds.iter().copied()).zip(bounds.iter().copied()).map(|(a, b)| b - a).collect();
+            eprintln!("  plan: {} index work, {} wide readers, level sizes {:?}", work, is_big.len(), &sizes[..sizes.len().min(12)]);
+        }
+        Some(Plan { order, bounds, leveled, work })
+    }
+}
+
+/// The dirty formulas of one column, for [`Graph::levels`]: rows sorted, each with the formula's
+/// index in the plan, and which of them are not leveled yet.
+#[derive(Default)]
+struct ColIndex {
+    rows: Vec<u32>,
+    keys: Vec<u32>,
+    pending: Fenwick,
+}
+
+impl ColIndex {
+    /// The positions of the rows in `r0..=r1`.
+    fn span(&self, r0: u32, r1: u32) -> std::ops::Range<usize> {
+        let a = self.rows.partition_point(|r| *r < r0);
+        let b = a + self.rows.get(a..).unwrap_or(&[]).partition_point(|r| *r <= r1);
+        a..b
+    }
+    /// How many of the positions are not leveled yet.
+    fn pending_in(&self, span: std::ops::Range<usize>) -> usize {
+        self.pending.prefix(span.end).saturating_sub(self.pending.prefix(span.start))
+    }
+}
+
+/// Prefix counts over positions, each starting at one and decremented once.
+#[derive(Default)]
+struct Fenwick(Vec<usize>);
+
+// `isolate_lowest_one` needs Rust 1.97; the workspace builds on 1.90.
+#[allow(clippy::manual_isolate_lowest_one)]
+impl Fenwick {
+    fn ones(n: usize) -> Fenwick {
+        let mut t = vec![0usize; n + 1];
+        for i in 1..=n {
+            if let Some(x) = t.get_mut(i) {
+                *x += 1;
+            }
+            let j = i + (i & i.wrapping_neg());
+            if j <= n {
+                let add = t.get(i).copied().unwrap_or(0);
+                if let Some(y) = t.get_mut(j) {
+                    *y += add;
+                }
+            }
+        }
+        Fenwick(t)
+    }
+    /// Count of positions `< end`.
+    fn prefix(&self, end: usize) -> usize {
+        let mut i = end.min(self.0.len().saturating_sub(1));
+        let mut s = 0;
+        while i > 0 {
+            s += self.0.get(i).copied().unwrap_or(0);
+            i &= i - 1;
+        }
+        s
+    }
+    fn decrement(&mut self, p: usize) {
+        let n = self.0.len().saturating_sub(1);
+        let mut i = p + 1;
+        while i <= n {
+            if let Some(x) = self.0.get_mut(i) {
+                *x = x.saturating_sub(1);
+            }
+            i += i & i.wrapping_neg();
+        }
+    }
+}
+
+/// An evaluation plan from [`Graph::levels`].
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Plan {
+    order: Vec<Key>,
+    /// End of each level in `order`.
+    bounds: Vec<usize>,
+    /// Where the formulas on or behind cycles start in `order`.
+    leveled: usize,
+    /// Index work it took (tests bound it).
+    work: usize,
+}
+
+impl Plan {
+    /// The index work planning took: columns visited, entries released, readers recounted.
+    pub(crate) fn work(&self) -> usize {
+        self.work
+    }
+    /// The levels, in order: no formula of a level reads another of the same level (statically).
+    pub(crate) fn levels(&self) -> impl Iterator<Item = &[Key]> {
+        let starts = std::iter::once(0).chain(self.bounds.iter().copied());
+        starts.zip(self.bounds.iter().copied()).filter_map(|(a, b)| self.order.get(a..b))
+    }
+    /// Formulas on or behind a cycle.
+    pub(crate) fn rest(&self) -> &[Key] {
+        self.order.get(self.leveled..).unwrap_or(&[])
+    }
 }
 
 /// Calculation state kept beside a workbook.
@@ -382,11 +724,22 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Caps the planner's index work, to test the row-major fallback.
+    #[cfg(test)]
+    pub(crate) plan_budget: Option<usize>,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            #[cfg(test)]
+            plan_budget: None,
+        }
     }
 }
 
@@ -1214,7 +1567,6 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
-        let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         for _round in 0..8 {
             if dirty.is_empty() {
@@ -1231,14 +1583,51 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
+            // Planned, so the order the formulas are calculated in (which cell of a cycle shows
+            // `#CIRC!`, the sequence RAND draws in, how many rounds a chain of spills takes)
+            // follows the dependencies rather than the position on the sheet.
+            #[cfg(test)]
+            let plan = self.graph.levels_within(wb, &dirty, self.plan_budget);
+            #[cfg(not(test))]
+            let plan = self.graph.levels(wb, &dirty);
+            if std::env::var_os("GRIDCRAFT_PROFILE").is_some()
+                && let Some(p) = &plan
+            {
+                eprintln!(
+                    "  plan: {} levels over {} formulas, {} behind cycles, {} index work, {:.1} ms",
+                    p.bounds.len(),
+                    p.leveled,
+                    p.order.len() - p.leveled,
+                    p.work(),
+                    prof_now() - tp
+                );
+            }
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
-                for k in &dirty {
-                    host.calculate(*k);
+                match &plan {
+                    Some(plan) => {
+                        for level in plan.levels() {
+                            for &k in level {
+                                host.calculate(k);
+                            }
+                        }
+                        for &k in plan.rest() {
+                            host.calculate(k);
+                        }
+                    }
+                    None => {
+                        for k in &dirty {
+                            host.calculate(*k);
+                        }
+                    }
                 }
                 if host.iterate && !host.members.is_empty() {
-                    let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
+                    let order: Vec<Key> = match &plan {
+                        Some(p) => p.levels().flatten().copied().chain(p.rest().iter().copied()).collect(),
+                        None => dirty.clone(),
+                    };
+                    let passes = host.iterate_loops(&order, wb.calc.max_iterations, wb.calc.max_change);
                     if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
@@ -1260,6 +1649,8 @@ impl Calc {
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
+            // Whether a spill was laid out differently from before in this round.
+            let mut laid_out = false;
             for (k, v) in results {
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 if let Some(cell) = sheet.cells.get_mut(k.1)
@@ -1283,6 +1674,7 @@ impl Calc {
                 {
                     continue;
                 }
+                laid_out = true;
                 if let Some(r) = old {
                     for c in r.iter() {
                         sheet.spill.remove(&c);
@@ -1339,9 +1731,10 @@ impl Calc {
                 }
             }
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
-            // a spill area before it was laid out: they are evaluated once more.
-            if dynamic_again && !spills.is_empty() {
-                dynamic_again = false;
+            // a spill area before it was laid out: they are evaluated once more after every round
+            // that laid one out differently (a spill laid out in a later round changes what they
+            // read as much as one from the first).
+            if laid_out {
                 spill_changes.extend(self.graph.dynamic.iter().copied());
             }
             // An area a formula no longer spills over may unblock another formula's array.

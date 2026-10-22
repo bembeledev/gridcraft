@@ -1208,15 +1208,20 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let f = axis_field(C, pt, &field)?;
         if on {
+            // One fold per label (`TextSet`), not one comparison per collapsed item: linear in
+            // `all.len() + collapsed_items.len()`. Existing items keep their spelling; new ones
+            // are added in order, first spelling met.
+            let mut have = gridcraft_core::TextSet::new(&f.collapsed_items);
             for it in all {
-                if !f.collapsed_items.iter().any(|x| x.eq_ignore_ascii_case(&it)) {
+                if have.insert(&it) {
                     f.collapsed_items.push(it);
                 }
             }
         } else if items.is_none() {
             f.collapsed_items.clear();
         } else {
-            f.collapsed_items.retain(|x| !all.iter().any(|a| a.eq_ignore_ascii_case(x)));
+            let drop = gridcraft_core::TextSet::new(&all);
+            f.collapsed_items.retain(|x| !drop.contains(x));
         }
         Ok(json!({"collapsed": f.collapsed_items}))
     })

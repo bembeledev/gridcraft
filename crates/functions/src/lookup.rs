@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::{Array, CellError, Value, col_to_letters, compare};
+use gridcraft_core::{Array, CellError, Value, col_to_letters, compare, fold_key, text_eq_prefolded};
 
 use crate::criteria::{has_wildcards, lookup_equal};
 use crate::util::{R, arg, array_val, as_array, has, int, num, opt_bool, opt_int, opt_num, text, text_val};
@@ -28,9 +28,20 @@ fn same_type(a: &Value, b: &Value) -> bool {
 }
 
 /// Exact search (first match, or last when `reverse`). Text needles match wildcards when `wild`.
+/// A text needle without wildcards is folded once before the scan; each entry is then compared
+/// with it as it is read ([`text_eq_prefolded`], the relation of `lookup_equal`).
 fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usize> {
     let wild = wild && matches!(x, Value::Text(t) if has_wildcards(t));
-    if reverse { hay.iter().rposition(|v| lookup_equal(x, v, wild)) } else { hay.iter().position(|v| lookup_equal(x, v, wild)) }
+    let folded = match x {
+        Value::Text(t) if !wild => Some(fold_key(t)),
+        _ => None,
+    };
+    let eq = |v: &Value| match (&folded, v) {
+        (Some(f), Value::Text(t)) => text_eq_prefolded(t, f),
+        (Some(_), _) => false,
+        (None, _) => lookup_equal(x, v, wild),
+    };
+    if reverse { hay.iter().rposition(eq) } else { hay.iter().position(eq) }
 }
 
 /// Approximate match of VLOOKUP, HLOOKUP, LOOKUP and MATCH: the position of the largest entry
@@ -802,5 +813,58 @@ mod tests {
         is_err(ev("ADDRESS", vec![n(0.0), n(1.0)]), CellError::Value);
         is_err(ev("ADDRESS", vec![n(1.0), n(16385.0)]), CellError::Value);
         is_err(ev("ADDRESS", vec![n(1.0), n(1.0), n(5.0)]), CellError::Value);
+    }
+
+    const NFC: &str = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+    const NFD: &str = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+
+    #[test]
+    fn match_and_xlookup_find_nfd_needle() {
+        let hay = arr(vec![vec![tv("An")], vec![tv(NFC)]]);
+        close(ev("MATCH", vec![t(NFD), rf(hay), n(0.0)]), 2.0);
+        let keys = arr(vec![vec![tv(NFC)]]);
+        let vals = arr(vec![vec![tv("ok")]]);
+        is_text(ev("XLOOKUP", vec![t(NFD), rf(keys), rf(vals)]), "ok");
+        let table = arr(vec![vec![tv(NFC), nv(1.0)]]);
+        close(ev("VLOOKUP", vec![t(NFD), rf(table), n(2.0), b(false)]), 1.0);
+    }
+
+    /// Text spellings of one name: NFC, NFD, upper case, NFD upper case.
+    fn spellings(w: &str) -> Vec<String> {
+        let d = gridcraft_core::canonical(w);
+        vec![w.to_string(), d.clone(), w.to_uppercase(), d.to_uppercase()]
+    }
+
+    #[test]
+    fn exact_scan_with_a_folded_needle_equals_the_pairwise_scan() {
+        let words = ["Nguyễn", "Ánh", "Anh", "Ảnh", "Đặng", "Dang", "Hoà", "Hòa", "İ", "i\u{307}", "a\u{323}\u{302}", "ậ", "x*", "x~*", "", "1"];
+        let mut hay: Vec<Value> = Vec::new();
+        for w in words {
+            hay.extend(spellings(w).into_iter().map(Value::from));
+        }
+        hay.extend([Value::Number(1.0), Value::Empty, Value::Bool(true)]);
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        for round in 0..400 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            // Rotate the haystack so first/last matches move around.
+            let k = (state % hay.len() as u64) as usize;
+            let mut h = hay.clone();
+            h.rotate_left(k);
+            for w in words.iter().chain(["Nguyen", "x?", "*"].iter()) {
+                for x in spellings(w).into_iter().map(Value::from).chain([Value::Number(1.0)]) {
+                    for (wild, rev) in [(false, false), (true, false), (false, true), (true, true)] {
+                        let eff = wild && matches!(&x, Value::Text(t) if super::has_wildcards(t));
+                        let want = if rev {
+                            h.iter().rposition(|v| super::lookup_equal(&x, v, eff))
+                        } else {
+                            h.iter().position(|v| super::lookup_equal(&x, v, eff))
+                        };
+                        assert_eq!(super::find_exact(&x, &h, wild, rev), want, "round {round}: {x:?} wild={wild} rev={rev}");
+                    }
+                }
+            }
+        }
     }
 }

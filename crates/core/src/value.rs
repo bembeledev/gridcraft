@@ -323,20 +323,7 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
     round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
-/// Case-insensitive text order (Unicode lowercase).
-pub fn compare_text(a: &str, b: &str) -> Ordering {
-    let mut ai = a.chars().flat_map(char::to_lowercase);
-    let mut bi = b.chars().flat_map(char::to_lowercase);
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x != y => return x.cmp(&y),
-            _ => {}
-        }
-    }
-}
+pub use crate::collate::compare_text;
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
@@ -432,6 +419,9 @@ mod tests {
         assert_eq!(compare(&Value::from("z"), &Value::Bool(false)), Ordering::Less);
         assert_eq!(compare(&Value::Empty, &Value::Number(0.0)), Ordering::Equal);
         assert_eq!(sort_compare(&Value::Empty, &Value::Number(1.0)), Ordering::Greater);
+        // Accented letters sort with their base letter, and NFC equals NFD.
+        assert_eq!(compare(&Value::from("Ánh"), &Value::from("bàn")), Ordering::Less);
+        assert_eq!(compare(&Value::from("Ánh"), &Value::from("A\u{301}NH")), Ordering::Equal);
     }
 
     #[test]

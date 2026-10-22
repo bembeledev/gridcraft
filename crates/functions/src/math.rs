@@ -1774,4 +1774,28 @@ mod tests {
         close(sumifs(format!(">={}", e.repeat(128))), 1.0 + 2.0);
         close(sumifs(format!("<={}", e.repeat(128))), 3.0);
     }
+
+    const NFC: &str = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+    const NFD: &str = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+
+    fn col_t(xs: &[&str]) -> Value {
+        arr(xs.iter().map(|x| vec![tv(x)]).collect())
+    }
+
+    #[test]
+    fn countif_matches_nfc_and_nfd() {
+        let v = col_t(&[NFC, NFD]);
+        close(ev("COUNTIF", vec![rf(v.clone()), t(NFC)]), 2.0);
+        close(ev("COUNTIF", vec![rf(v), t(NFD)]), 2.0);
+        // Not-equal and wildcard patterns: `<>` is the complement, wildcards keep their per-char matching.
+        let w = col_t(&[NFC, NFD, "x"]);
+        close(ev("COUNTIF", vec![rf(w.clone()), t(&format!("<>{NFD}"))]), 1.0);
+        close(ev("COUNTIF", vec![rf(w), t("Nguy*")]), 2.0);
+    }
+
+    #[test]
+    fn relational_criteria_follow_root_order() {
+        let v = col_t(&["\u{1ea5}m", "b\u{e0}n", "Zebra"]);
+        close(ev("COUNTIF", vec![rf(v), t("<b")]), 1.0);
+    }
 }

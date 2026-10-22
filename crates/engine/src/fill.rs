@@ -260,7 +260,7 @@ impl Pattern {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
             let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
             for list in &all_lists {
-                let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
+                let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| gridcraft_core::text_eq(l, t))).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();
                     let first = idx.first().copied().unwrap_or(0);

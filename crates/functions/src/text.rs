@@ -1,7 +1,7 @@
 //! Text functions.
 
 use gridcraft_core::parse::parse_number_text_in;
-use gridcraft_core::{CellError, Value, number_to_text};
+use gridcraft_core::{CellError, Value, canonical, number_to_text};
 
 use crate::criteria::wildcard_find;
 use crate::util::{
@@ -243,7 +243,8 @@ fn search(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn exact(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(text(a, 0)? == text(a, 1)?))
+    // Case-sensitive, but canonically equivalent texts (NFC and NFD) are the same text.
+    Ok(Value::Bool(canonical(&text(a, 0)?) == canonical(&text(a, 1)?)))
 }
 
 /// Windows-1252 code points 128–159.
@@ -1220,5 +1221,13 @@ mod tests {
         is_text(ev("REGEXREPLACE", vec![t("a1b22c"), t("[0-9]+"), t("#"), n(-2.0)]), "a#b22c");
         is_text(ev("REGEXREPLACE", vec![t("John Smith"), t("(\\w+) (\\w+)"), t("$2, $1")]), "Smith, John");
         is_text(ev("REGEXREPLACE", vec![t("ab"), t("(a)"), t("$1x")]), "axb");
+    }
+
+    #[test]
+    fn exact_is_case_sensitive_but_canonical() {
+        let nfc = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";
+        let nfd = "Nguye\u{302}\u{303}n Thi\u{323} Ngo\u{323}c A\u{301}nh";
+        assert_eq!(ev("EXACT", vec![t(nfc), t(nfd)]), Value::Bool(true));
+        assert_eq!(ev("EXACT", vec![t("\u{110}\u{e0}"), t("\u{111}\u{e0}")]), Value::Bool(false));
     }
 }

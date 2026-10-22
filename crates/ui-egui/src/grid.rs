@@ -327,6 +327,9 @@ impl ScrollRail {
             // both ways otherwise. A swipe the trackpad has just started, before it has moved,
             // stops what's left of the earlier swipe's glide.
             RailAxis::Undecided if self.fresh && self.travel == egui::Vec2::ZERO => egui::Vec2::ZERO,
+            // Nothing reported since a pause: what egui is still smoothing out (a wheel notch
+            // after a slow frame) goes through whole, whichever way it points.
+            RailAxis::Undecided if self.travel == egui::Vec2::ZERO => d,
             RailAxis::Undecided if self.travel.y >= RAIL_RATIO * self.travel.x => vec2(0.0, d.y),
             RailAxis::Undecided if self.travel.x >= RAIL_RATIO * self.travel.y => vec2(d.x, 0.0),
             RailAxis::Undecided => d,

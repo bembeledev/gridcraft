@@ -172,19 +172,18 @@ fn a_slow_frame_does_not_swallow_a_wheel_notch() {
     // egui smooths a wheel notch over a few frames. A frame longer than the pause that ends a
     // swipe (a heavy workbook) must not drop what's still being smoothed.
     // Enough frames for egui's smoothing to settle at either frame rate (about a second).
-    let notch = |h: &mut Harness, frames: usize| {
+    let notch = |h: &mut Harness, frames: usize, delta: Vec2| {
         let before = scroll(h);
-        h.input_mut().events.push(Event::MouseWheel {
-            unit: MouseWheelUnit::Line,
-            delta: vec2(0.0, -3.0),
-            phase: TouchPhase::Move,
-            modifiers: Modifiers::NONE,
-        });
+        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers: Modifiers::NONE });
         h.run_steps(frames);
-        scroll(h).y - before.y
+        scroll(h) - before
     };
-    let fast = notch(&mut harness(), 60);
-    let slow = notch(&mut harness_at(0.3), 4);
-    assert!(fast > 50.0, "a notch scrolls: {fast}");
-    assert!((slow - fast).abs() < 1.0, "the same notch over slow frames: {slow} vs {fast}");
+    // A vertical notch and a horizontal one (a tilt wheel, or a wheel with Shift held off the
+    // Mac, which egui has already turned sideways by the time the rail sees it).
+    for delta in [vec2(0.0, -3.0), vec2(-3.0, 0.0)] {
+        let fast = notch(&mut harness(), 60, delta);
+        let slow = notch(&mut harness_at(0.3), 4, delta);
+        assert!(fast.length() > 50.0, "a notch scrolls: {fast:?}");
+        assert!((slow - fast).length() < 1.0, "the same notch {delta:?} over slow frames: {slow:?} vs {fast:?}");
+    }
 }

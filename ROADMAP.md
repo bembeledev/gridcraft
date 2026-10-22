@@ -1,6 +1,6 @@
 # GridCraft roadmap
 
-**Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Linux desktop-menu adapter and shared standard XDG appearance watcher; parity estimates unchanged)
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
 
@@ -129,6 +129,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
 
 ## Progress log
+
+Linux integration update (2026-10-21): portable Global Menu model with guarded interactive
+dispatch and a shared standard XDG appearance watcher. Existing parity estimates are unchanged;
+see [KDE verification](docs/KDE.md) for the separate compositor/manual checks.
 
 | Date | What landed |
 |---|---|

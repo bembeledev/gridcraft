@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (shared Linux desktop layer, portable menu adapter and standard appearance portal) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -45,6 +45,12 @@ including tests, 2026-10-10.
 
 ## Agent control
 
+The desktop integration snapshot lives in `vendor/craft-desktop`, with a portable menu model
+used by `ui-egui::desktop_menu` and opt-in Linux transports in the desktop host. The application
+revalidates document identity and modal/enabled state before dispatching a desktop-menu event.
+Portal appearance is read off the UI thread and requests repaint on changes. The engine and
+WASM build remain independent of Linux-specific dependencies. See [KDE.md](KDE.md).
+
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
   (`engine.execute`, `ui.screenshot`, pointer and keyboard input…), see
   [`control-protocol.md`](control-protocol.md).
@@ -68,4 +74,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Portable desktop-menu adapter; shared standard appearance portal watcher replaces the GNOME-specific implementation; native dependencies remain platform-gated |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

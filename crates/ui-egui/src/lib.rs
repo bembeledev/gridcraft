@@ -12,6 +12,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
+pub mod desktop_menu;
 pub mod dialogs;
 pub mod editor;
 pub mod fonts;
@@ -270,6 +271,7 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    desktop_clipboard: Vec<desktop_menu::ClipboardRequest>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
@@ -322,6 +324,7 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            desktop_clipboard: vec![],
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -510,8 +513,9 @@ impl SheetApp {
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
     /// Follow the desktop's light/dark choice while the app runs (Linux; the desktop app calls
     /// this once — tests and embedders don't start the watcher thread).
-    pub fn watch_desktop_theme(&mut self) {
-        self.desktop_theme = desktop_theme::DesktopTheme::start();
+    pub fn watch_desktop_theme(&mut self, ctx: &egui::Context) {
+        let ctx = ctx.clone();
+        self.desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
@@ -1068,7 +1072,7 @@ impl SheetApp {
             }
         }
         if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
+            self.desktop_dark = answer.dark;
         }
         let preference = match (
             self.ui.system_theme,
@@ -1120,6 +1124,7 @@ impl SheetApp {
         if self.session.active().is_none() {
             self.session.new_workbook();
         }
+        desktop_menu::guard_clipboard(self, ctx);
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {

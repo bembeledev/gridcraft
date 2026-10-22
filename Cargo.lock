@@ -743,6 +743,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-desktop"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "raw-window-handle",
+ "serde_json",
+ "wayland-client",
+ "wayland-protocols-plasma",
+ "winit",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d#d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d"
@@ -1499,6 +1513,7 @@ name = "gridcraft"
 version = "0.10.0"
 dependencies = [
  "arboard",
+ "craft-desktop",
  "craft-print",
  "eframe",
  "egui",
@@ -1635,6 +1650,7 @@ version = "0.10.0"
 name = "gridcraft-ui-egui"
 version = "0.10.0"
 dependencies = [
+ "craft-desktop",
  "craft-ui",
  "egui",
  "egui_kittest",
@@ -1650,7 +1666,6 @@ dependencies = [
  "sys-locale",
  "toml",
  "web-sys",
- "zbus",
 ]
 
 [[package]]
@@ -4370,8 +4385,6 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
 dependencies = [
  "ahash",
  "android-activity",

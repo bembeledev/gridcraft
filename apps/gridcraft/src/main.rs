@@ -25,10 +25,21 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App(
+    SheetApp,
+    #[cfg(target_os = "linux")] Option<craft_desktop::appmenu::Bridge>,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &mut self.1 {
+            for click in menu.take_events() {
+                gridcraft_ui_egui::desktop_menu::activate(&mut self.0, ctx, click.document, &click.action);
+            }
+        }
         #[cfg(target_os = "macos")]
         {
             if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
@@ -56,8 +67,14 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        #[cfg(target_os = "linux")]
+        if let Some(menu) = &self.1 {
+            menu.publish(gridcraft_ui_egui::desktop_menu::snapshot(&self.0));
+        }
     }
     fn on_exit(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.1.take();
         print::finish_pending_jobs();
         save_prefs(&self.0);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
@@ -298,7 +315,6 @@ fn main() -> eframe::Result<()> {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
-    app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
@@ -351,14 +367,28 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                app.watch_desktop_theme(&cc.egui_ctx);
                 if let Some(port) = control_port {
                     match control_server::start(port, cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
+                #[cfg(target_os = "linux")]
+                let menu = cc.winit_window().cloned().and_then(|window| {
+                    let ctx = cc.egui_ctx.clone();
+                    craft_desktop::appmenu::Bridge::start(
+                        window,
+                        "ai.storyteller.gridcraft",
+                        "GRIDCRAFT",
+                        gridcraft_ui_egui::desktop_menu::snapshot(&app),
+                        move || ctx.request_repaint(),
+                    )
+                });
                 Ok(Box::new(App(
                     app,
+                    #[cfg(target_os = "linux")]
+                    menu,
                     #[cfg(target_os = "macos")]
                     None,
                     #[cfg(target_os = "macos")]

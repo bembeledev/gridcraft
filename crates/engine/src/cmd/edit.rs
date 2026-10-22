@@ -166,12 +166,14 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(cell));
     }
     let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
-    // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
-    // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
+    // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell whose
+    // format shows it as a percentage is a percent (3 -> 3%); smaller numbers are taken as
+    // fractions. What counts is the section the value lands in, not whether the code holds a `%`
+    // anywhere: a positive 3 in `0;0%` shows in the plain first section, so it stays 3.
     if parsed.format.is_none()
         && !input.contains('%')
-        && wb.styles.get(style).num_fmt.as_str().ends_with('%')
         && let Value::Number(n) = parsed.value
+        && gridcraft_numfmt::NumberFormat::parse(wb.styles.get(style).num_fmt.as_str()).is_percent_for(n)
         && n.abs() >= 1.0
     {
         parsed.value = Value::Number(n / 100.0);

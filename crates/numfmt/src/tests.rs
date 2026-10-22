@@ -66,6 +66,39 @@ fn scaling_and_percent() {
 }
 
 #[test]
+fn percent_uses_the_selected_section() {
+    let mixed = NumberFormat::parse("0;0%");
+    // Any section is a percentage…
+    assert!(mixed.is_percent());
+    // …but the value's sign decides whether the entered number is scaled.
+    assert!(!mixed.is_percent_for(1234.0));
+    assert!(mixed.is_percent_for(-1234.0));
+    assert!(NumberFormat::parse("0%").is_percent_for(1234.0));
+    assert!(!NumberFormat::parse("0,000").is_percent_for(-1234.0));
+}
+
+#[test]
+fn conditional_percent_section_survives_percent_entry() {
+    // Percent entry turns a typed 3 into 0.03. A condition on a percentage section compares the
+    // value in its displayed (×100) units, so `[>=1]0%` still selects that section afterwards:
+    // the scaled value is kept and renders as a percentage instead of falling into the plain `0`
+    // section as "0".
+    let cond = NumberFormat::parse("[>=1]0%;0");
+    assert!(cond.is_percent_for(3.0), "entry scales a typed 3");
+    assert!(cond.is_percent_for(0.03), "the scaled value keeps the percent section");
+    assert_eq!(f("[>=1]0%;0", 0.03), "3%");
+    assert_eq!(f("[>=1]0%;0", 3.0), "300%");
+    // Below the threshold the plain section applies.
+    assert!(!cond.is_percent_for(-0.03));
+    assert_eq!(f("[>=1]0%;0", -0.03), "0");
+    // A conditional section without `%` is unaffected by the scaling rule.
+    let plain = NumberFormat::parse("[>=1]0.0;0");
+    assert!(!plain.is_percent_for(0.03));
+    assert_eq!(f("[>=1]0.0;0", 0.03), "0");
+    assert_eq!(f("[>=1]0.0;0", 3.0), "3.0");
+}
+
+#[test]
 fn sections_and_colors() {
     let r = full("#,##0.00;[Red](#,##0.00)", Value::Number(-5.0));
     assert_eq!(r.text, "(5.00)");

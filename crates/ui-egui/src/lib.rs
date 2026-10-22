@@ -270,6 +270,10 @@ pub struct SheetApp {
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
+    /// The language the last frame drew in. A change refreshes the whole window: fonts are
+    /// rebuilt when the script differs and every panel, tab, pane, dialog and menu is repainted
+    /// from the new catalog.
+    draw_language: Option<i18n::Language>,
     effective_dark: bool,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
@@ -330,6 +334,7 @@ impl SheetApp {
             fonts_seen: (0, 0),
             fonts_rebind: false,
             fonts_han: None,
+            draw_language: None,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
@@ -1156,10 +1161,16 @@ impl SheetApp {
         // Floating pictures' textures go with their workbook, even when no sheet is painted.
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
+        // A language switch rebuilds the font set when the script changes, and redraws the
+        // whole window from the new catalog either way.
         if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;
         }
+        if self.draw_language.is_some_and(|drawn| drawn != self.ui.language) {
+            ctx.request_repaint();
+        }
+        self.draw_language = Some(self.ui.language);
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {

@@ -128,6 +128,16 @@ fn too_long(code: &str) -> bool {
     code.len() > MAX_FORMAT_CODE_CHARS && code.chars().count() > MAX_FORMAT_CODE_CHARS
 }
 
+/// True when `sec`'s condition holds for `v`. A percentage section displays the value scaled by
+/// 100, so its condition compares in those units: `[>=1]0%` matches 0.03, which it shows as 3%.
+/// That keeps the percentage section selected after automatic percent entry scales a typed
+/// number, so `[>=1]0%;0` with 3 stores 0.03 and still renders 3% rather than passing 0.03 to the
+/// plain `0` section.
+fn cond_matches(sec: &Section, v: f64) -> bool {
+    let test = if sec.percent > 0 { v * 100.0 } else { v };
+    sec.cond.is_some_and(|c| c.test(test))
+}
+
 impl NumberFormat {
     /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text, and
     /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters degrades to General.
@@ -197,6 +207,15 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Number && s.percent > 0)
     }
 
+    /// True when the section that would actually format `v` is a percentage. Unlike
+    /// [`is_percent`](Self::is_percent), which reports whether *any* section is a percentage, a
+    /// mixed format such as `0;0%` counts only the section the value's sign selects, and a
+    /// conditional percentage section such as `[>=1]0%` counts the values it displays as
+    /// percentages.
+    pub fn is_percent_for(&self, v: f64) -> bool {
+        self.select(v).is_some_and(|(s, _)| s.kind == SecKind::Number && s.percent > 0)
+    }
+
     /// True for a pure text format such as `@`.
     pub fn is_text(&self) -> bool {
         self.inner.num_sections == 0 && self.inner.text_section.is_some()
@@ -248,11 +267,13 @@ impl NumberFormat {
         let k = secs.len();
         let s0 = secs.first()?;
         let c0 = s0.cond;
-        let c1 = secs.get(1).and_then(|s| s.cond);
+        let s1 = secs.get(1);
+        let c1 = s1.and_then(|s| s.cond);
         if c0.is_some() || c1.is_some() {
-            let idx = if c0.is_some_and(|c| c.test(v)) {
+            let m1 = s1.is_some_and(|s| cond_matches(s, v));
+            let idx = if cond_matches(s0, v) {
                 0
-            } else if c1.is_some_and(|c| c.test(v)) {
+            } else if m1 {
                 1
             } else if c0.is_some() && c1.is_some() {
                 2

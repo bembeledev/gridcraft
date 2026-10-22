@@ -4584,3 +4584,64 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+
+#[test]
+fn a_number_entered_in_a_percent_formatted_cell_is_read_as_a_percentage() {
+    // #1967: Excel's automatic percent entry: a cell already formatted as Percentage reads a typed
+    // plain number as that percentage, so 3 shows as 3% (stored 0.03).
+    let mut s = s();
+    s.execute("home.numberFormat", json!({"range": "A1:A4", "code": "0.0%"})).unwrap();
+    for (cell, input, stored) in [
+        ("A1", "3", 0.03),
+        ("A2", "2.5", 0.025),
+        ("A3", "-3", -0.03),
+        // Input that carries its own meaning is not scaled again.
+        ("A4", "3%", 0.03),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        assert_eq!(v(&s, cell).as_f64(), Some(stored), "typing `{input}` into {cell}");
+    }
+    // A formula keeps its value, and a General cell is untouched.
+    s.execute("cell.set", json!({"cell": "A5", "input": "=3"})).unwrap();
+    assert_eq!(v(&s, "A5").as_f64(), Some(3.0));
+    s.execute("cell.set", json!({"cell": "B1", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "B1").as_f64(), Some(3.0));
+    // Undo takes the entry away and leaves the percent format in place.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Empty);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A5"), Value::Empty);
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    assert_eq!(v(&s, "A1").as_f64(), Some(0.07));
+
+    // Ctrl+Enter fill is entry too: the number is read in each cell's format.
+    s.execute("home.numberFormat", json!({"range": "C1:C2", "code": "0.0%"})).unwrap();
+    s.execute("range.fill", json!({"range": "C1:C2", "input": "3"})).unwrap();
+    for cell in ["C1", "C2"] {
+        assert_eq!(v(&s, cell).as_f64(), Some(0.03), "filling {cell}");
+    }
+
+    // Replace runs the replacement through the same entry path, so it is read in the cell's
+    // format too.
+    s.execute("home.numberFormat", json!({"range": "D1", "code": "0.0%"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "placeholder"})).unwrap();
+    s.execute("edit.replace", json!({"what": "placeholder", "with": "3", "all": true})).unwrap();
+    assert_eq!(v(&s, "D1").as_f64(), Some(0.03));
+
+    // A mixed format scales only when the entered value lands in a percentage section: `0;0%`
+    // shows positive values as plain numbers and negative ones as percentages.
+    s.execute("home.numberFormat", json!({"range": "E1:E2", "code": "0;0%"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "E1").as_f64(), Some(3.0), "positive in the plain section");
+    s.execute("cell.set", json!({"cell": "E2", "input": "-3"})).unwrap();
+    assert_eq!(v(&s, "E2").as_f64(), Some(-0.03), "negative in the percent section");
+
+    // A conditional percentage section keeps the value after scaling: the condition compares in
+    // the displayed (×100) units, so 3 lands in `[>=1]0%` and the stored 0.03 still shows as a
+    // percentage instead of falling through to the plain `0` section.
+    s.execute("home.numberFormat", json!({"range": "F1:F2", "code": "[>=1]0%;0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "F1").as_f64(), Some(0.03), "scaled into the conditional percent section");
+    s.execute("cell.set", json!({"cell": "F2", "input": "-3"})).unwrap();
+    assert_eq!(v(&s, "F2").as_f64(), Some(-3.0), "below the threshold the plain `0` section keeps the value");
+}

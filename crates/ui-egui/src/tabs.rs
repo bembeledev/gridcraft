@@ -81,11 +81,14 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             }
             ui.add_space(8.0);
             let Some(d) = app.session.active() else { return };
+            // The strip starts at the workbook's first tab (Excel's tab scroll, saved with the
+            // file), or at the active sheet when that comes before it.
+            let first = d.wb.first_tab.min(d.wb.active_sheet);
             let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
                 d.wb.sheets
                     .iter()
                     .enumerate()
-                    .filter(|(_, s)| s.visibility == Visibility::Visible)
+                    .filter(|(i, s)| *i >= first && s.visibility == Visibility::Visible)
                     .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet))
                     .collect();
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the

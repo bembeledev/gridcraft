@@ -26,6 +26,7 @@ mod shared_media;
 mod sheet_names;
 mod smooth_roundtrip;
 mod trendline_roundtrip;
+mod view_state;
 mod xls_tests;
 mod xlsb_tests;
 mod zip_order;

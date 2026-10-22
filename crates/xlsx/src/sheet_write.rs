@@ -184,8 +184,16 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     if sheet.zoom != 100 && (10..=400).contains(&sheet.zoom) {
         let _ = write!(s, " zoomScale=\"{0}\" zoomScaleNormal=\"{0}\"", sheet.zoom);
     }
-    if sheet.view_top_left != CellRef::default() && sheet.freeze.is_none() {
-        let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+    // With panes frozen on one axis only, the sheet view keeps the other axis's scroll (as Excel
+    // writes it: rows frozen, `D1` here and the row on the pane).
+    let view_top_left = match sheet.freeze {
+        None | Some((0, 0)) => sheet.view_top_left,
+        Some((rows, 0)) if rows > 0 => CellRef::new(0, sheet.view_top_left.col),
+        Some((0, _)) => CellRef::new(sheet.view_top_left.row, 0),
+        Some(_) => CellRef::default(),
+    };
+    if view_top_left != CellRef::default() {
+        let _ = write!(s, " topLeftCell=\"{}\"", view_top_left.a1());
     }
     s.push_str(" workbookViewId=\"0\">");
     let active = sheet.view_active.a1();

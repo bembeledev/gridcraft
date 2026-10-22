@@ -246,7 +246,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.protected_structure = p.flag("lockStructure", false);
         wb.structure_password = if wb.protected_structure { crate::sheet_read::read_password(p, "workbook") } else { None };
     }
-    let active_tab = wb_xml.path(&["bookViews", "workbookView"]).and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    let book_view = wb_xml.path(&["bookViews", "workbookView"]);
+    let active_tab = book_view.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    let first_tab = book_view.and_then(|v| v.attr_u32("firstSheet")).unwrap_or(0) as usize;
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
@@ -298,6 +300,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
+    wb.first_tab = file_to_model.get(first_tab).copied().flatten().unwrap_or(0);
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

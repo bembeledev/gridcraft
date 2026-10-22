@@ -117,6 +117,8 @@ pub struct FillTag {
 
 #[derive(Default)]
 pub struct GridState {
+    /// The region cells are shown in (separators, short date); the app takes it from the system.
+    pub number_locale: gridcraft_engine::numfmt::Locale,
     pub drag: Drag,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
@@ -533,7 +535,21 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
     (Look { style, fill, text_color }, cfl)
 }
 
-/// Text for a value with General narrowing to the available width.
+/// The region the system shows numbers in (its separators and short date); en-US on the web and
+/// where the system doesn't say.
+pub fn system_number_locale() -> gridcraft_engine::numfmt::Locale {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        sys_locale::get_locale().map(|tag| gridcraft_engine::numfmt::Locale::from_tag(&tag)).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        gridcraft_engine::numfmt::Locale::default()
+    }
+}
+
+/// Text for a value with General narrowing to the available width, in the region `loc`.
+#[allow(clippy::too_many_arguments)]
 fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -542,6 +558,7 @@ fn display_text(
     st: &Style,
     width_px: f32,
     char_w: f32,
+    loc: &gridcraft_engine::numfmt::Locale,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -561,11 +578,11 @@ fn display_text(
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
-            Some(t) => (t, None, true, None),
+            Some(t) => (gridcraft_engine::numfmt::localize_general(t, loc), None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
-    let f = gridcraft_engine::display::format(v, code, wb);
+    let f = gridcraft_engine::display::format_in(v, code, wb, loc);
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
@@ -869,7 +886,7 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, &app.grid.number_locale);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.
@@ -1097,6 +1114,7 @@ pub(crate) fn paint_quadrant(
     cols: (u32, u32),
     cf: &mut CfCache,
     t: &Tokens,
+    loc: &gridcraft_engine::numfmt::Locale,
 ) {
     let z = geo.z;
     let (r0, r1) = rows;
@@ -1245,7 +1263,7 @@ pub(crate) fn paint_quadrant(
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
-        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w, loc);
         if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
             text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
         }
@@ -4198,7 +4216,7 @@ mod tests {
         let text = |row: u32, cf: &mut CfCache| {
             let c = CellRef::new(row, 0);
             let (lk, _) = look(&wb, 0, sh, c, cf);
-            display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
+            display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, &Default::default()).0
         };
         assert_eq!(text(0, &mut cf), "1");
         assert_eq!(text(1, &mut cf), "3.00");

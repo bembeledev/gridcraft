@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, Locale, NumberFormat, format_value, format_value_in};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -31,6 +31,12 @@ pub fn number_format(code: &str) -> NumberFormat {
 /// Formats a value with a format code.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
     format_value(v, &parsed(code), wb.date_system)
+}
+
+/// Formats a value with a format code in a region's separators and short date, as the grid shows
+/// it. Everything that reads or writes values (files, commands, CSV, TEXT) uses `format`.
+pub fn format_in(v: &Value, code: &str, wb: &Workbook, loc: &Locale) -> Formatted {
+    format_value_in(v, &parsed(code), wb.date_system, loc)
 }
 
 /// Whether typing `t` back into a General cell would not give the text `t` again (it would parse

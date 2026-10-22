@@ -989,6 +989,65 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "უჯრების ჩაკეტვა ან ფორმულების დამალვა მხოლოდ ფურცლის დაცვის შემდეგ მოქმედებს (განხილვა › ფურცლის დაცვა)."
         }
         "No Color" => "ფერის გარეშე",
+        "Unprotect Sheet…" => "ფურცლის დაცვის მოხსნა…",
+        "Fit selection" => "მონიშნულის ჩატევა",
+        "Account" => "ანგარიში",
+        "Product Information" => "ინფორმაცია პროდუქტის შესახებ",
+        "Version" => "ვერსია",
+        "Platform" => "პლატფორმა",
+        "Licence" => "ლიცენზია",
+        "Select Data…" => "მონაცემების არჩევა…",
+        "Format Chart Area…" => "დიაგრამის არის ფორმატირება…",
+        "Number Stored as Text" => "ტექსტად შენახული რიცხვი",
+        "Convert to Number" => "რიცხვად გარდაქმნა",
+        "Error checking options" => "შეცდომების შემოწმების პარამეტრები",
+        "Paste formulas that refer to the copied cells" => "დაკოპირებულ უჯრებზე მიმართული ფორმულების ჩასმა",
+        "Insert Link" => "ბმულის ჩასმა",
+        "Redo" => "ხელახლა შესრულება",
+        "Search commands" => "ბრძანებების ძიება",
+        "Undo" => "დაბრუნება",
+        "Rename" => "სახელის შეცვლა",
+        "Move or Copy…" => "გადატანა ან კოპირება…",
+        "Duplicate" => "დუბლირება",
+        "Tab Color" => "ჩანართის ფერი",
+        "Unhide…" => "გამოჩენა…",
+        "Select All Sheets" => "ყველა ფურცლის მონიშვნა",
+        "All sheets" => "ყველა ფურცელი",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "ავტოშენახვა: შენახვა ყოველი ცვლილების შემდეგ (ფაილში შენახული სამუშაო წიგნებისთვის)"
+        }
+        "Copies" => "ასლები",
+        "End date:" => "საბოლოო თარიღი:",
+        "Finding printers…" => "პრინტერების ძიება…",
+        "Forecast start (a date or number in the history; blank: after the last point):" => {
+            "პროგნოზის დასაწყისი (თარიღი ან რიცხვი ისტორიიდან; ცარიელი: ბოლო წერტილის შემდეგ):"
+        }
+        "Grayscale" => "ნაცრისფერი ტონები",
+        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => {
+            "ზედა კოლონტიტული (&L მარცხნივ, &C ცენტრში, &R მარჯვნივ; &P გვერდი, &N გვერდები, &D თარიღი, &A ფურცელი):"
+        }
+        "No printers found. Configure a system printer or export a PDF." => {
+            "პრინტერი ვერ მოიძებნა. დააყენეთ სისტემის პრინტერი ან გააკეთეთ PDF ექსპორტი."
+        }
+        "One-sided" => "ცალმხრივი",
+        "Options|Editing" => "რედაქტირება",
+        "Print failed: the printing worker stopped." => "დაბეჭდვა ვერ მოხერხდა: ბეჭდვის პროცესი შეწყდა.",
+        "Print failed: {error}" => "დაბეჭდვა ვერ მოხერხდა: {error}",
+        "Print job submitted." => "ბეჭდვის დავალება გაიგზავნა.",
+        "Print job submitted: {receipt}" => "ბეჭდვის დავალება გაიგზავნა: {receipt}",
+        "Printer" => "პრინტერი",
+        "Printer default" => "პრინტერის ნაგულისხმევი პარამეტრი",
+        "Printer discovery failed." => "პრინტერების მოძებნა ვერ მოხერხდა.",
+        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => {
+            "სამუშაო წიგნის დაცვა: სტრუქტურა (ფურცლების დამატება, გადატანა, სახელის შეცვლა, დამალვა და წაშლა შეუძლებელია)."
+        }
+        "Refresh printers" => "პრინტერების განახლება",
+        "Select a printer" => "აირჩიეთ პრინტერი",
+        "Source:" => "წყარო:",
+        "Submitting print job…" => "ბეჭდვის დავალება იგზავნება…",
+        "Two-sided printing" => "ორმხრივი ბეჭდვა",
+        "Two-sided: long edge" => "ორმხრივი: გრძელი გვერდი",
+        "Two-sided: short edge" => "ორმხრივი: მოკლე გვერდი",
         _ => return None,
     })
 }

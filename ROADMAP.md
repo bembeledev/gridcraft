@@ -112,7 +112,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
 | German | de | menus only | ~12% |
 | Korean | ko | menus only | ~12% |
-| Georgian | ka | menus, File view and the dialogs the tables cover (973 labels) | ~44% |
+| Georgian | ka | menus, File view and the dialogs the tables cover (1,022 labels) | ~46% |
 | Vietnamese | vi | none | 0% |
 
 Other shipped languages: 3 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%).

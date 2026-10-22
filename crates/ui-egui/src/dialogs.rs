@@ -772,6 +772,44 @@ impl Dialog {
                 select_chart(&mut d, 0);
                 d
             }
+            "changeChartType" => {
+                // Change Chart Type: the Insert Chart dialog's lists with the chart's own type
+                // picked; OK changes the type of that chart.
+                let id = p("chart").as_u64();
+                let found = app.session.active().and_then(|doc| {
+                    let ch = doc.wb.active()?.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
+                    Some((ch.kind, ch.source.clone()))
+                });
+                let Some((kind, source)) = found else {
+                    app.message = Some(("Change Chart Type".into(), "Select a chart first.".into()));
+                    return None;
+                };
+                let mut d = Dialog::custom("changeChartType", "Change Chart Type", json!({"chart": id}));
+                // Recommendations for the chart's own data; without them only All Charts shows.
+                d.result = source.and_then(|range| app.session.run("insert.chartRecommendations", json!({"range": range})).ok());
+                d.tab = "All Charts".into();
+                match ALL_CHARTS.iter().position(|(t, sub, _)| gridcraft_engine::cmd::insert::chart_kind(t, sub) == kind) {
+                    Some(current) => select_chart(&mut d, current),
+                    // A kind the list doesn't have (Bubble, Stock…): nothing is picked, so OK
+                    // keeps it instead of turning it into the first type listed.
+                    None => d.list_index = usize::MAX,
+                }
+                d
+            }
+            "moveChart" => {
+                // Move Chart: to another worksheet as an object (chart sheets can't be made yet).
+                let id = p("chart").as_u64();
+                let found = app.session.active().and_then(|doc| {
+                    let sh = doc.wb.active()?;
+                    sh.charts.iter().any(|c| Some(u64::from(c.id)) == id).then(|| sh.name.clone())
+                });
+                let Some(sheet) = found else {
+                    app.message = Some(("Move Chart".into(), "Select a chart first.".into()));
+                    return None;
+                };
+                // `from` is the chart's sheet; `sheet` is the destination picked.
+                Dialog::custom("moveChart", "Move Chart", json!({"chart": id, "from": sheet, "sheet": sheet}))
+            }
             "selectData" => {
                 // Chart Design › Select Data: data range, series to keep, category axis labels.
                 let id = p("chart").as_u64();
@@ -1149,7 +1187,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
-        "recommendedCharts" => 600.0,
+        "recommendedCharts" | "changeChartType" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
@@ -1183,8 +1221,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "manageRules" => manage_rules(app, ui),
-                "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
+                "recommendedCharts" | "changeChartType" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
+                "moveChart" => move_chart(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
@@ -2447,9 +2486,13 @@ fn chart_icon(t: &str) -> Icon {
     }
 }
 
+/// Insert Chart (OK inserts the chart picked) and Change Chart Type (OK changes the type of the
+/// chart in `values.chart`).
 fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let change = d.name == "changeChartType";
+    let tabs: &[&str] = if change && d.result.is_none() { &["All Charts"] } else { &["Recommended Charts", "All Charts"] };
     ui.horizontal(|ui| {
-        for tab in ["Recommended Charts", "All Charts"] {
+        for &tab in tabs {
             if ui.selectable_label(d.tab == tab, tab).clicked() && d.tab != tab {
                 d.tab = tab.to_string();
                 select_chart(d, 0);
@@ -2488,10 +2531,23 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
             let (rect, _) = ui.allocate_exact_size(vec2(360.0, 216.0), Sense::hover());
             ui.painter().rect_filled(rect, 2.0, Color32::WHITE);
             ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-            let params = json!({"type": d.values.get("type").cloned().unwrap_or(Json::Null), "subtype": d.values.get("subtype").cloned().unwrap_or(Json::Null)});
-            if let Some(doc) = app.session.active()
-                && let Ok((sheet, chart)) = gridcraft_engine::cmd::insert::build_chart(&app.session, &params)
-            {
+            let text = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+            let Some(doc) = app.session.active() else { return };
+            let preview = if change {
+                // The chart itself, drawn as the type picked.
+                let sheet = doc.wb.active_sheet;
+                let id = d.values.get("chart").and_then(Json::as_u64);
+                doc.wb.sheet(sheet).and_then(|sh| sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)).map(|c| {
+                    let mut chart = c.clone();
+                    if d.values.contains_key("type") {
+                        chart.kind = gridcraft_engine::cmd::insert::chart_kind(&text("type"), &text("subtype"));
+                    }
+                    (sheet, chart)
+                })
+            } else {
+                gridcraft_engine::cmd::insert::build_chart(&app.session, &json!({"type": text("type"), "subtype": text("subtype")})).ok()
+            };
+            if let Some((sheet, chart)) = preview {
                 crate::chartview::paint_chart(ui.painter(), rect, &doc.wb, sheet, &chart);
             }
         });
@@ -2501,6 +2557,19 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
         *confirm = false;
         let params =
             json!({"type": d.values.get("type").cloned().unwrap_or(Json::Null), "subtype": d.values.get("subtype").cloned().unwrap_or(Json::Null)});
+        if change {
+            // No type picked: the chart keeps its own.
+            if !d.values.contains_key("type") {
+                *open = false;
+                return;
+            }
+            let params = json!({"chart": d.values.get("chart"), "type": params["type"], "subtype": params["subtype"]});
+            match app.run("chart.changeType", params) {
+                Ok(_) => *open = false,
+                Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+            }
+            return;
+        }
         match app.run("insert.chart", params) {
             Ok(r) => {
                 // The new chart is selected, as after inserting any object.
@@ -2510,6 +2579,58 @@ fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
     }
+}
+
+/// Move Chart: Excel's two placements. New sheet needs chart sheets, which GridCraft can't make
+/// yet, so it shows disabled; Object in moves the chart to that worksheet and goes there.
+fn move_chart(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
+    let sheets: Vec<String> = app
+        .session
+        .active()
+        .map(|doc| doc.wb.sheets.iter().filter(|s| s.visibility == gridcraft_engine::model::Visibility::Visible).map(|s| s.name.clone()).collect())
+        .unwrap_or_default();
+    let mut target = d.values.get("sheet").and_then(Json::as_str).unwrap_or("").to_string();
+    ui.label(lang.tr("Choose where you want the chart to be placed:"));
+    ui.add_space(6.0);
+    egui::Grid::new("move_chart").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+        ui.add_enabled(false, egui::RadioButton::new(false, lang.tr("New sheet:")))
+            .on_disabled_hover_text(lang.tr("Chart sheets aren't supported yet."));
+        ui.add_enabled(false, egui::TextEdit::singleline(&mut "Chart1".to_string()).desired_width(220.0));
+        ui.end_row();
+        let _ = ui.radio(true, lang.tr("Object in:"));
+        egui::ComboBox::from_id_salt("move_chart_sheet").selected_text(target.clone()).width(220.0).show_ui(ui, |ui| {
+            for name in &sheets {
+                ui.selectable_value(&mut target, name.clone(), name);
+            }
+        });
+        ui.end_row();
+    });
+    d.values.insert("sheet".into(), json!(target));
+    ok_cancel(ui, confirm, open);
+    if !*confirm {
+        return;
+    }
+    *confirm = false;
+    let id = d.values.get("chart").and_then(Json::as_u64);
+    let from = d.values.get("from").and_then(Json::as_str).unwrap_or("").to_string();
+    // Moving to its own sheet leaves it where it is.
+    if from != target {
+        // `chart.move` finds the chart on the active sheet: go back to the chart's sheet if the
+        // active one changed while the dialog was open.
+        let here = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.name.clone()));
+        if here.as_deref() != Some(from.as_str()) {
+            let _ = app.run("sheet.activate", json!({"sheet": from}));
+        }
+        if let Err(e) = app.run("chart.move", json!({"chart": id, "sheet": target})) {
+            app.message = Some((d.title.clone(), crate::clean_error(&e)));
+            return;
+        }
+        // Excel goes to the chart's new sheet with the chart selected.
+        let _ = app.run("sheet.activate", json!({"sheet": target}));
+        app.selected_chart = id.and_then(|id| u32::try_from(id).ok());
+    }
+    *open = false;
 }
 
 fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {

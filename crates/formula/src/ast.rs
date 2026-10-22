@@ -357,6 +357,7 @@ impl PartialEq for Expr {
                 (Expr::Invoke(c1, a), Expr::Invoke(c2, b)) => break c1 == c2 && a == b,
                 (Expr::Missing, Expr::Missing) => break true,
                 (Expr::Paren(a), Expr::Paren(b)) => break a == b,
+                (Expr::LinkedRefError(a), Expr::LinkedRefError(b)) => break a == b,
                 _ => break false,
             }
         };

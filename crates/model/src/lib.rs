@@ -20,8 +20,8 @@ pub use features::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
 pub use sheet::{
-    DEFAULT_COL_WIDTH, DEFAULT_DIGIT_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, base_col_width, max_digit_width,
-    points_to_chars,
+    DEFAULT_COL_WIDTH, DEFAULT_DIGIT_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, base_col_width, max_col_width,
+    max_digit_width, points_to_chars,
 };
 pub use store::CellStore;
 pub use style::{

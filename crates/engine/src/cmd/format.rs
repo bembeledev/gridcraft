@@ -1069,10 +1069,12 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
+    // As wide as 255 characters of the workbook's digit, the most a file can store.
+    let max = f64::from(gridcraft_model::max_col_width(s.doc()?.wb.digit_width()));
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
         (Some(w), _) => {
-            if !(0.0..=1800.0).contains(&w) {
-                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            if !(0.0..=max).contains(&w) {
+                return Err(EngineError::Other(format!("Column width must be between 0 and {max} pixels.")));
             }
             w
         }
@@ -1212,7 +1214,8 @@ fn default_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = f64_param(p, "width").ok_or_else(|| bad("home.defaultWidth", "missing `width`"))?;
     let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        cx.sheet_mut(si)?.default_col_width = w.clamp(0.0, 1800.0) as f32;
+        let max = gridcraft_model::max_col_width(cx.wb.digit_width());
+        cx.sheet_mut(si)?.default_col_width = (w as f32).clamp(0.0, max);
         Ok(Json::Null)
     })
 }
@@ -1297,5 +1300,19 @@ mod tests {
         // Calibri 12 counts in 8 px digits: 8.43 characters are 72 px.
         assert_eq!(chars_to_points(8.43, 8.0), 72.0);
         assert!((points_to_chars(72.0, 8.0) - 8.38).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_width_stays_within_what_a_file_can_store() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // Calibri 11: 255 characters are 1790 px.
+        assert_eq!(gridcraft_model::max_col_width(7.0), 1790.0);
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1790})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1791})).is_err());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 255})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 256})).is_err());
+        assert!(s.execute("home.defaultWidth", json!({"width": 5000})).is_ok());
+        assert!(s.active().unwrap().wb.active().unwrap().default_col_width <= 1790.0);
     }
 }

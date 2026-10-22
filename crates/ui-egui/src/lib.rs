@@ -354,12 +354,6 @@ impl SheetApp {
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
-    /// Names new workbooks and sheets in the interface language (see `Session::set_default_names`).
-    fn sync_naming_language(&mut self) {
-        let l = self.ui.language;
-        self.session.set_default_names(l.tr("new workbook|Book"), l.tr("new workbook|Sheet"));
-    }
-
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
@@ -419,11 +413,7 @@ impl SheetApp {
         {
             self.commit_text_box_edit()?;
         }
-        // Before the first frame too (a control command, a host's file.new), new workbooks and
-        // sheets are named in the interface language; after a language change, at once.
-        self.sync_naming_language();
         if let Some(r) = self.run_ui_command(id, &params) {
-            self.sync_naming_language();
             return r;
         }
         let r = self.session.run(id, params);
@@ -1288,7 +1278,6 @@ impl SheetApp {
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
-        self.sync_naming_language();
         let t = theme::Tokens::get(&ctx);
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {

@@ -170,10 +170,6 @@ fn push_history_with_budget(
 }
 
 impl DocState {
-    /// A new workbook nobody has typed in or saved yet (Excel replaces it with the next file opened).
-    pub fn is_untouched_blank(&self) -> bool {
-        self.path.is_none() && !self.is_dirty() && self.undo.is_empty() && self.wb.sheets.iter().all(|sh| sh.cells.is_empty())
-    }
     pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
@@ -257,11 +253,6 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
-    /// The words new workbooks and sheets are named with (`Book`, `Sheet`), set by the interface
-    /// from its language's catalog, as Excel names them in its own language. Not saved: the
-    /// interface keeps its own language preference.
-    #[serde(skip)]
-    pub default_names: (String, String),
 }
 
 impl Default for Prefs {
@@ -276,7 +267,6 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
-            default_names: ("Book".into(), "Sheet".into()),
         }
     }
 }
@@ -330,10 +320,6 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
-    /// Uid of the blank workbook the session started with, which a change of default names may
-    /// replace ([`Session::set_default_names`]). Cleared once any other document is added, so an
-    /// opened or imported workbook (even a blank one) is never discarded.
-    startup: Option<u64>,
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
@@ -367,7 +353,6 @@ impl Session {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
     pub fn add_document(&mut self, d: DocState) -> usize {
-        self.startup = None;
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -380,44 +365,15 @@ impl Session {
             }
         }
     }
-    /// The words new workbooks and sheets are named with ([`Prefs::default_names`]).
-    pub fn default_names(&self) -> (String, String) {
-        self.prefs.default_names.clone()
-    }
-    /// Sets [`Prefs::default_names`] (the interface passes its language's words). The startup
-    /// workbook, while still untouched, is replaced by one with the new names. Empty words
-    /// keep the current ones.
-    pub fn set_default_names(&mut self, book: &str, sheet: &str) {
-        if book.trim().is_empty() || sheet.trim().is_empty() || self.prefs.default_names == (book.to_string(), sheet.to_string()) {
-            return;
-        }
-        self.prefs.default_names = (book.to_string(), sheet.to_string());
-        if self.documents().len() == 1 && self.active().is_some_and(|d| Some(d.uid) == self.startup && d.is_untouched_blank()) {
-            self.close_document(0);
-            self.new_workbook();
-        }
-    }
-    /// The name for a sheet added to the active workbook (`SheetN` in the interface language).
-    pub fn next_sheet_name(&self) -> Result<String> {
-        Ok(self.doc()?.wb.next_sheet_name_in(&self.default_names().1))
-    }
-    /// A new blank workbook titled `BookN`. Created into an empty session, it is the startup
-    /// workbook ([`Session::set_default_names`]).
+    /// A new blank workbook titled `BookN`.
     pub fn new_workbook(&mut self) -> usize {
-        let first = self.docs.is_empty();
-        let (book, sheet) = self.default_names();
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
-        Arc::make_mut(&mut wb.sheets[0]).name = format!("{sheet}1");
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
-            let name = wb.next_sheet_name_in(&sheet);
+            let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        let i = self.add_document(DocState::new(wb, None, format!("{book}{n}")));
-        if first {
-            self.startup = Some(self.docs[i].uid);
-        }
-        i
+        self.add_document(DocState::new(wb, None, format!("Book{n}")))
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress

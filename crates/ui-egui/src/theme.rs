@@ -517,9 +517,9 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
 /// every family can carry them as fallback. egui's bundled fonts have no coverage beyond Latin, so
-/// without this a Thai, Hebrew, Georgian, Japanese or Chinese workbook shows tofu boxes even though
-/// the text was read correctly. With a face installed those scripts get real glyphs instead of tofu;
-/// nothing is bundled, and a machine without the face keeps the old behaviour.
+/// without this a Thai, Hebrew, Japanese or Chinese workbook shows tofu boxes even though the text
+/// was read correctly. With a face installed those scripts get real glyphs instead of tofu; nothing
+/// is bundled, and a machine without the face keeps the old behaviour.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
     let mut keys = Vec::new();
@@ -567,7 +567,6 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
-        ("sys-georgian", georgian()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -745,22 +744,6 @@ fn hebrew() -> Vec<(String, u32)> {
         v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
     }
     v.push(("/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf".into(), 0));
-    v
-}
-
-/// Georgian faces. macOS ships SF Georgian; Windows has Sylfaen; Linux usually has Noto Sans
-/// Georgian or DejaVu Sans.
-#[cfg(not(target_arch = "wasm32"))]
-fn georgian() -> Vec<(String, u32)> {
-    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
-    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
-    let mut v: Vec<(String, u32)> = Vec::new();
-    v.push((format!("{win}\\sylfaen.ttf"), 0)); // Sylfaen
-    v.push(("/System/Library/Fonts/SFGeorgian.ttf".into(), 0));
-    for d in lin {
-        v.push((format!("{d}/NotoSansGeorgian-Regular.ttf"), 0));
-        v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
-    }
     v
 }
 
@@ -958,45 +941,14 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            [
-                "sys-cjk-han-ja",
-                "sys-cjk-han-zh",
-                "sys-cjk-hangul",
-                "sys-thai",
-                "sys-lao",
-                "sys-hebrew",
-                "sys-georgian",
-                "sys-symbols",
-                "sys-symbols-2"
-            ]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            [
-                "sys-cjk-han-zh",
-                "sys-cjk-han-ja",
-                "sys-cjk-hangul",
-                "sys-thai",
-                "sys-lao",
-                "sys-hebrew",
-                "sys-georgian",
-                "sys-symbols",
-                "sys-symbols-2"
-            ]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
-        for l in [
-            Language::En,
-            Language::Zh,
-            Language::Ko,
-            Language::Ru,
-            Language::PtBr,
-            Language::De,
-            Language::Cs,
-            Language::Fr,
-            Language::Tr,
-            Language::Ka,
-        ] {
+        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
             assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
         }
     }
@@ -1049,14 +1001,13 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 9] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-lao", lao(), "ພາສາລາວ"),
             ("sys-hebrew", hebrew(), "עברית"),
-            ("sys-georgian", georgian(), "ქართული"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
             ("ui", candidates(UI), "Příliš žluťoučký kůň úpěl ďábelské ódy ŘŠČŽÝÁÍÉÚŮĚŤĎŇÓ"),

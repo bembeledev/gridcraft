@@ -4247,44 +4247,6 @@ fn paste_special_validation_moves_relative_references() {
 }
 
 #[test]
-fn new_workbooks_and_sheets_take_the_interface_default_names() {
-    let mut s = Session::new();
-    s.new_workbook();
-    assert_eq!(s.doc().unwrap().title, "Book1");
-    // The untouched start-up workbook is renamed when the interface turns out to be Georgian.
-    s.set_default_names("წიგნი", "ფურცელი");
-    assert_eq!(s.documents().len(), 1);
-    assert_eq!(s.doc().unwrap().title, "წიგნი1");
-    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "ფურცელი1");
-    s.execute("home.insertSheet", json!({})).unwrap();
-    assert!(s.doc().unwrap().wb.sheet_index("ფურცელი2").is_some());
-    // A workbook with content keeps its names on a language switch.
-    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
-    s.set_default_names("Book", "Sheet");
-    assert_eq!(s.doc().unwrap().title, "წიგნი1");
-    s.new_workbook();
-    assert_eq!(s.doc().unwrap().title, "Book1");
-    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
-}
-
-#[test]
-fn a_language_switch_never_discards_an_opened_blank_workbook() {
-    let mut blank = Session::new();
-    blank.new_workbook();
-    let saved = blank.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
-    let mut s = Session::new();
-    s.new_workbook();
-    // Opened from bytes (no path, as on the web), it replaces the startup Book1 but is the user's file.
-    s.execute("file.open", json!({"name": "budget.xlsx", "base64": saved["base64"]})).unwrap();
-    let (uid, title) = (s.doc().unwrap().uid, s.doc().unwrap().title.clone());
-    s.set_default_names("წიგნი", "ფურცელი");
-    assert_eq!(s.documents().len(), 1);
-    assert_eq!(s.doc().unwrap().uid, uid);
-    assert_eq!(s.doc().unwrap().title, title);
-    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
-}
-
-#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {

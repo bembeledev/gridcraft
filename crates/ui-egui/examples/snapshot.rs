@@ -90,6 +90,8 @@ fn main() {
     // the workbook's fonts are drawn in their own faces, not a substitute.
     let _ = gridcraft_ui_egui::fonts::catalog();
     let mut session = Session::new();
+    // Before any --cmd: AutoFit measures the text in this region.
+    session.display_locale = number_locale;
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
     } else if let Some(s) = &sample {
@@ -122,7 +124,6 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.session.display_locale = number_locale;
                 app.selected_chart = chart;
                 if let Some(d) = &dialog {
                     let (name, p) =

@@ -1110,6 +1110,22 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// A number `tw` wide in a cell with `room` across and `pad` on each side, accepted by the hinted
+/// digit count: the scale it's drawn at (below 1 only when it's wider than the whole cell) and the
+/// padding left on each side.
+fn fit_hinted(tw: f32, room: f32, pad: f32) -> (f32, f32) {
+    if !(tw.is_finite() && room.is_finite()) || tw <= 0.0 || room <= 0.0 {
+        return (1.0, pad.max(0.0));
+    }
+    if tw + 2.0 * pad <= room {
+        (1.0, pad)
+    } else if tw <= room {
+        (1.0, ((room - tw) / 2.0).max(0.0))
+    } else {
+        (room / tw, 0.0)
+    }
+}
+
 fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
     let (x, y, w, h) = rect;
     let sh = b.sh;
@@ -1168,8 +1184,18 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
-    // A number that fits only in hinted digits (give or take a pixel) uses the cell padding.
-    let hpad = if is_num && !wrap && tw > avail { ((w - indent - tw) / 2.0).clamp(0.0, pad) } else { pad };
+    // A number that fits only in hinted digits uses the cell padding, and is drawn a little smaller
+    // when even that isn't enough, so no glyph falls outside the cell.
+    let hpad = if is_num && !wrap && tw > avail && !sh.show_formulas {
+        let (scale, hpad) = fit_hinted(tw, w - indent, pad);
+        if scale < 1.0 {
+            size = (size * scale).max(1.0);
+            tw = gridcraft_pdf::text_width(font, size, &text);
+        }
+        hpad
+    } else {
+        pad
+    };
     let h_align = match st.align.h {
         HAlign::General => {
             if is_num {
@@ -2365,6 +2391,17 @@ mod tests {
         assert_eq!(center_across_width(&styles, &sh, a1, &[]), sh.col_width(1));
         let merged = [RangeRef::new(CellRef::new(0, 1), CellRef::new(1, 1))];
         assert_eq!(center_across_width(&styles, &sh, a1, &merged), 0.0);
+    }
+
+    #[test]
+    fn hinted_numbers_stay_inside_their_cell() {
+        // Fits with its padding; fits only without it; wider than the cell: drawn smaller, no padding.
+        assert_eq!(fit_hinted(40.0, 50.0, 2.0), (1.0, 2.0));
+        assert_eq!(fit_hinted(48.0, 50.0, 2.0), (1.0, 1.0));
+        let (scale, pad) = fit_hinted(55.0, 54.0, 2.0);
+        assert!((55.0 * scale - 54.0).abs() < 1e-3 && pad == 0.0);
+        assert_eq!(fit_hinted(f32::NAN, 54.0, 2.0), (1.0, 2.0));
+        assert_eq!(fit_hinted(10.0, 0.0, 2.0), (1.0, 2.0));
     }
 
     #[test]

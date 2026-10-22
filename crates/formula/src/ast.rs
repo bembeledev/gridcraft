@@ -317,7 +317,7 @@ impl Clone for Expr {
             Expr::Call(n, args) => Expr::Call(n.clone(), args.clone()),
             Expr::Invoke(c, args) => Expr::Invoke(c.clone(), args.clone()),
             Expr::Missing => Expr::Missing,
-            Expr::Paren(e) => Expr::Paren(e.clone()),
+            Expr::LinkedRefError(s) => Expr::LinkedRefError(s.clone()),
         };
         while let Some((op, b)) = spine.pop() {
             acc = Expr::Binary(op, Box::new(acc), b.clone());

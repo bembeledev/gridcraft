@@ -170,8 +170,21 @@ impl eframe::App for WebShell {
                         }
                     }
                 };
+                // A host close must not drop an open cell editor: commit it first, exactly
+                // like the File menu does, and refuse to close when the edit won't commit —
+                // the host hears why and the workbook stays open for the user to fix it.
+                if id == "file.close" && !self.app.commit_edit(0, 0, false, false) {
+                    bridge.post_response(false, "the cell edit doesn't commit; fix or cancel it before closing");
+                    continue;
+                }
                 match self.app.run(&id, parsed) {
-                    Ok(v) => bridge.post_response(true, &v.to_string()),
+                    Ok(v) => {
+                        // Bind save receipts to the document that was just saved: a queued
+                        // `gridcraft:open` later in the same burst would make another document
+                        // active before the frame's sync applies the receipt.
+                        bridge.apply_receipts(&mut self.app);
+                        bridge.post_response(true, &v.to_string());
+                    }
                     Err(e) => bridge.post_response(false, &e),
                 }
             }

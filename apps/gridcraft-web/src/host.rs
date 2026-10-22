@@ -104,10 +104,11 @@ impl Bridge {
         self.send(&[("type", "gridcraft:failed".into()), ("error", error.into())]);
     }
 
-    /// After each frame: a workbook handed to the parent this frame counts as saved under the
-    /// name it was saved as, and the parent hears when unsaved changes appear or go away. When
-    /// the last workbook closes (File › Close), the parent hears `docClosed` once.
-    pub fn sync(&self, app: &mut SheetApp) {
+    /// Apply save receipts recorded since the last call to the document active right now —
+    /// the one that was saved when the receipt was recorded. The command loop calls this
+    /// right after a save returns (its document is still active there); [`Self::sync`] calls
+    /// it for saves that came from the UI, where the active document doesn't move in between.
+    pub fn apply_receipts(&self, app: &mut SheetApp) {
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
         if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
             && let Some(doc) = app.session.active_mut()
@@ -117,6 +118,13 @@ impl Bridge {
                 doc.title = name.clone();
             }
         }
+    }
+
+    /// After each frame: a workbook handed to the parent this frame counts as saved under the
+    /// name it was saved as, and the parent hears when unsaved changes appear or go away. When
+    /// the last workbook closes (File › Close), the parent hears `docClosed` once.
+    pub fn sync(&self, app: &mut SheetApp) {
+        self.apply_receipts(app);
         let dirty = app.session.documents().iter().any(|d| d.is_dirty());
         if self.reported.get() != Some(dirty) && self.send(&[("type", "gridcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));

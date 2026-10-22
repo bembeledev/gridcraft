@@ -452,7 +452,7 @@ impl<'a> Legacy<'a> {
             return *kind;
         }
         let (scope, bare) = match n.rsplit_once('!') {
-            Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
+            Some((s, name)) => (self.wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), name),
             None => (sheet, n),
         };
         if let Some(def) = self.wb.name(bare, scope) {
@@ -469,7 +469,7 @@ impl<'a> Legacy<'a> {
                 }
                 None => {}
             }
-            let Ok(expr) = gridcraft_formula::parse(def.formula.trim_start_matches('=')) else { return Kind::Array };
+            let Ok(expr) = gridcraft_formula::parse_name(def.formula.trim_start_matches('=')) else { return Kind::Array };
             self.names.insert(key.clone(), None);
             // A name's own formula does not see the formula's LET variables.
             let locals = std::mem::take(&mut self.locals);
@@ -568,7 +568,9 @@ impl<'a> Legacy<'a> {
             "INDEX" => {
                 let row = out.get(1);
                 let col = out.get(2);
-                let multi = !row.is_some_and(positive) || col.is_some_and(|e| !positive(e)) || (col.is_none() && !out.first().is_some_and(one_line));
+                let row_positive = row.is_some_and(|e| positive_index(e, kinds.get(1).copied()));
+                let col_positive = col.is_some_and(|e| positive_index(e, kinds.get(2).copied()));
+                let multi = !row_positive || col.is_some_and(|_| !col_positive) || (col.is_none() && !out.first().is_some_and(one_line));
                 if multi {
                     if first == Kind::Array { Kind::Array } else { Kind::Ref }
                 } else if lifted {
@@ -688,7 +690,10 @@ impl<'a> Legacy<'a> {
 fn positive(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n >= 1.0)
 }
-
+fn positive_index(e: &Expr, kind: Option<Kind>) -> bool {
+    // MATCH returns a one-based position or an error, never INDEX's zero whole-row selector.
+    positive(e) || (matches!(e, Expr::Call(name, _) if matches!(name.as_str(), "MATCH" | "XMATCH")) && kind.is_some_and(|k| k != Kind::Ref))
+}
 
 fn one(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n == 1.0)
@@ -761,6 +766,7 @@ fn param(name: &str, i: usize, functions: FunctionInfo) -> Param {
         | "ANCHORARRAY" => Param::Ref,
         "CELL" | "GETPIVOTDATA" if i == 1 => Param::Ref,
         "T" => Param::First,
+        "N" if i == 0 => Param::Value,
         "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "VSTACK" | "HSTACK" | "TOROW" | "TOCOL" | "WRAPROWS" | "WRAPCOLS" | "TAKE" | "DROP"
         | "CHOOSEROWS" | "CHOOSECOLS" | "EXPAND" | "GROUPBY" | "PIVOTBY"
             if !scalar_arg(name, i) =>

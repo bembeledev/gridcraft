@@ -66,7 +66,7 @@ fn pivot_charts_plot_their_cached_points_when_the_references_do_not_cover_them()
         r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{bar}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{line}<c:axId val="1"/><c:axId val="2"/></c:lineChart>"#
     );
     let c = read(&chart_xml(true, &plot, ""));
-    assert_eq!(c.pivot.as_deref(), Some("[Book.xlsx]Graph!PivotTable1"));
+    assert_eq!(c.pivot.as_deref(), Some("Graph!PivotTable1"));
     assert_eq!(c.kind, ChartKind::Combo);
     let s = &c.series;
     assert_eq!(s[0].name.as_deref(), Some("\"Events\""));
@@ -88,7 +88,7 @@ fn pivot_charts_plot_their_cached_points_when_the_references_do_not_cover_them()
     // The cached points keep the cache's number format (data labels show "$185"), and so does
     // a save.
     assert_eq!(c.series[0].number_format.as_deref(), Some("\"$\"#,##0"));
-    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c));
+    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c, ""));
     assert_eq!(back.series[0].number_format, c.series[0].number_format);
 
     // References whose cells hold the cached points stay live, and so do an ordinary chart's.
@@ -105,7 +105,7 @@ fn pivot_charts_plot_their_cached_points_when_the_references_do_not_cover_them()
     // Saved again, the cached points come back as they were: quotes, gaps and all. (A literal
     // name is saved as plain text, which names the series the same way.)
     let c = read(&chart_xml(true, &plot, ""));
-    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c));
+    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c, ""));
     assert_eq!(back.pivot, c.pivot);
     let parts = |c: &Chart| c.series.iter().map(|s| (shown(s.name.as_deref()), s.categories.clone(), s.values.clone())).collect::<Vec<_>>();
     assert_eq!(parts(&back), parts(&c));
@@ -173,7 +173,7 @@ fn multi_level_pivot_categories_plot_their_innermost_level() {
     );
     // A save keeps the references and writes the block as a `multiLvlStrRef` whose cache has
     // both levels, innermost first, so it reads back the same way.
-    let saved = crate::chart::write_chart(&wb, 0, &c);
+    let saved = crate::chart::write_chart(&wb, 0, &c, "");
     let cat = format!(
         r#"<c:cat><c:multiLvlStrRef><c:f>Graph!$A$4:$B$7</c:f><c:multiLvlStrCache><c:ptCount val="4"/><c:lvl>{leaf}</c:lvl><c:lvl>{outer}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef></c:cat>"#
     );
@@ -208,7 +208,7 @@ fn series_names_with_quotes_survive_a_save() {
         ser(&str_cache("Graph!$J$2", &["Sales \"East\""]), &str_cache("Graph!$J$2", &["a", "b"]), &num_cache("Graph!$J$2", 2, &[(0, "1"), (1, "2")]));
     let c = read(&chart_xml(true, &format!("<c:pieChart>{s}</c:pieChart>"), ""));
     assert_eq!(shown(c.series[0].name.as_deref()).as_deref(), Some("Sales \"East\""));
-    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c));
+    let back = read(&crate::chart::write_chart(&Workbook::new(), 0, &c, ""));
     assert_eq!(shown(back.series[0].name.as_deref()).as_deref(), Some("Sales \"East\""));
 
     // So does a literal name on a chartex chart.
@@ -252,7 +252,7 @@ fn a_deleted_automatic_title_stays_deleted() {
 
     // Both states survive a save.
     let wb = Workbook::new();
-    assert_eq!(read(&crate::chart::write_chart(&wb, 0, &deleted)).title.as_deref(), Some(""));
+    assert_eq!(read(&crate::chart::write_chart(&wb, 0, &deleted, "")).title.as_deref(), Some(""));
     let auto = read(&chart_xml(false, &pie, ""));
-    assert_eq!(read(&crate::chart::write_chart(&wb, 0, &auto)).title, None);
+    assert_eq!(read(&crate::chart::write_chart(&wb, 0, &auto, "")).title, None);
 }

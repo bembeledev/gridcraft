@@ -421,10 +421,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
-        "AutoSave" => "Automatisch speichern",
-        "AutoSave: save after every change (workbooks saved to a file)" => {
-            "Automatisch speichern: nach jeder Änderung speichern (Arbeitsmappen, die in einer Datei gespeichert sind)"
-        }
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",
         "Copy" => "Kopieren",

@@ -242,6 +242,21 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             wb.calc.set_max_change(d);
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
+        wb.calc.multi_threaded = c.flag("concurrentCalc", true);
+        wb.calc.threads = match c.attr("concurrentManualCount").map(str::trim) {
+            None => 0,
+            Some(v) => match v.parse::<u64>() {
+                Ok(n) if n <= 1024 => n as u32,
+                Ok(n) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {n} is above Excel's limit; kept 1024"));
+                    1024
+                }
+                Err(_) => {
+                    cx.warn(format!("calcPr: concurrentManualCount {v:?} is not a count; calculation uses every processor"));
+                    0
+                }
+            },
+        };
     }
     if let Some(p) = wb_xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);

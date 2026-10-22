@@ -1329,3 +1329,48 @@ fn stacked_bar_of_dates_and_durations_uses_the_stacked_positions() {
     assert_eq!(widths.len(), 4);
     assert!(widths.iter().all(|w| *w > 5.0), "{widths:?}");
 }
+
+/// All-negative data: the axis leaves 0 out at the top (Excel: −101…−92), the bars hang from
+/// the top, and the category axis line is drawn there too (in Excel the axis sits at −92).
+#[test]
+fn negative_bars_hang_from_the_axis_line() {
+    let cats: Vec<String> = ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect();
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let d = ChartData {
+            categories: cats.clone(),
+            series: vec![general("V", &[-95.0, -97.0, -99.0, -100.0], [10, 20, 30, 255], kind)],
+            ..ChartData::default()
+        };
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let bars: Vec<(f32, f32, f32, f32)> = p
+            .iter()
+            .filter_map(|q| match q {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if *f == [10, 20, 30, 255] && w.max(*h) > 14.0 => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 4, "{kind:?}");
+        // The edge every bar starts from: the top of a column, the right end of a bar.
+        let starts: Vec<f32> = bars.iter().map(|(x, y, w, _)| if kind == ChartKind::BarClustered { x + w } else { *y }).collect();
+        assert!(starts.windows(2).all(|s| (s[0] - s[1]).abs() < 0.01), "{kind:?} {starts:?}");
+        // The axis line (the one drawn in the axis colour across the whole plot) is at that edge.
+        let axis = [0xBF, 0xBF, 0xBF, 0xFF];
+        let at = p.iter().find_map(|q| match q {
+            Prim::Line { pts, color, .. } if *color == axis && pts.len() == 2 => {
+                let [a, b] = [pts[0], pts[1]];
+                if kind == ChartKind::BarClustered && (a[0] - b[0]).abs() < 0.01 {
+                    Some(a[0])
+                } else if kind != ChartKind::BarClustered && (a[1] - b[1]).abs() < 0.01 {
+                    Some(a[1])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        });
+        let at = at.unwrap_or_else(|| panic!("{kind:?}: no axis line"));
+        assert!((at - starts[0]).abs() < 0.01, "{kind:?}: axis line at {at}, bars start at {}", starts[0]);
+    }
+}

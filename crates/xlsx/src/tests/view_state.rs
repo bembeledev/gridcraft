@@ -30,6 +30,19 @@ fn active_pane_without_a_selection_starts_at_its_first_cell() {
 }
 
 #[test]
+fn each_active_pane_starts_at_its_own_first_cell() {
+    let pane = |active: &str| {
+        sheet(&format!(
+            r#"<sheetView workbookViewId="0"><pane xSplit="2" ySplit="3" topLeftCell="F10" activePane="{active}" state="frozen"/><selection activeCell="A1" sqref="A1"/></sheetView>"#
+        ))
+        .view_active
+    };
+    assert_eq!(pane("bottomRight"), c("F10"));
+    assert_eq!(pane("topRight"), c("F1"));
+    assert_eq!(pane("bottomLeft"), c("A10"));
+}
+
+#[test]
 fn active_pane_selection_is_the_active_cell() {
     let sh = sheet(
         r#"<sheetView workbookViewId="0"><pane xSplit="2" ySplit="1" topLeftCell="M2" activePane="bottomRight" state="frozen"/><selection pane="topRight" activeCell="C1" sqref="C1"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/><selection pane="bottomRight" activeCell="AH80" sqref="AH80"/></sheetView>"#,
@@ -85,4 +98,36 @@ fn first_tab_round_trips() {
     assert!(workbook_xml(&write_xlsx(&wb).unwrap()).contains(r#"firstSheet="3""#));
     wb.first_tab = 0;
     assert!(!workbook_xml(&write_xlsx(&wb).unwrap()).contains("firstSheet"));
+}
+
+#[test]
+fn first_tab_on_a_chart_sheet_moves_to_the_next_worksheet() {
+    use super::{CT, ROOT_RELS, make_zip};
+    let ns = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let wb = format!(
+        r#"<workbook {ns}><bookViews><workbookView firstSheet="1" activeTab="2"/></bookViews><sheets><sheet name="One" sheetId="1" r:id="rId1"/><sheet name="Chart" sheetId="2" r:id="rId2"/><sheet name="Two" sheetId="3" r:id="rId3"/></sheets></workbook>"#
+    );
+    let rel = |id: &str, kind: &str, target: &str| {
+        format!(r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#)
+    };
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}{}{}</Relationships>"#,
+        rel("rId1", "worksheet", "worksheets/sheet1.xml"),
+        rel("rId2", "chartsheet", "chartsheets/sheet1.xml"),
+        rel("rId3", "worksheet", "worksheets/sheet2.xml")
+    );
+    let sheet = format!("<worksheet {ns}><sheetData/></worksheet>");
+    let chart = format!("<chartsheet {ns}><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews></chartsheet>");
+    let bytes = make_zip(&[
+        ("[Content_Types].xml", CT.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/chartsheets/sheet1.xml", chart.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet.as_bytes()),
+    ]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.sheets.len(), 2);
+    assert_eq!((wb.first_tab, wb.active_sheet), (1, 1));
 }

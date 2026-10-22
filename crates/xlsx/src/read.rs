@@ -300,7 +300,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
-    wb.first_tab = file_to_model.get(first_tab).copied().flatten().unwrap_or(0);
+    // A chart sheet there isn't modelled: the next worksheet after it is.
+    wb.first_tab = file_to_model.iter().skip(first_tab).find_map(|m| *m).unwrap_or(0);
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

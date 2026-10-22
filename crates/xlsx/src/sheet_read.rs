@@ -355,8 +355,15 @@ fn read_views(e: &El, sheet: &mut Sheet) {
         }
         if let Some(a) = p.attr("activePane") {
             active_pane = a;
-            // The active pane's first cell is its active cell when the file saved no selection there.
-            pane_first = Some(sheet.view_top_left);
+            // The active pane's first cell is its active cell when the file saved no selection
+            // there: the frozen rows and columns start at row 1 and column A.
+            let top = sheet.view_top_left;
+            pane_first = Some(match a {
+                "topRight" => CellRef::new(0, top.col),
+                "bottomLeft" => CellRef::new(top.row, 0),
+                "topLeft" => CellRef::new(0, 0),
+                _ => top,
+            });
         }
     }
     let cell = |s: &El| s.attr("activeCell").and_then(CellRef::parse);

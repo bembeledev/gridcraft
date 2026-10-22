@@ -175,6 +175,12 @@ pub struct Services {
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// macOS: start a picker that doesn't block the frame and send its answer (`None` when
+    /// cancelled) on the channel; used instead of `pick_open` and `pick_save`. A blocking picker
+    /// runs AppKit's modal loop inside winit's event handler, and an event delivered there (a
+    /// Finder drag) aborts the process (#1911, #2042). Hosts keep `pick_open`/`pick_save` set
+    /// too: their presence is what tells the desktop from the web.
+    pub pick_async: Option<Box<dyn Fn(PathPick, std::sync::mpsc::Sender<Option<String>>)>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -205,6 +211,27 @@ pub struct Services {
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// A path asked of the host's asynchronous picker ([`Services::pick_async`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PathPick {
+    /// A workbook to open.
+    Open,
+    /// Where to save; the suggested file name's extension is the file type asked for.
+    Save(String),
+}
+
+/// What a picked path is for, run once the picker answers ([`SheetApp::pick_path`]).
+pub(crate) enum AfterPick {
+    Open,
+    SaveAs,
+    /// `file.exportPdf` with the caller's other params (range, sheets, fitToPage).
+    ExportPdf(Json),
+    /// A Backstage export: the command and the extension it writes.
+    Export(&'static str, String),
+    /// Save a Copy, in this format.
+    SaveCopy(String),
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Perf {
@@ -296,6 +323,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// An asynchronous picker still open: what its answer is for, the workbook that asked (by uid)
+    /// and where the answer comes.
+    pending_pick: Option<(AfterPick, Option<u64>, std::sync::mpsc::Receiver<Option<String>>)>,
 }
 
 impl SheetApp {
@@ -342,6 +372,7 @@ impl SheetApp {
             tab_run: None,
             started: now_ms(),
             allow_close: false,
+            pending_pick: None,
         }
     }
 
@@ -553,24 +584,127 @@ impl SheetApp {
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
     /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    fn export_pdf_with_picker(&mut self, mut params: Json) {
+    fn export_pdf_with_picker(&mut self, params: Json) {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
         let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
-        // The picker may suggest a workbook extension; the export writes a PDF.
-        let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
-        match &mut params {
-            Json::Object(map) => {
-                map.insert("path".into(), Json::String(path));
-            }
-            other => *other = json!({"path": path}),
+        self.pick_path(PathPick::Save(format!("{stem}.pdf")), AfterPick::ExportPdf(params));
+    }
+
+    /// Asks for a path and runs `then` with it. A blocking picker answers at once and this returns
+    /// whether `then` wrote or opened something; the asynchronous one (macOS) answers on a later
+    /// frame and this returns `None`. While one is open, another request is refused (`Some(false)`).
+    pub(crate) fn pick_path(&mut self, pick: PathPick, then: AfterPick) -> Option<bool> {
+        if self.pending_pick.is_some() {
+            return Some(false);
         }
-        if let Err(e) = self.run("file.exportPdf", params) {
+        if let Some(start) = &self.services.pick_async {
+            let (answer, rx) = std::sync::mpsc::channel();
+            start(pick, answer);
+            self.pending_pick = Some((then, self.session.active().map(|d| d.uid), rx));
+            return None;
+        }
+        let path = match &pick {
+            PathPick::Open => self.services.pick_open.as_ref().and_then(|p| p()),
+            PathPick::Save(suggested) => self.services.pick_save.as_ref().and_then(|p| p(suggested)),
+        };
+        Some(self.after_pick(then, path))
+    }
+
+    /// Hands the asynchronous picker's answer to what asked for it, once it has arrived.
+    fn poll_pick(&mut self, ctx: &egui::Context) {
+        let Some((_, _, rx)) = &self.pending_pick else { return };
+        match rx.try_recv() {
+            Ok(path) => {
+                if let Some((then, uid, _)) = self.pending_pick.take() {
+                    self.after_pick_for(uid, then, path);
+                }
+            }
+            // The host gave up on the picker without answering: nothing to do.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending_pick = None,
+            // Nothing wakes the frame loop when the answer comes, so keep looking for it.
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+        }
+    }
+
+    /// [`Self::after_pick`] for the workbook that asked: the frame loop kept running while the
+    /// picker was up, so another workbook may be active now (the control channel can switch or
+    /// close one). Saves and exports go to the one that asked, and the active one stays active.
+    fn after_pick_for(&mut self, uid: Option<u64>, then: AfterPick, path: Option<String>) {
+        let active = self.session.active().map(|d| d.uid);
+        if matches!(then, AfterPick::Open) || path.is_none() || active == uid {
+            self.after_pick(then, path);
+            return;
+        }
+        let Some(asked) = self.session.documents().iter().position(|d| Some(d.uid) == uid) else {
+            self.message = Some(("GridCraft".into(), "The workbook was closed before a file was chosen, so nothing was saved.".into()));
+            return;
+        };
+        // A text-box draft belongs to the active workbook: commit it before the switch, as
+        // window.activate does, or the save refuses it as off-sheet.
+        if let Err(e) = self.commit_text_box_edit() {
             self.alert(e);
+            return;
+        }
+        self.session.set_active(asked);
+        self.after_pick(then, path);
+        if let Some(i) = self.session.documents().iter().position(|d| Some(d.uid) == active) {
+            self.session.set_active(i);
+        }
+    }
+
+    /// Runs what a path was picked for. `false` when the picker was cancelled or the command failed.
+    pub(crate) fn after_pick(&mut self, then: AfterPick, path: Option<String>) -> bool {
+        let Some(path) = path else { return false };
+        match then {
+            AfterPick::Open => {
+                self.open_path(&path);
+                true
+            }
+            AfterPick::SaveAs => {
+                let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
+                self.run_or_alert("file.save", json!({"path": path}));
+                true
+            }
+            AfterPick::ExportPdf(mut params) => {
+                // The picker may suggest a workbook extension; the export writes a PDF.
+                let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
+                match &mut params {
+                    Json::Object(map) => {
+                        map.insert("path".into(), Json::String(path));
+                    }
+                    other => *other = json!({"path": path}),
+                }
+                match self.run("file.exportPdf", params) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        self.alert(e);
+                        false
+                    }
+                }
+            }
+            AfterPick::Export(id, fmt) => {
+                // The picker may suggest a workbook extension; the export writes the chosen format.
+                let path = std::path::Path::new(&path).with_extension(&fmt).to_string_lossy().into_owned();
+                match self.run(id, json!({"path": path})) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        self.message = Some(("GridCraft".into(), clean_error(&e)));
+                        false
+                    }
+                }
+            }
+            AfterPick::SaveCopy(fmt) => {
+                let id = match fmt.as_str() {
+                    "csv" => "file.exportCsv",
+                    "html" => "file.exportHtml",
+                    _ => "file.saveAs",
+                };
+                self.run_or_alert(id, json!({"path": path}));
+                true
+            }
         }
     }
 
@@ -778,19 +912,14 @@ impl SheetApp {
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
-                } else if let Some(pick) = &self.services.pick_open
-                    && let Some(path) = pick()
-                {
-                    self.open_path(&path);
+                } else {
+                    self.pick_path(PathPick::Open, AfterPick::Open);
                 }
             }
             "saveAs" => {
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
-                    }
+                if self.services.pick_save.is_some() {
+                    self.pick_path(PathPick::Save(suggested), AfterPick::SaveAs);
                 } else if self.services.download.is_some()
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
                     && let Some(dl) = &self.services.download
@@ -1225,6 +1354,7 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        self.poll_pick(ctx);
         self.guard_window_close(ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self

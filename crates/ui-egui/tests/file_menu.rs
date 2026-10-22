@@ -377,3 +377,100 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     assert_eq!(asked.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// macOS shows file pickers as sheets that answer on a later frame (#1911, #2042): nothing is
+/// written before the answer, one sheet is open at a time, and a cancelled or abandoned sheet
+/// frees the picker for the next request.
+#[test]
+fn an_asynchronous_picker_runs_its_action_when_the_answer_arrives() {
+    use gridcraft_ui_egui::PathPick;
+    let dir = std::env::temp_dir().join(format!("gridcraft-async-picker-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    type Asked = Arc<Mutex<Vec<(PathPick, std::sync::mpsc::Sender<Option<String>>)>>>;
+    let asked: Asked = Arc::default();
+    let capture = asked.clone();
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(|_| panic!("the blocking picker runs although a sheet is available"))),
+        pick_async: Some(Box::new(move |pick, answer| capture.lock().unwrap().push((pick, answer)))),
+        ..Default::default()
+    });
+    let next = |asked: &Asked| asked.lock().unwrap().remove(0);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().open_dialog("saveAs", serde_json::json!({}));
+    h.run_steps(2);
+    h.state_mut().open_dialog("saveAs", serde_json::json!({}));
+    assert_eq!(asked.lock().unwrap().len(), 1, "a second request waits for the open sheet");
+    let (pick, answer) = next(&asked);
+    assert!(matches!(&pick, PathPick::Save(s) if s.starts_with("Book")), "Save As suggests the workbook's name: {pick:?}");
+    let target = dir.join("Async.xlsx");
+    h.run_steps(2);
+    assert!(!target.exists(), "nothing is written before the sheet answers");
+    answer.send(Some(target.to_string_lossy().into_owned())).unwrap();
+    h.run_steps(2);
+    assert!(target.exists(), "the workbook is saved once the sheet answers");
+    assert!(h.state().session.active().and_then(|d| d.path.clone()).is_some_and(|p| p.ends_with("Async.xlsx")));
+    // Cancelled: nothing happens, and the next request gets a sheet.
+    h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
+    let (pick, answer) = next(&asked);
+    assert!(matches!(&pick, PathPick::Save(s) if s.ends_with(".pdf")), "Export as PDF suggests a .pdf name: {pick:?}");
+    answer.send(None).unwrap();
+    h.run_steps(2);
+    assert!(h.state().message.is_none());
+    // Abandoned (the host dropped it without answering): the picker is free again too.
+    h.state_mut().open_dialog("open", serde_json::json!({}));
+    let (pick, answer) = next(&asked);
+    assert_eq!(pick, PathPick::Open);
+    drop(answer);
+    h.run_steps(2);
+    h.state_mut().open_dialog("open", serde_json::json!({}));
+    assert_eq!(asked.lock().unwrap().len(), 1, "an abandoned sheet doesn't block the next one");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The frame loop runs while a sheet is up, so the control channel can switch or close workbooks
+/// before it answers: Save As still saves the workbook that asked, or nothing if it was closed.
+#[test]
+fn an_asynchronous_save_goes_to_the_workbook_that_asked() {
+    use gridcraft_ui_egui::PathPick;
+    let dir = std::env::temp_dir().join(format!("gridcraft-async-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    type Asked = Arc<Mutex<Vec<(PathPick, std::sync::mpsc::Sender<Option<String>>)>>>;
+    let asked: Asked = Arc::default();
+    let capture = asked.clone();
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(|_| panic!("the blocking picker runs although a sheet is available"))),
+        pick_async: Some(Box::new(move |pick, answer| capture.lock().unwrap().push((pick, answer)))),
+        ..Default::default()
+    });
+    let next = |asked: &Asked| asked.lock().unwrap().remove(0);
+    let uid = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().map(|d| d.uid);
+    let asker = uid(&h);
+    h.state_mut().open_dialog("saveAs", serde_json::json!({}));
+    let (_, answer) = next(&asked);
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    let other = uid(&h);
+    assert_ne!(asker, other);
+    // The workbook made meanwhile is editing a text box when the answer comes.
+    let shape = h.state_mut().run("insert.textBox", serde_json::json!({"at": "B2", "width": 200, "height": 80, "text": "note"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap() as u32;
+    assert!(h.state_mut().begin_text_box_edit(shape));
+    let target = dir.join("Asker.xlsx");
+    answer.send(Some(target.to_string_lossy().into_owned())).unwrap();
+    h.run_steps(2);
+    assert!(target.exists());
+    let docs = h.state().session.documents();
+    assert!(docs.iter().find(|d| Some(d.uid) == asker).and_then(|d| d.path.clone()).is_some_and(|p| p.ends_with("Asker.xlsx")));
+    assert!(docs.iter().find(|d| Some(d.uid) == other).is_some_and(|d| d.path.is_none()), "the workbook made meanwhile isn't saved");
+    assert_eq!(uid(&h), other, "the active workbook stays active");
+    // The workbook that asked is closed before the answer: nothing is written, and the user is told.
+    h.state_mut().open_dialog("saveAs", serde_json::json!({}));
+    let (_, answer) = next(&asked);
+    h.state_mut().run("file.close", serde_json::json!({"force": true})).unwrap();
+    let gone = dir.join("Gone.xlsx");
+    answer.send(Some(gone.to_string_lossy().into_owned())).unwrap();
+    h.run_steps(2);
+    assert!(!gone.exists());
+    assert!(h.state().message.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}

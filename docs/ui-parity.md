@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (Window menu: switching between open workbooks; previously minor: AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -35,6 +35,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Dark mode, system appearance | yes | yes | done (10-09) |
 | Page Layout view (paper view with rulers and header editing) | yes | yes (#329, 10-11): per-sheet view saved in XLSX, pages with margins and gaps on the print pagination, "Click to add data" pages, rulers (inches or centimetres), headers and footers drawn and edited in place with a Header & Footer tab, whose Different First Page and Different Odd & Even Pages give the first page and the even pages their own header and footer (#344), and whose Scale with Document and Align with Page Margins set whether header and footer text follows the print scale and the side margins, on paper and in the view | margins drag on the rulers (#792, with header and footer margins); header/footer pictures missing (1–3 h). Unverified: with Align with Page Margins off, header and footer text sits 0.7 in from the paper edge, a value not yet measured in the target app |
 | Multiple windows per workbook | yes | no (#162) | see [hardware-parity.md](hardware-parity.md) |
+| Window menu: switch between open workbooks | yes (Switch Windows in View › Window; Window menu on the Mac) | yes (2026-10-23) | View › Window › Switch Windows lists the open workbooks, numbered, the active one checked, a dirty one marked; Ctrl+F6 / Ctrl+Shift+F6 and Ctrl+Tab / Ctrl+Shift+Tab cycle; on the Mac the native Window menu lists them with Next Window Cmd+\` and Previous Window Cmd+Shift+\`. Windows are identified by the document, so a later window-per-workbook build keeps the same commands (`window.list`, `window.activate {id}`, `window.next`, `window.previous`) |
 
 ## Grid interaction
 
@@ -106,7 +107,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+K, Ctrl+T | Cmd (Ctrl+H) | find, replace, go to, hyperlink, table | present |
 | Ctrl+D, Ctrl+R, Ctrl+E, Ctrl+1, Ctrl+9 / 0, Ctrl+Shift+9 / 0 | Cmd (Ctrl+E on Mac: see below) | fill down/right, Flash Fill, Format Cells, hide/unhide | present |
 | Ctrl+- , Ctrl+Shift+= | Cmd | Delete / Insert cells dialog | present |
-| Ctrl+; , Ctrl+` | Control+; | current date, show formulas | present (Mac Control+; added) |
+| Ctrl+; , Ctrl+\` | Control+; , Control+\` | current date, show formulas | present (Mac Control+; and Control+\` added; Cmd+\` is the next window on the Mac) |
 | Arrows, Shift / Ctrl / Ctrl+Shift+arrows, Home, Ctrl+Home / End, Page Up / Down, Ctrl+Page Up / Down | Cmd+arrows | navigation and extension | present |
 | Tab, Shift+Tab, Enter, Shift+Enter, Ctrl+Space, Shift+Space, Delete, Esc | same | entry and selection | present |
 | F2, F9, F10 (key tips), F4 / Alt+Enter / Ctrl+Enter / Ctrl+Shift+Enter while editing | same | edit, calculate, references, new line, fill, array | present |
@@ -141,7 +142,8 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+Shift+U | Control+Shift+U | expand or collapse the formula bar (`view.expandFormulaBar`), on the grid and while editing; on Windows and Linux it no longer underlines | **added** |
-| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
+| Ctrl+F6, Ctrl+Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab | Cmd+\`, Cmd+Shift+\` | next / previous workbook window | **added** (in a browser Ctrl+Tab and Ctrl+Shift+Tab belong to the browser's tabs, as in Excel Online; the Switch Windows drop-down works there) |
+| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5, Ctrl+F7–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
 | — | Cmd+= (calculate), Cmd+T (references while editing; F4 works), Shift+F7, Cmd+Shift+L | Mac-only extras | missing (Cmd+= is egui's zoom key; no thesaurus or Modify Cell Style) |
 
 On Windows, AltGr arrives as Ctrl+Alt: a Ctrl+Alt key that also types a character is treated as
@@ -201,6 +203,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-24 | minor | When the fill starts from a date, the right-drag fill menu and the Auto Fill Options button also offer Fill Days, Fill Weekdays (Saturday and Sunday skipped), Fill Months and Fill Years (`edit.autoFill` with `mode` set to `days`, `weekdays`, `months` or `years`). A lone date steps by one unit; two or more dates step by the difference between the first two in that unit, or one unit when they fall in the same one. Fill Months and Fill Years keep the day of the month, clamped to the month's last day. Every fill by months or years (these two, a drag of dates a month apart, and Series by Month or Year) keeps the time of day of a date with a time, which used to be dropped |
 | 2026-10-22 | minor | Show Outline Symbols (`view.showOutlineSymbols`, Ctrl+8): a sheet can hide the outline's level buttons and brackets while keeping its outline, as Excel saves with `showOutlineSymbols="0"` (read and written); the grid then gives the bands no room |
 | 2026-10-22 | minor | A number in a repeat-fill format (`*`, as in the Accounting format) that is too wide for its column shows #### like any other number, instead of the fill rebuilding the value so its leading digits were cut off (2,509.00 CHF drawn as "509.00 CHF") |
+| 2026-10-23 | minor | Window menu: switching between open workbooks (View › Window › Switch Windows, Ctrl+F6 / Ctrl+Tab, the Mac Window menu with Cmd+\`); Show Formulas is Control+\` on the Mac |
 | 2026-10-21 | minor | Background error checking, first part (#1994): a constant whose text would be a number if typed (signs, thousands, currency, percent, exponent, parenthesised negative) gets Excel's green corner triangle; the active cell then shows a warning button whose menu names the problem and offers Convert to Number for the selection (`formulas.convertToNumber`). Dates, times and fractions kept as text and formula results are not flagged, as in Excel |
 | 2026-10-21 | minor | Paste Special laid out as Excel's: Paste and Operation options each in two columns inside a frame, Skip blanks and Transpose side by side, Paste Link as a button that pastes references at once; labels translated (the generic form didn't translate them) and the window no longer runs past the screen |
 | 2026-10-21 | minor | Form dialogs (conditional-format quick rules, New Name, Remove Duplicates, Text to Columns and every other `Dialog::form`) fit their content: OK and Cancel sit in a row under the last field instead of a right-to-left layout that took the screen's whole height and left the buttons floating halfway down |

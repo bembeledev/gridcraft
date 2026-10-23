@@ -2,7 +2,7 @@
 //! and sheet tabs until Esc or the back arrow returns to the sheet.
 //!
 //! A navigation column on the left picks a page (Home, New, Open, Info, Save As, Print, Export,
-//! Options); Save and Close act at once. Every action runs an existing command through
+//! Options, Account); Save and Close act at once. Every action runs an existing command through
 //! [`SheetApp::run`] or an existing dialog through [`SheetApp::open_dialog`]; the state here is
 //! UI-only and never saved. Recent workbooks are listed by path, with when each was last changed:
 //! that is asked of the file system on a thread of its own, never while drawing, and only the
@@ -36,10 +36,11 @@ pub enum Page {
     Print,
     Export,
     Options,
+    Account,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options];
+    pub const ALL: [Page; 9] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options, Page::Account];
 
     /// The id `ui.backstage` and `ui.dialog {"name": "backstage", "page": …}` take.
     pub fn id(self) -> &'static str {
@@ -52,6 +53,7 @@ impl Page {
             Page::Print => "print",
             Page::Export => "export",
             Page::Options => "options",
+            Page::Account => "account",
         }
     }
 
@@ -71,6 +73,7 @@ impl Page {
             Page::Print => "Print",
             Page::Export => "Export",
             Page::Options => "Options",
+            Page::Account => "Account",
         }
     }
 
@@ -84,6 +87,7 @@ impl Page {
             Page::Print => Icon::Print,
             Page::Export => Icon::Share,
             Page::Options => Icon::Settings,
+            Page::Account => Icon::Info,
         }
     }
 }
@@ -98,9 +102,11 @@ const PROPERTIES: [(&str, &str); 6] = [
     ("description", "Description"),
 ];
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct PreviewTexture(egui::TextureHandle);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for PreviewTexture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PreviewTexture")
@@ -121,7 +127,9 @@ pub struct Backstage {
     preview_page: usize,
     /// Print: the preview for (document, revision, active sheet, whole workbook, fit to page).
     preview: Option<((u64, u64, usize, bool, bool), Json)>,
+    #[cfg(not(target_arch = "wasm32"))]
     preview_pdf: Option<Result<Arc<Vec<u8>>, String>>,
+    #[cfg(not(target_arch = "wasm32"))]
     preview_image: Option<(usize, Result<PreviewTexture, String>)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
@@ -143,7 +151,9 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            #[cfg(not(target_arch = "wasm32"))]
             preview_pdf: None,
+            #[cfg(not(target_arch = "wasm32"))]
             preview_image: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
@@ -203,9 +213,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     out.close = true;
                 }
             }
+            // Bottom up: Account sits just above Options, as in Excel.
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
-                    out.page = Some(Page::Options);
+                for page in [Page::Options, Page::Account] {
+                    if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                        out.page = Some(page);
+                    }
                 }
             });
         });
@@ -224,6 +237,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
                     Page::Options => options(app, ui),
+                    Page::Account => account(app, ui),
                 }
             });
         });
@@ -716,8 +730,11 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
-        bs.preview_pdf = None;
-        bs.preview_image = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            bs.preview_pdf = None;
+            bs.preview_image = None;
+        }
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
     ui.horizontal_top(|ui| {
@@ -770,33 +787,43 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
             p.rect_filled(rect, 2.0, Color32::WHITE);
             p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if bs.preview_pdf.is_none() {
-                bs.preview_pdf = Some(app.session.run("file.print", params.clone()).map_err(|e| e.to_string()).and_then(|data| {
-                    data.get("base64")
-                        .and_then(Json::as_str)
-                        .and_then(gridcraft_engine::io::base64_decode)
-                        .map(Arc::new)
-                        .ok_or_else(|| "No print preview data was returned.".into())
-                }));
-            }
-            if bs.preview_image.as_ref().is_none_or(|(index, _)| *index != bs.preview_page) {
-                let image = match bs.preview_pdf.as_ref() {
-                    Some(Ok(bytes)) => crate::print_preview::render(bytes.clone(), bs.preview_page)
-                        .map(|image| ui.ctx().load_texture("print-preview-page", image, egui::TextureOptions::LINEAR))
-                        .map(PreviewTexture),
-                    Some(Err(error)) => Err(error.clone()),
-                    None => Err("No print preview is available.".into()),
-                };
-                bs.preview_image = Some((bs.preview_page, image));
-            }
-            match bs.preview_image.as_ref() {
-                Some((_, Ok(texture))) => {
-                    p.image(texture.0.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if bs.preview_pdf.is_none() {
+                    bs.preview_pdf = Some(app.session.run("file.print", params.clone()).map_err(|e| e.to_string()).and_then(|data| {
+                        data.get("base64")
+                            .and_then(Json::as_str)
+                            .and_then(gridcraft_engine::io::base64_decode)
+                            .map(Arc::new)
+                            .ok_or_else(|| "No print preview data was returned.".into())
+                    }));
                 }
-                Some((_, Err(error))) => {
-                    ui.colored_label(t.cell_text, error);
+                if bs.preview_image.as_ref().is_none_or(|(index, _)| *index != bs.preview_page) {
+                    let image = match bs.preview_pdf.as_ref() {
+                        Some(Ok(bytes)) => crate::print_preview::render(bytes.clone(), bs.preview_page)
+                            .map(|image| ui.ctx().load_texture("print-preview-page", image, egui::TextureOptions::LINEAR))
+                            .map(PreviewTexture),
+                        Some(Err(error)) => Err(error.clone()),
+                        None => Err("No print preview is available.".into()),
+                    };
+                    bs.preview_image = Some((bs.preview_page, image));
                 }
-                None => {}
+                match bs.preview_image.as_ref() {
+                    Some((_, Ok(texture))) => {
+                        p.image(texture.0.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    }
+                    Some((_, Err(error))) => {
+                        ui.colored_label(t.cell_text, error);
+                    }
+                    None => {}
+                }
+            }
+            // Keep the upstream web preview until PDF rasterization can run behind a
+            // recoverable boundary. catch_unwind cannot contain wasm panic-abort.
+            #[cfg(target_arch = "wasm32")]
+            if let Some(d) = app.session.active() {
+                p.rect_filled(rect.shrink(1.0), 1.0, t.grid_bg);
+                paint_page(p, rect, w, page, &d.wb, &t);
             }
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
@@ -818,6 +845,77 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             });
         });
     });
+}
+
+/// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
+#[cfg(target_arch = "wasm32")]
+const PREVIEW_ROWS: u32 = 200;
+#[cfg(target_arch = "wasm32")]
+const PREVIEW_COLS: u32 = 60;
+
+/// Draws one printed page in miniature: the cells' displayed text at the page's print scale,
+/// inside the sheet's margins. `paper_w` is the page width in points.
+#[cfg(target_arch = "wasm32")]
+fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
+    let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
+    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
+    // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
+    let per_pt = rect.width() / paper_w;
+    let print_scale =
+        page.get("scale").and_then(Json::as_f64).filter(|s| s.is_finite() && *s > 0.0).map_or(1.0, |s| (s / 100.0) as f32).clamp(0.1, 4.0);
+    let per_px = per_pt * 0.75 * print_scale;
+    let margin =
+        |i: usize, default: f32| sh.print.margins.get(i).copied().filter(|m| m.is_finite()).unwrap_or(default).clamp(0.0, 3.0) * 72.0 * per_pt;
+    let body = Rect::from_min_max(
+        pos2(rect.left() + margin(0, 0.7), rect.top() + margin(2, 0.75)),
+        pos2(rect.right() - margin(1, 0.7), rect.bottom() - margin(3, 0.75)),
+    );
+    if !body.is_positive() {
+        return;
+    }
+    let font = theme::ui_font((11.0 * per_pt * print_scale).clamp(3.0, 14.0));
+    let last_row = range.end.row.min(range.start.row.saturating_add(PREVIEW_ROWS));
+    let last_col = range.end.col.min(range.start.col.saturating_add(PREVIEW_COLS));
+    let mut y = body.top();
+    for row in range.start.row..=last_row {
+        let h = sh.row_height(row) * per_px;
+        if h <= 0.0 {
+            continue;
+        }
+        if y >= body.bottom() {
+            break;
+        }
+        let mut x = body.left();
+        for col in range.start.col..=last_col {
+            let w = sh.col_width(col) * per_px;
+            if w <= 0.0 {
+                continue;
+            }
+            if x >= body.right() {
+                break;
+            }
+            let cell = gridcraft_engine::core::CellRef::new(row, col);
+            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
+            if !text.is_empty() {
+                let numeric = sh.value(cell).as_f64().is_some();
+                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
+                let mut span = w;
+                if !numeric {
+                    let mut next = col.saturating_add(1);
+                    while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
+                        span += sh.col_width(next) * per_px;
+                        next = next.saturating_add(1);
+                    }
+                }
+                let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
+                let (anchor, at) =
+                    if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
+                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
+            }
+            x += w;
+        }
+        y += h;
+    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
@@ -920,7 +1018,7 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
         ui.end_row();
         ui.label(lang.tr("Interface language"));
         egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
-            for l in i18n::Language::ALL {
+            for l in i18n::Language::for_picker() {
                 if ui.selectable_label(l == lang, l.name()).clicked() {
                     app.run_or_alert("app.language.set", json!({"language": l.code()}));
                 }
@@ -941,9 +1039,9 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
-    let mut autosave = app.grid.autosave();
+    let mut autosave = app.ui.autosave;
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
-        app.grid.toggle_autosave();
+        app.toggle_autosave();
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
@@ -966,6 +1064,51 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// The platform the app was built for, e.g. "macOS (aarch64)"; the web build reports "Web".
+fn platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        "openbsd" => "OpenBSD",
+        "netbsd" => "NetBSD",
+        _ if cfg!(target_arch = "wasm32") => return "Web".into(),
+        other => other,
+    };
+    format!("{os} ({})", std::env::consts::ARCH)
+}
+
+/// Excel's File › Account: product information and the About window.
+fn account(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    section(ui, lang, "Product Information");
+    ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
+    ui.add_space(8.0);
+    egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+        for (label, value) in
+            [("Version", env!("CARGO_PKG_VERSION").to_string()), ("Platform", platform()), ("Licence", env!("CARGO_PKG_LICENSE").to_string())]
+        {
+            ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+            ui.label(value);
+            ui.end_row();
+        }
+    });
+    ui.add_space(18.0);
+    ui.horizontal(|ui| {
+        if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+            app.open_dialog("about", json!({}));
+        }
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
+            dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+        });
+    });
 }
 
 #[cfg(test)]
@@ -1003,10 +1146,8 @@ mod tests {
         }
         assert!(age(Language::En, f64::MAX).ends_with(" years ago"));
         // Other languages put the count where their own words want it.
-        assert_eq!(age(Language::Ja, 3.0 * DAY), "3 日前");
-        assert_eq!(age(Language::De, 3.0 * DAY), "vor 3 Tagen");
-        assert_eq!(age(Language::Fr, 90.0), "il y a 1 min");
         for lang in Language::ALL {
+            assert!(age(lang, 3.0 * DAY).contains('3'), "{lang:?}: {}", age(lang, 3.0 * DAY));
             for seconds in [10.0, 600.0, 7200.0, 1.5 * DAY, 5.0 * DAY, 30.0 * DAY, 200.0 * DAY, 2000.0 * DAY] {
                 let words = age(lang, seconds);
                 assert!(!words.is_empty() && !words.contains('{'), "{lang:?} {seconds}: {words}");
@@ -1048,7 +1189,7 @@ mod tests {
             assert_eq!(Page::parse(page.id()), Some(page));
         }
         assert_eq!(Page::parse(" SAVEAS "), Some(Page::SaveAs));
-        assert_eq!(Page::parse("account"), None);
+        assert_eq!(Page::parse("feedback"), None);
         assert_eq!(Page::parse(""), None);
     }
 

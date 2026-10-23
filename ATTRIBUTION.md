@@ -50,4 +50,4 @@ standard-font substitutes (Copyright 2014 PDFium Authors / Foxit Software Inc., 
 and color profiles (CGATS001Compat-v2-micro.icc, saucecontrol/Compact-ICC-Profiles, CC0-1.0;
 LAB.icc generated with LCMS2). The BSD notice is reproduced in NOTICE, shipped by packaging.
 See [hayro-interpret assets](https://github.com/LaurenzV/hayro/tree/0c98904d2ced8e37b63ed2bd1e60f95bc0c7c774/hayro-interpret/assets).
-No font/profile binary is added to this repository. Predefined CMap embedding is disabled.
+No font/profile binary is added to this repository. Native preview also uses hayro-cmap 0.1.0 predefined CMap data (Adobe, BSD-3-Clause), from [hayro-cmap assets](https://github.com/LaurenzV/hayro/tree/a2354aebaf86f5ab13e5fd6b6b0521306488bf9d/hayro-cmap/assets). Its licence notice is reproduced in NOTICE. These are character-code mapping data, not fonts or UI assets. Chinese preview reads the same installed face as the UI; no system font is redistributed.

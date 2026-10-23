@@ -35,6 +35,68 @@ const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
+/// One tab per open workbook, centred in the title bar, so opening or creating a workbook never
+/// hides the others: click a tab to switch, Cmd/Ctrl+W closes the current one. `docs` holds each
+/// shown workbook's window index, title and unsaved state; the tabs fit in `max_w`, the room left
+/// between the controls on either side.
+fn workbook_tabs(app: &mut SheetApp, ui: &mut Ui, rect: Rect, docs: &[(usize, String, bool)], ch: f32, t: &Tokens, max_w: f32) {
+    const MIN_TAB: f32 = 60.0;
+    const MAX_TAB: f32 = 150.0;
+    const GAP: f32 = 2.0;
+    const MORE_W: f32 = 26.0;
+    let active = app.session.active_index();
+    let avail = max_w.max(MIN_TAB + GAP + MORE_W);
+    let n = docs.len();
+    // Tabs shrink to share the space; when even the narrowest do not fit, the ones left over are
+    // listed under "»", and the run of shown tabs always includes the active workbook.
+    let fits = |k: usize| k as f32 * (MIN_TAB + GAP) <= avail;
+    let (shown, overflow) = if fits(n) { (n, false) } else { ((((avail - MORE_W) / (MIN_TAB + GAP)) as usize).max(1), true) };
+    let pos = docs.iter().position(|d| d.0 == active).unwrap_or(0);
+    let first = if pos < shown { 0 } else { pos + 1 - shown };
+    let tab_w = ((avail - if overflow { MORE_W + GAP } else { 0.0 }) / shown as f32 - GAP).clamp(MIN_TAB, MAX_TAB);
+    let width = shown as f32 * (tab_w + GAP) + if overflow { MORE_W } else { 0.0 };
+    let area = Rect::from_center_size(rect.center(), vec2(width, ch));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.set_clip_rect(area.intersect(ui.clip_rect()));
+    child.spacing_mut().item_spacing.x = GAP;
+    let mut switch = None;
+    for &(i, ref title, dirty) in &docs[first..first + shown] {
+        let label = shown_title(title, dirty);
+        let text = egui::RichText::new(label).color(if i == active { t.text } else { t.text_dim });
+        let r = child.add_sized(vec2(tab_w, ch - 2.0), egui::Button::selectable(i == active, text).truncate());
+        // The full name, as a long one is clipped on the tab.
+        if r.on_hover_text(title.as_str()).clicked() && i != active {
+            switch = Some(i);
+        }
+    }
+    if overflow {
+        let more = child.add(egui::Button::new("»").min_size(vec2(MORE_W, ch - 2.0))).on_hover_text("More workbooks");
+        egui::Popup::menu(&more).show(|ui| {
+            for (k, &(i, ref title, dirty)) in docs.iter().enumerate() {
+                if (first..first + shown).contains(&k) {
+                    continue;
+                }
+                if ui.button(shown_title(title, dirty)).clicked() {
+                    switch = Some(i);
+                }
+            }
+        });
+    }
+    // A cell edit in progress belongs to the workbook it started in: commit it before switching
+    // (a value the cell rejects keeps the editor open and the current workbook active).
+    if let Some(i) = switch
+        && app.commit_edit(0, 0, false, false)
+    {
+        app.run_or_alert("window.activate", json!({"index": i}));
+    }
+}
+
+/// A workbook's name as the title bar shows it: a dot marks unsaved changes.
+fn shown_title(title: &str, dirty: bool) -> String {
+    format!("{title}{}", if dirty { " •" } else { "" })
+}
+
+/// The title bar: AutoSave, the quick-access buttons, the workbook title (or tabs) and search.
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
@@ -150,11 +212,26 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 theme.context_menu(|ui| theme_choices(app, ui));
                 ui.min_rect().left()
             });
-            // Centred title, cut with "…" so it never runs under the controls on either side.
+            // Centred title, cut with "…" so it never runs under the controls on either side; with
+            // several workbooks open, one tab each in the same room.
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
             let max_w = title_max_width(rect.center().x, left_end, right.inner);
-            paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
+            // A window hidden with View › Hide gets no tab until it is unhidden.
+            let hidden = &app.session.hidden_windows;
+            let docs: Vec<(usize, String, bool)> = app
+                .session
+                .documents()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !hidden.contains(i))
+                .map(|(i, d)| (i, d.display_title(), d.is_dirty()))
+                .collect();
+            if docs.len() > 1 {
+                workbook_tabs(app, ui, rect, &docs, ch, &t, max_w);
+            } else {
+                paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
+            }
         });
     });
 }

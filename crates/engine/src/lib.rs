@@ -335,9 +335,19 @@ impl Session {
     pub fn active_index(&self) -> usize {
         self.active
     }
+    /// Moves the active index to window `i` without touching its View › Hide state. For internal
+    /// bookkeeping (hide fallback, close); user activation goes through [`Self::activate_and_show`].
     pub fn set_active(&mut self, i: usize) {
         if i < self.docs.len() {
             self.active = i;
+        }
+    }
+    /// The user asked for workbook `i` (reopening its file, Switch Windows, Unhide…): like Excel,
+    /// a window hidden with View › Hide is shown again and made active.
+    pub fn activate_and_show(&mut self, i: usize) {
+        if i < self.docs.len() {
+            self.active = i;
+            self.hidden_windows.retain(|x| *x != i);
         }
     }
     pub fn active(&self) -> Option<&DocState> {
@@ -360,8 +370,26 @@ impl Session {
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             self.docs.remove(i);
-            if self.active >= self.docs.len() {
-                self.active = self.docs.len().saturating_sub(1);
+            // Hidden-window indices follow the documents they name.
+            self.hidden_windows.retain(|x| *x != i);
+            for x in &mut self.hidden_windows {
+                if *x > i {
+                    *x -= 1;
+                }
+            }
+            if self.active > i || self.active >= self.docs.len() {
+                self.active = self.active.saturating_sub(1).min(self.docs.len().saturating_sub(1));
+            }
+            // Closing the active window shows a visible one, not one hidden with View › Hide.
+            if self.hidden_windows.contains(&self.active) {
+                let n = self.docs.len();
+                if let Some(v) = (0..n)
+                    .rev()
+                    .find(|v| *v <= self.active && !self.hidden_windows.contains(v))
+                    .or_else(|| (0..n).find(|v| !self.hidden_windows.contains(v)))
+                {
+                    self.active = v;
+                }
             }
         }
     }

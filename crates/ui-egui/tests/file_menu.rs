@@ -377,3 +377,119 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     assert_eq!(asked.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Writes `body` to a CSV named `name` in this run's temp folder and returns its path.
+fn temp_csv(name: &str, body: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("gridcraft_open_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, body).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+/// Opening a second file adds a tab for it, and clicking the first tab switches back.
+#[test]
+fn opening_a_second_file_adds_a_visible_tab_and_keeps_the_first() {
+    let a = temp_csv("one.csv", "a,1\n");
+    let b = temp_csv("two.csv", "b,2\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a); // replaces the untouched blank Book1
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().open_path(&b);
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 2, "the second file is added, not swapped in");
+    assert_eq!(h.state().session.active_index(), 1);
+    // Both workbooks have a tab, and clicking the first switches back to it.
+    h.get_by_label_contains("two.csv");
+    h.get_by_label_contains("one.csv").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), 0);
+    assert_eq!(h.state().session.documents().len(), 2);
+    let _ = std::fs::remove_file(a);
+    let _ = std::fs::remove_file(b);
+}
+
+/// Only an untouched blank Book1 is replaced: New and Open keep an edited one.
+#[test]
+fn new_and_open_never_replace_an_edited_or_saved_workbook() {
+    let a = temp_csv("edited.csv", "x,1\n");
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    h.state_mut().open_path(&a);
+    assert_eq!(h.state().session.documents().len(), 2, "an edited Book1 is kept");
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    assert_eq!(h.state().session.documents().len(), 3);
+    h.run_steps(2);
+    assert!(!h.state().session.documents()[0].wb.sheets[0].cells.is_empty());
+    let _ = std::fs::remove_file(a);
+}
+
+/// A workbook hidden with View › Hide has no tab, so a click cannot bring it back past Unhide.
+#[test]
+fn a_hidden_workbook_has_no_tab() {
+    use egui_kittest::kittest::Queryable;
+    let a = temp_csv("shown.csv", "a,1\n");
+    let b = temp_csv("secret.csv", "b,2\n");
+    let c = temp_csv("third.csv", "c,3\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a);
+    h.state_mut().open_path(&b);
+    h.state_mut().open_path(&c);
+    h.state_mut().run("window.activate", serde_json::json!({"index": 1})).unwrap();
+    h.state_mut().run("view.hideWindow", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 3);
+    assert!(h.query_by_label_contains("secret.csv").is_none(), "the hidden workbook has no tab");
+    h.get_by_label_contains("shown.csv");
+    h.get_by_label_contains("third.csv");
+    for p in [a, b, c] {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// A cell edit in progress is committed into its own workbook before a tab switches away.
+#[test]
+fn clicking_a_tab_commits_the_cell_edit_in_the_workbook_it_started_in() {
+    let a = temp_csv("edit_a.csv", "a,1\n");
+    let b = temp_csv("edit_b.csv", "b,2\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a);
+    h.state_mut().open_path(&b);
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(3);
+    h.state_mut().run("selection.set", serde_json::json!({"range": "C3"})).unwrap();
+    h.state_mut().begin_edit(Some("draft".into()), false);
+    h.run_steps(2);
+    h.get_by_label_contains("edit_b.csv").click();
+    h.run_steps(3);
+    assert!(h.state().editor.is_none(), "the edit was committed, not carried over");
+    assert_eq!(h.state().session.active_index(), 1);
+    let docs = h.state().session.documents();
+    let c3 = CellRef::parse("C3").unwrap();
+    assert_eq!(docs[0].wb.sheets[0].cell(c3).map(|c| c.value.clone()), Some(Value::Text("draft".into())));
+    assert!(docs[1].wb.sheets[0].cell(c3).is_none(), "the other workbook is untouched");
+    let _ = std::fs::remove_file(a);
+    let _ = std::fs::remove_file(b);
+}
+
+/// With more workbooks than the title bar can fit, the rest are under "»", so every one is reachable.
+#[test]
+fn every_workbook_tab_stays_reachable_when_they_overflow() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    for _ in 1..20 {
+        h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    }
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 20);
+    let last = h.state().session.documents()[19].display_title();
+    assert!(h.query_by_label(&last).is_none(), "the last tab does not fit beside the first");
+    h.get_by_label("»").click();
+    h.run_steps(3);
+    h.get_by_label(&last).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), 19);
+    // The active workbook now has a visible tab of its own.
+    h.get_by_label(&last);
+}

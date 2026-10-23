@@ -820,8 +820,7 @@ fn hide_window(s: &mut Session, _: &Json) -> Result<Json> {
 fn unhide_window(s: &mut Session, p: &Json) -> Result<Json> {
     let i = u32_param(p, "index").map(|v| v as usize).or_else(|| s.hidden_windows.last().copied());
     if let Some(i) = i {
-        s.hidden_windows.retain(|x| *x != i);
-        s.set_active(i);
+        s.activate_and_show(i);
     }
     ok()
 }

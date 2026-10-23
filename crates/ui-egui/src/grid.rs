@@ -28,6 +28,33 @@ pub const WHEEL_ZOOM_LADDER: [u16; 22] = [10, 12, 15, 18, 21, 25, 30, 35, 42, 50
 /// Seconds without Ctrl+wheel input after which part of a notch turned so far is forgotten.
 const WHEEL_ZOOM_IDLE: f64 = 0.75;
 
+/// Ends a wheel "touch" that still carries Ctrl/Cmd when a wheel event without it comes in, so
+/// the wheel scrolls again once Ctrl is released (#2213).
+///
+/// On Wayland winit starts a touch for a high-resolution wheel and never ends it; while in a
+/// touch egui keeps every modifier it has seen, so one Ctrl+wheel turn made each later turn zoom.
+/// `ctrl_wheel` remembers between frames whether the current touch has seen Ctrl/Cmd.
+pub(crate) fn end_stuck_ctrl_wheel(events: &mut Vec<egui::Event>, ctrl_wheel: &mut bool) {
+    let mut out = Vec::with_capacity(events.len());
+    for e in events.drain(..) {
+        if let egui::Event::MouseWheel { unit, phase, modifiers, .. } = &e {
+            let ctrl = modifiers.ctrl || modifiers.command;
+            match phase {
+                egui::TouchPhase::Start => *ctrl_wheel = ctrl,
+                egui::TouchPhase::Move if ctrl => *ctrl_wheel = true,
+                egui::TouchPhase::Move if *ctrl_wheel => {
+                    out.push(egui::Event::MouseWheel { unit: *unit, delta: egui::Vec2::ZERO, phase: egui::TouchPhase::End, modifiers: *modifiers });
+                    *ctrl_wheel = false;
+                }
+                egui::TouchPhase::Move => {}
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => *ctrl_wheel = false,
+            }
+        }
+        out.push(e);
+    }
+    *events = out;
+}
+
 /// The zoom one Ctrl+wheel notch goes to from `zoom`: the next step on [`WHEEL_ZOOM_LADDER`] in
 /// that direction, skipping a step less than 5% away (121% out goes to 100%, not 120%), but never
 /// 100% or the 10% / 400% limits (99% or 101% towards 100% goes to 100%).
@@ -3885,6 +3912,37 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_wheel_turn_without_ctrl_ends_a_ctrl_wheel_touch() {
+        use super::end_stuck_ctrl_wheel;
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+        let wheel = |phase, modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 3.0), phase, modifiers };
+        let end = Event::MouseWheel { unit: MouseWheelUnit::Point, delta: egui::Vec2::ZERO, phase: TouchPhase::End, modifiers: Modifiers::NONE };
+        let mut ctrl_wheel = false;
+        // Wayland: a plain turn starts a touch that never ends; nothing to change yet.
+        let mut events = vec![wheel(TouchPhase::Start, Modifiers::NONE), wheel(TouchPhase::Move, Modifiers::NONE)];
+        end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+        assert_eq!(events.len(), 2);
+        // Ctrl+wheel in the same touch zooms, as it should.
+        let mut events = vec![wheel(TouchPhase::Move, Modifiers::CTRL)];
+        end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+        assert_eq!(events, vec![wheel(TouchPhase::Move, Modifiers::CTRL)]);
+        // Ctrl released, in a later frame: the touch ends first, so egui scrolls this turn.
+        let mut events = vec![wheel(TouchPhase::Move, Modifiers::NONE)];
+        end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+        assert_eq!(events, vec![end, wheel(TouchPhase::Move, Modifiers::NONE)]);
+        // Later plain turns pass through untouched.
+        let mut events = vec![wheel(TouchPhase::Move, Modifiers::NONE)];
+        end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+        assert_eq!(events, vec![wheel(TouchPhase::Move, Modifiers::NONE)]);
+        // Cmd (macOS command flag) counts as Ctrl; a touch that ends by itself needs nothing extra.
+        let cmd = wheel(TouchPhase::Start, Modifiers::COMMAND);
+        let mut events = vec![cmd, wheel(TouchPhase::End, Modifiers::NONE), wheel(TouchPhase::Move, Modifiers::NONE)];
+        end_stuck_ctrl_wheel(&mut events, &mut ctrl_wheel);
+        assert_eq!(events.len(), 3);
+        assert!(!ctrl_wheel);
+    }
 
     #[test]
     fn explicit_left_and_right_keep_their_side_on_a_right_to_left_sheet() {

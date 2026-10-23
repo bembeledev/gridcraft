@@ -576,6 +576,22 @@ mod tests {
         SheetApp::new(session, crate::Services::default())
     }
 
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    fn synthetic_wheel_events_end_a_stuck_ctrl_touch() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+        let mut app = test_app();
+        let wheel = |modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 3.0), phase: TouchPhase::Move, modifiers };
+        app.synthetic.push_back(vec![wheel(Modifiers::CTRL)]);
+        app.synthetic.push_back(vec![wheel(Modifiers::NONE)]);
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&mut raw);
+        assert_eq!(raw.events.len(), 1);
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&mut raw);
+        assert_eq!(raw.events.len(), 2);
+    }
+
     #[test]
     fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {
         let mut app = test_app();

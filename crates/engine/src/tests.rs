@@ -4599,3 +4599,17 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+}

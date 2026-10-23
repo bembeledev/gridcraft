@@ -172,6 +172,32 @@ fn formula_point_drag_keeps_the_sheet_qualifier() {
 }
 
 #[test]
+fn formula_arrow_pointing_after_a_sheet_switch_keeps_the_sheet_qualifier() {
+    let mut h = harness("A1");
+    let before = cells(&h);
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Other sheet"})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    h.state_mut().begin_edit(Some("=".into()), false);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Other sheet"})).unwrap();
+    h.run_steps(2);
+    let other_before = cells(&h);
+    for (key, modifiers, expected) in [
+        (egui::Key::ArrowDown, Modifiers::NONE, "='Other sheet'!A2"),
+        (egui::Key::ArrowRight, Modifiers::SHIFT, "='Other sheet'!A2:B2"),
+        (egui::Key::ArrowRight, Modifiers::NONE, "='Other sheet'!C2"),
+    ] {
+        for pressed in [true, false] {
+            h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().editor.as_ref().unwrap().text, expected);
+    }
+    assert_eq!(cells(&h), other_before);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(cells(&h), before);
+}
+
+#[test]
 fn formula_modifier_command_click_appends_an_argument() {
     let mut h = harness("J10");
     let before = cells(&h);

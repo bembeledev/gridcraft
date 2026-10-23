@@ -3046,6 +3046,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let Some(ed) = app.editor.as_ref() else { return };
     if ed.sheet != wb.active_sheet {
+        point_keys_off_sheet(app, ui);
         return;
     }
     let cell = ed.cell;
@@ -3093,6 +3094,29 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     // theme, on the white paper): pick black or white against the fill, like Excel.
     child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0);
+}
+
+/// While a formula typed in a cell is pointed at another sheet, the in-cell editor is not drawn, so
+/// nothing else reads the arrow keys: point with them here, writing sheet-qualified references.
+fn point_keys_off_sheet(app: &mut SheetApp, ui: &mut egui::Ui) {
+    if app.message.is_some() || app.dialog.is_some() {
+        return;
+    }
+    let Some(mut ed) = app.editor.take() else { return };
+    if ed.enter_mode && !ed.from_formula_bar && ed.can_point() {
+        // Left/Right follow the screen on a right-to-left sheet.
+        let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
+        let sign = if rtl { -1 } else { 1 };
+        use egui::Key;
+        for (k, dr, dc) in [(Key::ArrowUp, -1, 0), (Key::ArrowDown, 1, 0), (Key::ArrowLeft, 0, -sign), (Key::ArrowRight, 0, sign)] {
+            // Shift first: a plain pattern matches logically and would also take Shift+arrow.
+            let (extend, plain) = ui.input_mut(|i| (i.consume_key(egui::Modifiers::SHIFT, k), i.consume_key(egui::Modifiers::NONE, k)));
+            if plain || extend {
+                point_move(app, &mut ed, dr, dc, extend);
+            }
+        }
+    }
+    app.editor = Some(ed);
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -3442,6 +3466,14 @@ fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet)
     });
 }
 
+/// `text` prefixed with the quoted `sheet` name when the formula points at a sheet other than the one being edited.
+fn qualified_ref(text: String, sheet: Option<&str>) -> String {
+    match sheet {
+        Some(n) => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(n)),
+        None => text,
+    }
+}
+
 /// Used by `EditState` users to keep the active cell visible while pointing.
 pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
     let Some(d) = app.session.active() else { return };
@@ -3450,7 +3482,8 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        // A qualified range (`Sheet2!A1:B2`) is parsed without its sheet prefix.
+        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(|t| RangeRef::parse(t.rsplit_once('!').map_or(t, |(_, r)| r)));
         let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -3464,6 +3497,9 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    // Like mouse pointing: qualify with the pointed sheet when it is not the one being edited.
+    let sheet_name = d.wb.active().filter(|_| ed.sheet != d.wb.active_sheet).map(|sh| sh.name.as_str());
+    let text = qualified_ref(text, sheet_name);
     let sheet = d.wb.active_sheet;
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
@@ -3929,6 +3965,13 @@ mod tests {
         for index in [0, 57, 255] {
             assert_eq!(numfmt_color(F::Indexed(index)), Color32::BLACK);
         }
+    }
+
+    #[test]
+    fn pointed_references_are_qualified_with_a_quoted_sheet_name() {
+        assert_eq!(qualified_ref("B2".into(), None), "B2");
+        assert_eq!(qualified_ref("B2".into(), Some("Sheet2")), "Sheet2!B2");
+        assert_eq!(qualified_ref("A1:C3".into(), Some("My Data")), "'My Data'!A1:C3");
     }
 
     #[test]

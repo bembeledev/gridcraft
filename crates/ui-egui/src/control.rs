@@ -245,7 +245,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 (
                     "ui.printSubmit",
                     "Submit Print Job",
-                    "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
+                    "existing file.print sheet/pagination params, orientation?: auto|portrait|landscape → {printing,bytes,pending}; submits without opening a dialog",
                 ),
                 ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),

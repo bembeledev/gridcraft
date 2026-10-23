@@ -112,6 +112,29 @@ impl EditState {
         self.sync_caret = true;
     }
 
+    /// Points the reference at byte span `span` (from [`formula_refs`]) at `to`, keeping its sheet
+    /// prefix and `$` markers, and puts the caret after it. Returns the reference's new span.
+    pub fn replace_ref(&mut self, span: (usize, usize), to: RangeRef) -> Option<(usize, usize)> {
+        let old = self.text.get(span.0..span.1)?;
+        let (prefix, body) = old.split_at(old.rfind('!').map_or(0, |i| i + 1));
+        let (first, last) = (body.split(':').next().unwrap_or(""), body.rsplit(':').next().unwrap_or(""));
+        let cell = |c: CellRef, part: &str| {
+            let col_abs = if part.starts_with('$') { "$" } else { "" };
+            let row_abs = if part.trim_start_matches('$').contains('$') { "$" } else { "" };
+            format!("{col_abs}{}{row_abs}{}", gridcraft_engine::core::col_to_letters(c.col), c.row as u64 + 1)
+        };
+        let new = if to.is_single() { cell(to.start, first) } else { format!("{}:{}", cell(to.start, first), cell(to.end, last)) };
+        let new = format!("{prefix}{new}");
+        self.text.replace_range(span.0..span.1, &new);
+        let end = span.0 + new.len();
+        self.point = None;
+        self.caret = self.text.get(..end).map(|s| s.chars().count()).unwrap_or(0);
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        self.request_focus = true;
+        Some((span.0, end))
+    }
+
     /// Add another argument after the current pointed reference. Keep only the new reference
     /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
     pub fn append_ref(&mut self, r: &str) {
@@ -419,6 +442,22 @@ mod tests {
         assert_eq!(refs[2].2.a1(), "D:E");
         assert_eq!(refs[3].2.a1(), "7:8");
         assert_eq!(refs[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn dragging_a_reference_rewrites_it_in_place() {
+        let mut edit = EditState::new(0, CellRef::new(0, 0), "=A1*'My Sheet'!$B$2:C$3+A1".into(), false, false);
+        let refs = formula_refs(&edit.text);
+        let span = edit.replace_ref((refs[0].0, refs[0].1), RangeRef::cell(CellRef::new(4, 3))).unwrap_or_default();
+        assert_eq!(edit.text, "=D5*'My Sheet'!$B$2:C$3+A1");
+        assert_eq!((span, edit.caret), ((1, 3), 3));
+        let refs = formula_refs(&edit.text);
+        edit.replace_ref((refs[1].0, refs[1].1), RangeRef::new(CellRef::new(0, 0), CellRef::new(9, 4)));
+        assert_eq!(edit.text, "=D5*'My Sheet'!$A$1:E$10+A1", "sheet prefix and $ markers survive");
+        // A single cell grown into a range keeps its markers on both ends.
+        let mut edit = EditState::new(0, CellRef::new(0, 0), "=$A$1".into(), false, false);
+        edit.replace_ref((1, 5), RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 1)));
+        assert_eq!(edit.text, "=$A$1:$B$2");
     }
 
     #[test]

@@ -556,6 +556,33 @@ mod tests {
     }
 
     #[test]
+    fn undoing_several_steps_keeps_each_sheet_its_own_zoom() {
+        // Adding C then deleting B leaves as many sheets as before under other names: across both
+        // steps at once, that looks like B renamed to C, and C's zoom used to land on B.
+        let mut s = Session::new();
+        s.new_workbook();
+        let zoom = |s: &Session, name: &str| {
+            let wb = &s.doc().unwrap().wb;
+            wb.sheet(wb.sheet_index(name).unwrap()).unwrap().zoom
+        };
+        let names = |s: &Session| s.doc().unwrap().wb.sheets.iter().map(|sh| sh.name.clone()).collect::<Vec<_>>();
+        let first = names(&s)[0].clone();
+        s.execute("home.insertSheet", json!({"name": "B", "before": 1})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "C", "before": 2})).unwrap();
+        s.execute("home.deleteSheet", json!({"sheet": "B"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "C"})).unwrap();
+        s.execute("view.zoom", json!({"percent": 150})).unwrap();
+        s.execute("edit.undo", json!({"steps": 2})).unwrap();
+        assert_eq!(names(&s), [first.clone(), "B".to_string()]);
+        assert_eq!(zoom(&s, "B"), 100, "B never had C's zoom");
+        s.execute("sheet.activate", json!({"sheet": "B"})).unwrap();
+        s.execute("view.zoom", json!({"percent": 80})).unwrap();
+        s.execute("edit.redo", json!({"steps": 2})).unwrap();
+        assert_eq!(names(&s), [first, "C".to_string()]);
+        assert_eq!(zoom(&s, "C"), 150, "C gets its own zoom back, not B's");
+    }
+
+    #[test]
     fn formula_bar_toggles_without_a_workbook_and_defaults_to_shown() {
         let mut s = Session::new();
         assert!(s.prefs.formula_bar);

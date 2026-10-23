@@ -657,10 +657,10 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
-    super::view::keep_zoom(d, &now);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -678,10 +678,10 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
-    super::view::keep_zoom(d, &now);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))

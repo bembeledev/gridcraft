@@ -211,53 +211,98 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                let mut tabs: Vec<&str> = TABS.to_vec();
+                let ctx_tabs = contextual_tabs(app);
+                tabs.extend(ctx_tabs.iter());
+                let tabs_width: f32 = tabs
+                    .iter()
+                    .map(|tab| {
+                        let label = app.ui.language.tr(tab);
+                        ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(13.5), t.text).size().x + 24.0
+                    })
+                    .sum();
+                let overflow = tabs_width + 64.0 > ui.available_width();
+                let reveal_id = ui.id().with("ribbon_tabs_reveal");
+                let reveal_key =
+                    egui::Id::new((app.ui.ribbon_tab.as_str(), tabs.clone(), app.ui.language.tr("More tabs"), ui.available_width().to_bits()));
+                let reveal_active = ui.ctx().data_mut(|data| {
+                    let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
+                    data.insert_temp(reveal_id, reveal_key);
+                    changed
+                });
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
                     if app.chrome.file_tab {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
-                        }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                    let mut draw_tabs = |ui: &mut Ui| {
+                        for &tab in &tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, active, label));
+                            if active && reveal_active {
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
+                    };
+                    if overflow {
+                        let visible_width = (ui.available_width() - 34.0).max(40.0);
+                        egui::ScrollArea::horizontal()
+                            .id_salt("ribbon_tabs_horizontal")
+                            .max_width(visible_width)
+                            .auto_shrink([false, false])
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                            .show(ui, &mut draw_tabs);
+                        let arrow = ui.add(egui::Button::new(egui::RichText::new("▼").color(t.text)).min_size(vec2(30.0, 28.0)).fill(t.window));
+                        arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, app.ui.language.tr("More tabs")));
+                        arrow.clone().on_hover_text(app.ui.language.tr("More tabs"));
+                        egui::Popup::menu(&arrow).show(|ui| {
+                            for tab in &tabs {
+                                if ui.selectable_label(app.ui.ribbon_tab == *tab, app.ui.language.tr(tab)).clicked() {
+                                    app.ui.ribbon_tab = (*tab).to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                    ui.close();
+                                }
+                            }
+                        });
+                    } else {
+                        draw_tabs(ui);
                     }
                 });
             });
@@ -270,28 +315,107 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
-                            "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
-                            "Draw" => draw(app, ui),
-                            "Page Layout" => page_layout(app, ui),
-                            "Formulas" => formulas(app, ui),
-                            "Data" => data(app, ui),
-                            "Review" => review(app, ui),
-                            "View" => view(app, ui),
-                            "Automate" => automate(app, ui),
-                            "Table Design" => table_design(app, ui),
-                            "Chart Design" => chart_design(app, ui),
-                            crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
-                            _ => home(app, ui),
+                // Keep the overflow anchor outside the clipped command strip.
+                let strip_width = (inner.width() - 34.0).max(0.0);
+                let popup_id = egui::Id::new(("ribbon_overflow", &app.ui.ribbon_tab));
+                let width_id = popup_id.with("content_width");
+                // Egui's memory tracks one popup. Keep this parent separately so opening
+                // a font/colour picker cannot replace it and unmount the picker next frame.
+                let open_id = egui::Id::new("ribbon_overflow_open");
+                let mut popup_open = ui.data(|data| data.get_temp::<String>(open_id)).as_deref() == Some(app.ui.ribbon_tab.as_str());
+                let content_width = if popup_open {
+                    ui.data(|data| data.get_temp::<f32>(width_id)).unwrap_or(inner.width())
+                } else {
+                    let content = egui::ScrollArea::horizontal()
+                        .id_salt(("ribbon_content", &app.ui.ribbon_tab))
+                        .max_width(strip_width)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| ribbon_controls(app, ui));
+                        });
+                    ui.data_mut(|data| data.insert_temp(width_id, content.content_size.x));
+                    content.content_size.x
+                };
+                if popup_open || content_width > strip_width + 1.0 {
+                    let rect = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top()), vec2(30.0, inner.height()));
+                    let label = app.ui.language.tr("More commands on this tab");
+                    let arrow = ui.put(rect, egui::Button::new("▼").fill(t.ribbon).stroke(Stroke::new(1.0, t.ribbon_border)));
+                    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                    arrow.clone().on_hover_text(label);
+                    if arrow.clicked() {
+                        popup_open = !popup_open;
+                        egui::Popup::close_all(ui.ctx());
+                        // Draw each control once per frame, including the font-size text editor.
+                        ui.ctx().request_repaint();
+                    } else {
+                        let child_was_open = egui::Popup::is_any_open(ui.ctx());
+                        let response = egui::Popup::from_response(&arrow)
+                            .id(popup_id)
+                            .open_bool(&mut popup_open)
+                            .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                            .show(|ui| {
+                                let viewport = ui.ctx().content_rect();
+                                let width = (viewport.width() - 32.0).max(0.0);
+                                let height = (viewport.bottom() - arrow.rect.bottom() - 24.0).max(0.0);
+                                ui.set_width(width);
+                                // Reuse the real controls and their parameterized handlers. Groups
+                                // wrap; horizontal scrolling also accommodates an oversized group.
+                                egui::ScrollArea::both()
+                                    .id_salt("ribbon_overflow_body")
+                                    .min_scrolled_height(0.0)
+                                    .min_scrolled_width(0.0)
+                                    .max_height(height)
+                                    .show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| ribbon_controls(app, ui));
+                                    });
+                            });
+                        // A click in a child menu can be outside the overflow's own rectangle.
+                        // Let that child handle its click, including the click that closes it.
+                        if !child_was_open
+                            && !egui::Popup::is_any_open(ui.ctx())
+                            && response.is_some_and(|response| response.response.clicked_elsewhere())
+                        {
+                            popup_open = false;
                         }
-                    });
+                    }
+                }
+                // SheetApp dialogs take over from the ribbon. Child font/size/colour
+                // popups (including More Colors) are owned by these controls instead,
+                // so they keep the parent mounted while their interaction continues.
+                if popup_open && app.dialog.is_some() {
+                    popup_open = false;
+                    egui::Popup::close_all(ui.ctx());
+                    ui.ctx().request_repaint();
+                }
+                ui.data_mut(|data| {
+                    if popup_open {
+                        data.insert_temp(open_id, app.ui.ribbon_tab.clone());
+                    } else {
+                        data.remove::<String>(open_id);
+                    }
                 });
             });
         });
+}
+
+/// Shared by the ribbon strip and its overflow: no second command catalog or empty-param dispatch.
+fn ribbon_controls(app: &mut SheetApp, ui: &mut Ui) {
+    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+    match app.ui.ribbon_tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Page Layout" => page_layout(app, ui),
+        "Formulas" => formulas(app, ui),
+        "Data" => data(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Automate" => automate(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Chart Design" => chart_design(app, ui),
+        crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 /// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
@@ -766,6 +890,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fill = app.grid.last_fill.clone();
             let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
+            fa.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Fill Color")));
             control_keytip(app, ui, &fa, "home.fillColor");
             if f {
                 act(app, "home.fillColor", json!({"color": fill}));
@@ -786,6 +911,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fc = app.grid.last_font_color.clone();
             let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
+            ca.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Font Color")));
             control_keytip(app, ui, &ca, "home.fontColor");
             if c {
                 act(app, "home.fontColor", json!({"color": fc}));
@@ -2161,7 +2287,9 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
+    let analysis = big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false);
+    analysis.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Data Analysis")));
+    if analysis.clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
     sep(ui);

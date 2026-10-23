@@ -61,6 +61,7 @@ mod paste_special_dialog;
 mod pivot_pane;
 mod popup_dismissal;
 mod protect_password;
+mod responsive_interface;
 mod right_to_left;
 mod scroll_position;
 mod scrollbar_column_fill;

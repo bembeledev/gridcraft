@@ -969,6 +969,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "More tabs" => "Mais abas",
+        "More commands on this tab" => "Mais comandos desta aba",
         _ => return None,
     })
 }

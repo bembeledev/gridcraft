@@ -104,6 +104,33 @@ fn hollow_marker_contours_transparency_and_smoothing_are_written_natively() {
 }
 
 #[test]
+fn category_and_value_gridlines_round_trip_independently_in_bars_and_scatter() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::BarStacked, ChartKind::ScatterLines, ChartKind::Bubble] {
+        for (value_grid, category_grid) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut wb = workbook();
+            let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[0];
+            c.kind = kind;
+            c.gridlines = value_grid;
+            c.format.vertical_gridlines = category_grid;
+            c.format.horizontal_gridline = gridcraft_model::ChartStroke { color: Some([1, 2, 3, 255]), width: Some(2.5) };
+            c.format.vertical_gridline = gridcraft_model::ChartStroke { color: Some([4, 5, 6, 255]), width: Some(1.5) };
+            let bytes = write_xlsx(&wb).unwrap();
+            let (back, _) = read_xlsx(&bytes).unwrap();
+            let c = &back.sheets[0].charts[0];
+            assert_eq!((c.gridlines, c.format.vertical_gridlines), (value_grid, category_grid), "{kind:?}");
+            if value_grid {
+                assert_eq!(c.format.horizontal_gridline.color, Some([1, 2, 3, 255]), "{kind:?}");
+                assert_eq!(c.format.horizontal_gridline.width, Some(2.5), "{kind:?}");
+            }
+            if category_grid {
+                assert_eq!(c.format.vertical_gridline.color, Some([4, 5, 6, 255]), "{kind:?}");
+                assert_eq!(c.format.vertical_gridline.width, Some(1.5), "{kind:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn axis_and_series_format_roundtrip_and_native_axis_xml() {
     let mut wb = workbook();
     let sheet = Arc::make_mut(&mut wb.sheets[0]);

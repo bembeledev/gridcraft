@@ -281,6 +281,11 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 }
 
 fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::ChartFormat {
+    let scatter = plot
+        .children
+        .iter()
+        .find_map(group_kind)
+        .is_some_and(|kind| matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble));
     let mut format = read_custom_format(root).unwrap_or_else(|| gridcraft_model::ChartFormat {
         legend_overlay: root.path(&["chart", "legend"]).is_some_and(|l| bool_val(l, "overlay")),
         ..Default::default()
@@ -312,18 +317,19 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         if a.path(&["spPr", "ln", "noFill"]).is_some() {
             options.line.width = Some(0.0);
         }
+        let category_grid = if scatter { x } else { matches!(a.name.as_str(), "catAx" | "dateAx") };
         if let Some(grid) = a.child("majorGridlines") {
             let surface = read_surface(grid.child("spPr"));
             let style = gridcraft_model::ChartStroke {
                 color: surface.border.filter(|color| *color != [217, 217, 217, 255]),
                 width: surface.border_width.filter(|width| *width != 1.0),
             };
-            if x {
+            if category_grid {
                 format.vertical_gridline = style;
             } else {
                 format.horizontal_gridline = style;
             }
-        } else if x {
+        } else if category_grid {
             format.vertical_gridline = Default::default();
         } else {
             format.horizontal_gridline = Default::default();
@@ -331,18 +337,15 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         options.number_format =
             a.child("numFmt").filter(|n| n.attr("sourceLinked") == Some("0")).and_then(|n| n.attr("formatCode")).map(str::to_string);
     }
-    let scatter = plot
-        .children
-        .iter()
-        .find_map(group_kind)
-        .is_some_and(|kind| matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble));
     format.vertical_gridlines = plot
         .children
         .iter()
         .find(|axis| {
-            let is_x_axis = matches!(axis.child_val("axPos"), Some("b" | "t"));
-            let axis_matches_chart = if scatter { axis.name == "valAx" } else { matches!(axis.name.as_str(), "catAx" | "dateAx") };
-            is_x_axis && axis_matches_chart
+            if scatter {
+                axis.name == "valAx" && matches!(axis.child_val("axPos"), Some("b" | "t"))
+            } else {
+                matches!(axis.name.as_str(), "catAx" | "dateAx")
+            }
         })
         .is_some_and(|axis| axis.child("majorGridlines").is_some());
     let mut series_index = 0;
@@ -419,7 +422,14 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
                     | ChartKind::Area
                     | ChartKind::AreaStacked
             ) {
-                spec.border_width = width;
+                let custom = format.series.get(&series_index);
+                // The bar/area writer uses border_width, not line_width. Keep the latter
+                // as an extension-only field and normalize the automatic zero-width border.
+                spec.line_width = custom.and_then(|style| style.line_width);
+                spec.border_width = width.filter(|width| *width != 0.0 || custom.is_some_and(|style| style.border_width == Some(0.0)));
+                if width == Some(0.0) {
+                    spec.no_line = custom.is_some_and(|style| style.no_line);
+                }
             } else if matches!(kind, ChartKind::Scatter) {
                 // A marker-only scatter group encodes its structural no-line default in `spPr`.
                 // Preserve its marker-only kind instead of turning that XML into a line override.
@@ -1028,8 +1038,10 @@ fn axis_xml(a: &Ax<'_>, chart: &Chart) -> String {
         }
     }
     let _ = write!(s, "</c:scaling><c:delete val=\"{}\"/><c:axPos val=\"{}\"/>", a.delete as u8, a.pos);
-    if a.grid || (matches!(a.pos, "b" | "t") && chart.format.vertical_gridlines) {
-        let style = if matches!(a.pos, "b" | "t") { &chart.format.vertical_gridline } else { &chart.format.horizontal_gridline };
+    let scatter = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+    let category_grid = if scatter { matches!(a.pos, "b" | "t") } else { a.cat };
+    if a.grid || (a.id <= 2 && category_grid && chart.format.vertical_gridlines) {
+        let style = if category_grid { &chart.format.vertical_gridline } else { &chart.format.horizontal_gridline };
         let sp = surface_xml(&gridcraft_model::ChartSurface { border: style.color, border_width: style.width, ..Default::default() }, "c");
         if sp.is_empty() {
             s.push_str("<c:majorGridlines/>");

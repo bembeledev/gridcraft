@@ -573,6 +573,8 @@ fn minor_ticks(ctx: &mut Ctx, scale: Scale, axis: &gridcraft_model::ChartAxis, p
 }
 
 fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, chart: &Chart) -> Bx {
+    let reverse_categories =
+        chart.format.x_axis.reversed && !matches!(chart.kind, ChartKind::Histogram | ChartKind::Waterfall | ChartKind::BoxWhisker | ChartKind::Stock);
     let grid = chart.gridlines;
     let gx = chart.format.vertical_gridline.color.unwrap_or(GRID);
     let gwx = chart.format.vertical_gridline.width.unwrap_or(0.75);
@@ -642,7 +644,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
                 for (j, t) in l.iter().enumerate().step_by(k) {
                     let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    let j = if chart.format.x_axis.reversed { n - 1 - j } else { j };
+                    let j = if reverse_categories { n - 1 - j } else { j };
                     tick(
                         ctx,
                         plot.x + (j as f32 + 0.5) * cw,
@@ -663,18 +665,18 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 for (i, level) in outer.iter().enumerate() {
                     let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
                     for (first, end) in level_groups(level, n) {
-                        let (start, stop) = if chart.format.x_axis.reversed { (n - end, n - first) } else { (first, end) };
+                        let (start, stop) = if reverse_categories { (n - end, n - first) } else { (first, end) };
                         let (x0, x1) = (plot.x + start as f32 * cw, plot.x + stop as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
                             let t = ctx.fit(t, ls, x1 - x0 - 2.0);
                             ctx.text_role("x_axis", (x0 + x1) / 2.0, top, &t, ls, TEXT, HAlign::Center, VAlign::Top);
                         }
                         if first > 0 {
-                            let edge = if chart.format.x_axis.reversed { x1 } else { x0 };
+                            let edge = if reverse_categories { x1 } else { x0 };
                             ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
                         }
                     }
-                    let edge = if chart.format.x_axis.reversed { plot.x } else { plot.right() };
+                    let edge = if reverse_categories { plot.x } else { plot.right() };
                     ctx.vline(edge, plot.bottom(), top + lh - 2.0, ax, awx);
                 }
             }
@@ -1595,7 +1597,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     }
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
-                            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
+                            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten())
+                                && inside_plot(*p, plot)
+                            {
                                 ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
                             }
                         }

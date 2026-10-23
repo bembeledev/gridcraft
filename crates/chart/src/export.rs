@@ -3,6 +3,15 @@ use crate::{Chart, ChartData, HAlign, Measure, Prim, Rgba, VAlign, render};
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn load_bundled_fonts(db: &mut resvg::usvg::fontdb::Database) {
+    for bytes in [epaint_default_fonts::UBUNTU_LIGHT, epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR] {
+        db.load_font_data(bytes.to_vec());
+    }
+    db.set_sans_serif_family("Ubuntu");
+    db.set_monospace_family("Hack");
+}
+
 fn font_database() -> Arc<resvg::usvg::fontdb::Database> {
     static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
     FONTS
@@ -10,6 +19,8 @@ fn font_database() -> Arc<resvg::usvg::fontdb::Database> {
             let mut db = resvg::usvg::fontdb::Database::new();
             #[cfg(not(target_arch = "wasm32"))]
             db.load_system_fonts();
+            #[cfg(target_arch = "wasm32")]
+            load_bundled_fonts(&mut db);
             if let Some(family) = ["DejaVu Sans", "Arial", "Liberation Sans", "Helvetica", "Noto Sans"]
                 .into_iter()
                 .find(|name| db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)))
@@ -154,11 +165,23 @@ pub fn export_png(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale:
 
 #[cfg(test)]
 mod tests {
-    use super::font_database;
+    use super::{font_database, load_bundled_fonts};
     use std::sync::Arc;
 
     #[test]
     fn font_database_is_shared_between_exports() {
         assert!(Arc::ptr_eq(&font_database(), &font_database()));
+    }
+
+    #[test]
+    fn bundled_fonts_rasterize_text_without_system_fonts() {
+        let mut db = resvg::usvg::fontdb::Database::new();
+        load_bundled_fonts(&mut db);
+        let options = resvg::usvg::Options { fontdb: Arc::new(db), ..Default::default() };
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40"><text x="2" y="25" font-family="sans-serif" font-size="20">Chart 123</text></svg>"#;
+        let tree = resvg::usvg::Tree::from_str(svg, &options).unwrap();
+        let mut pixels = resvg::tiny_skia::Pixmap::new(120, 40).unwrap();
+        resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixels.as_mut());
+        assert!(pixels.pixels().iter().any(|pixel| pixel.alpha() > 0));
     }
 }

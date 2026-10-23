@@ -1577,6 +1577,7 @@ dependencies = [
 name = "gridcraft-chart"
 version = "0.11.1"
 dependencies = [
+ "epaint_default_fonts",
  "gridcraft-calc",
  "gridcraft-core",
  "gridcraft-model",

@@ -54,6 +54,38 @@ fn chart(kind: ChartKind) -> Chart {
 }
 
 #[test]
+fn line_labels_exclude_points_outside_manual_axis_bounds() {
+    let mut c = chart(ChartKind::LineMarkers);
+    c.format.y_axis.minimum = Some(0.0);
+    c.format.y_axis.maximum = Some(10.0);
+    let data = ChartData {
+        categories: ["Below", "Visible", "Above"].map(String::from).to_vec(),
+        series: vec![series("Values", &[-1234.0, 5.0, 5678.0], [20, 96, 130, 255], c.kind)],
+        ..Default::default()
+    };
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    let labels: Vec<_> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, role, .. } if role == "data_labels" => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["$5"]);
+}
+
+#[test]
+fn fixed_order_chart_labels_stay_aligned_when_reversal_is_requested() {
+    for kind in [ChartKind::Histogram, ChartKind::Waterfall, ChartKind::BoxWhisker, ChartKind::Stock] {
+        let mut c = chart(kind);
+        let data = sample(kind);
+        let before = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+        c.format.x_axis.reversed = true;
+        assert_eq!(before, render(&c, &data, 640.0, 400.0, &ApproxMeasure), "{kind:?}");
+    }
+}
+
+#[test]
 fn chart_svg_export_preserves_text_and_escapes_xml() {
     for kind in ALL_KINDS {
         let mut c = chart(kind);

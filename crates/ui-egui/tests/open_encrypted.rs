@@ -65,7 +65,7 @@ fn opening_an_encrypted_file_asks_for_its_password() {
     h.run_steps(2);
     h.input_mut().events.push(egui::Event::Text("wrong-guess".into()));
     h.run_steps(2);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     let msg = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
     assert!(msg.contains(gridcraft_engine::io::WRONG_PASSWORD), "{msg}");
@@ -77,7 +77,7 @@ fn opening_an_encrypted_file_asks_for_its_password() {
 
     // The right one opens the workbook: no save path, in Recent, with the notice.
     h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(a1(&h), Value::Number(42.0));
@@ -95,7 +95,7 @@ fn cancel_leaves_nothing_open() {
     h.state_mut().open_path(&path.to_string_lossy());
     h.run_steps(3);
     assert_eq!(dialog(&h).as_deref(), Some("openPassword"));
-    h.get_by_label(" Cancel ").click();
+    h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(h.state().session.documents().len(), before);
@@ -112,7 +112,7 @@ fn a_file_picked_on_the_web_asks_for_its_password_too() {
     assert_eq!(dialog(&h).as_deref(), Some("openPassword"));
     assert!(h.state().dialog.as_ref().is_some_and(|d| d.values.contains_key("base64")));
     h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(a1(&h), Value::Number(42.0));
@@ -125,7 +125,7 @@ fn an_untouched_password_field_is_incorrect_not_required() {
     let mut h = harness(Services::default());
     h.state_mut().open_path(&path.to_string_lossy());
     h.run_steps(3);
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     let msg = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
     assert!(msg.contains(gridcraft_engine::io::WRONG_PASSWORD), "{msg}");
@@ -141,7 +141,7 @@ fn the_backstage_closes_once_the_password_opens_the_workbook() {
     h.state_mut().open_path(&path.to_string_lossy());
     h.run_steps(3);
     h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
-    h.get_by_label("   OK   ").click();
+    h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(a1(&h), Value::Number(42.0));
     assert!(h.state().backstage.is_none(), "the opened workbook shows, not the Backstage");

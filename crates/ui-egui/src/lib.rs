@@ -645,10 +645,11 @@ impl SheetApp {
     /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
     /// without publishing, GridCraft's own clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
-        if self.system_clipboard_text().is_none() && self.paste_chart_image() {
+        let text = self.system_clipboard_text();
+        if text.is_none() && self.paste_chart_image() {
             return;
         }
-        match self.system_clipboard_text() {
+        match text {
             Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
             _ => self.run_or_alert("edit.paste", json!({})),
         }

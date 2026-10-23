@@ -1200,6 +1200,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .movable(true)
         .resizable(true)
         .default_width(width)
+        // The scroll body can shrink to its natural content height. Start with screen room
+        // so compact forms do not inherit a tiny viewport that hides their action row.
+        .default_height((ctx.content_rect().height() - 80.0).max(80.0))
         .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
         .pivot(egui::Align2::CENTER_CENTER)
         .constrain(true)
@@ -1209,7 +1212,6 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "analysisToolPak" if chooser => window.default_height(500.0),
         "analysisToolPak" if d.values.get("tool").and_then(Json::as_str) == Some("regression") => window.default_height(680.0),
         "insertPicture" => window.default_height(240.0),
-        "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
     window.show(ctx, |ui| {

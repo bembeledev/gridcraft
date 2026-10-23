@@ -761,6 +761,10 @@ fn georgian() -> Vec<(String, u32)> {
         v.push((format!("{d}/NotoSansGeorgian-Regular.ttf"), 0));
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
     }
+    // Fedora keeps each family in its own package folder, as for Thai and Hebrew.
+    v.push(("/usr/share/fonts/google-noto/NotoSansGeorgian-Regular.ttf".into(), 0));
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansGeorgian[wght].ttf".into(), 0));
+    v.push(("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".into(), 0));
     v
 }
 
@@ -1184,7 +1188,7 @@ mod tests {
         // after the existing Linux folders for the same font, so wherever one of those matched,
         // nothing changes.
         let paths = |cands: Vec<(String, u32)>| cands.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
-        let cases: [(&str, Vec<String>, &str, &str); 9] = [
+        let cases: [(&str, Vec<String>, &str, &str); 10] = [
             (CELL, paths(candidates(CELL)), "google-carlito-fonts/Carlito-Regular.ttf", "/carlito/Carlito-Regular.ttf"),
             (CELL_BOLD, paths(candidates(CELL_BOLD)), "google-carlito-fonts/Carlito-Bold.ttf", "/carlito/Carlito-Bold.ttf"),
             (CELL_ITALIC, paths(candidates(CELL_ITALIC)), "google-carlito-fonts/Carlito-Italic.ttf", "/carlito/Carlito-Italic.ttf"),
@@ -1194,6 +1198,7 @@ mod tests {
             (MONO, paths(candidates(MONO)), "liberation-mono-fonts/LiberationMono-Regular.ttf", "/dejavu/DejaVuSansMono.ttf"),
             ("thai", paths(thai()), "google-noto-vf/NotoSansThai[wght].ttf", "/NotoSansThai-Regular.ttf"),
             ("hebrew", paths(hebrew()), "google-noto-vf/NotoSansHebrew[wght].ttf", "/NotoSansHebrew-Regular.ttf"),
+            ("georgian", paths(georgian()), "google-noto-vf/NotoSansGeorgian[wght].ttf", "/NotoSansGeorgian-Regular.ttf"),
         ];
         for (role, list, fedora_file, earlier) in &cases {
             let at = list.iter().position(|p| *p == format!("/usr/share/fonts/{fedora_file}"));

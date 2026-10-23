@@ -978,6 +978,23 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Finish", "完了"),
+    ("Select…", "選択…"),
+    ("Regression Type:", "回帰の種類:"),
+    ("Regression method", "回帰方法"),
+    ("Regression options", "回帰オプション"),
+    ("Exponential", "指数近似"),
+    ("Logarithmic", "対数近似"),
+    ("Power / Geometric", "累乗 / 幾何"),
+    ("Select a worksheet range, then choose Finish.", "ワークシートで範囲を選択してから、完了を選んでください。"),
+    (
+        "Return to the original workbook to continue this analysis, or cancel.",
+        "この分析を続けるには元のブックに戻ってください。またはキャンセルしてください。",
+    ),
+    (
+        "Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.",
+        "診断統計量と切片は ln(Y) の尺度で計算されます。切片を 0 にすると振幅は 1 に固定されます。",
+    ),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the
@@ -1237,8 +1254,8 @@ mod tests {
         }
         assert_eq!(seen.len(), catalog_keys().count());
         assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 562, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 954);
+        assert_eq!(DIALOGS.len(), 573, "the dialog, message and menu strings beyond it");
+        assert_eq!(catalog_keys().count(), 965);
     }
 
     #[test]
@@ -1256,7 +1273,7 @@ mod tests {
     #[test]
     fn covers_every_key_the_portuguese_catalog_translates() {
         let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 954, "pt.rs's arms changed: add the new keys here and update the count");
+        assert_eq!(portuguese.len(), 965, "pt.rs's arms changed: add the new keys here and update the count");
         let japanese: HashSet<&str> = catalog_keys().collect();
         for key in &portuguese {
             assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");

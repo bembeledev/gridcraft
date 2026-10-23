@@ -289,6 +289,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.dialog.set" => match app.dialog.as_mut() {
             Some(d) => {
+                if let Err(error) = d.prepare_analysis(&app.session) {
+                    return err(&error);
+                }
                 let Some(field) = s("field") else { return err("missing `field`") };
                 if field == "tab" {
                     d.tab = s("value").unwrap_or("").to_string();
@@ -302,9 +305,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
+            Some(mut d) => match d.command {
                 Some(cmd) => {
-                    let params = crate::dialogs::build_params(&d);
+                    let params = match d.command_params(&app.session) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            app.dialog = Some(d);
+                            return err(&error);
+                        }
+                    };
                     let r = app.run(cmd, params);
                     if r.is_err() {
                         app.dialog = Some(d);

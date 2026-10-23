@@ -678,6 +678,7 @@ fn item_xml(v: &Value, sys: DateSystem, date: bool) -> String {
     }
 }
 
+/// Serializes a [`Cache`] definition to OpenXML `pivotCacheDefinition` XML.
 fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     let mut s = format!("{XML_DECL}<pivotCacheDefinition xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\"");
     match (records_rid, &c.records) {

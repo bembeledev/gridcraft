@@ -324,6 +324,7 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+/// Runs a mutating closure against the document state, creating an undo entry if changes occurred.
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
     // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.

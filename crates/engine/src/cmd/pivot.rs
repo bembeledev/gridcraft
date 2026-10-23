@@ -602,6 +602,7 @@ fn source_param(s: &Session, p: &Json) -> Result<String> {
     }
 }
 
+/// Generates the next default unique PivotTable name (e.g. "PivotTable1").
 fn next_pivot_name(wb: &Workbook) -> String {
     (1..)
         .map(|n| format!("PivotTable{n}"))
@@ -609,11 +610,13 @@ fn next_pivot_name(wb: &Workbook) -> String {
         .unwrap_or_default()
 }
 
+/// Allocates the next unique numeric object ID for a PivotTable.
 fn next_pivot_id(wb: &Workbook) -> u32 {
     let m = wb.sheets.iter().flat_map(|s| s.pivots.iter().map(|p| p.id)).max().unwrap_or(0);
     wb.next_object_id().max(m.saturating_add(1))
 }
 
+/// Extracts a list of field descriptors from a JSON array or string parameter.
 fn field_list(v: Option<&Json>) -> Vec<Json> {
     match v {
         Some(Json::Array(a)) => a.iter().take(512).cloned().collect(),
@@ -738,6 +741,7 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(res)
 }
 
+/// Creates a PivotTable summarizing the table containing the selection or named in parameters.
 fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let name = match str_param(p, "table") {
@@ -781,6 +785,7 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     })
 }
 
+/// Returns the field list and layout configuration for a PivotTable to populate the task pane.
 fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let d = s.doc()?;
@@ -962,6 +967,7 @@ fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Moves a field between PivotTable areas (rows, columns, values, filters) or reorders within an area.
 fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.moveField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -1203,6 +1209,7 @@ fn group(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Expands or collapses member items for a PivotTable axis field.
 fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.collapse";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -1319,6 +1326,7 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Configures grand total visibility on rows and columns for a PivotTable.
 fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
     let (r, c) = match str_param(p, "mode").map(|m| m.to_ascii_lowercase()) {
         Some(m) if m == "off" => (Some(false), Some(false)),
@@ -1338,6 +1346,7 @@ fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
     layout(s, &Json::Object(q))
 }
 
+/// Recalculates and re-renders the specified PivotTable from its source data.
 fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let replace = bool_param(p, "replace").unwrap_or(false);
@@ -1350,6 +1359,7 @@ fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Refreshes all PivotTables across all sheets in the workbook.
 fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
@@ -1577,6 +1587,7 @@ fn suggestions(wb: &Workbook, src: &pv::Source) -> Vec<Json> {
     out
 }
 
+/// Returns or applies recommended PivotTable configurations for a given data source.
 fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
     let source = source_param(s, p)?;
     let active = s.doc()?.wb.active_sheet;

@@ -367,6 +367,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": at.a1(), "value": v.display()}))
 }
 
+/// Converts a JSON parameter value into a string representation suitable for cell input.
 pub(crate) fn json_to_input(v: &Json) -> String {
     match v {
         Json::Null => String::new(),
@@ -925,6 +926,7 @@ enum What {
     ValuesAndNumberFormats,
 }
 
+/// Pastes clipboard contents or external text into the target selection.
 fn paste(s: &mut Session, p: &Json) -> Result<Json> {
     // External text (from the system clipboard) when it differs from ours.
     if let Some(text) = str_param(p, "text")
@@ -1586,6 +1588,7 @@ fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Applies Flash Fill to extrapolate values in the target column from pattern examples.
 fn flash_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let r = target_range(s, p)?;
@@ -1701,6 +1704,7 @@ fn find(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": c.a1(), "sheet": si, "value": t, "count": hits.len()}))
 }
 
+/// Replaces occurrences of a string across cells within the sheet or workbook.
 fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let what = str_param(p, "what").unwrap_or("").to_string();
     let with = str_param(p, "with").unwrap_or("").to_string();

@@ -525,6 +525,7 @@ struct Grid {
 }
 
 impl Grid {
+    /// Appends a new empty row to the output grid with the specified [`RowKind`].
     fn push_row(&mut self, kind: RowKind) -> Result<usize, String> {
         if (self.rows.len() as u64 + 1) * self.width.max(1) as u64 > MAX_OUTPUT_CELLS || self.rows.len() as u64 >= MAX_ROWS as u64 {
             return Err("The PivotTable report is too large.".into());
@@ -533,6 +534,7 @@ impl Grid {
         self.kinds.push(kind);
         Ok(self.rows.len() - 1)
     }
+    /// Sets a cell in the output grid defaulting its classification to [`PivotCellTarget::Data`].
     fn set(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>) {
         self.set_with_target(r, c, value, kind, indent, fmt, PivotCellTarget::Data);
     }
@@ -589,6 +591,7 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// Retrieves the display value, format, and label string for a row item at the given depth.
     fn label_cell(&self, depth: usize, item: u32) -> (Value, Option<String>, String) {
         let Some(it) = self.row_items.get(depth).and_then(|fi| fi.get(item)) else { return (Value::Empty, None, String::new()) };
         let fmt = if it.formatted { self.row_fmts.get(depth).cloned() } else { None };
@@ -798,6 +801,7 @@ impl Ctx<'_> {
     }
 }
 
+/// Flattens column hierarchy nodes into an ordered list of column specifications ([`ColSpec`]).
 fn flatten_cols(
     nodes: &[Node],
     depth: usize,

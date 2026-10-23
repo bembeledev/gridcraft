@@ -6,7 +6,7 @@
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 use gridcraft_engine::Session;
-use gridcraft_engine::core::CellRef;
+use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -60,9 +60,14 @@ fn button(pos: Pos2, pressed: bool) -> Event {
     Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
 }
 
+fn selected_range(h: &Harness) -> RangeRef {
+    h.state().session.active().unwrap().selection.current()
+}
+
 /// Returns rendered frames from the endpoint event until the painted outline reaches the actual
-/// selection. The endpoint frame is frame zero.
+/// selection. The endpoint frame is frame zero. A matching outline on the old range does not count.
 fn drag_visual_latency(h: &mut Harness, from: &str, to: &str) -> usize {
+    let want = RangeRef::parse(&format!("{from}:{to}")).expect("C3:F7-style range");
     let from = point(h, from);
     frame(h, Event::PointerMoved(from));
     frame(h, button(from, true));
@@ -70,12 +75,12 @@ fn drag_visual_latency(h: &mut Harness, from: &str, to: &str) -> usize {
     frame(h, Event::PointerMoved(to));
 
     for frames in 0..=120 {
-        if same_rect(h.state().grid.glide.drawn(), selected_rect(h)) {
+        if selected_range(h) == want && same_rect(h.state().grid.glide.drawn(), selected_rect(h)) {
             return frames;
         }
         h.step();
     }
-    panic!("selection outline did not reach its drag endpoint within one second");
+    panic!("selection outline did not reach C3:F7 within one second");
 }
 
 #[test]

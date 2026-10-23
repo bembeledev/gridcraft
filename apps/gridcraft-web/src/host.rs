@@ -166,6 +166,9 @@ impl Bridge {
             None => Err("params must be a string of valid JSON".to_string()),
         };
         match parsed {
+            Ok(c) if !host_cmd::has_room(self.commands.borrow().len()) => {
+                self.post_response(&c.id, c.request_id.as_deref(), Err("too many commands are waiting; try again".to_string()));
+            }
             Ok(c) => self.commands.borrow_mut().push((c.id, c.params, c.request_id)),
             Err(error) => self.post_response(id.as_deref().unwrap_or(""), request_id.as_deref(), Err(error)),
         }

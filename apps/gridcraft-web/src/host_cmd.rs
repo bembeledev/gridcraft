@@ -8,6 +8,16 @@ use serde_json::{Map, Value, json};
 /// string is parsed into memory.
 pub const MAX_PARAMS_BYTES: usize = 4 << 20;
 
+/// Most commands waiting for the next frame. The queue is drained once per frame, so a throttled
+/// tab or a parent that sends faster than frames run would otherwise grow it without bound; the
+/// size limit of `params` applies per command, not to the queue.
+pub const MAX_PENDING_COMMANDS: usize = 256;
+
+/// Whether another command fits in a queue that already holds `pending`.
+pub fn has_room(pending: usize) -> bool {
+    pending < MAX_PENDING_COMMANDS
+}
+
 /// What the parent asked for: the engine command, its parameters and the id to echo back.
 #[derive(Debug, PartialEq)]
 pub struct Command {
@@ -83,6 +93,13 @@ mod tests {
     fn oversized_params_are_refused() {
         let big = "1".repeat(MAX_PARAMS_BYTES + 1);
         assert!(parse(Some("cell.set".into()), Some(Some(big)), None).is_err());
+    }
+
+    #[test]
+    fn the_queue_holds_a_fixed_number_of_commands() {
+        assert!(has_room(0));
+        assert!(has_room(MAX_PENDING_COMMANDS - 1));
+        assert!(!has_room(MAX_PENDING_COMMANDS));
     }
 
     #[test]

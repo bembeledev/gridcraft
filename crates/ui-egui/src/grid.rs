@@ -2314,7 +2314,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         // Dragging a coloured reference moves it, or resizes it by a corner; a plain click inside
         // one still commits the edit.
-        if resp.drag_started()
+        if resp.drag_started_by(egui::PointerButton::Primary)
             && let Some(drag) = ref_hit(app, geo, sh, p)
         {
             app.grid.drag = drag;

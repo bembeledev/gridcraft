@@ -42,9 +42,13 @@ fn center(h: &Harness, a1: &str) -> Pos2 {
 
 /// Press at `from`, move to `to` and release; `from == to` is a plain click.
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
+    drag_with(h, PointerButton::Primary, from, to);
+}
+
+fn drag_with(h: &mut Harness, button: PointerButton, from: Pos2, to: Pos2) {
     let moves = if from == to { vec![] } else { vec![Event::PointerMoved(from + egui::vec2(6.0, 6.0)), Event::PointerMoved(to)] };
-    let press = Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
-    let release = Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+    let press = Event::PointerButton { pos: from, button, pressed: true, modifiers: Modifiers::NONE };
+    let release = Event::PointerButton { pos: to, button, pressed: false, modifiers: Modifiers::NONE };
     for event in [Event::PointerMoved(from), press].into_iter().chain(moves).chain([release]) {
         h.input_mut().events.push(event);
         h.run_steps(1);
@@ -103,4 +107,12 @@ fn clicking_inside_a_reference_still_commits_the_edit() {
     let at = center(&h, "B1");
     drag(&mut h, at, at);
     assert!(h.state().editor.is_none(), "only the outline is a handle; inside the cell behaves as before");
+}
+
+#[test]
+fn a_right_drag_leaves_the_reference_alone() {
+    let mut h = editing("=A1*B5");
+    let (from, to) = (center(&h, "B5"), center(&h, "B4"));
+    drag_with(&mut h, PointerButton::Secondary, from, to);
+    assert!(!text(&h).contains("B4"), "only the primary button drags a reference");
 }

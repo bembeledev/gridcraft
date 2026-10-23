@@ -60,6 +60,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
     }
 }
 
@@ -73,6 +74,149 @@ const KINDS: [ChartKind; 8] = [
     ChartKind::ScatterLines,
     ChartKind::Bubble,
 ];
+
+#[test]
+fn scatter_lines_keep_markers_opt_in_when_only_line_styling_changes() {
+    for marker in [None, Some("none"), Some("diamond")] {
+        let mut wb = workbook();
+        let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[0];
+        c.kind = ChartKind::ScatterLines;
+        c.format.series.insert(
+            0,
+            gridcraft_model::ChartSeriesFormat {
+                line_width: Some(3.0),
+                dashed: true,
+                smooth: Some(true),
+                marker: marker.map(str::to_string),
+                ..Default::default()
+            },
+        );
+        let bytes = write_xlsx(&wb).unwrap();
+        let xml = chart_parts(&bytes).remove(0);
+        let expected_symbol = marker.unwrap_or("none");
+        assert!(xml.contains(&format!("<c:symbol val=\"{expected_symbol}\"/>")), "{marker:?}: {xml}");
+        assert!(!xml.contains("<c:symbol val=\"circle\"/>"), "line styling must not introduce a circle");
+
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        let c = &back.sheets[0].charts[0];
+        assert_eq!(c.kind, ChartKind::ScatterLines);
+        let style = c.format.series.get(&0).unwrap();
+        assert_eq!(style.marker.as_deref(), marker.filter(|m| *m != "none"));
+        assert_eq!(style.line_width, Some(3.0));
+        assert!(style.dashed);
+        assert_eq!(style.smooth, Some(true));
+        let xml = chart_parts(&write_xlsx(&back).unwrap()).remove(0);
+        assert!(xml.contains(&format!("<c:symbol val=\"{expected_symbol}\"/>")), "second save: {xml}");
+    }
+}
+
+#[test]
+fn hollow_marker_contours_transparency_and_smoothing_are_written_natively() {
+    let mut wb = workbook();
+    let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[0];
+    let style = gridcraft_model::ChartSeriesFormat {
+        marker: Some("plus".into()),
+        marker_size: Some(72.0),
+        marker_no_fill: true,
+        marker_border_color: Some([255, 0, 0, 255]),
+        marker_border_width: Some(2.0),
+        line_color: Some([10, 20, 30, 128]),
+        smooth: Some(true),
+        ..Default::default()
+    };
+    c.format.series.insert(0, style.clone());
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(0);
+    assert_eq!(xml.matches("<c:marker>").count(), 1);
+    assert!(xml.contains("<c:symbol val=\"plus\"/>"));
+    assert!(xml.contains("<c:size val=\"72\"/>"));
+    assert!(xml.contains("<a:noFill/>"));
+    assert!(xml.contains("<a:srgbClr val=\"FF0000\">"));
+    assert!(xml.contains("<c:smooth val=\"1\"/>"));
+    assert!(xml.contains("<a:alpha val=\"50196\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].format.series.get(&0), Some(&style));
+}
+
+#[test]
+fn category_and_value_gridlines_round_trip_independently_in_bars_and_scatter() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::BarStacked, ChartKind::ScatterLines, ChartKind::Bubble] {
+        for (value_grid, category_grid) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut wb = workbook();
+            let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[0];
+            c.kind = kind;
+            c.gridlines = value_grid;
+            c.format.vertical_gridlines = category_grid;
+            c.format.horizontal_gridline = gridcraft_model::ChartStroke { color: Some([1, 2, 3, 255]), width: Some(2.5) };
+            c.format.vertical_gridline = gridcraft_model::ChartStroke { color: Some([4, 5, 6, 255]), width: Some(1.5) };
+            let bytes = write_xlsx(&wb).unwrap();
+            let (back, _) = read_xlsx(&bytes).unwrap();
+            let c = &back.sheets[0].charts[0];
+            assert_eq!((c.gridlines, c.format.vertical_gridlines), (value_grid, category_grid), "{kind:?}");
+            if value_grid {
+                assert_eq!(c.format.horizontal_gridline.color, Some([1, 2, 3, 255]), "{kind:?}");
+                assert_eq!(c.format.horizontal_gridline.width, Some(2.5), "{kind:?}");
+            }
+            if category_grid {
+                assert_eq!(c.format.vertical_gridline.color, Some([4, 5, 6, 255]), "{kind:?}");
+                assert_eq!(c.format.vertical_gridline.width, Some(1.5), "{kind:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn axis_and_series_format_roundtrip_and_native_axis_xml() {
+    let mut wb = workbook();
+    let sheet = Arc::make_mut(&mut wb.sheets[0]);
+    let c = &mut sheet.charts[0];
+    c.format.y_axis =
+        gridcraft_model::ChartAxis { minimum: Some(1.0), maximum: Some(1000.0), logarithmic: true, reversed: true, ..Default::default() };
+    c.format.vertical_gridlines = true;
+    c.format.series.insert(
+        0,
+        gridcraft_model::ChartSeriesFormat {
+            marker: Some("diamond".into()),
+            marker_size: Some(9.0),
+            line_width: Some(3.0),
+            dashed: true,
+            ..Default::default()
+        },
+    );
+    let expected = c.format.clone();
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(0);
+    assert!(xml.contains("<c:logBase val=\"10\"/>"));
+    assert!(xml.contains("<c:orientation val=\"maxMin\"/>"));
+    assert!(xml.contains("<c:min val=\"1\"/>"));
+    assert!(xml.contains("<c:max val=\"1000\"/>"));
+    assert!(xml.contains("<c:symbol val=\"diamond\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].format, expected);
+}
+
+#[test]
+fn independent_marker_fills_surfaces_spacing_and_axis_masks_are_native_and_preserved() {
+    let mut wb = workbook();
+    let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[2];
+    c.format.y_axis.number_format = Some("0 \"kg\"".into());
+    c.format.gap_width = Some(80.0);
+    c.format.overlap = Some(25.0);
+    c.format.chart_area.fill = Some([240, 240, 240, 255]);
+    c.format.plot_area.fill = Some([200, 210, 220, 128]);
+    c.format
+        .series
+        .insert(0, gridcraft_model::ChartSeriesFormat { fill_color: Some([40, 80, 120, 128]), border_width: Some(2.0), ..Default::default() });
+    let expected = c.format.clone();
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(2);
+    assert!(xml.contains("<c:gapWidth val=\"80\"/>"));
+    assert!(xml.contains("<c:overlap val=\"25\"/>"));
+    assert!(xml.contains("formatCode=\"0 &quot;kg&quot;\" sourceLinked=\"0\""));
+    assert!(xml.contains("<a:alpha val=\"50196\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[2].format, expected);
+}
 
 fn workbook() -> Workbook {
     let mut s = Sheet::new("Data");
@@ -99,7 +243,20 @@ fn every_trendline_kind_round_trips_in_every_chart_group() {
     }
     // A second save writes the same parts (nothing drifts on the way round).
     let again = write_xlsx(&back).unwrap();
-    assert_eq!(chart_parts(&again), chart_parts(&bytes));
+    let expected = chart_parts(&bytes);
+    for (index, (actual, expected)) in chart_parts(&again).iter().zip(&expected).enumerate() {
+        if actual != expected {
+            let mismatch = actual.chars().zip(expected.chars()).take_while(|(a, b)| a == b).count();
+            let start = mismatch.saturating_sub(100);
+            let actual_end = (mismatch + 240).min(actual.len());
+            let expected_end = (mismatch + 240).min(expected.len());
+            panic!(
+                "chart part {index} changes on its second save near byte {mismatch}:\nactual: {}\nexpected: {}",
+                actual.get(start..actual_end).unwrap_or(""),
+                expected.get(start..expected_end).unwrap_or("")
+            );
+        }
+    }
 }
 
 fn chart_parts(bytes: &[u8]) -> Vec<String> {

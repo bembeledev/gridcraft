@@ -158,14 +158,14 @@ impl eframe::App for WebShell {
         // Commands still run in the same frame, right after a queued open lands.
         self.app.logic(ctx);
         if let Some(bridge) = &self.bridge {
-            for (id, params) in bridge.take_commands() {
+            for (id, params, request_id) in bridge.take_commands() {
                 let parsed: serde_json::Value = if params.trim().is_empty() {
                     serde_json::json!({})
                 } else {
                     match serde_json::from_str(&params) {
                         Ok(v) => v,
                         Err(e) => {
-                            bridge.post_response(false, &format!("invalid params for {id}: {e}"));
+                            bridge.post_response(&id, request_id.as_deref(), false, Some(&format!("invalid params for {id}: {e}")));
                             continue;
                         }
                     }
@@ -174,7 +174,7 @@ impl eframe::App for WebShell {
                 // like the File menu does, and refuse to close when the edit won't commit —
                 // the host hears why and the workbook stays open for the user to fix it.
                 if id == "file.close" && !self.app.commit_edit(0, 0, false, false) {
-                    bridge.post_response(false, "the cell edit doesn't commit; fix or cancel it before closing");
+                    bridge.post_response(&id, request_id.as_deref(), false, Some("the cell edit doesn't commit; fix or cancel it before closing"));
                     continue;
                 }
                 match self.app.run(&id, parsed) {
@@ -183,9 +183,9 @@ impl eframe::App for WebShell {
                         // `gridcraft:open` later in the same burst would make another document
                         // active before the frame's sync applies the receipt.
                         bridge.apply_receipts(&mut self.app);
-                        bridge.post_response(true, &v.to_string());
+                        bridge.post_response(&id, request_id.as_deref(), true, Some(&v.to_string()));
                     }
-                    Err(e) => bridge.post_response(false, &e),
+                    Err(e) => bridge.post_response(&id, request_id.as_deref(), false, Some(&e)),
                 }
             }
         }

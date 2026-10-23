@@ -8,6 +8,11 @@
 //!   file GridCraft would otherwise download: Save and Save As (an .xlsx workbook) and Export
 //!   as PDF. The parent stores it and reports failures itself.
 //! - `gridcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
+//! - `gridcraft:cmd` (from the parent): `{ id, params?, requestId? }` runs the engine command
+//!   `id` (`cell.set`, `home.bold`, …) like a ribbon button. `params` is a JSON string (absent
+//!   or `null` means `{}`), and `requestId` an optional string that comes back in the response.
+//! - `gridcraft:response` (to the parent): `{ id, requestId?, ok, value? }` or
+//!   `{ id, requestId?, ok: false, error }` for every `gridcraft:cmd`, once it has run.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the page
@@ -28,6 +33,18 @@ const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
+/// Largest `params` string accepted from the host; a command's parameters are small, and the
+/// string is parsed into memory.
+const MAX_PARAMS_BYTES: usize = 1 << 20;
+
+/// Most commands waiting for the next frame. The queue is drained once per frame, so a throttled
+/// tab or a parent that sends faster than frames run would otherwise grow it without bound
+/// (the same caps the WordCraft and DeckCraft bridges use).
+const MAX_PENDING_COMMANDS: usize = 256;
+
+/// Most `params` text waiting for the next frame, all commands together.
+const MAX_PENDING_PARAMS_BYTES: usize = 8 << 20;
+
 #[derive(Clone)]
 pub struct Bridge {
     window: web_sys::Window,
@@ -37,8 +54,10 @@ pub struct Bridge {
     saved: Rc<RefCell<Vec<String>>>,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
-    /// Commands the parent sent since the last frame: (id, params JSON string).
-    commands: Rc<RefCell<Vec<(String, String)>>>,
+    /// Commands the parent sent since the last frame: (id, params JSON string, request id).
+    commands: Rc<RefCell<Vec<(String, String, Option<String>)>>>,
+    /// Total length of the `params` text of the commands that haven't run yet.
+    queued_bytes: Rc<Cell<usize>>,
     /// The workbook the host opened, by the exact name it was opened as
     /// (the app titles documents with the full file name): docClosed fires once no document
     /// carries it (the app itself always keeps a blank Book around otherwise).
@@ -53,7 +72,7 @@ impl Bridge {
         if js_sys::Object::is(&parent, &window) {
             return None;
         }
-        let origin = window.location().origin().ok()?;
+        let origin = window.location().origin().ok().filter(|o| !matches!(o.as_str(), "" | "null" | "*"))?;
         Some(Self {
             window,
             parent,
@@ -61,6 +80,7 @@ impl Bridge {
             saved: Rc::default(),
             reported: Rc::default(),
             commands: Rc::default(),
+            queued_bytes: Rc::default(),
             host_doc: Rc::default(),
         })
     }
@@ -95,9 +115,23 @@ impl Bridge {
         self.send(&[("type", "gridcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into())]);
     }
 
-    /// How a host command ended (`gridcraft:cmd`): value or error as JSON strings.
-    pub fn post_response(&self, ok: bool, text: &str) {
-        self.send(&[("type", "gridcraft:response".into()), ("ok", ok.into()), ("value", text.into())]);
+    /// How a host command ended (`gridcraft:cmd`), like the WordCraft and DeckCraft bridges:
+    /// the response echoes the command's `id` and the host's optional `requestId`; the result
+    /// lands in `value`, the failure in `error`.
+    pub fn post_response(&self, id: &str, request_id: Option<&str>, ok: bool, text: Option<&str>) {
+        let mut fields: Vec<(&str, JsValue)> = vec![("type", "gridcraft:response".into()), ("id", id.into())];
+        if let Some(request_id) = request_id {
+            fields.push(("requestId", request_id.into()));
+        }
+        fields.push(("ok", ok.into()));
+        if ok {
+            if let Some(value) = text {
+                fields.push(("value", value.into()));
+            }
+        } else {
+            fields.push(("error", text.unwrap_or("unknown failure").into()));
+        }
+        self.send(&fields);
     }
 
     pub fn post_failed(&self, error: &str) {
@@ -144,8 +178,9 @@ impl Bridge {
         }
     }
 
-    /// Commands the parent sent since the last frame, oldest first: (id, params JSON).
-    pub fn take_commands(&self) -> Vec<(String, String)> {
+    /// Commands the parent sent since the last frame, oldest first: (id, params JSON, request id).
+    pub fn take_commands(&self) -> Vec<(String, String, Option<String>)> {
+        self.queued_bytes.set(0);
         std::mem::take(&mut *self.commands.borrow_mut())
     }
 
@@ -164,7 +199,9 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let bridge = self.clone();
         let commands = self.commands.clone();
+        let queued_bytes = self.queued_bytes.clone();
         let host_doc = self.host_doc.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
@@ -181,9 +218,35 @@ impl Bridge {
                     ctx.request_repaint();
                 }
                 Some("gridcraft:cmd") => {
-                    let Some(id) = string(&data, "id").filter(|i| !i.trim().is_empty()) else { return };
-                    let params = string(&data, "params").unwrap_or_else(|| "{}".into());
-                    commands.borrow_mut().push((id, params));
+                    // Bad and oversized commands are refused at once, like the WordCraft and
+                    // DeckCraft bridges. A malformed `params` never runs as `{}` again.
+                    let id = string(&data, "id").filter(|i| !i.trim().is_empty());
+                    let request_id = string(&data, "requestId").filter(|r| !r.is_empty());
+                    let Some(id) = id else {
+                        bridge.post_response("", request_id.as_deref(), false, Some("a command needs an id"));
+                        ctx.request_repaint();
+                        return;
+                    };
+                    let refuse = |id: &str, request_id: Option<&str>, why: &str| {
+                        bridge.post_response(id, request_id, false, Some(why));
+                        ctx.request_repaint();
+                    };
+                    let params = match js_sys::Reflect::get(&data, &JsValue::from_str("params")) {
+                        Ok(v) if !v.is_undefined() && !v.is_null() => match v.as_string() {
+                            // `params` is a JSON string; parsing happens in the runner.
+                            Some(text) if text.len() <= MAX_PARAMS_BYTES => text,
+                            Some(_) => return refuse(&id, request_id.as_deref(), &format!("params are larger than {MAX_PARAMS_BYTES} bytes")),
+                            None => return refuse(&id, request_id.as_deref(), "params must be a string of valid JSON"),
+                        },
+                        _ => "{}".to_string(), // absent or `null` means `{}`.
+                    };
+                    if commands.borrow().len() >= MAX_PENDING_COMMANDS
+                        || queued_bytes.get().saturating_add(params.len()) > MAX_PENDING_PARAMS_BYTES
+                    {
+                        return refuse(&id, request_id.as_deref(), "too many commands are waiting; try again");
+                    }
+                    queued_bytes.set(queued_bytes.get().saturating_add(params.len()));
+                    commands.borrow_mut().push((id, params, request_id));
                     ctx.request_repaint();
                 }
                 _ => {}

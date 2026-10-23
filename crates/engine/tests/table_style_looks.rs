@@ -4,7 +4,7 @@
 use gridcraft_core::CellRef;
 use gridcraft_engine::Session;
 use gridcraft_engine::model::*;
-use gridcraft_engine::tables::{table_cell_shown_style, table_cell_style};
+use gridcraft_engine::tables::{ShownEdges, shown_edges, table_cell_shown_style, table_cell_style};
 use serde_json::json;
 
 const ROWS: u32 = 6; // header + 5 data rows
@@ -197,7 +197,8 @@ fn shown_with(s: &Session, style: &str, edit: impl Fn(&mut Table)) -> Vec<Vec<St
     let mut t = wb.sheet(0).unwrap().tables[0].clone();
     t.style = format!("TableStyle{style}");
     edit(&mut t);
-    (0..ROWS).map(|r| (0..COLS).map(|c| table_cell_shown_style(wb, 0, &t, CellRef::new(r, c))).collect()).collect()
+    let e = shown_edges(wb.sheet(0).unwrap(), &t);
+    (0..ROWS).map(|r| (0..COLS).map(|c| table_cell_shown_style(wb, 0, &t, e, CellRef::new(r, c))).collect()).collect()
 }
 
 #[test]
@@ -210,6 +211,8 @@ fn frame_follows_the_last_visible_row_and_column() {
     let mut s = session();
     s.execute("home.hideRows", json!({"rows": "5:6"})).unwrap();
     s.execute("home.hideColumns", json!({"cols": "E:E"})).unwrap();
+    let t = &s.doc().unwrap().wb.sheet(0).unwrap().tables[0];
+    assert_eq!(shown_edges(s.doc().unwrap().wb.sheet(0).unwrap(), t), ShownEdges { top: 0, bottom: 3, left: 0, right: 3 });
     let g = shown_with(&s, "Medium2", |_| {});
     for (c, cell) in g[3].iter().take(4).enumerate() {
         assert_eq!(cell.borders.bottom, frame, "bottom frame on row 4, col {c}");

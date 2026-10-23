@@ -243,23 +243,43 @@ pub fn table_cell_style(wb: &Workbook, sheet: usize, t: &Table, c: CellRef) -> S
     s
 }
 
+/// A table's first and last visible row and column (hidden or filtered lines skipped).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShownEdges {
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
+}
+
+/// Finds [`ShownEdges`]. It scans the hidden lines at each edge, so the grid and print call it
+/// once per table per paint (through [`crate::cf::CfCache::table_edges`]), not once per cell.
+pub fn shown_edges(sh: &Sheet, t: &Table) -> ShownEdges {
+    let (start, end) = (t.range.start, t.range.end);
+    let row_shown = |r: &u32| sh.row_height(*r) > 0.0;
+    let col_shown = |k: &u32| sh.col_width(*k) > 0.0;
+    // With every row (or column) hidden, each cell takes both edges' lines; nothing is drawn.
+    ShownEdges {
+        top: (start.row..=end.row).find(row_shown).unwrap_or(end.row),
+        bottom: (start.row..=end.row).rev().find(row_shown).unwrap_or(start.row),
+        left: (start.col..=end.col).find(col_shown).unwrap_or(end.col),
+        right: (start.col..=end.col).rev().find(col_shown).unwrap_or(start.col),
+    }
+}
+
 /// The style the grid and print draw for a table cell. Like [`table_cell_style`], but the
 /// table's outer frame follows hidden rows and columns: the last visible row takes the table's
 /// bottom line, the last visible column its right side, and the first visible row and column its
 /// top line and left side. (Each frame line is owned by the edge cell, which is never drawn while
 /// it is hidden or filtered out.) Convert to Range uses [`table_cell_style`], the table as it is.
-pub fn table_cell_shown_style(wb: &Workbook, sheet: usize, t: &Table, c: CellRef) -> Style {
+pub fn table_cell_shown_style(wb: &Workbook, sheet: usize, t: &Table, e: ShownEdges, c: CellRef) -> Style {
     let mut s = table_cell_style(wb, sheet, t, c);
     let Some(sh) = wb.sheet(sheet) else { return s };
     let (start, end) = (t.range.start, t.range.end);
-    let row_gone = |r: u32| sh.row_height(r) <= 0.0;
-    let col_gone = |k: u32| sh.col_width(k) <= 0.0;
-    // Each check walks outward from the cell and stops at the first visible line, so the gaps
-    // scanned by different cells don't overlap.
-    let below = c.row < end.row && (c.row + 1..=end.row).all(row_gone);
-    let above = c.row > start.row && (start.row..c.row).rev().all(row_gone);
-    let right = c.col < end.col && (c.col + 1..=end.col).all(col_gone);
-    let left = c.col > start.col && (start.col..c.col).rev().all(col_gone);
+    let below = c.row < end.row && c.row >= e.bottom;
+    let above = c.row > start.row && c.row <= e.top;
+    let right = c.col < end.col && c.col >= e.right;
+    let left = c.col > start.col && c.col <= e.left;
     if !(below || above || right || left) {
         return s;
     }

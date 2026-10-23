@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" or several areas \"A1:B5,D1:E5\", one run of pages each (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),
@@ -145,7 +145,8 @@ impl SheetLayout {
 #[derive(Clone, Debug, Default)]
 pub struct PrintOptions {
     pub all_sheets: bool,
-    pub range: Option<RangeRef>,
+    /// Areas of the active sheet to print instead of its print area, in order (Print Selection).
+    pub ranges: Vec<RangeRef>,
     pub fit_to_page: Option<bool>,
 }
 
@@ -156,12 +157,33 @@ impl PrintOptions {
             Some("all") | Some("workbook") => true,
             Some(other) => return Err(bad(cmd, format!("`sheets` must be active or all, not `{other}`"))),
         };
-        let range = match str_param(p, "range").map(str::trim).filter(|r| !r.is_empty()) {
-            Some(r) => Some(RangeRef::parse(split_sheet(r).1).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?),
-            None => None,
-        };
-        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage") })
+        let mut ranges = Vec::new();
+        if let Some(r) = str_param(p, "range").map(str::trim).filter(|r| !r.is_empty()) {
+            for part in split_areas(r) {
+                ranges.push(RangeRef::parse(split_sheet(part.trim()).1.trim()).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?);
+            }
+        }
+        Ok(PrintOptions { all_sheets, ranges, fit_to_page: bool_param(p, "fitToPage") })
     }
+}
+
+/// Splits a multi-area reference at the commas outside quoted sheet names, so each area keeps
+/// its own optional `Sheet!` prefix.
+fn split_areas(r: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in r.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                parts.push(&r[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&r[start..]);
+    parts
 }
 
 /// The range a sheet prints: its print area, else the used range grown to cover drawing
@@ -376,14 +398,20 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
         if pages >= MAX_PAGES {
             break;
         }
-        let ovr = if si == wb.active_sheet { opts.range } else { None };
-        if opts.all_sheets && ovr.is_none() && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
+        let areas: Vec<Option<RangeRef>> =
+            if si == wb.active_sheet && !opts.ranges.is_empty() { opts.ranges.iter().copied().map(Some).collect() } else { vec![None] };
+        if opts.all_sheets && areas == [None] && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
             continue;
         }
-        if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
-            l.pages.truncate(MAX_PAGES - pages);
-            pages += l.pages.len();
-            out.push(l);
+        for ovr in areas {
+            if pages >= MAX_PAGES {
+                break;
+            }
+            if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
+                l.pages.truncate(MAX_PAGES - pages);
+                pages += l.pages.len();
+                out.push(l);
+            }
         }
     }
     if out.is_empty() && opts.all_sheets {
@@ -1857,6 +1885,38 @@ mod tests {
         let cropped = String::from_utf8_lossy(&cropped);
         assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
         assert!(!cropped.contains("/Dest ["));
+    }
+
+    fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+        let r = s.execute("file.printPreview", p).unwrap();
+        r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+        assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+        assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+        // Several areas, like a multi-area selection: one run of pages each, in the order given.
+        assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+        assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+        let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+        assert_eq!(pages, 2);
+        for bad in ["A1:B2,", "A1:B2,nope", ","] {
+            assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+        let mut s = s();
+        assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+        assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+        // A comma inside a quoted sheet name is not an area separator.
+        assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
     }
 
     #[test]

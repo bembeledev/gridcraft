@@ -1,6 +1,27 @@
 //! Standalone chart SVG and lossless PNG, including text. No worksheet chrome.
 use crate::{Chart, ChartData, HAlign, Measure, Prim, Rgba, VAlign, render};
 use std::fmt::Write as _;
+use std::sync::{Arc, OnceLock};
+
+fn font_database() -> Arc<resvg::usvg::fontdb::Database> {
+    static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
+    FONTS
+        .get_or_init(|| {
+            let mut db = resvg::usvg::fontdb::Database::new();
+            #[cfg(not(target_arch = "wasm32"))]
+            db.load_system_fonts();
+            if let Some(family) = ["DejaVu Sans", "Arial", "Liberation Sans", "Helvetica", "Noto Sans"]
+                .into_iter()
+                .find(|name| db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)))
+                .map(str::to_owned)
+                .or_else(|| db.faces().find_map(|face| face.families.first().map(|(name, _)| name.clone())))
+            {
+                db.set_sans_serif_family(family);
+            }
+            Arc::new(db)
+        })
+        .clone()
+}
 
 fn esc(text: &str) -> String {
     text.chars()
@@ -121,22 +142,23 @@ pub fn export_png(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale:
     if width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 16_777_216 {
         return Err("PNG export is limited to 16 megapixels and 8192 pixels per side".into());
     }
-    let mut options = resvg::usvg::Options::default();
-    #[cfg(not(target_arch = "wasm32"))]
-    options.fontdb_mut().load_system_fonts();
+    let options = resvg::usvg::Options { fontdb: font_database(), ..Default::default() };
     if options.fontdb.faces().next().is_none() {
         return Err("PNG export needs installed fonts; use SVG on this platform".into());
-    }
-    let family = ["DejaVu Sans", "Arial", "Liberation Sans", "Helvetica", "Noto Sans"]
-        .into_iter()
-        .find(|name| options.fontdb.faces().any(|face| face.families.iter().any(|(f, _)| f == name)))
-        .map(str::to_owned)
-        .or_else(|| options.fontdb.faces().find_map(|face| face.families.first().map(|(name, _)| name.clone())));
-    if let Some(family) = family {
-        options.fontdb_mut().set_sans_serif_family(family);
     }
     let tree = resvg::usvg::Tree::from_str(&svg, &options).map_err(|e| e.to_string())?;
     let mut pixels = resvg::tiny_skia::Pixmap::new(width, height).ok_or("Could not allocate PNG image")?;
     resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixels.as_mut());
     pixels.encode_png().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::font_database;
+    use std::sync::Arc;
+
+    #[test]
+    fn font_database_is_shared_between_exports() {
+        assert!(Arc::ptr_eq(&font_database(), &font_database()));
+    }
 }

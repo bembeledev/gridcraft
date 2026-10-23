@@ -11,6 +11,8 @@ pub mod cf;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
+pub mod collab;
+pub use collab::CollabSink;
 pub mod display;
 pub mod fill;
 pub mod io;
@@ -320,6 +322,17 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Hears about every local command, when a collaboration layer is attached.
+    /// `None` is the ordinary single-user case and costs nothing.
+    pub collab: Option<std::sync::Arc<dyn collab::CollabSink>>,
+    /// The workbook the room is for. Edits in any other open workbook stay on
+    /// this machine, and a remote edit is applied here even when another
+    /// window is active. `None` means the active workbook (tests, and the
+    /// moment before a link has bound).
+    pub collab_uid: Option<u64>,
+    /// Set while a remote command is being applied, so it is not sent back to
+    /// the peer that sent it. Without this, one edit echoes forever.
+    applying_remote: bool,
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
@@ -345,6 +358,15 @@ impl Session {
     }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
+    }
+    /// A document by its uid, active or not.
+    ///
+    /// For a caller holding an answer that outlived the frame it was asked
+    /// for. A cloud save lands after the bytes have travelled, and it belongs
+    /// to the document it was made from even when another window is active by
+    /// then.
+    pub fn document_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
     }
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)
@@ -440,21 +462,69 @@ impl Session {
         };
         if spec.journal && result.is_ok() {
             self.push_journal(id, cmd::journal_params(&params));
+            // Journaled is not the same as shared: file commands, undo and
+            // sheet protection are journaled for macros, and must not leave
+            // this machine. Params go through journal_params so a secret
+            // field cannot ride a command that is otherwise shareable. The
+            // Arc is cloned so the sink can be called without holding a
+            // borrow of `self`.
+            if !self.applying_remote
+                && collab::shareable(id)
+                && self.collab_uid.is_some_and(|uid| self.active().is_some_and(|d| d.uid == uid))
+                && let Some(sink) = self.collab.clone()
+            {
+                sink.on_local(id, &cmd::journal_params(&params));
+            }
         }
         if spec.undoable
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            push_history(&mut d.undo, spec.label.trim_end_matches('…').to_string(), wb, &d.wb, sel);
-            d.redo.clear();
             d.revision += 1;
+            if self.applying_remote {
+                // Undo is this peer's own. A snapshot taken before the remote
+                // edit would wipe it if restored, so the local stacks go.
+                d.undo.clear();
+                d.redo.clear();
+            } else {
+                push_history(&mut d.undo, spec.label.trim_end_matches('…').to_string(), wb, &d.wb, sel);
+                d.redo.clear();
+            }
         }
         result
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Runs a command that arrived from another peer.
+    ///
+    /// Three things differ from [`Session::execute`]. It is not reported to
+    /// the [`collab::CollabSink`], which is what stops an edit bouncing
+    /// between two peers forever. It only accepts a [`collab::shareable`]
+    /// command, so a peer cannot open, save or undo on this machine. And it
+    /// runs against the shared workbook ([`Session::collab_uid`]) even when
+    /// another window is active. Undo stays local: the remote edit is not
+    /// recorded on this peer's stack, and local history is cleared because a
+    /// snapshot taken before it would wipe it if restored.
+    pub fn apply_remote(&mut self, id: &str, params: Json) -> Result<Json> {
+        if !collab::shareable(id) {
+            return Err(EngineError::Other(format!("{id} is not a shared edit")));
+        }
+        let was_active = self.active;
+        if let Some(uid) = self.collab_uid {
+            match self.docs.iter().position(|d| d.uid == uid) {
+                Some(i) => self.active = i,
+                None => return Err(EngineError::Other("the shared workbook is not open".into())),
+            }
+        }
+        let was = std::mem::replace(&mut self.applying_remote, true);
+        let out = self.execute(id, params);
+        self.applying_remote = was;
+        self.active = was_active;
+        out
     }
 
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {

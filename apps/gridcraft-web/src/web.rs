@@ -1,7 +1,11 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use craft_cloud::Entry;
+use craft_cloud_client::Client;
 use gridcraft_engine::Session;
+use gridcraft_ui_egui::cloud::{self, open_entry};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use std::sync::{Arc, Mutex};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
@@ -40,6 +44,16 @@ pub fn start() {
         // workbooks in it and stores what it saves (`host`).
         let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
         let app_bridge = bridge.clone();
+        // Keyed invite: CollabCraft redeemed the link and sent us here with `?invite`.
+        // Ask once before the canvas starts so a dead link is a page, not an empty workbook.
+        let mut invite = match craft_cloud_client::invite::arrive().await {
+            craft_cloud_client::invite::Arrival::Ordinary => None,
+            craft_cloud_client::invite::Arrival::Refused(reason) => {
+                craft_cloud_client::invite::refuse(&reason);
+                return;
+            }
+            craft_cloud_client::invite::Arrival::Invited(invitation) => Some(invitation),
+        };
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -48,7 +62,7 @@ pub fn start() {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
                     // In host mode the parent sends the workbook to edit; no sample meanwhile.
-                    let q = if app_bridge.is_some() { String::new() } else { query() };
+                    let q = if app_bridge.is_some() || invite.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
                     } else if q.contains("sample") {
@@ -59,6 +73,14 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = SheetApp::new(session, services);
+                    app.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
+                    if let Some(share) = collabcraft_share::CollabCraft::from_env() {
+                        app.share.connect(share.for_app("gridcraft"));
+                    }
+                    let invited = invite.is_some();
+                    if let Some(invitation) = invite.take() {
+                        open_invite(&mut app, invitation);
+                    }
                     app.ui.system_theme = true;
                     // Follow the browser's language, except a CJK one: the web build has no system
                     // CJK fonts (none are bundled), so that interface would render as tofu.
@@ -82,7 +104,17 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
+                    let pending_file = if invited { None } else { query_param("file") };
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        bridge: app_bridge,
+                        pending_file,
+                        file_stat: Arc::new(Mutex::new(None)),
+                        file_stat_started: false,
+                        opened_file: false,
+                        prefs,
+                    }))
                 }),
             )
             .await;
@@ -98,6 +130,27 @@ pub fn start() {
     });
 }
 
+fn open_invite(app: &mut SheetApp, invitation: craft_cloud_client::invite::Invitation) {
+    let name = invitation.name.clone();
+    match gridcraft_ui_egui::cloud::CloudApp::open_bytes(app, &name, invitation.document.clone()) {
+        Ok(Some(_)) => {
+            let mode = if invitation.read_only() { " (view only)" } else { "" };
+            let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
+            app.message = Some(("GridCraft".into(), format!("Opened \"{name}\"{mode}{who}")));
+            if let Err(e) = invitation.join() {
+                log::warn!("invite relay join failed: {e}");
+            }
+        }
+        Ok(None) => {
+            app.message = Some(("GridCraft".into(), format!("Shared \"{name}\" needs a choice before it opens")));
+        }
+        Err(e) => {
+            log::error!("invite open failed: {e}");
+            craft_cloud_client::invite::refuse(&format!("The shared workbook could not be opened. {e}"));
+        }
+    }
+}
+
 fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
@@ -110,6 +163,12 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    /// Nextcloud file handle from `?file=`, opened once the account arrives.
+    pending_file: Option<String>,
+    /// `stat` of that handle, so Open uses the provider's name and writable flag.
+    file_stat: Arc<Mutex<Option<Result<Entry, String>>>>,
+    file_stat_started: bool,
+    opened_file: bool,
     prefs: crate::prefs::PrefsSync,
 }
 
@@ -140,6 +199,35 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        if !self.opened_file {
+            if let Some(id) = self.pending_file.clone() {
+                if self.app.cloud.account.as_ref().is_some_and(|a| a.provider_linked) {
+                    if !self.file_stat_started {
+                        self.file_stat_started = true;
+                        let slot = self.file_stat.clone();
+                        let ctx = ctx.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let result = Client::from_page().stat(&id).await.map_err(|e| e.to_string());
+                            if let Ok(mut slot) = slot.lock() {
+                                *slot = Some(result);
+                            }
+                            ctx.request_repaint();
+                        });
+                    } else if let Some(result) = self.file_stat.lock().ok().and_then(|mut g| g.take()) {
+                        self.opened_file = true;
+                        match result {
+                            Ok(entry) => open_entry(&mut self.app, entry, None),
+                            Err(e) => {
+                                log::error!("couldn't open cloud file {id}: {e}");
+                                self.app.message = Some(("GridCraft".into(), "Could not open the cloud file.".into()));
+                            }
+                        }
+                    }
+                }
+            } else if self.app.cloud.account.is_some() {
+                self.opened_file = true;
+            }
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {

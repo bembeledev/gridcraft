@@ -94,6 +94,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | follow-up review | Fractional-minimum minor-tick lattice, remapped combo-series formatting, fontless native test setup |
 | 2026-10-23 | review follow-up | Resolved-font text fitting, category legend colors, offset minor ticks, automatic series colors and native borders, combo/ChartEx axes, one-step template insertion and chart-specific translations |
 | 2026-10-23 | local contribution | Element formatting, primary axes, tick strokes, markers, text fonts, overlay legend placement, chart menus and PNG/SVG export |
 | 2026-10-23 | review fixes | Browser PNG fallback fonts, clipped line labels, stable category-label ordering for fixed-order renderers, and independent category/value gridlines in horizontal-bar XLSX round-trips |

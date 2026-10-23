@@ -314,7 +314,8 @@ fn chart_minor_ticks_and_custom_grid_strokes_are_bounded() {
 
 #[test]
 fn chart_minor_ticks_exclude_major_ticks_relative_to_manual_minimum() {
-    for min in [3.0, -3.0] {
+    for (min, major_unit, minor_unit) in [(3.0, 5.0, 1.0), (-3.0, 5.0, 1.0), (0.5, 1.0, 0.2), (-0.5, 1.0, 0.2)] {
+        let span = major_unit * 3.0;
         for reversed in [false, true] {
             let mut c = chart(ChartKind::ScatterLines);
             let plot_color = [1, 2, 3, 255];
@@ -323,9 +324,9 @@ fn chart_minor_ticks_exclude_major_ticks_relative_to_manual_minimum() {
             c.format.plot_area.fill = Some(plot_color);
             for (axis, color) in [(&mut c.format.x_axis, x_color), (&mut c.format.y_axis, y_color)] {
                 axis.minimum = Some(min);
-                axis.maximum = Some(min + 15.0);
-                axis.major_unit = Some(5.0);
-                axis.minor_unit = Some(1.0);
+                axis.maximum = Some(min + span);
+                axis.major_unit = Some(major_unit);
+                axis.minor_unit = Some(minor_unit);
                 axis.minor_tick = Some("out".into());
                 axis.tick_line.color = Some(color);
                 axis.reversed = reversed;
@@ -338,7 +339,7 @@ fn chart_minor_ticks_exclude_major_ticks_relative_to_manual_minimum() {
                     _ => None,
                 })
                 .expect("plot bounds");
-            let expected: Vec<_> = (1..15).filter(|i| i % 5 != 0).map(|i| min + i as f64).collect();
+            let expected: Vec<_> = (1..15).filter(|i| i % 5 != 0).map(|i| min + i as f64 * minor_unit).collect();
             for (horizontal, color) in [(true, x_color), (false, y_color)] {
                 let mut values: Vec<_> = prims
                     .iter()
@@ -346,7 +347,7 @@ fn chart_minor_ticks_exclude_major_ticks_relative_to_manual_minimum() {
                         Prim::Line { pts, color: actual, .. } if *actual == color => {
                             let p = pts.first().expect("tick start");
                             let f = if horizontal { (p[0] - px) / pw } else { (py + ph - p[1]) / ph };
-                            Some(min + f64::from(if reversed { 1.0 - f } else { f }) * 15.0)
+                            Some(min + f64::from(if reversed { 1.0 - f } else { f }) * span)
                         }
                         _ => None,
                     })

@@ -34,6 +34,11 @@ preserve automatic series colors, explicit bar/area borders, combo axis titles, 
 ChartEx gridlines. A default template and chart insertion share one undo step; invalid templates
 produce a visible error rather than silently losing the selected appearance.
 
+Fractional manual minima also anchor the minor-tick lattice. Combo formatting is recovered by
+the native series index before being remapped to loaded series order. On native hosts without
+fonts, the engine's PNG test accepts only the specific missing-font error and still checks SVG
+and non-mutation; chart unit tests load their bundled test fallback on such hosts.
+
 ## Concurrent upstream work
 
 [PR #2265](https://github.com/storytold/gridcraft/pull/2265) was open at review time, head
@@ -64,5 +69,6 @@ Some extension-only properties can become stale after another editor changes a w
 
 | Date | Change |
 |---|---|
+| 2026-10-23 | Follow-up review: fractional minor ticks, combo series-index mapping and fontless native test hosts |
 | 2026-10-23 | Address chart review: role-aware text layout, ticks/legends, native XLSX defaults, template undo and contextual translations |
 | 2026-10-23 | Port chart editing/export and persistence, preserve donor review fixes, document #2265 overlap |

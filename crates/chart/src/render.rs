@@ -542,10 +542,9 @@ fn minor_ticks(ctx: &mut Ctx, scale: Scale, axis: &gridcraft_model::ChartAxis, p
         if !step.is_finite() || step <= 0.0 {
             return;
         }
-        let first = (scale.min / step).floor() + 1.0;
         let stride = ((scale.max - scale.min) / step / 250.0).ceil().max(1.0);
         for i in 0..250 {
-            let v = (first + i as f64 * stride) * step;
+            let v = scale.min + (1.0 + i as f64 * stride) * step;
             if v >= scale.max {
                 break;
             }

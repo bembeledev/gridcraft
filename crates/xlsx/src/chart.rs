@@ -356,6 +356,9 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
             }
         })
         .is_some_and(|axis| axis.child("majorGridlines").is_some());
+    // Extension keys are native c:idx values. Combo groups can put series in a
+    // different XML order, which is the order used by the imported model.
+    let custom_series = std::mem::take(&mut format.series);
     let mut series_index = 0;
     for group in plot.children.iter().filter(|g| group_kind(g).is_some()) {
         let Some(kind) = group_kind(group) else { continue };
@@ -371,7 +374,7 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
                 | ChartKind::AreaStacked
         );
         for ser in group.kids("ser") {
-            let custom = format.series.get(&series_index);
+            let custom = ser.child_val("idx").and_then(|value| value.parse::<usize>().ok()).and_then(|index| custom_series.get(&index));
             let ln = ser.path(&["spPr", "ln"]);
             let marker = ser.child("marker");
             let native_smooth = bool_val(ser, "smooth");
@@ -454,10 +457,9 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
             } else {
                 spec.line_width = width.filter(|value| *value != 2.25 && !spec.no_line);
             }
-            if format.series.get(&series_index).is_some_and(|custom| custom.smooth.is_some()) {
+            if custom.is_some_and(|style| style.smooth.is_some()) {
                 spec.smooth = Some(native_smooth);
             }
-            format.series.remove(&series_index);
             if spec != gridcraft_model::ChartSeriesFormat::default() {
                 format.series.insert(series_index, spec);
             }

@@ -21,6 +21,12 @@ fn font_database() -> Arc<resvg::usvg::fontdb::Database> {
             db.load_system_fonts();
             #[cfg(target_arch = "wasm32")]
             load_bundled_fonts(&mut db);
+            // Chart unit tests can run on minimal CI hosts too. The normal native library
+            // still reports missing system fonts; the engine integration test covers that case.
+            #[cfg(all(not(target_arch = "wasm32"), test))]
+            if db.faces().next().is_none() {
+                load_bundled_fonts(&mut db);
+            }
             if let Some(family) = ["DejaVu Sans", "Arial", "Liberation Sans", "Helvetica", "Noto Sans"]
                 .into_iter()
                 .find(|name| db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)))

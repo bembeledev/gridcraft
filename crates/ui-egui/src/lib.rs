@@ -174,6 +174,8 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native picker for Data › Get Data (Text/CSV): text formats only (csv, tsv, txt, json).
+    pub pick_text: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
@@ -782,6 +784,28 @@ impl SheetApp {
                     && let Some(path) = pick()
                 {
                     self.open_path(&path);
+                }
+            }
+            // Data › Get Data: pick a text file and import it into a new sheet of the open workbook
+            // (`file.open` would replace the workbook). Without a native picker, fall back to Open.
+            "getData" => {
+                if self.services.pick_text.is_some() {
+                    if !self.commit_edit(0, 0, false, false) {
+                        return;
+                    }
+                    if let Some(path) = self.services.pick_text.as_ref().and_then(|pick| pick()) {
+                        // Keep the caller's import options (delimiter, sheet) and add the picked file.
+                        let mut import = params;
+                        match import.as_object_mut() {
+                            Some(o) => {
+                                o.insert("path".into(), json!(path));
+                            }
+                            None => import = json!({"path": path}),
+                        }
+                        self.run_or_alert("data.getData", import);
+                    }
+                } else {
+                    self.open_dialog("open", json!({}));
                 }
             }
             "saveAs" => {

@@ -4599,3 +4599,13 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+
+#[test]
+fn get_data_without_a_file_asks_for_one_with_the_import_options() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.fromTextCsv", json!({"delimiter": ";", "sheet": "Sales"})).unwrap();
+    let requests = s.take_ui_requests();
+    let [crate::UiRequest::Dialog(name, p)] = requests.as_slice() else { panic!("expected one dialog request") };
+    assert_eq!((name.as_str(), &p["delimiter"], &p["sheet"]), ("getData", &json!(";"), &json!("Sales")));
+}

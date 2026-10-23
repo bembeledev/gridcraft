@@ -6,16 +6,22 @@ use serde_json::{Map, Value, json};
 
 /// Largest `params` string accepted from the host; a command's parameters are small, and the
 /// string is parsed into memory.
-pub const MAX_PARAMS_BYTES: usize = 4 << 20;
+pub const MAX_PARAMS_BYTES: usize = 1 << 20;
 
 /// Most commands waiting for the next frame. The queue is drained once per frame, so a throttled
 /// tab or a parent that sends faster than frames run would otherwise grow it without bound; the
 /// size limit of `params` applies per command, not to the queue.
 pub const MAX_PENDING_COMMANDS: usize = 256;
 
-/// Whether another command fits in a queue that already holds `pending`.
-pub fn has_room(pending: usize) -> bool {
-    pending < MAX_PENDING_COMMANDS
+/// Most `params` text waiting for the next frame, all commands together. A count alone would let
+/// 256 large commands queue a quarter of a gigabyte of text, and parsed values take more room
+/// than their text.
+pub const MAX_PENDING_PARAMS_BYTES: usize = 8 << 20;
+
+/// Whether a command whose `params` text is `incoming_bytes` long fits in a queue that already
+/// holds `pending` commands with `pending_bytes` of `params` text.
+pub fn has_room(pending: usize, pending_bytes: usize, incoming_bytes: usize) -> bool {
+    pending < MAX_PENDING_COMMANDS && pending_bytes.saturating_add(incoming_bytes) <= MAX_PENDING_PARAMS_BYTES
 }
 
 /// What the parent asked for: the engine command, its parameters and the id to echo back.
@@ -24,22 +30,25 @@ pub struct Command {
     pub id: String,
     pub params: Value,
     pub request_id: Option<String>,
+    /// Length of the `params` text the host sent, for the queue's byte budget.
+    pub params_bytes: usize,
 }
 
 /// Reads a `gridcraft:cmd` message's fields. `params` is a JSON string, as in WordCraft's bridge;
 /// a missing or `null` one means `{}`. Nothing is run for a message that doesn't fit.
 pub fn parse(id: Option<String>, params: Option<Option<String>>, request_id: Option<String>) -> Result<Command, String> {
     let id = id.filter(|id| !id.trim().is_empty()).ok_or("a command needs an id")?;
-    let params = match params {
-        None | Some(None) => json!({}),
+    let (params, params_bytes) = match params {
+        None | Some(None) => (json!({}), 0),
         Some(Some(text)) => {
             if text.len() > MAX_PARAMS_BYTES {
                 return Err(format!("params are larger than {MAX_PARAMS_BYTES} bytes"));
             }
-            serde_json::from_str(&text).map_err(|_| "params must be a string of valid JSON".to_string())?
+            let value = serde_json::from_str(&text).map_err(|_| "params must be a string of valid JSON".to_string())?;
+            (value, text.len())
         }
     };
-    Ok(Command { id, params, request_id })
+    Ok(Command { id, params, request_id, params_bytes })
 }
 
 /// The `gridcraft:response` fields: the command's `id`, the host's `requestId` when it sent one,
@@ -71,7 +80,7 @@ mod tests {
     #[test]
     fn a_command_without_params_runs_with_an_empty_object() -> Result<(), String> {
         let c = parse(Some("home.bold".into()), None, None)?;
-        assert_eq!(c, Command { id: "home.bold".into(), params: json!({}), request_id: None });
+        assert_eq!(c, Command { id: "home.bold".into(), params: json!({}), request_id: None, params_bytes: 0 });
         let c = parse(Some("home.bold".into()), Some(None), Some("r1".into()))?;
         assert_eq!((c.params, c.request_id.as_deref()), (json!({}), Some("r1")));
         Ok(())
@@ -97,9 +106,16 @@ mod tests {
 
     #[test]
     fn the_queue_holds_a_fixed_number_of_commands() {
-        assert!(has_room(0));
-        assert!(has_room(MAX_PENDING_COMMANDS - 1));
-        assert!(!has_room(MAX_PENDING_COMMANDS));
+        assert!(has_room(0, 0, 0));
+        assert!(has_room(MAX_PENDING_COMMANDS - 1, 0, 0));
+        assert!(!has_room(MAX_PENDING_COMMANDS, 0, 0));
+    }
+
+    #[test]
+    fn the_queue_holds_a_fixed_amount_of_params_text() {
+        assert!(has_room(1, MAX_PENDING_PARAMS_BYTES - 10, 10));
+        assert!(!has_room(1, MAX_PENDING_PARAMS_BYTES - 10, 11));
+        assert!(!has_room(1, usize::MAX, 1));
     }
 
     #[test]

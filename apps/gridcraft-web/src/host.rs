@@ -50,6 +50,8 @@ pub struct Bridge {
     reported: Rc<Cell<Option<bool>>>,
     /// Commands from the parent that haven't run yet.
     commands: CommandQueue,
+    /// Length of the `params` text of the commands that haven't run yet.
+    queued_bytes: Rc<Cell<usize>>,
 }
 
 impl Bridge {
@@ -61,7 +63,7 @@ impl Bridge {
             return None;
         }
         let origin = window.location().origin().ok()?;
-        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), commands: Rc::default() })
+        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), commands: Rc::default(), queued_bytes: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, and hear files
@@ -166,16 +168,20 @@ impl Bridge {
             None => Err("params must be a string of valid JSON".to_string()),
         };
         match parsed {
-            Ok(c) if !host_cmd::has_room(self.commands.borrow().len()) => {
+            Ok(c) if !host_cmd::has_room(self.commands.borrow().len(), self.queued_bytes.get(), c.params_bytes) => {
                 self.post_response(&c.id, c.request_id.as_deref(), Err("too many commands are waiting; try again".to_string()));
             }
-            Ok(c) => self.commands.borrow_mut().push((c.id, c.params, c.request_id)),
+            Ok(c) => {
+                self.queued_bytes.set(self.queued_bytes.get().saturating_add(c.params_bytes));
+                self.commands.borrow_mut().push((c.id, c.params, c.request_id));
+            }
             Err(error) => self.post_response(id.as_deref().unwrap_or(""), request_id.as_deref(), Err(error)),
         }
     }
 
     /// The commands the parent sent since the last frame.
     pub fn take_commands(&self) -> Vec<(String, Value, Option<String>)> {
+        self.queued_bytes.set(0);
         std::mem::take(&mut *self.commands.borrow_mut())
     }
 

@@ -356,14 +356,13 @@ fn read_views(e: &El, sheet: &mut Sheet) {
         if let Some(a) = p.attr("activePane") {
             active_pane = a;
             // The active pane's first cell is its active cell when the file saved no selection
-            // there: the frozen rows and columns start at row 1 and column A.
+            // there: the frozen rows and columns start at row 1 and column A, and an axis that
+            // isn't frozen scrolls from the sheet view's first cell.
             let top = sheet.view_top_left;
-            pane_first = Some(match a {
-                "topRight" => CellRef::new(0, top.col),
-                "bottomLeft" => CellRef::new(top.row, 0),
-                "topLeft" => CellRef::new(0, 0),
-                _ => top,
-            });
+            let (rows, cols) = sheet.freeze.unwrap_or((0, 0));
+            let row = if rows > 0 && matches!(a, "topLeft" | "topRight") { 0 } else { top.row };
+            let col = if cols > 0 && matches!(a, "topLeft" | "bottomLeft") { 0 } else { top.col };
+            pane_first = Some(CellRef::new(row, col));
         }
     }
     let cell = |s: &El| s.attr("activeCell").and_then(CellRef::parse);

@@ -40,6 +40,31 @@ fn each_active_pane_starts_at_its_own_first_cell() {
     assert_eq!(pane("bottomRight"), c("F10"));
     assert_eq!(pane("topRight"), c("F1"));
     assert_eq!(pane("bottomLeft"), c("A10"));
+    assert_eq!(pane("topLeft"), c("A1"));
+}
+
+#[test]
+fn a_pane_without_a_selection_keeps_the_axis_that_isnt_frozen() {
+    // Rows 1:7 frozen, the sheet scrolled to column D: the panes below and above the split both
+    // start at column D.
+    let rows_only = |active: &str| {
+        sheet(&format!(
+            r#"<sheetView topLeftCell="D1" workbookViewId="0"><pane ySplit="7" topLeftCell="A40" activePane="{active}" state="frozen"/></sheetView>"#
+        ))
+        .view_active
+    };
+    assert_eq!(rows_only("bottomLeft"), c("D40"));
+    assert_eq!(rows_only("topLeft"), c("D1"));
+    // Columns A:B frozen, the sheet scrolled to row 30: the panes left and right of the split both
+    // start at row 30.
+    let cols_only = |active: &str| {
+        sheet(&format!(
+            r#"<sheetView topLeftCell="A30" workbookViewId="0"><pane xSplit="2" topLeftCell="F1" activePane="{active}" state="frozen"/></sheetView>"#
+        ))
+        .view_active
+    };
+    assert_eq!(cols_only("topRight"), c("F30"));
+    assert_eq!(cols_only("topLeft"), c("A30"));
 }
 
 #[test]

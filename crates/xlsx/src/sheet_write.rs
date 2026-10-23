@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
-use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, Orientation, Sheet, SparklineKind, Style, Table,
-    TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
+    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -76,12 +76,36 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let nstyles = wb.styles.len() as u32;
     let sid = |s: gridcraft_model::StyleId| if s.0 < nstyles { s.0 } else { 0 };
 
+    // A table's dropdown filter is kept in `sheet.autofilter`, not in `Table::filter` (the
+    // engine's only live filter state, which the reader also fills). Where the two coincide,
+    // fold the sheet filter's criteria into the table so they reach the file: the stored
+    // `colId` offsets are relative to the range's first column, and both ranges start at the
+    // same column, so they carry over verbatim. A filter that only partially covers a table
+    // has nowhere valid to go, so it keeps being suppressed below.
+    let folded: Vec<Table> = match &sheet.autofilter {
+        Some(af) if !af.criteria.is_empty() => sheet
+            .tables
+            .iter()
+            .cloned()
+            .map(|mut t| {
+                if t.header_row
+                    && t.filter_button
+                    && t.filter.is_empty()
+                    && t.range.contains_range(&af.range)
+                    && t.range.start.col == af.range.start.col
+                {
+                    t.filter = af.criteria.clone();
+                }
+                t
+            })
+            .collect(),
+        _ => sheet.tables.clone(),
+    };
     // Table header cells must hold the column names.
     let mut overrides: BTreeMap<CellRef, String> = BTreeMap::new();
-    let tables: Vec<(&Table, Vec<String>)> = sheet
-        .tables
+    let tables: Vec<(&Table, Vec<String>)> = folded
         .iter()
-        .filter(|t| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && !t.totals_row && t.range.height() >= 1))
+        .filter(|t| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && t.range.height() > t.totals_row as u32))
         .map(|t| (t, table_columns(t)))
         .collect();
     for (t, cols) in &tables {
@@ -388,7 +412,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             if t.is_empty() {
                 continue;
             }
-            let external = t.contains("://")
+            // `external` is what the file said, or what Insert › Link chose; the scheme test covers
+            // links made before the flag existed.
+            let external = h.external
+                || t.contains("://")
                 || t.to_ascii_lowercase().starts_with("mailto:")
                 || t.starts_with("\\\\")
                 || t.to_ascii_lowercase().starts_with("file:");
@@ -495,12 +522,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             if img.data.is_empty() {
                 continue;
             }
-            out.images += 1;
             let ext = image_ext(&img.mime, &img.data);
-            let name = format!("xl/media/image{}.{ext}", out.images);
             out.default_type(ext, image_content_type(ext));
-            out.part(&name, None, img.data.clone());
-            let rid = drels.add("image", &format!("../media/image{}.{ext}", out.images));
+            let file = out.image_part(ext, &img.data);
+            let rid = drels.add("image", &format!("../media/{file}"));
             objs.push(Obj::Image(img, rid));
         }
         for ch in &sheet.charts {
@@ -519,7 +544,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
             } else {
                 let name = format!("xl/charts/chart{}.xml", out.charts);
-                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch).into_bytes());
+                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
                 drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
             };
             objs.push(Obj::Chart(ch, rid));
@@ -548,7 +573,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
         let vml_name = format!("xl/drawings/vmlDrawing{n}.vml");
-        let vml = kept.notes_vml(vml_xml(sheet, n), &vml_name, out);
+        let vml = kept.notes_vml(vml_xml(sheet, out.kept.notes_block(n)), &vml_name, out);
         out.part(&vml_name, None, vml.into_bytes());
         rels.add("comments", &format!("../comments{n}.xml"));
         let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
@@ -573,9 +598,33 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
-    // Sparklines (Excel 2010 extension).
+    // Excel 2010 extensions: solid data bars, then sparklines.
+    let solid_bars: Vec<(&CondFormat, u32)> = sheet
+        .cond_formats
+        .iter()
+        .enumerate()
+        .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
+        .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
+        .collect();
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+        s.push_str("<extLst>");
+    }
+    if !solid_bars.is_empty() {
+        let _ = write!(
+            s,
+            "<ext uri=\"{{78C0D931-6437-407d-A8A1-0F90B4350D7D}}\" xmlns:x14=\"{X14_NS}\" xmlns:xm=\"{XM_NS}\"><x14:conditionalFormattings>"
+        );
+        for (cf, p) in &solid_bars {
+            if let CfRule::DataBar { min, max, .. } = &cf.rule {
+                let (id, lo, hi) = (solid_bar_id(*p), x14_cfvo(min), x14_cfvo(max));
+                let _ = write!(s, "<x14:conditionalFormatting><x14:cfRule type=\"dataBar\" id=\"{id}\"><x14:dataBar gradient=\"0\">{lo}{hi}");
+                let _ = write!(s, "</x14:dataBar></x14:cfRule><xm:sqref>{}</xm:sqref></x14:conditionalFormatting>", sqref(&cf.ranges));
+            }
+        }
+        s.push_str("</x14:conditionalFormattings></ext>");
+    }
     if !sheet.sparklines.is_empty() {
-        s.push_str("<extLst><ext uri=\"{05C60535-1F16-4fd2-B633-F4F36F0B64E0}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:sparklineGroups xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\">");
+        let _ = write!(s, "<ext uri=\"{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}\" xmlns:x14=\"{X14_NS}\"><x14:sparklineGroups xmlns:xm=\"{XM_NS}\">");
         for sp in &sheet.sparklines {
             let ty = match sp.kind {
                 SparklineKind::Line => "",
@@ -593,7 +642,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 sp.cell.a1()
             );
         }
-        s.push_str("</x14:sparklineGroups></ext></extLst>");
+        s.push_str("</x14:sparklineGroups></ext>");
+    }
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+        s.push_str("</extLst>");
     }
     s.push_str("</worksheet>");
     (s, rels)
@@ -637,6 +689,10 @@ fn write_cell(
         Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
         v => v,
     };
+    // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
+    // not need it: Excel decided the formula is evaluated as an array.
+    let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
+    let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
     if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
         s.push_str(" cm=\"1\"");
@@ -712,6 +768,33 @@ fn cfvo_xml(v: &CfValueKind) -> String {
 
 fn quote(t: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
+}
+
+const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
+
+/// The id linking a solid data bar's `cfRule` to its x14 extension; unique per sheet because priorities are.
+fn solid_bar_id(priority: u32) -> String {
+    format!("{{00000000-0000-0000-0000-{priority:012}}}")
+}
+
+/// The `cfRule` extension that points a solid data bar at its x14 rule.
+fn solid_bar_ext(priority: u32) -> String {
+    let id = solid_bar_id(priority);
+    format!("<extLst><ext uri=\"{{B025F937-C7B1-47D3-B67F-A62EFF666E3E}}\" xmlns:x14=\"{X14_NS}\"><x14:id>{id}</x14:id></ext></extLst>")
+}
+
+/// An x14 `cfvo`: unlike the 2006 one it has no `val` attribute, the value is an `xm:f` child.
+fn x14_cfvo(v: &CfValueKind) -> String {
+    let (ty, val) = match v {
+        CfValueKind::Min => return "<x14:cfvo type=\"min\"/>".into(),
+        CfValueKind::Max => return "<x14:cfvo type=\"max\"/>".into(),
+        CfValueKind::Number(n) => ("num", num(*n)),
+        CfValueKind::Percent(n) => ("percent", num(*n)),
+        CfValueKind::Percentile(n) => ("percentile", num(*n)),
+        CfValueKind::Formula(f) => ("formula", text_to_file(f)),
+    };
+    format!("<x14:cfvo type=\"{ty}\"><xm:f>{}</xm:f></x14:cfvo>", esc(&val))
 }
 
 fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
@@ -809,12 +892,13 @@ fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
             b.push_str("</colorScale>");
             format!("<cfRule type=\"colorScale\" priority=\"{priority}\"{stop}>{b}</cfRule>")
         }
-        CfRule::DataBar { min, max, color, show_value, .. } => format!(
-            "<cfRule type=\"dataBar\" priority=\"{priority}\"{stop}><dataBar{}>{}{}<color {}/></dataBar></cfRule>",
+        CfRule::DataBar { min, max, color, show_value, gradient } => format!(
+            "<cfRule type=\"dataBar\" priority=\"{priority}\"{stop}><dataBar{}>{}{}<color {}/></dataBar>{}</cfRule>",
             if *show_value { "" } else { " showValue=\"0\"" },
             cfvo_xml(min),
             cfvo_xml(max),
-            if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) }
+            if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) },
+            if *gradient { String::new() } else { solid_bar_ext(priority) }
         ),
         CfRule::IconSet { set, thresholds, reverse, show_value } => {
             let mut b = format!("<iconSet iconSet=\"{}\"", esc_attr(set));
@@ -974,6 +1058,12 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     } else {
         s.push_str(" totalsRowShown=\"0\"");
     }
+    if let Some(ty) = &t.table_type {
+        let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
+    }
+    if let Some(c) = t.connection_id {
+        let _ = write!(s, " connectionId=\"{c}\"");
+    }
     s.push('>');
     if t.header_row && t.filter_button {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
@@ -983,7 +1073,11 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {
         let col = t.columns.get(i);
-        let _ = write!(s, "<tableColumn id=\"{}\" name=\"{}\"", i + 1, esc_attr(&encode_xstring(name)));
+        let _ = write!(s, "<tableColumn id=\"{}\"", i + 1);
+        if let Some(u) = col.and_then(|c| c.unique_name.as_ref()) {
+            let _ = write!(s, " uniqueName=\"{}\"", esc_attr(u));
+        }
+        let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
         let totals = col.map(|c| c.totals).unwrap_or_default();
         if t.totals_row {
             let f = match totals {
@@ -1006,7 +1100,8 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
         }
         let calc = col.and_then(|c| c.formula.as_ref()).filter(|f| !f.is_empty());
         let custom = if t.totals_row && totals == TotalsFn::Custom { col.and_then(|c| c.totals_label.as_ref()) } else { None };
-        if calc.is_none() && custom.is_none() {
+        let xml = col.and_then(|c| c.xml.as_ref());
+        if calc.is_none() && custom.is_none() && xml.is_none() {
             s.push_str("/>");
             continue;
         }
@@ -1016,6 +1111,13 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
         }
         if let Some(f) = custom {
             let _ = write!(s, "<totalsRowFormula>{}</totalsRowFormula>", esc(&text_to_file(f)));
+        }
+        if let Some(x) = xml {
+            let _ = write!(s, "<xmlColumnPr mapId=\"{}\" xpath=\"{}\"", x.map_id, esc_attr(&x.xpath));
+            if x.denormalized {
+                s.push_str(" denormalized=\"1\"");
+            }
+            let _ = write!(s, " xmlDataType=\"{}\"/>", esc_attr(&x.data_type));
         }
         s.push_str("</tableColumn>");
     }
@@ -1184,6 +1286,24 @@ fn protected_ranges_xml(sheet: &Sheet) -> String {
     if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
 }
 
+/// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
+/// A box read from a file that equals it is kept as `None`, so a note's model survives a save.
+pub(crate) const DEFAULT_NOTE_BOX: NoteBox = NoteBox {
+    from: NoteCorner { col: 1, col_px: 15, row: 0, row_px: 2 },
+    to: NoteCorner { col: 3, col_px: 15, row: 4, row_px: 16 },
+    size_pt: Some(DEFAULT_NOTE_SIZE_PT),
+};
+const DEFAULT_NOTE_SIZE_PT: (f64, f64) = (108.0, 59.25);
+
+/// A note box's `<x:Anchor>` text and its width and height in points: the box read from the file
+/// or [`DEFAULT_NOTE_BOX`], its corners moved with the note's `cell` and kept on the sheet.
+fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
+    let b = b.unwrap_or(&DEFAULT_NOTE_BOX);
+    let at = |base: u32, d: i64, max: u32| (i64::from(base) + d).clamp(0, i64::from(max) - 1);
+    let corner = |k: &NoteCorner| format!("{}, {}, {}, {}", at(cell.col, k.col, MAX_COLS), k.col_px, at(cell.row, k.row, MAX_ROWS), k.row_px);
+    (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
+}
+
 /// Legacy VML shapes Excel uses to display notes.
 fn vml_xml(sheet: &Sheet, n: u32) -> String {
     let mut s = format!(
@@ -1192,14 +1312,13 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
         let id = n as u64 * 1024 + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
+        let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
             s,
-            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{}, 15, {}, 2, {}, 15, {}, 16</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:{}pt;height:{}pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            num(w),
+            num(h),
             i + 1,
-            cell.col + 1,
-            cell.row,
-            cell.col + 3,
-            cell.row + 4,
             cell.row,
             cell.col,
             if c.visible { "<x:Visible/>" } else { "" }

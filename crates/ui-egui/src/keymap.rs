@@ -84,6 +84,11 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Semicolon if ctrl && s => Shortcut::Time,
         Quote if ctrl && s => Shortcut::ValueAbove,
         Quote if ctrl => Shortcut::FormulaAbove,
+        // Ctrl+[ / Ctrl+] (Excel): select precedent / dependent cells; Shift walks every level.
+        OpenBracket if ctrl && !s => run("formulas.selectPrecedents"),
+        OpenBracket if ctrl => Shortcut::Run("formulas.selectPrecedents", json!({"all": true})),
+        CloseBracket if ctrl && !s => run("formulas.selectDependents"),
+        CloseBracket if ctrl => Shortcut::Run("formulas.selectDependents", json!({"all": true})),
         // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
         Semicolon if mac && ctrl => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,
@@ -92,6 +97,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Num3 if ctrl && !mac => run("home.italic"),
         Num4 if ctrl && !mac => run("home.underline"),
         Num5 if ctrl && !mac => run("home.strikethrough"),
+        // Ctrl+6 hides and shows objects (Windows, and Control+6 in Excel for Mac).
+        Num6 if ctrl && !s => run("view.showObjects"),
         // Letters that differ between Windows and Mac.
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),
@@ -162,12 +169,16 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
     })
 }
 
+/// AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~` on a German
+/// layout; a user-defined Ctrl+Alt+A hotkey may type `ä`) is text, not a shortcut.
+pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
+    !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
-    // AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~`
-    // on a German layout) is text, not a shortcut.
-    if !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_)))) {
+    if altgr_text(ctx, m, mac) {
         return false;
     }
     let Some(shortcut) = lookup(key, physical, m, mac) else { return false };
@@ -179,12 +190,14 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         }
         Shortcut::Dialog(name, params) => app.open_dialog(name, params),
         Shortcut::Date | Shortcut::Time => {
-            let now = gridcraft_engine::calc::now_serial();
-            let (value, format) = if shortcut == Shortcut::Date { (now.floor(), "m/d/yyyy") } else { (now.fract(), "h:mm AM/PM") };
             let text = app
                 .session
                 .active()
-                .map(|d| gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(value), format, &d.wb).text)
+                .map(|d| {
+                    let now = gridcraft_engine::core::date::serial_in_system(d.wb.date_system, gridcraft_engine::calc::now_serial());
+                    let (value, format) = if shortcut == Shortcut::Date { (now.floor(), "m/d/yyyy") } else { (now.fract(), "h:mm AM/PM") };
+                    gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(value), format, &d.wb).text
+                })
                 .unwrap_or_default();
             edit_with(app, text);
         }
@@ -212,12 +225,16 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
             let dc = if shortcut == Shortcut::ScreenRight { cols } else { -cols };
             let _ = app.session.run("selection.move", json!({"dr": 0, "dc": dc, "extend": m.shift}));
             app.grid.ensure_visible = true;
+            app.grid.reveal_moving_end = m.shift;
         }
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {
                 app.grid.list_picker = Some(active);
+            } else if sh.has_filter_button(active) {
+                let at = geo.mirror_pos(crate::grid::filter_button_rect(geo, sh, active).center());
+                app.grid.filter_menu = Some((active.col, active.row, at));
             }
         }
         Shortcut::Zoom(step) => {
@@ -243,4 +260,5 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
         d.selection.anchor = anchor;
     }
     app.grid.ensure_visible = true;
+    app.grid.reveal_moving_end = true;
 }

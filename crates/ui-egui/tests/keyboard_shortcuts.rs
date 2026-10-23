@@ -149,3 +149,160 @@ fn space_shortcuts_per_platform() {
     // Cmd+Space is Spotlight on macOS.
     assert_eq!(space(mac_cmd, true), None);
 }
+
+#[test]
+fn alt_down_opens_autofilter_headers_without_changing_the_workbook() {
+    for rtl in [false, true] {
+        for cell in ["A1", "B1"] {
+            let mut session = book(cell);
+            session.execute("data.filter", json!({"range": "A1:B3"})).unwrap();
+            session.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+            let mut h = harness(session);
+            let before = h.state().session.active().unwrap().wb.clone();
+            key(&mut h, Key::ArrowDown, Modifiers::ALT);
+            let (column, _row, at) = h.state().grid.filter_menu.expect("Alt+Down must open the filter header menu");
+            let d = h.state().session.active().unwrap();
+            let active = CellRef::parse(cell).unwrap();
+            assert_eq!(column, active.col);
+            assert_eq!(d.selection.active, active);
+            assert_eq!(d.wb, before);
+            let sh = d.wb.active().unwrap();
+            let geo = gridcraft_ui_egui::grid::Geo::new(sh, h.state().grid.rect.unwrap(), h.state().view().scroll);
+            assert_eq!(at, geo.mirror_pos(gridcraft_ui_egui::grid::filter_button_rect(&geo, sh, active).center()));
+            // Opening focuses the existing search box; typing must not edit the header.
+            h.input_mut().events.push(Event::Text("1".into()));
+            h.run_steps(2);
+            assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::new(("filter_search", column)))).as_deref(), Some("1"));
+            assert!(h.state().editor.is_none());
+            assert_eq!(h.state().session.active().unwrap().wb, before);
+            key(&mut h, Key::Escape, Modifiers::NONE);
+            assert!(h.state().grid.filter_menu.is_none());
+        }
+    }
+}
+
+#[test]
+fn alt_down_keeps_validation_priority_and_plain_down_navigation() {
+    let mut session = book("A1");
+    session.execute("data.filter", json!({"range": "A1:B3"})).unwrap();
+    session.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"First,Second\""})).unwrap();
+    let mut h = harness(session);
+    key(&mut h, Key::ArrowDown, Modifiers::ALT);
+    assert_eq!(h.state().grid.list_picker, Some(CellRef::parse("A1").unwrap()));
+    assert!(h.state().grid.filter_menu.is_none());
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    assert!(h.state().grid.filter_menu.is_none());
+    key(&mut h, Key::ArrowDown, Modifiers::ALT);
+    assert!(h.state().grid.filter_menu.is_none(), "a data cell has no filter button");
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+}
+
+#[test]
+fn alt_down_only_opens_enabled_table_filter_buttons() {
+    for enabled in [false, true] {
+        let mut session = book("B1");
+        session.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+        if !enabled {
+            session.execute("table.headerRow", json!({"on": false})).unwrap();
+        }
+        session.execute("selection.set", json!({"cell": "B1"})).unwrap();
+        let mut h = harness(session);
+        key(&mut h, Key::ArrowDown, Modifiers::ALT);
+        assert_eq!(h.state().grid.filter_menu.map(|(column, _, _)| column), enabled.then_some(1));
+        assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "B1");
+    }
+}
+
+/// #1443: Ctrl+Q (also with Shift or Alt, which is what AltGr+Q reports on Windows) must not
+/// close the window and lose unsaved input; macOS keeps Cmd+Q as the app's Quit.
+#[test]
+fn ctrl_q_does_not_close_the_window_outside_macos() {
+    let closes = |h: &mut Harness, k: Key, m: Modifiers| -> bool {
+        h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
+        h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
+        let mut closed = false;
+        for _ in 0..3 {
+            h.step();
+            closed |= h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+        }
+        closed
+    };
+    let ctrl_alt = Modifiers { alt: true, ..CTRL };
+    for os in [egui::os::OperatingSystem::Windows, egui::os::OperatingSystem::Nix] {
+        let mut h = harness(book("A1"));
+        h.ctx.set_os(os);
+        h.run_steps(2);
+        for (name, m) in [("Ctrl+Q", CTRL), ("Ctrl+Shift+Q", CTRL_SHIFT), ("Ctrl+Alt+Q", ctrl_alt)] {
+            assert!(!closes(&mut h, Key::Q, m), "{os:?}: {name} closed the window");
+        }
+        assert!(h.ctx.options(|o| o.quit_shortcuts.is_empty()), "{os:?}: no quit shortcut left");
+    }
+    // macOS: Cmd+Q stays the app's Quit.
+    let mut h = harness(book("A1"));
+    // The harness's first frame already ran as the host OS; restore egui's default, as a real
+    // macOS launch would have it.
+    h.ctx.options_mut(|o| o.quit_shortcuts = vec![egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Q)]);
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.run_steps(2);
+    assert!(h.ctx.options(|o| !o.quit_shortcuts.is_empty()), "Cmd+Q is still egui's quit shortcut on macOS");
+}
+
+#[test]
+fn ctrl_6_is_show_objects_and_nothing_else() {
+    let show = Some(Shortcut::Run("view.showObjects", json!({})));
+    let mac_control = Modifiers::CTRL;
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), CTRL, false), show);
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), mac_control, true), show);
+    // Its neighbours keep theirs: Ctrl+Shift+6 (Ctrl+^) is Scientific, Cmd+6 on a Mac is free.
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), CTRL_SHIFT, false), Some(Shortcut::Run("home.numberFormat", json!({"code": "0.00E+00"}))));
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), Modifiers::MAC_CMD, true), None);
+    // No other command claims Ctrl+6.
+    let claims: Vec<&str> = Session::new().commands().iter().filter(|c| c.shortcut == Some("Ctrl+6")).map(|c| c.id).collect();
+    assert_eq!(claims, ["view.showObjects"]);
+}
+
+/// Alt+= as Windows and Linux report it: the key press, then the `=` the OS types with it.
+fn alt_equals(h: &mut Harness) {
+    h.input_mut().events.push(Event::Key {
+        key: Key::Equals,
+        physical_key: Some(Key::Equals),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::ALT,
+    });
+    h.input_mut().events.push(Event::Text("=".into()));
+    h.run_steps(2);
+}
+
+#[test]
+fn alt_equals_autosum_does_not_also_type_the_equals_sign() {
+    let input = |h: &Harness, a1: &str| h.state().session.active().unwrap().wb.active().unwrap().input_text(CellRef::parse(a1).unwrap());
+    // Column above, row to the left, and a block (totals below each column).
+    for (selected, cell, formula) in [("A4", "A4", "=SUM(A1:A3)"), ("C3", "C3", "=SUM(A3:B3)"), ("A1:B3", "B4", "=SUM(B1:B3)")] {
+        let mut h = harness(book(selected));
+        alt_equals(&mut h);
+        assert_eq!(input(&h, cell), formula, "Alt+= on {selected}");
+        assert!(h.state().editor.is_none(), "Alt+= on {selected} started an edit");
+        // Enter moves on: there is no stray `=` edit to commit.
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        assert!(h.state().message.is_none(), "Alt+= on {selected}: {:?}", h.state().message);
+        assert_eq!(input(&h, cell), formula);
+    }
+    // Nothing to sum: AutoSum's own edit, `=SUM()`, not `=`.
+    let mut h = harness(book("E10"));
+    alt_equals(&mut h);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.clone()).as_deref(), Some("=SUM()"));
+}
+
+#[test]
+fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
+    let mut h = harness(book("B2"));
+    let ctrl_alt = Modifiers { alt: true, ..CTRL };
+    h.input_mut().events.push(Event::Key { key: Key::A, physical_key: Some(Key::A), pressed: true, repeat: false, modifiers: ctrl_alt });
+    h.input_mut().events.push(Event::Text("\u{e4}".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
+    assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
+}

@@ -54,7 +54,7 @@ fn median(v: Vec<f64>) -> R<f64> {
     let s = sorted(v);
     let n = s.len();
     let hi = s.get(n / 2).copied().unwrap_or(0.0);
-    if n % 2 == 1 { Ok(hi) } else { Ok((s.get(n / 2 - 1).copied().unwrap_or(0.0) + hi) / 2.0) }
+    if n % 2 == 1 { Ok(hi) } else { Ok(s.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) }
 }
 
 /// Values occurring at least twice, ordered by first occurrence, with their (equal, maximal) count.
@@ -79,10 +79,12 @@ fn mode_sngl(v: &[f64]) -> R<f64> {
 }
 
 /// Numbers for MODE / MODE.SNGL / MODE.MULT. Inside multi-cell ranges and arrays only numbers
-/// count, like [`numbers`]. Scalar arguments are stricter than in SUM: Excel answers `#VALUE!`
-/// for direct text (even numeric text such as `"1"`) and for a single-cell reference to text or
-/// a blank cell (observed: `MODE(B8,"1",2,3)` and `MODE(B9,2,D7)` with D7 blank are `#VALUE!`).
-/// Arguments are processed left to right, so the first error wins.
+/// count, like [`numbers`]. Scalar arguments differ from SUM: in Excel 365, text and logical
+/// values are skipped whether typed or referenced (even numeric text such as `"1"`, so
+/// `MODE(1,"1",2,3)` is `#N/A`, and `MODE(1,TRUE,TRUE,2)` is `#N/A`), but a single-cell reference
+/// to a blank cell is `#VALUE!` (`MODE(B9,2,D7)` with D7 blank). Arguments are processed left to
+/// right, so the first error wins. The results cached in POI's FormulaEvalTestData come from an
+/// older Excel that answered `#VALUE!` for typed text; they are not the reference here.
 fn mode_numbers(args: &[Arg]) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
@@ -98,9 +100,8 @@ fn mode_numbers(args: &[Arg]) -> R<Vec<f64>> {
             }
             Value::Number(n) => out.push(*n),
             Value::Error(e) => return Err(*e),
-            Value::Text(_) | Value::Empty => return Err(CellError::Value),
-            Value::Bool(_) if a.from_ref => {}
-            v => out.push(v.to_number()?),
+            Value::Text(_) | Value::Bool(_) => {}
+            Value::Empty => return Err(CellError::Value),
         }
     }
     Ok(out)
@@ -461,7 +462,7 @@ fn prob(a: &[Arg], _: C) -> R<Value> {
     let (xs, ps) = arg_pairs(a, 0, 1)?;
     let lo = num(a, 2)?;
     let hi = if has(a, 3) { num(a, 3)? } else { lo };
-    if ps.iter().any(|&p| !(0.0..=1.0).contains(&p)) {
+    if ps.iter().any(|&p| p <= 0.0 || p > 1.0) {
         return Err(CellError::Num);
     }
     let total: f64 = ps.iter().sum();
@@ -533,6 +534,25 @@ fn strict_num(v: &Value) -> R<f64> {
     }
 }
 
+/// Most predictor columns LINEST, LOGEST, TREND and GROWTH accept. The normal equations are a
+/// k×k matrix inverted in O(k³), so an unbounded k (one `SEQUENCE(1,16384)` argument) allocated
+/// gigabytes and could abort the process.
+const MAX_REGRESSORS: usize = 255;
+/// Most multiply-adds (rows × k²) a regression may spend building its normal equations.
+const MAX_REGRESSION_WORK: usize = 1_000_000_000;
+
+/// Rejects regressions too large to fit: more than [`MAX_REGRESSORS`] predictors is `#VALUE!`,
+/// more than [`MAX_REGRESSION_WORK`] multiply-adds is `#NUM!`.
+fn check_regression_size(n: usize, k: usize) -> R<()> {
+    if k > MAX_REGRESSORS {
+        return Err(CellError::Value);
+    }
+    match n.checked_mul(k).and_then(|nk| nk.checked_mul(k)) {
+        Some(work) if work <= MAX_REGRESSION_WORK => Ok(()),
+        _ => Err(CellError::Num),
+    }
+}
+
 fn parse_xy(y: &Value, x: Option<&Value>) -> R<Xy> {
     let ya = as_array(y);
     let n = ya.data.len();
@@ -545,12 +565,14 @@ fn parse_xy(y: &Value, x: Option<&Value>) -> R<Xy> {
             if xa.rows == ya.rows && xa.cols == ya.cols {
                 (xa.data.iter().map(|v| strict_num(v).map(|f| vec![f])).collect::<R<Vec<_>>>()?, 1)
             } else if !y_is_row && xa.rows == n {
+                check_regression_size(n, xa.cols)?;
                 let mut rows = Vec::with_capacity(n);
                 for r in 0..n {
                     rows.push((0..xa.cols).map(|c| strict_num(xa.get(r, c).unwrap_or(&Value::Empty))).collect::<R<Vec<_>>>()?);
                 }
                 (rows, xa.cols)
             } else if y_is_row && xa.cols == n {
+                check_regression_size(n, xa.rows)?;
                 let mut rows = Vec::with_capacity(n);
                 for c in 0..n {
                     rows.push((0..xa.rows).map(|r| strict_num(xa.get(r, c).unwrap_or(&Value::Empty))).collect::<R<Vec<_>>>()?);
@@ -637,6 +659,7 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     if n == 0 || x.len() != n {
         return Err(CellError::Value);
     }
+    check_regression_size(n, k)?;
     let nf = n as f64;
     let (xm, ym) = if constant {
         let xm: Vec<f64> = (0..k).map(|j| x.iter().map(|r| r.get(j).copied().unwrap_or(0.0)).sum::<f64>() / nf).collect();
@@ -1242,6 +1265,10 @@ fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     }
     while hi - lo > 1.0 {
         let mid = ((lo + hi) / 2.0).floor();
+        // Above 2^53 adjacent f64 values are more than 1 apart, so the gap can stop shrinking.
+        if mid <= lo || mid >= hi {
+            break;
+        }
         if binom_cdf(mid, n, p) >= alpha {
             hi = mid;
         } else {
@@ -2244,7 +2271,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_values, aggregate_values_k};
+    use super::{MAX_REGRESSORS, aggregate_values, aggregate_values_k, check_regression_size};
     use crate::util::testutil::*;
     use gridcraft_core::{CellError, Value};
 
@@ -2252,6 +2279,46 @@ mod tests {
 
     fn c(xs: &[f64]) -> crate::Arg {
         av(col(xs))
+    }
+
+    // The two middle values are finite and their midpoint is representable even when
+    // adding them first would overflow. Exercise both callers of the shared helper.
+    #[test]
+    fn median_finite_midpoint_does_not_overflow() {
+        for (values, expected) in [
+            (vec![1e308, 1e308], 1e308),
+            (vec![-1e308, -1e308], -1e308),
+            (vec![1.6e308, 1e308], 1.3e308),
+            (vec![-1e308, -1.6e308], -1.3e308),
+            (vec![f64::MAX, f64::MAX], f64::MAX),
+            (vec![-f64::MAX, -f64::MAX], -f64::MAX),
+            (vec![-f64::MAX, f64::MAX], 0.0),
+            (vec![1.7e308, -1.7e308, 1e308, 1.6e308], 1.3e308),
+        ] {
+            close(ev("MEDIAN", values.iter().copied().map(n).collect()), expected);
+            close(ev("MEDIAN", vec![rf(col(&values))]), expected);
+            close(aggregate_values(12, &values.iter().copied().map(nv).collect::<Vec<_>>()), expected);
+        }
+    }
+
+    #[test]
+    fn median_midpoint_keeps_small_values_and_argument_semantics() {
+        // Halving each operand unconditionally can lose the smallest numbers. Use exact
+        // equality here: the usual aggregate-test tolerance would accept zero.
+        for value in [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1)] {
+            assert_eq!(ev("MEDIAN", vec![n(value), n(value)]), nv(value));
+            assert_eq!(aggregate_values(12, &[nv(value), nv(value)]), nv(value));
+        }
+        close(ev("MEDIAN", vec![c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]), 3.5);
+        close(ev("MEDIAN", vec![c(&[1e308, -1e308, 3.0])]), 3.0);
+        close(ev("MEDIAN", vec![n(1e308)]), 1e308);
+        close(ev("MEDIAN", vec![t("4"), b(true)]), 2.5);
+        close(ev("MEDIAN", vec![rf(arr(vec![vec![nv(1.0), tv("ignored"), Value::Empty, Value::Bool(true), nv(6.0)]]))]), 3.5);
+        is_err(ev("MEDIAN", vec![t("invalid")]), CellError::Value);
+        is_err(ev("MEDIAN", vec![e(CellError::NA), n(1e308)]), CellError::NA);
+        is_err(ev("MEDIAN", vec![rf(arr(vec![vec![tv("ignored"), Value::Empty]]))]), CellError::Num);
+        is_err(aggregate_values(12, &[]), CellError::Num);
+        is_err(aggregate_values(12, &[nv(1e308), Value::Error(CellError::Div0)]), CellError::Div0);
     }
 
     #[test]
@@ -2279,9 +2346,11 @@ mod tests {
         assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 2.0, 3.0])])), vec![vec![nv(2.0)], vec![nv(3.0)]]);
     }
 
-    /// MODE argument semantics observed in Excel (FormulaEvalTestData, row "Mode"): multi-cell
-    /// ranges skip text and blanks, but direct text and single-cell references to text or blank
-    /// cells are `#VALUE!`; the first error from the left wins.
+    /// MODE argument semantics in Excel 365, on the inputs of FormulaEvalTestData (row "Mode"):
+    /// text is skipped, typed or referenced, but a single-cell reference to a blank cell is
+    /// `#VALUE!`; the first error from the left wins. The values cached in POI's file come from an
+    /// older Excel and say `#VALUE!` for `MODE(C9,E16,"1",B8)`, `MODE(B8,"1",2,3)` and
+    /// `MODE("1",1,#DIV/0!,2,3)`; Excel 365 gives `#N/A`, `#N/A` and `#DIV/0!`.
     #[test]
     fn mode_scalar_arguments() {
         let data = arr(vec![vec![tv(""), nv(0.0), nv(1.0)], vec![tv("x"), nv(1.0), nv(1.001)], vec![tv("y"), nv(9e9), nv(2.3456)]]);
@@ -2290,9 +2359,9 @@ mod tests {
             (vec![rf(data)], Ok(1.0)),
             (vec![rf(arr(vec![vec![nv(-1.1), Value::Empty, tv("1.1")]])), n(-1.1)], Ok(-1.1)),
             // MODE(C9,E16,"1",B8): E16 holds the text "1.1".
-            (vec![rf(nv(1.1)), rf(tv("1.1")), t("1"), rf(nv(1.0))], Err(CellError::Value)),
-            (vec![rf(nv(1.0)), t("1"), n(2.0), n(3.0)], Err(CellError::Value)),
-            (vec![t("1"), n(1.0), e(CellError::Div0), n(2.0), n(3.0)], Err(CellError::Value)),
+            (vec![rf(nv(1.1)), rf(tv("1.1")), t("1"), rf(nv(1.0))], Err(CellError::NA)),
+            (vec![rf(nv(1.0)), t("1"), n(2.0), n(3.0)], Err(CellError::NA)),
+            (vec![t("1"), n(1.0), e(CellError::Div0), n(2.0), n(3.0)], Err(CellError::Div0)),
             // MODE(B9,2,D7) with D7 blank.
             (vec![rf(nv(2.0)), n(2.0), rf(Value::Empty)], Err(CellError::Value)),
             (vec![n(1.0), n(1.0), e(CellError::Div0), t("1")], Err(CellError::Div0)),
@@ -2305,7 +2374,31 @@ mod tests {
                 }
             }
         }
-        is_err(ev("MODE.MULT", vec![rf(nv(1.0)), t("1"), n(1.0)]), CellError::Value);
+        is_err(ev("MODE.MULT", vec![rf(nv(1.0)), t("1"), rf(Value::Empty)]), CellError::Value);
+    }
+
+    /// Text and logical values typed as arguments are skipped, not coerced (Excel 365, #736).
+    #[test]
+    fn mode_skips_typed_text_and_logicals() {
+        let cases: Vec<(Vec<crate::Arg>, Result<f64, CellError>)> = vec![
+            (vec![n(1.0), n(1.0), t("x")], Ok(1.0)),
+            (vec![n(1.0), n(2.0), t("x")], Err(CellError::NA)),
+            (vec![n(1.0), t("1"), n(2.0), n(3.0)], Err(CellError::NA)),
+            (vec![t("1"), n(1.0), n(2.0), n(3.0)], Err(CellError::NA)),
+            (vec![t("1"), n(1.0), e(CellError::Div0), n(2.0), n(3.0)], Err(CellError::Div0)),
+            (vec![n(1.0), b(true), b(true), n(2.0)], Err(CellError::NA)),
+            (vec![n(1.0), n(1.0), b(true)], Ok(1.0)),
+        ];
+        for name in ["MODE", "MODE.SNGL"] {
+            for (args, want) in &cases {
+                match want {
+                    Ok(x) => close(ev(name, args.clone()), *x),
+                    Err(err) => is_err(ev(name, args.clone()), *err),
+                }
+            }
+        }
+        assert_eq!(rows_of(&ev("MODE.MULT", vec![n(1.0), t("1"), n(1.0), t("x")])), vec![vec![nv(1.0)]]);
+        is_err(ev("MODE.MULT", vec![n(1.0), b(true), b(true), n(2.0)]), CellError::NA);
     }
 
     #[test]
@@ -2464,6 +2557,28 @@ mod tests {
         is_err(ev("LINEST", vec![c(&[1.0, 2.0]), c(&[1.0, 2.0, 3.0])]), CellError::Ref);
     }
 
+    // #2177: one predictor row of 16,384 columns built three 16,384² matrices (6 GB) and an O(k³)
+    // inversion; a wider TOROW aborted the process. It is now refused before allocating.
+    #[test]
+    fn linest_family_caps_regressor_count() {
+        let wide = |k: usize| av(arr(vec![(0..k).map(|i| nv(i as f64)).collect()]));
+        let tall = |k: usize| av(arr((0..k).map(|i| vec![nv(i as f64), nv(1.0)]).collect()));
+        for f in ["LINEST", "LOGEST", "TREND", "GROWTH"] {
+            // y is one cell, so every column of x is a predictor.
+            is_err(ev(f, vec![n(1.0), wide(16_384)]), CellError::Value);
+            // y is a row, so every row of x is a predictor.
+            is_err(ev(f, vec![av(arr(vec![vec![nv(1.0), nv(2.0)]])), tall(16_384)]), CellError::Value);
+        }
+        is_err(ev("LINEST", vec![n(1.0), wide(MAX_REGRESSORS + 1)]), CellError::Value);
+        // At the cap the fit still runs (one observation: coefficients are zero, not an error).
+        assert_eq!(rows_of(&ev("LINEST", vec![n(1.0), wide(MAX_REGRESSORS)]))[0].len(), MAX_REGRESSORS + 1);
+        // The rows × k² work bound.
+        assert_eq!(check_regression_size(1_000, MAX_REGRESSORS), Ok(()));
+        assert_eq!(check_regression_size(1_000_000, 100), Err(CellError::Num));
+        assert_eq!(check_regression_size(usize::MAX, 2), Err(CellError::Num));
+        assert_eq!(check_regression_size(10_000_000, 1), Ok(()));
+    }
+
     #[test]
     fn frequency_prob() {
         let f = ev("FREQUENCY", vec![c(&[79.0, 85.0, 78.0, 85.0, 50.0, 81.0, 95.0, 88.0, 97.0]), c(&[70.0, 79.0, 89.0])]);
@@ -2472,7 +2587,10 @@ mod tests {
         let p = c(&[0.2, 0.3, 0.1, 0.4]);
         close(ev("PROB", vec![x.clone(), p.clone(), n(2.0)]), 0.1);
         close(ev("PROB", vec![x.clone(), p, n(1.0), n(3.0)]), 0.8);
-        is_err(ev("PROB", vec![x, c(&[0.5, 0.5, 0.5, 0.5]), n(1.0)]), CellError::Num);
+        is_err(ev("PROB", vec![x.clone(), c(&[0.5, 0.5, 0.5, 0.5]), n(1.0)]), CellError::Num);
+        // Excel: any probability <= 0 is #NUM!, even when it sums to one and lies outside the limits.
+        is_err(ev("PROB", vec![x.clone(), c(&[0.5, 0.0, 0.25, 0.25]), n(0.0), n(3.0)]), CellError::Num);
+        is_err(ev("PROB", vec![x, c(&[0.5, 0.0, 0.25, 0.25]), n(2.0), n(3.0)]), CellError::Num);
     }
 
     #[test]
@@ -2552,6 +2670,24 @@ mod tests {
         close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+    }
+
+    #[test]
+    fn binom_inv_huge_trials_returns() {
+        // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
+        let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
+        for (name, trials, p, alpha) in cases {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let r = ev(name, vec![n(trials), n(p), n(alpha)]);
+                let _ = tx.send(r);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Value::Number(_)) | Ok(Value::Error(CellError::Num)) => {}
+                Ok(other) => panic!("{name}({trials},{p},{alpha}) returned {other:?}"),
+                Err(_) => panic!("{name}({trials},{p},{alpha}) did not return within 5 s"),
+            }
+        }
     }
 
     #[test]

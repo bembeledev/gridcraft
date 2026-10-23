@@ -224,13 +224,17 @@ impl Value {
     /// Coercion to a number as arithmetic does it: empty = 0, TRUE = 1, numeric text parses
     /// (including dates, times, percentages and currency), other text = `#VALUE!`.
     pub fn to_number(&self) -> Result<f64, CellError> {
+        self.to_number_in(crate::DateSystem::D1900)
+    }
+    /// [`Value::to_number`] with date text read in the given workbook date system.
+    pub fn to_number_in(&self, sys: crate::DateSystem) -> Result<f64, CellError> {
         match self {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Text(t) => crate::parse::parse_number_text(t).ok_or(CellError::Value),
+            Value::Text(t) => crate::parse::parse_number_text_in(t, sys).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_number()).unwrap_or(Ok(0.0)),
+            Value::Array(a) => a.data.first().map(|v| v.to_number_in(sys)).unwrap_or(Ok(0.0)),
         }
     }
     /// Coercion to text as `&` does it.
@@ -355,6 +359,10 @@ pub fn number_to_text(n: f64) -> String {
     if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
         return sci_text(n, 15);
     }
+    // A value just below 1e15 can round up to 1e15 at 15 significant digits.
+    if format!("{:.14e}", a).parse::<f64>().is_ok_and(|r| r >= 1e15) {
+        return sci_text(n, 15);
+    }
     // 15 significant digits, trailing zeros trimmed.
     let mag = a.log10().floor() as i32;
     let decimals = (14 - mag).clamp(0, 30) as usize;
@@ -396,6 +404,13 @@ mod tests {
         assert_eq!(number_to_text(0.0001), "0.0001");
         assert_eq!(number_to_text(1e-10), "1E-10");
         assert_eq!(number_to_text(1.0 / 3.0), "0.333333333333333");
+    }
+
+    #[test]
+    fn number_text_rounds_up_to_scientific_boundary() {
+        assert_eq!(number_to_text(999999999999999.9), "1E+15");
+        assert_eq!(number_to_text(-999999999999999.9), "-1E+15");
+        assert_eq!(number_to_text(999999999999999.0), "999999999999999");
     }
 
     #[test]

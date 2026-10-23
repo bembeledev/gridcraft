@@ -63,7 +63,10 @@ fn workbook() -> Workbook {
         range: rr("A1:F9"),
         header_row: true,
         totals_row: false,
-        columns: headers.iter().map(|h| TableColumn { name: (*h).into(), totals: TotalsFn::None, totals_label: None, formula: None }).collect(),
+        columns: headers
+            .iter()
+            .map(|h| TableColumn { name: (*h).into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None })
+            .collect(),
         style: "TableStyleMedium2".into(),
         banded_rows: true,
         banded_cols: false,
@@ -71,6 +74,8 @@ fn workbook() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![],
+        table_type: None,
+        connection_id: None,
     });
     wb.names.push(DefinedName { name: "SalesData".into(), scope: None, formula: "Data!$A$1:$F$9".into(), comment: String::new(), hidden: false });
 
@@ -109,6 +114,8 @@ fn workbook() -> Workbook {
         show_headers: false,
         last_range: Some(rr("A2:H12")),
         calculated_fields: vec![],
+        values_on_rows: false,
+        values_position: None,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -166,6 +173,8 @@ fn workbook() -> Workbook {
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
         calculated_fields: vec![],
+        values_on_rows: false,
+        values_position: None,
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -346,6 +355,10 @@ fn pivot_xml_details() {
     let t2 = String::from_utf8(parts.get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
     assert!(t2.contains("pivotShowAs=\"rankDescending\""));
     assert!(t2.contains("showDataAs=\"runTotal\""));
+    // Pivot 1 has no Grand Total column (`colGrandTotals`), pivot 2 no Grand Total row
+    // (`rowGrandTotals`).
+    assert!(t1.contains(" colGrandTotals=\"0\"") && !t1.contains("rowGrandTotals"), "{t1}");
+    assert!(t2.contains(" rowGrandTotals=\"0\"") && !t2.contains("colGrandTotals"), "{t2}");
     // The custom value format is registered in the styles part.
     let styles = String::from_utf8(parts.get("xl/styles.xml").unwrap().clone()).unwrap();
     assert!(styles.contains("formatCode=\"0.0&quot; u&quot;\""));
@@ -391,6 +404,67 @@ fn large_cache_is_written_without_records() {
     assert!(c.contains("<sharedItems containsSemiMixedTypes=\"0\" containsString=\"0\" containsNumber=\"1\" containsInteger=\"1\" minValue=\"0\" maxValue=\"2\" count=\"3\">"), "{}", &c[..c.len().min(2000)]);
     let (back, _) = read_xlsx(&bytes).unwrap();
     assert_eq!(back.sheet(0).unwrap().pivots.len(), 1);
+}
+
+/// #1447 item 1: Excel counts booleans and errors as strings in `<sharedItems>`; writing
+/// `containsString="0"` for them makes a file Excel can't open.
+#[test]
+fn boolean_and_error_cache_flags_match_excel() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let na = || Value::Error(gridcraft_core::CellError::NA);
+    let cols: [(&str, [Value; 3]); 7] = [
+        ("K", [Value::text("a"), Value::text("b"), Value::text("a")]),
+        ("BoolOnly", [Value::Bool(true), Value::Bool(false), Value::Bool(true)]),
+        ("NumBool", [Value::number(1.0), Value::Bool(true), Value::number(2.5)]),
+        ("ErrOnly", [na(), na(), na()]),
+        ("NumErr", [Value::number(1.0), na(), Value::number(3.0)]),
+        ("TextBool", [Value::text("x"), Value::Bool(true), Value::text("y")]),
+        ("BoolBlank", [Value::Bool(true), Value::Empty, Value::Bool(false)]),
+    ];
+    for (c, (h, vals)) in cols.iter().enumerate() {
+        s.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if !matches!(v, Value::Empty) {
+                s.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+    }
+    s.pivots.push(PivotTable {
+        id: 1,
+        source: "Sheet1!$A$1:$G$4".into(),
+        anchor: at("J1"),
+        rows: vec![field("K")],
+        values: vec![PivotValue { source_col: "NumBool".into(), name: "Sum of NumBool".into(), ..PivotValue::default() }],
+        last_range: Some(rr("J1:K4")),
+        ..PivotTable::default()
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let c = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    let start = |name: &str| -> String {
+        let i = c.find(&format!("<cacheField name=\"{name}\"")).unwrap();
+        let j = i + c[i..].find("<sharedItems").unwrap();
+        let k = j + c[j..].find('>').unwrap();
+        c[j..=k].trim_end_matches('>').trim_end_matches('/').to_string()
+    };
+    let flags = |name: &str| -> String {
+        let t = start(name);
+        // Drop the trailing count attribute, which depends on itemization.
+        match t.find(" count=") {
+            Some(i) => t[..i].to_string(),
+            None => t,
+        }
+    };
+    assert_eq!(flags("BoolOnly"), "<sharedItems");
+    assert_eq!(flags("NumBool"), "<sharedItems containsMixedTypes=\"1\" containsNumber=\"1\" minValue=\"1\" maxValue=\"2.5\"");
+    assert_eq!(flags("ErrOnly"), "<sharedItems");
+    assert_eq!(flags("NumErr"), "<sharedItems containsMixedTypes=\"1\" containsNumber=\"1\" containsInteger=\"1\" minValue=\"1\" maxValue=\"3\"");
+    assert_eq!(flags("TextBool"), "<sharedItems");
+    assert_eq!(flags("BoolBlank"), "<sharedItems containsBlank=\"1\"");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().pivots.len(), 1);
+    assert!(!report.warnings.iter().any(|w| w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
 }
 
 const PT_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable1.xml"/></Relationships>"#;
@@ -507,4 +581,146 @@ fn calculated_fields_round_trip() {
     for (a, b) in orig.iter().zip(read.iter()) {
         assert_eq!(a, b, "pivot {} differs", a.name);
     }
+}
+
+/// The `x` attributes of an axis list (`rowFields`/`colFields`) in a pivotTable part.
+fn axis_xs(table: &str, tag: &str) -> Vec<i64> {
+    let Some(start) = table.find(&format!("<{tag} ")) else { return vec![] };
+    let end = table[start..].find(&format!("</{tag}>")).map_or(table.len(), |e| start + e);
+    table[start..end].split("<field x=\"").skip(1).filter_map(|s| s.split('"').next()?.parse().ok()).collect()
+}
+
+#[test]
+fn values_on_rows_round_trip() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(1).unwrap();
+        p.values_on_rows = true;
+        p.values_position = Some(1);
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let t2 = String::from_utf8(parts.get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
+    assert!(t2.contains(" dataOnRows=\"1\""), "{t2}");
+    // Σ Values (-2) between the two row fields; Columns keep only Product.
+    let rows = axis_xs(&t2, "rowFields");
+    assert_eq!(rows.len(), 3, "{t2}");
+    assert_eq!(rows[1], -2, "{t2}");
+    assert!(!axis_xs(&t2, "colFields").contains(&-2), "{t2}");
+    assert!(t2.contains("firstDataRow=\"2\" firstDataCol=\"3\""), "{t2}");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots, wb.sheet(1).unwrap().pivots);
+
+    // After the last row field.
+    wb.sheet_mut(1).unwrap().pivots[1].values_position = None;
+    let bytes = write_xlsx(&wb).unwrap();
+    let t2 = String::from_utf8(unzip(&bytes).get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
+    assert_eq!(axis_xs(&t2, "rowFields").last(), Some(&-2), "{t2}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots, wb.sheet(1).unwrap().pivots);
+
+    // Σ Values in Columns is written after the last column field, its only place in the layout.
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(1).unwrap();
+        p.values_on_rows = false;
+        p.values_position = Some(0);
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let t2 = String::from_utf8(unzip(&bytes).get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
+    assert!(!t2.contains("dataOnRows"), "{t2}");
+    assert_eq!(axis_xs(&t2, "colFields").last(), Some(&-2), "{t2}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots[1].values_position, None);
+}
+
+#[test]
+fn values_ahead_of_column_fields_read_last() {
+    let table = r#"<pivotTableDefinition name="ValuesFirst" cacheId="1"><location ref="C1:F4"/><pivotFields><pivotField axis="axisCol"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><colFields count="2"><field x="-2"/><field x="0"/></colFields><dataFields><dataField name="Sum of V" fld="1"/><dataField name="Count of V" fld="1" subtotal="count"/></dataFields></pivotTableDefinition>"#;
+    let (wb, _) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!((pt.columns.len(), pt.values.len()), (1, 2));
+    assert!(!pt.values_on_rows);
+    assert_eq!(pt.values_position, None);
+}
+
+// As Excel saves them: `rowGrandTotals="0"` drops the Grand Total row under the report (leaving
+// Excel's "On for Rows Only"), `colGrandTotals="0"` the Grand Total column at its right ("On for
+// Columns Only"). LibreOffice's Pivot2_Row_Subtotals.xlsx (`rowGrandTotals="0"`) shows no Grand
+// Total row; ClosedXML's TemplateWithTableSourcePivotTables.xlsx pivotTable5 (`colGrandTotals="0"`,
+// row and column fields) shows a Grand Total row and no Grand Total column.
+#[test]
+fn grand_totals_read_in_excel_direction() {
+    let table = |attr: &str| {
+        format!(
+            r#"<pivotTableDefinition name="GT" cacheId="1" {attr}><location ref="C1:F4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Sum of V" fld="1"/></dataFields></pivotTableDefinition>"#
+        )
+    };
+    for (attr, rows, cols) in [("rowGrandTotals=\"0\"", true, false), ("colGrandTotals=\"0\"", false, true), ("", true, true)] {
+        let (wb, _) = read_xlsx(&with_pivot(&table(attr), Some(GOOD_CACHE))).unwrap();
+        let pt = &wb.sheet(0).unwrap().pivots[0];
+        assert_eq!((pt.grand_totals_rows, pt.grand_totals_cols), (rows, cols), "{attr}");
+    }
+}
+
+#[test]
+fn data_on_rows_with_one_value_field_reads_without_warning() {
+    let table = r#"<pivotTableDefinition name="OneValue" cacheId="1" dataOnRows="1"><location ref="C1:D4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("values on rows")), "{:?}", report.warnings);
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert!(pt.values_on_rows);
+    assert_eq!(pt.values_position, None);
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
+}
+
+/// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
+/// (header, values), `pt` the pivot built on `Data!A1:<last>`.
+fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
+    let mut wb = Workbook::new();
+    let data = wb.sheet_mut(0).unwrap();
+    data.name = "Data".into();
+    let mut rows = 0;
+    for (c, (h, vals)) in columns.iter().enumerate() {
+        data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if *v != Value::Empty {
+                data.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+        rows = rows.max(vals.len());
+    }
+    let last = format!("{}{}", gridcraft_core::col_to_letters(columns.len() as u32 - 1), rows + 1);
+    let mut table = PivotTable { id: 1, name: "PT".into(), source: format!("Data!$A$1:{last}"), anchor: at("A3"), ..PivotTable::default() };
+    pt(&mut table);
+    let mut report = Sheet::new("Report");
+    report.pivots = vec![table];
+    wb.sheets.push(Arc::new(report));
+    unzip(&write_xlsx(&wb).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+}
+
+/// #1447: two value fields and no column field: Excel 365 adds a `Values` row unless told not to.
+#[test]
+fn two_value_fields_without_columns_hide_the_values_row() {
+    let cols = [
+        ("Region", vec![Value::text("East"), Value::text("West"), Value::text("East")]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0)]),
+        ("Qty", vec![Value::number(1.0), Value::number(2.0), Value::number(3.0)]),
+    ];
+    let value = |c: &str| PivotValue { source_col: c.into(), name: format!("Sum of {c}"), ..PivotValue::default() };
+    let two = small_pivot(&cols, |p| {
+        p.rows = vec![field("Region")];
+        p.values = vec![value("Sales"), value("Qty")];
+    });
+    let t = &two["xl/pivotTables/pivotTable1.xml"];
+    assert!(t.contains("firstHeaderRow=\"0\" firstDataRow=\"1\""), "{t}");
+    assert!(t.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t}");
+    let one = small_pivot(&cols, |p| {
+        p.rows = vec![field("Region")];
+        p.values = vec![value("Sales")];
+    });
+    let t = &one["xl/pivotTables/pivotTable1.xml"];
+    assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
+    assert!(!t.contains("hideValuesRow"), "{t}");
 }

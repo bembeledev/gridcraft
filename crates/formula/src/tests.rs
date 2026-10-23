@@ -6,6 +6,29 @@ fn rt(src: &str) -> String {
 }
 
 #[test]
+fn quoted_sheet_qualified_name_keeps_quotes() {
+    assert_eq!(rt("'My Sheet'!Total"), "'My Sheet'!Total");
+    assert_eq!(rt("'Data'!Total"), "Data!Total");
+    assert_eq!(rt("'It''s'!Total+1"), "'It''s'!Total+1");
+}
+
+#[test]
+fn intersection_with_deleted_operand_reparses() {
+    // Deleting the columns of an intersection operand prints `A1:B2 #REF!`; that text must parse back.
+    assert_eq!(rt("A1:B2 #REF!"), "A1:B2 #REF!");
+    assert_eq!(rt("#REF! A1:B2"), "#REF! A1:B2");
+    assert_eq!(parse("A1:B2 #REF!"), parse("A1:B2 (#REF!)").map(|e| strip_paren(&e)));
+}
+
+fn strip_paren(e: &Expr) -> Expr {
+    match e {
+        Expr::Binary(op, a, b) => Expr::Binary(*op, Box::new(strip_paren(a)), Box::new(strip_paren(b))),
+        Expr::Paren(x) => strip_paren(x),
+        other => other.clone(),
+    }
+}
+
+#[test]
 fn roundtrips() {
     for f in [
         "1+2*3",
@@ -48,6 +71,8 @@ fn normalises() {
     assert_eq!(rt("=sum(a1:b2)"), "SUM(A1:B2)");
     assert_eq!(rt("= 1 + 2"), "1+2");
     assert_eq!(rt("_xlfn.XLOOKUP(1,A:A,B:B)"), "XLOOKUP(1,A:A,B:B)");
+    assert_eq!(rt("_xlfn.GROUPBY(A1:A3,B1:B3,_xleta.SUM)"), "GROUPBY(A1:A3,B1:B3,SUM)");
+    assert_eq!(rt("_XLUDF.concat(\"a\",\"b\")"), "_xludf.CONCAT(\"a\",\"b\")");
     assert_eq!(rt("true"), "TRUE");
     assert_eq!(rt("'Sheet1'!A1"), "Sheet1!A1");
 }
@@ -183,6 +208,10 @@ fn rename_sheet_updates_qualified_names() {
     assert_eq!(print(&rename_sheet(e, "data", "Numbers")), "Numbers!MyName+MyName+Other!MyName");
     let e = parse("Data!MyName").unwrap();
     assert_eq!(print(&rename_sheet(e, "Data", "New Name")), "'New Name'!MyName");
+    // Stored bare, like a parsed name, so the evaluator finds the sheet and a second rename still matches.
+    let e = rename_sheet(parse("Data!MyName").unwrap(), "Data", "It's");
+    assert_eq!(e, Expr::Name("It's!MyName".into()));
+    assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
 }
 
 #[test]
@@ -249,6 +278,20 @@ fn unbracketed_this_row_column() {
 }
 
 #[test]
+fn struct_column_keeps_edge_spaces() {
+    // The spaces are part of the column name: `Table1[Qty ]` names `Qty `, never `Qty`.
+    let Expr::Struct(s) = parse("Table1[Qty ]").unwrap() else { panic!() };
+    assert_eq!(s.col_start.as_deref(), Some("Qty "));
+    let Expr::Struct(s) = parse("Table1[ Qty]").unwrap() else { panic!() };
+    assert_eq!(s.col_start.as_deref(), Some(" Qty"));
+    // Excel writes such a column in the double-bracket form.
+    assert_eq!(rt("Table1[Qty ]"), "Table1[[Qty ]]");
+    for f in ["Table1[[Qty ]]", "Table1[[ Sum for Q2 ]]", "Table1[[#Totals],[Qty ]]", "Table1[@[Qty ]]", "Table1[Unit Price]"] {
+        assert_eq!(rt(f), f);
+    }
+}
+
+#[test]
 fn trim_references() {
     for f in [
         "SUM(A1:.E10)",
@@ -300,4 +343,163 @@ fn trim_references_adjust() {
     assert_eq!(print(&shift_relative(parse("SUM(A1.:.B2)").unwrap(), 1, 1)), "SUM(B2.:.C3)");
     let refs: Vec<String> = parse("SUM(Sheet2!A1:.B5)").unwrap().references().iter().map(|r| printer::reference_a1(r)).collect();
     assert_eq!(refs, ["Sheet2!A1:B5"]);
+}
+
+#[test]
+fn prints_long_flat_chain_without_deep_recursion() {
+    // Small stack: a recursive printer overflows long before 20000 levels.
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut e = Expr::Number(1.0);
+            for _ in 0..20000 {
+                e = Expr::Binary(BinOp::Add, Box::new(e), Box::new(Expr::Number(1.0)));
+            }
+            let text = print(&e);
+            let r1c1 = print_r1c1(&e, gridcraft_core::CellRef { row: 0, col: 0 });
+            // Dropping the deep tree recurses; leak it so only the printer is under test.
+            std::mem::forget(e);
+            (text, r1c1)
+        })
+        .expect("spawn");
+    let (text, r1c1) = handle.join().expect("printer must not overflow the stack");
+    assert_eq!(text, vec!["1"; 20001].join("+"));
+    assert_eq!(r1c1, text);
+}
+
+#[test]
+fn hostile_formulas_are_errors_not_stack_overflows() {
+    // A small stack: parsing must fail cleanly instead of building trees deeper than the nesting
+    // limit, which dropping, printing and evaluating walk recursively.
+    let handle = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let percents = format!("1{}", "%".repeat(1_000));
+            let invokes = format!("LAMBDA(x,x)(1){}", "(1)".repeat(1_000));
+            let long_chain = format!("1{}", "+1".repeat(100_000));
+            let huge_percents = format!("1{}", "%".repeat(1_000_000));
+            (parse(&percents).is_err(), parse(&invokes).is_err(), parse(&long_chain).is_err(), parse(&huge_percents).is_err())
+        })
+        .expect("spawn");
+    assert_eq!(handle.join().expect("parsing must not overflow the stack"), (true, true, true, true));
+    // Within the limits these still parse.
+    assert!(parse(&format!("1{}", "%".repeat(100))).is_ok());
+    assert!(parse("LAMBDA(x,x)(1)(2)").is_ok());
+}
+
+#[test]
+fn formulas_longer_than_excel_allows_are_refused() {
+    let at_limit = format!("1{}", "+1".repeat((crate::MAX_FORMULA_LEN - 1) / 2));
+    assert_eq!(at_limit.chars().count(), crate::MAX_FORMULA_LEN - 1);
+    assert!(parse(&at_limit).is_ok());
+    assert!(parse(&format!("={at_limit}")).is_ok(), "the leading = does not count");
+    let over = format!("{at_limit}+1");
+    let err = parse(&over).unwrap_err();
+    assert!(err.msg.contains("8192"), "{}", err.msg);
+    // Characters, not bytes: 8,000 two-byte characters in a text literal are within the limit.
+    let text = format!("\"{}\"", "é".repeat(8_000));
+    assert!(text.len() > crate::MAX_FORMULA_LEN);
+    assert!(parse(&text).is_ok());
+}
+
+#[test]
+fn sheet_names_excel_quotes_stay_quoted() {
+    // Excel quotes R1C1-looking names, a leading `.`, cells within the sheet and booleans (#1458).
+    for name in ["R", "C", "RC", "R1C", "RC1", "R1C1", "r2c3", "R1", "C1", "A1", "XFD1", "AB1048576", ".x", "TRUE", "false"] {
+        assert_eq!(rt(&format!("'{name}'!A1")), format!("'{name}'!A1"), "{name}");
+    }
+    // Names Excel leaves bare.
+    for name in ["XFE1", "AB1048577", "Sheet.1", "_x", "A1A", "\u{3a3}"] {
+        assert_eq!(rt(&format!("'{name}'!A1")), format!("{name}!A1"), "{name}");
+    }
+}
+
+#[test]
+fn longest_flat_chains_clone_compare_walk_and_adjust_without_deep_recursion() {
+    // `=1+1+…` with 4,096 operands is 8,192 characters, Excel's formula limit, and nests 4,095
+    // levels on its left. On a 1 MiB stack (the Windows main thread) the derived, recursive
+    // Clone overflowed when the engine stored such a formula (#916).
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let plus = vec!["1"; 4096].join("+");
+            let e = parse(&plus).expect("parse");
+            let copy = e.clone();
+            assert!(copy == e);
+            let other = parse(&format!("{}-1", vec!["1"; 4095].join("+"))).expect("parse");
+            assert!(other != e);
+            let mut nodes = 0;
+            e.walk(&mut |_| nodes += 1);
+            assert_eq!(nodes, 2 * 4096 - 1);
+            assert_eq!(print(&copy.map(&mut |x| x)), plus);
+            // A chain of references: walk finds them in order, adjust rewrites every one.
+            let refs = (1..=1000).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+");
+            let e = parse(&refs).expect("parse");
+            let found: Vec<String> = e.references().iter().map(|r| printer::reference_a1(r)).collect();
+            assert_eq!(found.first().map(String::as_str), Some("A1"));
+            assert_eq!(found.last().map(String::as_str), Some("A1000"));
+            assert_eq!(found.len(), 1000);
+            let ins = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+            let moved = print(&adjust(e.clone(), "S", "S", &ins));
+            assert_eq!(moved, (2..=1001).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+"));
+            assert_eq!(print(&shift_relative(e, 0, 1)), (1..=1000).map(|r| format!("B{r}")).collect::<Vec<_>>().join("+"));
+        })
+        .expect("spawn");
+    handle.join().expect("long chains must not overflow the stack");
+}
+
+#[test]
+fn spanish_input_counts_left_operand_of_a_chain_at_the_same_depth() {
+    // The leftmost operand of a flat chain is not nested, so `(((…1)))+1` is accepted whenever
+    // `(((…1)))` is, in both the pre-check and `normalize`.
+    let wrap = |n: usize| {
+        let mut e = Expr::Number(1.0);
+        for _ in 0..n {
+            e = Expr::Paren(Box::new(e));
+        }
+        e
+    };
+    let es = |e: &Expr| crate::print_input(e, FormulaLocale::Es, |_| false);
+    let deepest = (0..400).take_while(|&n| es(&wrap(n)).is_ok()).last().expect("depth 0 is accepted");
+    assert!(deepest > 1 && deepest < 400);
+    let chain = Expr::Binary(BinOp::Add, Box::new(wrap(deepest)), Box::new(Expr::Number(1.0)));
+    assert!(es(&chain).is_ok());
+}
+
+#[test]
+fn walk_is_preorder_and_map_is_postorder_left_to_right() {
+    // `(A1+B1)+SUM(C1,D1)-E1`: a chain with a call on its right. walk visits parents before
+    // children, map rewrites children (left to right) before their parent.
+    let e = parse("(A1+B1)+SUM(C1,D1)-E1").unwrap();
+    let mut walked = Vec::new();
+    e.walk(&mut |n| walked.push(print(n)));
+    assert_eq!(walked, ["(A1+B1)+SUM(C1,D1)-E1", "(A1+B1)+SUM(C1,D1)", "(A1+B1)", "A1+B1", "A1", "B1", "SUM(C1,D1)", "C1", "D1", "E1"]);
+    let mut mapped = Vec::new();
+    let out = e.map(&mut |n| {
+        mapped.push(print(&n));
+        n
+    });
+    assert_eq!(mapped, ["A1", "B1", "A1+B1", "(A1+B1)", "C1", "D1", "SUM(C1,D1)", "(A1+B1)+SUM(C1,D1)", "E1", "(A1+B1)+SUM(C1,D1)-E1"]);
+    assert_eq!(print(&out), "(A1+B1)+SUM(C1,D1)-E1");
+}
+
+#[test]
+fn missing_closing_parentheses_are_closed_and_errors_describe_the_typed_text() {
+    // #2030: `1+` reported "unexpected `)`", the error of the last retry with `)` appended.
+    let entry = |src: &str| parse_closing_parens(src, parse);
+    assert_eq!(entry("SUM(1,2").map(|e| print(&e)), Ok("SUM(1,2)".to_string()));
+    assert_eq!(entry("((1+2").map(|e| print(&e)), Ok("((1+2))".to_string()));
+    assert_eq!(entry("1+2").map(|e| print(&e)), Ok("1+2".to_string()));
+    for src in ["1+", "--", "SUM(1,+", "1+*2", &format!("{}1", "(".repeat(9))] {
+        assert_eq!(entry(src).unwrap_err(), parse(src).unwrap_err(), "{src}");
+    }
+    assert_eq!(entry("1+").unwrap_err().msg, "unexpected end of formula");
+}
+
+#[test]
+fn number_literal_too_large_for_f64_is_a_parse_error() {
+    for bad in ["1E+400", "-1E+400", "1E+400*A1", "SUM(1E309,1)", "9".repeat(400).as_str()] {
+        assert!(parse(bad).is_err(), "{bad} should fail");
+    }
+    assert!(parse("1E+308").is_ok());
 }

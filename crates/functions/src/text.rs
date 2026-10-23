@@ -1,11 +1,12 @@
 //! Text functions.
 
-use gridcraft_core::parse::parse_number_text;
+use gridcraft_core::parse::parse_number_text_in;
 use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::criteria::wildcard_find;
 use crate::util::{
-    A, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar, text, text_val,
+    A, MAX_CELLS, MAX_TEXT, R, S, arg, array_val, as_array, boolean, has, num, num_val, opt_bool, opt_int, opt_num, round_half_away, scalar, text,
+    text_val,
 };
 use crate::{Arg, Ctx, FnSpec, VAR};
 
@@ -214,7 +215,7 @@ fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
     let hay = text(a, 1)?;
     let start = opt_num(a, 2, 1.0)?;
     let hc = chars(&hay);
-    if (start.is_nan() || start < 1.0) || start > hc.len() as f64 + 1.0 {
+    if (start.is_nan() || start < 1.0) || start > hc.len().max(1) as f64 {
         return Err(CellError::Value);
     }
     let start = start as usize - 1;
@@ -294,17 +295,17 @@ fn unicode(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 /// VALUE: a blank cell reads as 0, but empty or blank text is not a number (observed:
 /// `VALUE("")` is `#VALUE!`).
-fn value(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn value(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     match scalar(arg(a, 0)?) {
         Value::Number(n) => num_val(n),
         Value::Empty => num_val(0.0),
         Value::Error(e) => Err(e),
-        Value::Text(t) => parse_number_text(&t).ok_or(CellError::Value).and_then(num_val),
+        Value::Text(t) => parse_number_text_in(&t, c.date_system()).ok_or(CellError::Value).and_then(num_val),
         _ => Err(CellError::Value),
     }
 }
 
-fn numbervalue(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
     let dec = if a.len() > 1 { text(a, 1)?.chars().next().ok_or(CellError::Value)? } else { '.' };
     let grp = if a.len() > 2 { text(a, 2)?.chars().next().ok_or(CellError::Value)? } else { ',' };
@@ -337,7 +338,7 @@ fn numbervalue(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
-    let mut n = parse_number_text(&out).ok_or(CellError::Value)?;
+    let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
     for _ in 0..pct {
         n /= 100.0;
     }
@@ -408,10 +409,11 @@ const THAI_DIGITS: [&str; 10] = ["ศูนย์", "หนึ่ง", "สอ�
 const THAI_PLACES: [&str; 6] = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
 
 /// Thai words for a group of up to six decimal digits (most significant first); empty for zero.
-/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด.
-fn thai_group(digits: &[u8]) -> String {
+/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด; `after`
+/// says the number already has a non-zero digit in a higher group (so 1,000,001 ends in เอ็ด).
+fn thai_group(digits: &[u8], after: bool) -> String {
     let n = digits.len();
-    let higher = digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
+    let higher = after || digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
     let mut out = String::new();
     for (i, &d) in digits.iter().enumerate() {
         let place = n - 1 - i;
@@ -444,7 +446,7 @@ fn thai_number(digits: &str) -> String {
     let mut start = 0;
     let mut len = first;
     while let Some(group) = d.get(start..start + len) {
-        out.push_str(&thai_group(group));
+        out.push_str(&thai_group(group, start > 0));
         start += len;
         len = 6;
         if start < d.len() {
@@ -504,16 +506,33 @@ fn delimiters(v: &Value) -> R<Vec<Vec<char>>> {
     as_array(v).iter().map(|d| d.to_text().map(|s| chars(&s))).collect()
 }
 
-/// Non-overlapping delimiter matches (start, end) in char positions, scanning left to right and
-/// preferring the longest delimiter at each position. Empty delimiters are ignored unless all
+/// Non-overlapping delimiter matches (start, end) in char positions, in ascending order. Scans left
+/// to right preferring the longest delimiter starting at each position, or (`from_end`) right to
+/// left preferring the longest delimiter ending at each position. Empty delimiters are ignored unless all
 /// delimiters are empty, in which case every position matches with zero length.
-fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<(usize, usize)> {
+fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
     let t = if insensitive { fold(text) } else { text.to_vec() };
     let ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
     if ds.is_empty() {
         return (0..=t.len()).map(|i| (i, i)).collect();
     }
     let mut out = Vec::new();
+    if from_end {
+        let mut j = t.len();
+        while j > 0 {
+            let best =
+                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+            match best {
+                Some(l) => {
+                    out.push((j - l, j));
+                    j -= l;
+                }
+                None => j -= 1,
+            }
+        }
+        out.reverse();
+        return out;
+    }
     let mut i = 0;
     while i < t.len() {
         let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
@@ -537,7 +556,7 @@ fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
     }
-    let mut m = find_matches(&s, &delims, mode == 1);
+    let mut m = find_matches(&s, &delims, mode == 1, inst < 0);
     if match_end {
         if inst > 0 {
             if m.last().is_none_or(|x| x.0 != s.len()) {
@@ -572,7 +591,7 @@ fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char
     }
     let mut out = Vec::new();
     let mut last = 0;
-    for (st, en) in find_matches(s, delims, insensitive) {
+    for (st, en) in find_matches(s, delims, insensitive, false) {
         out.push(s[last..st].to_vec());
         last = en;
     }
@@ -610,6 +629,9 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let ncols = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let nrows = rows.len();
+    if nrows.saturating_mul(ncols) > MAX_CELLS {
+        return Err(CellError::Num);
+    }
     let mut data = Vec::with_capacity(nrows * ncols);
     for r in rows {
         let n = r.len();
@@ -841,6 +863,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             fixed
         ),
         f!("DOLLAR", 1, 2, Text, S, "DOLLAR(number, [decimals])", "Formats a number as currency text.", dollar),
+        f!("USDOLLAR", 1, 2, Compatibility, S, "USDOLLAR(number, [decimals])", "Formats a number as currency text, like DOLLAR.", dollar),
         f!("BAHTTEXT", 1, 1, Text, S, "BAHTTEXT(number)", "Spells out a number in Thai words with Baht.", bahttext),
         f!("T", 1, 1, Text, S, "T(value)", "Returns the value if it is text, otherwise empty text.", t_fn),
         f!(
@@ -954,6 +977,17 @@ mod tests {
         is_text(bt(1.999), "สองบาทถ้วน");
         is_text(bt(0.005), "หนึ่งสตางค์");
         is_text(bt(-0.001), "ศูนย์บาทถ้วน");
+        // A final one is เอ็ด after higher digits in any group, millions included (#1234).
+        is_text(bt(21_000_001.0), "ยี่สิบเอ็ดล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001.0), "หนึ่งล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001_000_000.0), "หนึ่งล้านเอ็ดล้านบาทถ้วน");
+        is_text(bt(1001.0), "หนึ่งพันเอ็ดบาทถ้วน");
+        is_text(bt(11.0), "สิบเอ็ดบาทถ้วน");
+        is_text(bt(1.0), "หนึ่งบาทถ้วน");
+        is_text(bt(0.01), "หนึ่งสตางค์");
+        is_text(bt(0.21), "ยี่สิบเอ็ดสตางค์");
+        is_text(bt(1250.5), "หนึ่งพันสองร้อยห้าสิบบาทห้าสิบสตางค์");
+        is_text(bt(0.25), "ยี่สิบห้าสตางค์");
         is_err(ev("BAHTTEXT", vec![t("abc")]), CellError::Value);
         // Huge numbers give text (or #NUM! where rounding overflows), never a panic.
         assert!(matches!(bt(-1e300), Value::Text(_)));
@@ -1032,6 +1066,15 @@ mod tests {
         close(ev("SEARCH", vec![t("~*"), t("a*b")]), 2.0);
         is_err(ev("SEARCH", vec![t("z"), t("abc")]), CellError::Value);
         is_err(ev("SEARCH", vec![t("a"), t("abc"), n(5.0)]), CellError::Value);
+        close(ev("SEARCH", vec![t("b"), t("\u{130}b")]), 2.0);
+        close(ev("SEARCH", vec![t("B"), t("\u{130}b")]), 2.0);
+        close(ev("SEARCH", vec![t("b?"), t("a\u{130}bc")]), 3.0);
+        close(ev("SEARCH", vec![t("i"), t("a\u{130}bc")]), 2.0);
+        is_err(ev("SEARCH", vec![t("b"), t("a\u{130}bc"), n(4.0)]), CellError::Value);
+        for f in ["FIND", "SEARCH"] {
+            close(ev(f, vec![t(""), t("abc"), n(3.0)]), 3.0);
+            is_err(ev(f, vec![t(""), t("abc"), n(4.0)]), CellError::Value);
+        }
         assert_eq!(ev("EXACT", vec![t("a"), t("A")]), Value::Bool(false));
         assert_eq!(ev("EXACT", vec![t("a"), t("a")]), Value::Bool(true));
     }
@@ -1091,6 +1134,8 @@ mod tests {
         is_text(ev("DOLLAR", vec![n(1234.567)]), "$1,234.57");
         is_text(ev("DOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
         is_text(ev("DOLLAR", vec![n(0.5), n(0.0)]), "$1");
+        is_text(ev("USDOLLAR", vec![n(1.0)]), "$1.00");
+        is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
     }
@@ -1111,6 +1156,12 @@ mod tests {
         is_err(ev("TEXTBEFORE", vec![t("abc"), t("b"), n(0.0)]), CellError::Value);
         is_text(ev("TEXTBEFORE", vec![t("abc"), t("")]), "");
         is_text(ev("TEXTAFTER", vec![t("abc"), t("")]), "abc");
+        // Negative instances search from the end, so overlapping delimiters match differently.
+        is_text(ev("TEXTBEFORE", vec![t("aaa"), t("aa"), n(-1.0)]), "a");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(-1.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("aaaa"), t("aa"), n(-2.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("AaA"), t("aa"), n(-1.0), n(1.0)]), "A");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(1.0)]), "a");
     }
 
     #[test]
@@ -1131,6 +1182,13 @@ mod tests {
         assert_eq!(rows_of(&v), vec![vec![tv("a"), tv("b"), tv("c")]]);
         let v = ev("TEXTSPLIT", vec![t("a,b;c"), t(","), t(";"), b(false), n(0.0), t("-")]);
         assert_eq!(rows_of(&v)[1], vec![tv("c"), tv("-")]);
+    }
+
+    #[test]
+    fn split_rejects_oversized_padded_grid() {
+        // One row of 8000 columns followed by 8000 one-cell rows: the text is under the cell-text limit, the padded grid is not.
+        let text = format!("{}{}", "a,".repeat(8000), "b;".repeat(8000));
+        is_err(ev("TEXTSPLIT", vec![t(&text), t(","), t(";")]), CellError::Num);
     }
 
     #[test]

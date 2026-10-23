@@ -113,17 +113,30 @@ impl EditState {
     }
 
     /// Points the reference at byte span `span` (from [`formula_refs`]) at `to`, keeping its sheet
-    /// prefix and `$` markers, and puts the caret after it. Returns the reference's new span.
+    /// prefix, `$` markers and trim operator (`.:`, `:.`, `.:.`), and puts the caret after it.
+    /// Returns the reference's new span.
     pub fn replace_ref(&mut self, span: (usize, usize), to: RangeRef) -> Option<(usize, usize)> {
         let old = self.text.get(span.0..span.1)?;
         let (prefix, body) = old.split_at(old.rfind('!').map_or(0, |i| i + 1));
         let (first, last) = (body.split(':').next().unwrap_or(""), body.rsplit(':').next().unwrap_or(""));
+        // A trim operator's dots sit beside the colon: read the endpoints without them, then put them back.
+        let (first, last, dots_before, dots_after) = (
+            first.trim_end_matches('.'),
+            last.trim_start_matches('.'),
+            ".".repeat(first.len() - first.trim_end_matches('.').len()),
+            ".".repeat(last.len() - last.trim_start_matches('.').len()),
+        );
+        let trim = !dots_before.is_empty() || !dots_after.is_empty();
         let cell = |c: CellRef, part: &str| {
             let col_abs = if part.starts_with('$') { "$" } else { "" };
             let row_abs = if part.trim_start_matches('$').contains('$') { "$" } else { "" };
             format!("{col_abs}{}{row_abs}{}", gridcraft_engine::core::col_to_letters(c.col), c.row as u64 + 1)
         };
-        let new = if to.is_single() { cell(to.start, first) } else { format!("{}:{}", cell(to.start, first), cell(to.end, last)) };
+        let new = if to.is_single() && !trim {
+            cell(to.start, first)
+        } else {
+            format!("{}{dots_before}:{dots_after}{}", cell(to.start, first), cell(to.end, last))
+        };
         let new = format!("{prefix}{new}");
         self.text.replace_range(span.0..span.1, &new);
         let end = span.0 + new.len();
@@ -458,6 +471,17 @@ mod tests {
         let mut edit = EditState::new(0, CellRef::new(0, 0), "=$A$1".into(), false, false);
         edit.replace_ref((1, 5), RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 1)));
         assert_eq!(edit.text, "=$A$1:$B$2");
+    }
+
+    #[test]
+    fn dragging_a_trim_reference_keeps_its_operator() {
+        for (formula, moved) in [("=SUM($A$1.:.$B2)", "=SUM($C$3.:.$D4)"), ("=SUM(A1.:B2)", "=SUM(C3.:D4)"), ("=SUM(A1:.$B$2)", "=SUM(C3:.$D$4)")] {
+            let mut edit = EditState::new(0, CellRef::new(0, 0), formula.into(), false, false);
+            let refs = formula_refs(&edit.text);
+            assert_eq!(refs.len(), 1, "{formula}");
+            edit.replace_ref((refs[0].0, refs[0].1), RangeRef::new(CellRef::new(2, 2), CellRef::new(3, 3)));
+            assert_eq!(edit.text, moved);
+        }
     }
 
     #[test]

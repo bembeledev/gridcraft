@@ -1339,7 +1339,15 @@ fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
-    update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))
+    let (si, pi) = find_pivot(s, p)?;
+    let replace = bool_param(p, "replace").unwrap_or(false);
+    edit(s, |cx| {
+        let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
+        let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
+        let area = pv::refresh(&mut cx.wb, si, pi, replace).map_err(other)?;
+        cx.structural = true;
+        Ok(json!({"range": area.a1(), "records": src.rows.len()}))
+    })
 }
 
 fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
@@ -2737,5 +2745,24 @@ mod tests {
         // Clearing an active caption pushes undo
         s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
         assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+    }
+
+    #[test]
+    fn pivot_refresh_updates_report_after_source_edits() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let si = s.doc().unwrap().wb.sheet_index("Sheet2").unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheet(si).unwrap().value(CellRef::parse("B4").unwrap()), Value::Number(415.0));
+
+        // Edit source cell E2 on Sheet1 (East sales increases from 100 to 500)
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "500"})).unwrap();
+
+        // pivot.refresh on Sheet2 recalculates report cells
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        let res = s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(res["records"], 12);
+        let sh = s.doc().unwrap().wb.sheet(si).unwrap();
+        assert_eq!(sh.value(CellRef::parse("B4").unwrap()), Value::Number(815.0));
     }
 }

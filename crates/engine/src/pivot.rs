@@ -767,7 +767,15 @@ impl Ctx<'_> {
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
                 } else {
-                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, value_label: child_value_label });
+                    out.push(Line {
+                        kind: LineKind::Item(false),
+                        leaf: true,
+                        path: prefix.clone(),
+                        values: true,
+                        labels,
+                        vi,
+                        value_label: child_value_label,
+                    });
                 }
             } else {
                 self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, child_value_label, out);

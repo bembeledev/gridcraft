@@ -139,6 +139,12 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        if let Some(bridge) = &self.bridge {
+            for (id, params, request_id) in bridge.take_commands() {
+                let result = self.app.run(&id, params);
+                bridge.post_response(&id, request_id.as_deref(), result);
+            }
+        }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);

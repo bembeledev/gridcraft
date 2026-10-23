@@ -728,6 +728,7 @@ fn khmer() -> Vec<(String, u32)> {
         "/usr/share/fonts/opentype/noto",
         "/usr/share/fonts/truetype",
         "/usr/share/fonts",
+        "/usr/share/fonts/google-noto",
         "/usr/share/fonts/chromeos/noto", // ChromeOS's Linux container (#1762)
     ];
     let mut v: Vec<(String, u32)> = Vec::new();

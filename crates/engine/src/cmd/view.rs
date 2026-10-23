@@ -45,6 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             focus_cell_color
         ),
+        cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
@@ -176,6 +177,7 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
             "gridlines" => &mut sh.show_gridlines,
             "headings" => &mut sh.show_headings,
             "zeros" => &mut sh.show_zeros,
+            "outlineSymbols" => &mut sh.show_outline_symbols,
             "rtl" => &mut sh.right_to_left,
             "printGridlines" => &mut sh.print.gridlines,
             _ => &mut sh.print.headings,

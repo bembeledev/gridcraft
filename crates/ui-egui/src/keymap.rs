@@ -89,6 +89,10 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         OpenBracket if ctrl => Shortcut::Run("formulas.selectPrecedents", json!({"all": true})),
         CloseBracket if ctrl && !s => run("formulas.selectDependents"),
         CloseBracket if ctrl => Shortcut::Run("formulas.selectDependents", json!({"all": true})),
+        // Cmd+Shift+{ / Cmd+Shift+}: the previous / next sheet, the way Mac apps with tabs switch
+        // theirs (Finder, Safari, Terminal). Excel for Mac leaves these unbound: a GridCraft extra.
+        OpenBracket if cmd && s && mac => run("sheet.previous"),
+        CloseBracket if cmd && s && mac => run("sheet.next"),
         // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
         Semicolon if mac && ctrl => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,

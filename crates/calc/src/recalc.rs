@@ -1018,6 +1018,13 @@ impl Calc {
                 }
             }
         }
+        // A cleared anchor empties its whole former spill area too.
+        for (si, r) in &cleared {
+            match emptied.iter_mut().find(|x| x.0 == *si) {
+                Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
+                None => emptied.push((*si, r.end)),
+            }
+        }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
             for &(s, c) in self.graph.nodes.keys() {

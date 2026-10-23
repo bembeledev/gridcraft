@@ -267,6 +267,26 @@ fn a_leading_plus_or_minus_starts_a_formula() {
         assert_eq!(v(&s, "B1"), value, "{typed}");
         assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
     }
+    // Text that would read as a formula is edited with its apostrophe, so confirming the editor
+    // unchanged keeps it text; text that wouldn't is edited as it is.
+    for (typed, shown) in [
+        ("'+5+4", "'+5+4"),
+        ("'-5+4", "'-5+4"),
+        ("'+1-555-1234", "'+1-555-1234"),
+        ("'-abc", "'-abc"),
+        ("--", "--"),
+        ("+49 170 1234567", "+49 170 1234567"),
+    ] {
+        s.execute("cell.set", json!({"cell": "B2", "input": typed})).unwrap();
+        let before = v(&s, "B2");
+        let edit = {
+            let d = s.doc().unwrap();
+            crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B2").unwrap())
+        };
+        assert_eq!(edit, shown, "{typed}");
+        s.execute("cell.set", json!({"cell": "B2", "input": edit})).unwrap();
+        assert_eq!(v(&s, "B2"), before, "{typed} stays text after an unchanged edit");
+    }
     // As observed in Excel for the web, an entry that doesn't read as a formula stays text, and
     // one that does but names nothing known is #NAME?. Only `=` entries are refused.
     for typed in ["--", "-----", "+5+", "+49 170 1234567"] {

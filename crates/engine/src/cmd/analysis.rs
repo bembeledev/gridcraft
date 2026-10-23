@@ -702,7 +702,7 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let mut g = Grid::default();
     g.txt(0, 0, "SUMMARY OUTPUT");
     g.txt(1, 0, model_label);
-    g.txt(2, 0, if model == "linear" { "Regression Statistics" } else { "Regression Statistics (transformed domain)" });
+    g.txt(2, 0, if matches!(model, "exponential" | "power") { "Regression Statistics (ln(Y) domain)" } else { "Regression Statistics" });
     let stats: [(&str, Value); 5] = [
         ("Multiple R", n_or_div0(r2.sqrt())),
         ("R Square", n_or_div0(r2)),
@@ -1365,6 +1365,7 @@ mod tests {
         assert!(close(n(&s, "Exp!B17"), 2.0f64.ln(), 1e-10), "ln(amplitude)");
         assert!(close(n(&s, "Exp!B18"), 1.0, 1e-10), "exponential rate");
         assert_eq!(v(&s, "Exp!A2"), Value::text("Exponential (log-linear fit)"));
+        assert_eq!(v(&s, "Exp!A3"), Value::text("Regression Statistics (ln(Y) domain)"));
 
         s.execute(
             "range.setValues",
@@ -1375,11 +1376,13 @@ mod tests {
             .unwrap();
         assert!(close(n(&s, "Log!B17"), 3.0, 1e-10));
         assert!(close(n(&s, "Log!B18"), 2.0, 1e-10));
+        assert_eq!(v(&s, "Log!A3"), Value::text("Regression Statistics"));
 
         s.execute("range.setValues", json!({"range":"G1","values":[["Y","X"],[4.0,1],[16.0,2],[36.0,3],[64.0,4]]})).unwrap();
         s.execute("data.analysisToolPak", json!({"tool":"regression","model":"power","inputY":"G2:G5","inputX":"H2:H5","newSheet":"Power"})).unwrap();
         assert!(close(n(&s, "Power!B17"), 4.0f64.ln(), 1e-10), "ln(amplitude)");
         assert!(close(n(&s, "Power!B18"), 2.0, 1e-10), "power exponent");
+        assert_eq!(v(&s, "Power!A3"), Value::text("Regression Statistics (ln(Y) domain)"));
     }
 
     #[test]

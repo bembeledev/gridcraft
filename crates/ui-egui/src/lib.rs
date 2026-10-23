@@ -468,6 +468,9 @@ impl SheetApp {
         ) {
             return None;
         }
+        if ["range", "cell", "sheet"].iter().any(|key| p.get(*key).is_some_and(|value| !value.is_null())) {
+            return None;
+        }
         let (id, role) = self.chart_font_target()?;
         let chart = self.session.active()?.wb.active()?.charts.iter().find(|c| c.id == id)?;
         let mut format = chart.format.clone();

@@ -55,6 +55,24 @@ impl Scale {
         let f = (((v - self.min) / span).clamp(-0.5, 1.5)) as f32;
         if self.reversed { 1.0 - f } else { f }
     }
+
+    /// Unclamped position of `v` on the axis. Use before geometric clipping so lines crossing
+    /// manually bounded axes are clipped at the actual axis boundary, not at an arbitrary band.
+    pub fn frac_raw(&self, v: f64) -> f32 {
+        if self.logarithmic {
+            if !(v > 0.0 && self.min > 0.0 && self.max > self.min && v.is_finite()) {
+                return f32::NAN;
+            }
+            let f = ((v.log10() - self.min.log10()) / (self.max.log10() - self.min.log10())) as f32;
+            return if self.reversed { 1.0 - f } else { f };
+        }
+        let span = self.max - self.min;
+        if !(span.is_finite() && span > 0.0 && v.is_finite()) {
+            return f32::NAN;
+        }
+        let f = ((v - self.min) / span) as f32;
+        if self.reversed { 1.0 - f } else { f }
+    }
 }
 
 pub(crate) fn clean(v: f64) -> f64 {
@@ -223,6 +241,15 @@ mod override_tests {
         assert_eq!(scale.ticks(), vec![3.0, 8.0, 13.0, 18.0, 23.0]);
         assert_eq!(scale.frac(3.0), 1.0);
         assert_eq!(scale.frac(23.0), 0.0);
+        assert_eq!(scale.frac_raw(43.0), -1.0);
+        assert_eq!(scale.frac_raw(-17.0), 2.0);
+    }
+
+    #[test]
+    fn raw_logarithmic_fraction_extrapolates_and_rejects_invalid_values() {
+        let scale = Scale { min: 1.0, max: 100.0, step: 10.0, logarithmic: true, reversed: false };
+        assert_eq!(scale.frac_raw(1000.0), 1.5);
+        assert!(scale.frac_raw(0.0).is_nan());
     }
 
     #[test]

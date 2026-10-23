@@ -181,7 +181,20 @@ fn every_trendline_kind_round_trips_in_every_chart_group() {
     }
     // A second save writes the same parts (nothing drifts on the way round).
     let again = write_xlsx(&back).unwrap();
-    assert_eq!(chart_parts(&again), chart_parts(&bytes));
+    let expected = chart_parts(&bytes);
+    for (index, (actual, expected)) in chart_parts(&again).iter().zip(&expected).enumerate() {
+        if actual != expected {
+            let mismatch = actual.chars().zip(expected.chars()).take_while(|(a, b)| a == b).count();
+            let start = mismatch.saturating_sub(100);
+            let actual_end = (mismatch + 240).min(actual.len());
+            let expected_end = (mismatch + 240).min(expected.len());
+            panic!(
+                "chart part {index} changes on its second save near byte {mismatch}:\nactual: {}\nexpected: {}",
+                actual.get(start..actual_end).unwrap_or(""),
+                expected.get(start..expected_end).unwrap_or("")
+            );
+        }
+    }
 }
 
 fn chart_parts(bytes: &[u8]) -> Vec<String> {

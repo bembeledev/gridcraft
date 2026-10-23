@@ -1494,6 +1494,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         if let Err(error) = crate::chart_tools::save_template(app, chart, name) {
             app.message = Some((d.title.clone(), error));
             open = true;
+        } else {
+            open = false;
         }
     } else if confirm && d.name == "chartExport" {
         match app.save_chart_image(build_params(&d)) {
@@ -1849,6 +1851,9 @@ fn range_editor_contents(ui: &mut egui::Ui, d: &mut Dialog, key: &str, active_sh
     if edit.changed() {
         d.values.insert(key.into(), json!(text));
         d.range_picker = None;
+        if d.name == "analysisToolPak" && key == "output" {
+            d.values.insert("outputTo".into(), json!("range"));
+        }
     }
     let picking = d.range_picker.as_ref().is_some_and(|p| p.key == key);
     let button = if picking { "Finish" } else { "Select…" };
@@ -1888,8 +1893,15 @@ pub(crate) fn update_dialog_range_picker(app: &mut SheetApp, sheet: usize, start
             p.start = Some(start);
         }
         d.values.insert(key, json!(text));
+        if d.name == "analysisToolPak" && p_key_is_output(d) {
+            d.values.insert("outputTo".into(), json!("range"));
+        }
     }
     let _ = app.session.run("selection.set", json!({"range": range.a1()}));
+}
+
+fn p_key_is_output(d: &Dialog) -> bool {
+    d.range_picker.as_ref().is_some_and(|picker| picker.key == "output")
 }
 
 /// Help ▸ About GridCraft: the app, its contributors and the AI models that helped. The credits
@@ -3390,6 +3402,12 @@ mod tests {
         let dialog = app.dialog.as_ref().expect("dialog");
         assert_eq!(dialog.values.get("inputX"), Some(&json!("B1:D3")));
         assert_eq!(app.session.active().expect("document").selection.current().a1(), "B1:D3");
+
+        app.dialog.as_mut().expect("dialog").range_picker = Some(RangePicker { key: "output".into(), sheet: 0, start: None, single_cell: true });
+        update_dialog_range_picker(&mut app, 0, CellRef::new(4, 5), CellRef::new(8, 9));
+        let dialog = app.dialog.as_ref().expect("dialog");
+        assert_eq!(dialog.values.get("output"), Some(&json!("F5")));
+        assert_eq!(dialog.values.get("outputTo"), Some(&json!("range")));
     }
 
     #[test]

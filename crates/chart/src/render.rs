@@ -1583,7 +1583,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         .enumerate()
                         .map(|(j, sp)| {
                             sp.filter(|(_, t)| !sc.logarithmic || *t > 0.0).map(|(_, t)| {
-                                let f = sc.frac(t);
+                                let f = sc.frac_raw(t);
                                 if horizontal { [plot.x + f * plot.w, center(j)] } else { [center(j), plot.bottom() - f * plot.h] }
                             })
                         })
@@ -1619,7 +1619,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let frac = |x: f64, y: f64| {
             let cat = (x - 0.5) / ncat_slots as f64;
             let reversed = if horizontal { chart.format.y_axis.reversed } else { chart.format.x_axis.reversed };
-            (if reversed { 1.0 - cat } else { cat }, sc.frac(y) as f64)
+            (if reversed { 1.0 - cat } else { cat }, sc.frac_raw(y) as f64)
         };
         let px = |(fx, fy): (f64, f64)| {
             if horizontal {
@@ -1676,7 +1676,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     if !plot.ok() {
         return;
     }
-    let map = |(x, y): (f64, f64)| [plot.x + xs.frac(x) * plot.w, plot.bottom() - ys.frac(y) * plot.h];
+    let map = |(x, y): (f64, f64)| [plot.x + xs.frac_raw(x) * plot.w, plot.bottom() - ys.frac_raw(y) * plot.h];
     let bubble = chart.kind == ChartKind::Bubble;
     let rmax = plot.w.min(plot.h) * 0.12;
     for (i, (s, pts)) in data.series.iter().zip(&all).enumerate() {
@@ -1691,7 +1691,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 .filter_map(|(j, p)| {
                     let sz = if sizes.is_empty() { Some(1.0) } else { sizes.get(j).copied().flatten() };
                     match (p, sz) {
-                        (Some(p), Some(sz)) if sz > 0.0 => Some((*p, sz)),
+                        (Some(p), Some(sz)) if sz > 0.0 && inside_plot(*p, plot) => Some((*p, sz)),
                         _ => None,
                     }
                 })
@@ -1735,7 +1735,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             continue;
         }
         let pts: Vec<(f64, f64)> = pts.iter().flatten().copied().collect();
-        let frac = |x: f64, y: f64| (xs.frac(x) as f64, ys.frac(y) as f64);
+        let frac = |x: f64, y: f64| (xs.frac_raw(x) as f64, ys.frac_raw(y) as f64);
         let px = |(fx, fy): (f64, f64)| [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h];
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }

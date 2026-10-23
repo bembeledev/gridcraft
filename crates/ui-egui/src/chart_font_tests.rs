@@ -35,3 +35,20 @@ fn chart_home_font_targets_text_without_touching_source_cells_and_supports_undo(
     app.run("home.fontSize", json!({"size":18})).unwrap();
     assert_ne!(serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap(), cells);
 }
+
+#[test]
+fn explicit_cell_font_target_stays_a_cell_command_when_chart_is_selected() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"1"})).unwrap();
+    let result = session.execute("insert.chart", json!({"range":"A1", "type":"column", "title":"Sales"})).unwrap();
+    let id = result["chart"].as_u64().unwrap() as u32;
+    let mut app = SheetApp::new(session, Default::default());
+    app.selected_chart = Some(id);
+    let before_cells = serde_json::to_value(&app.session.active().unwrap().wb.active().unwrap().cells).unwrap();
+    let before_format = app.session.active().unwrap().wb.active().unwrap().charts[0].format.clone();
+    app.run("home.bold", json!({"range":"B2", "on":true})).unwrap();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    assert_ne!(serde_json::to_value(&sheet.cells).unwrap(), before_cells);
+    assert_eq!(sheet.charts[0].format, before_format);
+}

@@ -2436,13 +2436,20 @@ mod tests {
     }
 
     #[test]
-    fn clear_formats_on_partial_pivot_is_refused() {
+    fn clear_formats_on_pivot_preserves_table_and_content() {
         let mut s = sales();
         s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
 
-        // Partial clearFormats is refused.
-        let err = s.execute("edit.clearFormats", json!({"range": "A4"})).unwrap_err().to_string();
-        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        // Partial clearFormats is allowed (as in Excel) and preserves the PivotTable and cell value.
+        s.execute("edit.clearFormats", json!({"range": "A4"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
+        assert_eq!(text(&s, "A4"), "East");
+
+        // Full clearFormats across the entire report also keeps the PivotTable.
+        let pt_range = pt(&s).last_range.unwrap().a1();
+        s.execute("edit.clearFormats", json!({"range": pt_range})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
+        assert_eq!(text(&s, "A4"), "East");
     }
 
     #[test]

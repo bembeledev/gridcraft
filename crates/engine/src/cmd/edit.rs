@@ -1292,7 +1292,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 
 fn check_pivots_for_clear(sh: &gridcraft_model::Sheet, ranges: &[RangeRef], what: &str) -> Result<Vec<usize>> {
     let mut to_delete = Vec::new();
-    if !matches!(what, "contents" | "all" | "formats") || sh.pivots.is_empty() {
+    if !matches!(what, "contents" | "all") || sh.pivots.is_empty() {
         return Ok(to_delete);
     }
     for (pi, pt) in sh.pivots.iter().enumerate() {

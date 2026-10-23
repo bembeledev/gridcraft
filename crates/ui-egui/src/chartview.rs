@@ -331,7 +331,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             turn_painted(p, start, r.center(), sp.rotation);
         }
         if app.selected_chart == Some(sp.id) {
-            crate::frame::paint(p, r, sp.rotation, sp.kind != ShapeKind::Ink);
+            crate::frame::paint(p, r, sp.rotation, sp.kind != ShapeKind::Ink, sp.kind != ShapeKind::Ink);
         }
         done(start, r);
     }
@@ -494,7 +494,7 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    crate::frame::paint(p, r, 0.0, false);
+    crate::frame::paint(p, r, 0.0, false, true);
 }
 
 /// Turn everything painted on `p`'s layer since `start` by `deg` clockwise about `c`.

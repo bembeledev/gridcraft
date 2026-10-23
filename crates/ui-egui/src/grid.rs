@@ -1981,6 +1981,10 @@ struct Selected {
     deg: f32,
     /// Whether it shows a rotation handle.
     rotates: bool,
+    /// Whether it shows resize handles (an ink stroke does not scale with its frame).
+    resizes: bool,
+    /// The cell area: handles act only inside it, not over the headers.
+    cells: Rect,
 }
 
 fn selected_object(app: &SheetApp, geo: &Geo, sh: &Sheet) -> Option<Selected> {
@@ -1990,12 +1994,19 @@ fn selected_object(app: &SheetApp, geo: &Geo, sh: &Sheet) -> Option<Selected> {
     let shape = sh.shapes.iter().find(|s| kind == "shape" && s.id == id);
     let deg = shape.map_or(0.0, |s| s.rotation);
     let rotates = shape.is_some_and(|s| s.kind != gridcraft_engine::model::ShapeKind::Ink);
-    Some(Selected { kind, id, rect: crate::chartview::anchor_rect(geo, sh, &a), deg, rotates })
+    let rect = crate::chartview::anchor_rect(geo, sh, &a);
+    Some(Selected { kind, id, rect, deg, rotates, resizes: rotates || shape.is_none(), cells: geo.cells })
 }
 
 impl Selected {
     fn grab_at(&self, p: Pos2) -> Option<crate::frame::Grab> {
-        crate::frame::grab_at(self.rect, self.deg, self.rotates, p)
+        if !self.cells.contains(p) {
+            return None;
+        }
+        match crate::frame::grab_at(self.rect, self.deg, self.rotates, p) {
+            Some(crate::frame::Grab::Resize(_)) if !self.resizes => None,
+            g => g,
+        }
     }
 }
 
@@ -2967,9 +2978,11 @@ fn object_key(app: &mut SheetApp, geo: &Geo, sh: &Sheet, key: egui::Key, m: egui
     use egui::Key;
     let Some(s) = selected_object(app, geo, sh) else { return false };
     let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
+    // Arrows follow the screen: a right-to-left sheet is mirrored.
+    let sx = if sh.right_to_left { -step } else { step };
     let d = match key {
-        Key::ArrowLeft => vec2(-step, 0.0),
-        Key::ArrowRight => vec2(step, 0.0),
+        Key::ArrowLeft => vec2(-sx, 0.0),
+        Key::ArrowRight => vec2(sx, 0.0),
         Key::ArrowUp => vec2(0.0, -step),
         Key::ArrowDown => vec2(0.0, step),
         Key::Escape => {

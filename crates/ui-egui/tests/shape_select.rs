@@ -16,9 +16,15 @@ fn fixture() -> (Harness, u32) {
 fn fixture_of(kind: &str) -> (Harness, u32) {
     let mut session = Session::new();
     session.new_workbook();
-    let shape =
-        session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": if kind == "line" { 0 } else { 100 }})).unwrap();
-    let id = shape["shape"].as_u64().unwrap() as u32;
+    let id = if kind == "ink" {
+        session.execute("draw.stroke", json!({"points": [[300, 100], [420, 200]]})).unwrap();
+        let sh = session.doc().unwrap().wb.active().unwrap();
+        sh.shapes.iter().find(|s| s.kind == gridcraft_engine::model::ShapeKind::Ink).unwrap().id
+    } else {
+        let shape =
+            session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": if kind == "line" { 0 } else { 100 }})).unwrap();
+        shape["shape"].as_u64().unwrap() as u32
+    };
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
@@ -245,4 +251,29 @@ fn resizing_a_flat_line_keeps_it_flat() {
     let after = rect(&h, id);
     assert!(after.width() > before.width() + 40.0, "{before:?} -> {after:?}");
     assert_eq!(after.height(), 0.0, "{before:?} -> {after:?}");
+}
+
+#[test]
+fn arrow_keys_follow_the_screen_on_a_right_to_left_sheet() {
+    let (mut h, id) = fixture();
+    h.state_mut().session.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    h.run_steps(2);
+    h.state_mut().selected_chart = Some(id);
+    h.run_steps(2);
+    let x = |h: &Harness| {
+        let a = anchor(h, id);
+        h.state().session.doc().unwrap().wb.active().unwrap().col_left(a.cell.col) as f32 + a.dx
+    };
+    let before = x(&h);
+    key(&mut h, egui::Key::ArrowRight, Modifiers::NONE);
+    let moved = x(&h) - before;
+    assert!((moved + 6.0).abs() < 0.01, "moved {moved}");
+}
+
+#[test]
+fn an_ink_stroke_shows_no_resize_handles() {
+    let (mut h, id) = fixture_of("ink");
+    select(&mut h, id);
+    let r = rect(&h, id);
+    assert!(!handle_at(&h, r.right_bottom()), "ink does not scale with its frame");
 }

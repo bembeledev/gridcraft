@@ -112,7 +112,7 @@ pub fn angle_to(f: Rect, p: Pos2, snap: bool) -> f32 {
 }
 
 /// Draw frame `f` turned `deg`: outline, handles and, with `rotate`, the rotation handle.
-pub fn paint(p: &Painter, f: Rect, deg: f32, rotate: bool) {
+pub fn paint(p: &Painter, f: Rect, deg: f32, rotate: bool, resize: bool) {
     let line = Stroke::new(1.0, egui::Color32::from_gray(120));
     if deg == 0.0 {
         p.rect_stroke(f, 0.0, line, StrokeKind::Outside);
@@ -133,8 +133,10 @@ pub fn paint(p: &Painter, f: Rect, deg: f32, rotate: bool) {
         let ring: Vec<Pos2> = (0..=12).map(|i| r + vec2((i as f32 * 0.4).cos(), (i as f32 * 0.4).sin()) * (HANDLE_R * 0.55)).collect();
         p.add(egui::Shape::line(ring, Stroke::new(1.0, egui::Color32::from_gray(80))));
     }
-    for h in handles(f) {
-        knob(h.at_turned(f, deg));
+    if resize {
+        for h in handles(f) {
+            knob(h.at_turned(f, deg));
+        }
     }
 }
 

@@ -189,7 +189,10 @@ impl eframe::App for WebShell {
                         self.opened_file = true;
                         match result {
                             Ok(entry) => open_entry(&mut self.app, entry, None),
-                            Err(e) => log::error!("couldn't open cloud file {id}: {e}"),
+                            Err(e) => {
+                                log::error!("couldn't open cloud file {id}: {e}");
+                                self.app.message = Some(("GridCraft".into(), "Could not open the cloud file.".into()));
+                            }
                         }
                     }
                 }

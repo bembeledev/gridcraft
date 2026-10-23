@@ -366,16 +366,18 @@ impl Session {
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }
-            // Journaled is not the same as shared: file commands and undo are
-            // journaled for macros, and must not leave this machine. The Arc
-            // is cloned so the sink can be called without holding a borrow of
-            // `self`.
+            // Journaled is not the same as shared: file commands, undo and
+            // sheet protection are journaled for macros, and must not leave
+            // this machine. Params go through journal_params so a secret
+            // field cannot ride a command that is otherwise shareable. The
+            // Arc is cloned so the sink can be called without holding a
+            // borrow of `self`.
             if !self.applying_remote
                 && collab::shareable(id)
                 && self.collab_uid.is_some_and(|uid| self.active().is_some_and(|d| d.uid == uid))
                 && let Some(sink) = self.collab.clone()
             {
-                sink.on_local(id, &params);
+                sink.on_local(id, &cmd::journal_params(&params));
             }
         }
         if spec.undoable

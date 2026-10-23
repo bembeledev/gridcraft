@@ -30,7 +30,8 @@ pub trait CollabSink: Send + Sync {
 /// Journaled is necessary but not enough. `file.open`, `file.save` and
 /// `file.new` are journaled so a macro can replay them, and so is `edit.undo`.
 /// None of those is a shared edit: a peer must not open a path from another
-/// machine, and undo is local to this peer's own history.
+/// machine, and undo is local to this peer's own history. Sheet protection
+/// carries a password in its params; that must not leave this machine.
 pub fn shareable(id: &str) -> bool {
     let Some(spec) = find_command(id) else {
         return false;
@@ -38,7 +39,7 @@ pub fn shareable(id: &str) -> bool {
     if !spec.journal {
         return false;
     }
-    if matches!(id, "edit.undo" | "edit.redo") {
+    if matches!(id, "edit.undo" | "edit.redo" | "review.protectSheet" | "review.unprotectSheet") {
         return false;
     }
     let family = id.split('.').next().unwrap_or(id);
@@ -150,5 +151,17 @@ mod tests {
         assert_eq!(s.active_index(), 1, "the window the user is in is put back");
         assert_eq!(cell_of(&s, 0, "B1"), Value::text("remote"));
         assert!(cell_of(&s, 1, "B1").is_empty(), "the other workbook was not written");
+    }
+
+    #[test]
+    fn a_protect_password_is_not_sent_to_peers() {
+        let mut s = book();
+        let heard = Arc::new(Heard::default());
+        s.collab = Some(heard.clone());
+        s.collab_uid = s.active().map(|d| d.uid);
+        s.execute("review.protectSheet", json!({"password": "secret", "formatCells": true})).unwrap();
+        assert!(heard.0.lock().unwrap().is_empty(), "protection stays on this machine");
+        let err = s.apply_remote("review.protectSheet", json!({"password": "secret"})).unwrap_err().to_string();
+        assert!(err.contains("not a shared edit"), "{err}");
     }
 }

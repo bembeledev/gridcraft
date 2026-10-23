@@ -1063,6 +1063,10 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// Custom caption for the row axis header (Excel: `rowHeaderCaption`, defaults to "Row Labels").
+    pub row_header_caption: Option<String>,
+    /// Custom caption for the column axis header (Excel: `colHeaderCaption`, defaults to "Column Labels").
+    pub col_header_caption: Option<String>,
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -1097,6 +1101,8 @@ impl Default for PivotTable {
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
+            row_header_caption: None,
+            col_header_caption: None,
         }
     }
 }

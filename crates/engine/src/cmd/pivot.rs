@@ -463,7 +463,7 @@ fn add_to_area(
             let f = func.unwrap_or(if numeric { PivotFunc::Sum } else { PivotFunc::Count });
             let base = match name {
                 Some(n) if !n.trim().is_empty() => {
-                    if src.col(n).is_some() {
+                    if src.headers.iter().any(|h| h.eq_ignore_ascii_case(n)) {
                         return Err(other("PivotTable field name already exists."));
                     }
                     n.to_string()
@@ -535,6 +535,17 @@ fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
         let mut out = f(&mut new, &src, &cx.wb)?;
+        if new == pt {
+            if out.is_null() {
+                out = json!({});
+            }
+            if let Some(m) = out.as_object_mut()
+                && let Some(area) = pt.last_range
+            {
+                m.insert("range".into(), json!(area.a1()));
+            }
+            return Ok(out);
+        }
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
         }
@@ -591,6 +602,7 @@ fn source_param(s: &Session, p: &Json) -> Result<String> {
     }
 }
 
+/// Generates the next default unique PivotTable name (e.g. "PivotTable1").
 fn next_pivot_name(wb: &Workbook) -> String {
     (1..)
         .map(|n| format!("PivotTable{n}"))
@@ -598,11 +610,13 @@ fn next_pivot_name(wb: &Workbook) -> String {
         .unwrap_or_default()
 }
 
+/// Allocates the next unique numeric object ID for a PivotTable.
 fn next_pivot_id(wb: &Workbook) -> u32 {
     let m = wb.sheets.iter().flat_map(|s| s.pivots.iter().map(|p| p.id)).max().unwrap_or(0);
     wb.next_object_id().max(m.saturating_add(1))
 }
 
+/// Extracts a list of field descriptors from a JSON array or string parameter.
 fn field_list(v: Option<&Json>) -> Vec<Json> {
     match v {
         Some(Json::Array(a)) => a.iter().take(512).cloned().collect(),
@@ -611,6 +625,7 @@ fn field_list(v: Option<&Json>) -> Vec<Json> {
     }
 }
 
+/// Inserts a new PivotTable from the given data source onto a new or existing sheet.
 fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure && matches!(str_param(p, "destination"), None | Some("new")) {
         return Err(other("The workbook is protected and cannot be changed."));
@@ -726,6 +741,7 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(res)
 }
 
+/// Creates a PivotTable summarizing the table containing the selection or named in parameters.
 fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let name = match str_param(p, "table") {
@@ -742,6 +758,7 @@ fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- queries
 
+/// Serializes a [`PivotTable`] state into JSON for engine responses and UI task panes.
 fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     json!({
         "id": pt.id,
@@ -763,9 +780,12 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "calculatedFields": pt.calculated_fields.iter().map(|c| json!({"name": c.name, "formula": c.formula})).collect::<Vec<_>>(),
         "valuesOnRows": pt.values_on_rows,
         "valuesPosition": pt.values_position,
+        "rowHeaderCaption": pt.row_header_caption,
+        "colHeaderCaption": pt.col_header_caption,
     })
 }
 
+/// Returns the field list and layout configuration for a PivotTable to populate the task pane.
 fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let d = s.doc()?;
@@ -947,6 +967,7 @@ fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Moves a field between PivotTable areas (rows, columns, values, filters) or reorders within an area.
 fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.moveField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -1015,6 +1036,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Configures settings for a value field (aggregation function, custom name, number format, showAs).
 fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.valueSettings";
     let field = str_param(p, "field").map(str::to_string);
@@ -1057,11 +1079,10 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         if let Some(n) = &name {
-            let n = n.trim();
             if n.is_empty() {
                 return Err(other("The name isn't valid."));
             }
-            if src.col(n).is_some() {
+            if src.headers.iter().any(|h| h.eq_ignore_ascii_case(n)) {
                 return Err(other("PivotTable field name already exists."));
             }
             if pt.values.iter().enumerate().any(|(j, x)| j != i && x.name.eq_ignore_ascii_case(n)) {
@@ -1188,6 +1209,7 @@ fn group(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Expands or collapses member items for a PivotTable axis field.
 fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.collapse";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -1222,6 +1244,7 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Updates layout options (compact/outline/tabular, subtotals, grand totals, headers, captions).
 fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.layout";
     let lay = match str_param(p, "layout").map(|x| x.to_ascii_lowercase()) {
@@ -1248,6 +1271,26 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     let gr = bool_param(p, "grandTotalsRows");
     let gc = bool_param(p, "grandTotalsCols");
     let hd = bool_param(p, "showHeaders");
+    let row_cap = match p.get("rowHeaderCaption") {
+        Some(Json::String(s)) => {
+            if s.trim().is_empty() {
+                return Err(other("A PivotTable report field name cannot be blank."));
+            }
+            Some(Some(s.clone()))
+        }
+        Some(Json::Null) => Some(None),
+        _ => None,
+    };
+    let col_cap = match p.get("colHeaderCaption") {
+        Some(Json::String(s)) => {
+            if s.trim().is_empty() {
+                return Err(other("A PivotTable report field name cannot be blank."));
+            }
+            Some(Some(s.clone()))
+        }
+        Some(Json::Null) => Some(None),
+        _ => None,
+    };
     update(s, p, |pt, _, _| {
         if let Some(l) = lay {
             pt.layout = l;
@@ -1273,10 +1316,17 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = hd {
             pt.show_headers = v;
         }
+        if let Some(c) = row_cap {
+            pt.row_header_caption = c;
+        }
+        if let Some(c) = col_cap {
+            pt.col_header_caption = c;
+        }
         Ok(json!({"layout": layout_name(pt.layout)}))
     })
 }
 
+/// Configures grand total visibility on rows and columns for a PivotTable.
 fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
     let (r, c) = match str_param(p, "mode").map(|m| m.to_ascii_lowercase()) {
         Some(m) if m == "off" => (Some(false), Some(false)),
@@ -1296,10 +1346,20 @@ fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
     layout(s, &Json::Object(q))
 }
 
+/// Recalculates and re-renders the specified PivotTable from its source data.
 fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
-    update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))
+    let (si, pi) = find_pivot(s, p)?;
+    let replace = bool_param(p, "replace").unwrap_or(false);
+    edit(s, |cx| {
+        let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
+        let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
+        let area = pv::refresh(&mut cx.wb, si, pi, replace).map_err(other)?;
+        cx.structural = true;
+        Ok(json!({"range": area.a1(), "records": src.rows.len()}))
+    })
 }
 
+/// Refreshes all PivotTables across all sheets in the workbook.
 fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
@@ -1527,6 +1587,7 @@ fn suggestions(wb: &Workbook, src: &pv::Source) -> Vec<Json> {
     out
 }
 
+/// Returns or applies recommended PivotTable configurations for a given data source.
 fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
     let source = source_param(s, p)?;
     let active = s.doc()?.wb.active_sheet;
@@ -1557,8 +1618,10 @@ fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
 
 #[cfg(test)]
 mod tests {
-    use gridcraft_core::{CellError, CellRef, Value};
+    use gridcraft_core::{CellError, CellRef, RangeRef, Value};
     use serde_json::{Value as Json, json};
+
+    use std::sync::Arc;
 
     use crate::Session;
 
@@ -2362,5 +2425,360 @@ mod tests {
         assert_eq!(l[0]["source"], "Sheet1!A3:E15");
         assert_eq!(l[0]["anchor"], "A3");
         s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+    }
+
+    #[test]
+    fn in_cell_rename_value_field_and_pane_sync() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        // Sum of Sales is at B3.
+        assert_eq!(text(&s, "B3"), "Sum of Sales");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales");
+
+        // Renaming directly by editing the cell
+        s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s, "B3"), "Revenue");
+        assert_eq!(pt(&s).values[0].name, "Revenue");
+
+        // The Fields list/pane sees the new name
+        let f = s.execute("pivot.fields", json!({})).unwrap();
+        assert_eq!(f["values"][0]["name"], "Revenue");
+
+        // Invalid: empty name is rejected
+        let err_empty = s.execute("cell.set", json!({"cell": "B3", "input": ""})).unwrap_err().to_string();
+        assert!(err_empty.contains("The name isn't valid."), "{err_empty}");
+
+        // Invalid: cannot clash with underlying source column name "Sales"
+        let err_src = s.execute("cell.set", json!({"cell": "B3", "input": "Sales"})).unwrap_err().to_string();
+        assert!(err_src.contains("PivotTable field name already exists."), "{err_src}");
+
+        // Allowed: field name with trailing space "Sales " (Excel pattern)
+        s.execute("cell.set", json!({"cell": "B3", "input": "Sales "})).unwrap();
+        assert_eq!(text(&s, "B3"), "Sales ");
+        assert_eq!(pt(&s).values[0].name, "Sales ");
+
+        // Allowed: single space to make value header blank
+        s.execute("cell.set", json!({"cell": "B3", "input": " "})).unwrap();
+        assert_eq!(text(&s, "B3"), " ");
+        assert_eq!(pt(&s).values[0].name, " ");
+
+        // Restore to Revenue
+        s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+
+        // Add a second value field: Units -> "Sum of Units" at C3
+        s.execute("pivot.addField", json!({"field": "Units", "area": "values"})).unwrap();
+        assert_eq!(text(&s, "C3"), "Sum of Units");
+
+        // Cannot duplicate another value field's name
+        let err_dup = s.execute("cell.set", json!({"cell": "C3", "input": "Revenue"})).unwrap_err().to_string();
+        assert!(err_dup.contains("PivotTable field name already exists."), "{err_dup}");
+
+        // Rename second value field to "Volume"
+        s.execute("cell.set", json!({"cell": "C3", "input": "Volume"})).unwrap();
+        assert_eq!(text(&s, "C3"), "Volume");
+        assert_eq!(pt(&s).values[1].name, "Volume");
+
+        // Undo reverts the rename
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&s, "C3"), "Sum of Units");
+        assert_eq!(pt(&s).values[1].name, "Sum of Units");
+
+        // Redo re-applies the rename
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(text(&s, "C3"), "Volume");
+        assert_eq!(pt(&s).values[1].name, "Volume");
+    }
+
+    #[test]
+    fn in_cell_rename_row_and_column_labels() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+
+        // Row Labels is at A4, Column Labels is at B3
+        assert_eq!(text(&s, "A4"), "Row Labels");
+        assert_eq!(text(&s, "B3"), "Column Labels");
+
+        // In-cell rename of Row Labels
+        s.execute("cell.set", json!({"cell": "A4", "input": "Territories"})).unwrap();
+        assert_eq!(text(&s, "A4"), "Territories");
+        assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
+
+        // Blank row header captions are rejected
+        let err_row_empty = s.execute("cell.set", json!({"cell": "A4", "input": ""})).unwrap_err().to_string();
+        assert_eq!(err_row_empty, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
+
+        let err_row_space = s.execute("cell.set", json!({"cell": "A4", "input": "   "})).unwrap_err().to_string();
+        assert_eq!(err_row_space, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Territories"));
+
+        // In-cell rename of Column Labels
+        s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
+        assert_eq!(text(&s, "B3"), "Goods");
+        assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
+
+        // Blank column header captions are rejected
+        let err_col_empty = s.execute("cell.set", json!({"cell": "B3", "input": ""})).unwrap_err().to_string();
+        assert_eq!(err_col_empty, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
+
+        let err_col_space = s.execute("cell.set", json!({"cell": "B3", "input": "   "})).unwrap_err().to_string();
+        assert_eq!(err_col_space, "A PivotTable report field name cannot be blank.");
+        assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Goods"));
+
+        // pivot.layout also rejects blank captions
+        let err_lay_row = s.execute("pivot.layout", json!({"rowHeaderCaption": "  "})).unwrap_err().to_string();
+        assert_eq!(err_lay_row, "A PivotTable report field name cannot be blank.");
+        let err_lay_col = s.execute("pivot.layout", json!({"colHeaderCaption": ""})).unwrap_err().to_string();
+        assert_eq!(err_lay_col, "A PivotTable report field name cannot be blank.");
+
+        // Undo restores default captions
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&s, "B3"), "Column Labels");
+        assert_eq!(pt(&s).col_header_caption, None);
+
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&s, "A4"), "Row Labels");
+        assert_eq!(pt(&s).row_header_caption, None);
+    }
+
+    #[test]
+    fn protect_pivot_data_cells_from_direct_edits() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        // A3 is "Row Labels", B3 is "Sum of Sales", B4 is East's sales (415), B7 is Grand Total
+        assert_eq!(text(&s, "B4"), "415");
+
+        // Direct cell edit on calculated body data cell is blocked
+        let err = s.execute("cell.set", json!({"cell": "B4", "input": "999"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        assert_eq!(text(&s, "B4"), "415");
+
+        // Array formula edit on pivot cell is blocked
+        let err_arr = s.execute("cell.set", json!({"cell": "B4", "input": "1", "array": true})).unwrap_err().to_string();
+        assert_eq!(err_arr, "Cannot change part of a PivotTable report.");
+
+        // range.setValues on pivot cells is blocked
+        let err_range = s.execute("range.setValues", json!({"range": "B4:B5", "values": [[1], [2]]})).unwrap_err().to_string();
+        assert_eq!(err_range, "Cannot change part of a PivotTable report.");
+
+        // range.fill on pivot cells is blocked
+        let err_fill = s.execute("range.fill", json!({"range": "B4:B5", "input": "1"})).unwrap_err().to_string();
+        assert_eq!(err_fill, "Cannot change part of a PivotTable report.");
+
+        // edit.paste on pivot cells is blocked
+        s.execute("selection.set", json!({"range": "A1"})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let err_paste = s.execute("edit.paste", json!({"at": "B4"})).unwrap_err().to_string();
+        assert_eq!(err_paste, "Cannot change part of a PivotTable report.");
+
+        // edit.replace on pivot cells is blocked
+        let err_rep = s.execute("edit.replace", json!({"what": "415", "with": "999"})).unwrap_err().to_string();
+        assert_eq!(err_rep, "Cannot change part of a PivotTable report.");
+        assert_eq!(text(&s, "B4"), "415");
+    }
+
+    #[test]
+    fn in_cell_rename_noop_does_not_push_undo() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        let u0 = s.doc().unwrap().undo.len();
+
+        // Default caption no-ops do not push undo
+        s.execute("cell.set", json!({"cell": "A4", "input": "Row Labels"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        s.execute("cell.set", json!({"cell": "B3", "input": "Column Labels"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        // Rename Row Labels
+        s.execute("cell.set", json!({"cell": "A4", "input": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Setting same name again is a no-op
+        s.execute("cell.set", json!({"cell": "A4", "input": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Rename Column Labels
+        s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+
+        // Setting same name again is a no-op
+        s.execute("cell.set", json!({"cell": "B3", "input": "Goods"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+
+        // Now test ValueHeader no-op
+        let mut s2 = sales();
+        s2.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let u0_val = s2.doc().unwrap().undo.len();
+
+        // Value header default is "Sum of Sales" at B3
+        assert_eq!(text(&s2, "B3"), "Sum of Sales");
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Sum of Sales"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val);
+
+        // Rename to "Revenue"
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val + 1);
+
+        // Setting same name again is a no-op
+        s2.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap();
+        assert_eq!(s2.doc().unwrap().undo.len(), u0_val + 1);
+    }
+
+    #[test]
+    fn row_items_under_values_in_rows_are_not_value_headers() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
+        assert_eq!(pt(&s).values_position, Some(0));
+        assert_eq!(text(&s, "A4"), "Sum of Sales");
+        assert_eq!(text(&s, "A5"), "East");
+
+        // Editing A5 ("East") must fail with "Cannot change part of a PivotTable report."
+        let err = s.execute("cell.set", json!({"cell": "A5", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales");
+
+        // Editing A4 ("Sum of Sales") succeeds in renaming the value field
+        s.execute("cell.set", json!({"cell": "A4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s, "A4"), "Revenue");
+        assert_eq!(pt(&s).values[0].name, "Revenue");
+
+        // Tabular layout: values after region
+        let mut s_tab = sales();
+        s_tab.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+        s_tab.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s_tab.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        assert_eq!(text(&s_tab, "A4"), "East");
+        assert_eq!(text(&s_tab, "B4"), "Sum of Sales");
+
+        // Editing A4 ("East") must fail with "Cannot change part of a PivotTable report."
+        let err_tab = s_tab.execute("cell.set", json!({"cell": "A4", "input": "West"})).unwrap_err().to_string();
+        assert_eq!(err_tab, "Cannot change part of a PivotTable report.");
+        assert_eq!(pt(&s_tab).values[0].name, "Sum of Sales");
+
+        // Editing B4 ("Sum of Sales") succeeds in renaming the value field
+        s_tab.execute("cell.set", json!({"cell": "B4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s_tab, "B4"), "Revenue");
+        assert_eq!(pt(&s_tab).values[0].name, "Revenue");
+    }
+
+    #[test]
+    fn in_cell_rename_respects_replace_protection() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(text(&s, "B3"), "Sum of Sales");
+
+        // Pretend last_range did not cover the grand total row A7:B7.
+        // B3 is still in last_range (A3:B6), so cell.set identifies it as a ValueHeader.
+        // But refresh(replace: false) detects that the report would overwrite data in A7 outside last_range.
+        let act = s.doc().unwrap().wb.active_sheet;
+        let p = &mut Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(act).unwrap().pivots[0];
+        p.last_range = Some(RangeRef::new(CellRef::new(2, 0), CellRef::new(5, 1)));
+
+        let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
+        assert!(err.contains("There's already data in") && err.contains("A7"), "{err}");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales");
+    }
+
+    #[test]
+    fn stale_pivot_cell_target_falls_back_to_data() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(text(&s, "B3"), "Sum of Sales");
+
+        // When the cell value in the sheet does not match the recomputed header (e.g. un-refreshed report),
+        // cell_target returns Data to protect against stale header classification.
+        let act = s.doc().unwrap().wb.active_sheet;
+        let p = &mut Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(act).unwrap().pivots[0];
+        p.values[0].name = "Renamed Outside Refresh".into();
+
+        let err = s.execute("cell.set", json!({"cell": "B3", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+    }
+
+    #[test]
+    fn tabular_values_between_row_fields_in_cell_rename() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales", "Units"]})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+        s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 1})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+
+        // Row 4 has: A4 = East, B4 = Sum of Sales, C4 = Apples
+        assert_eq!(text(&s, "A4"), "East");
+        assert_eq!(text(&s, "B4"), "Sum of Sales");
+        assert_eq!(text(&s, "C4"), "Apples");
+
+        // Editing A4 ("East") is blocked
+        let err_a4 = s.execute("cell.set", json!({"cell": "A4", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err_a4, "Cannot change part of a PivotTable report.");
+
+        // Editing C4 ("Apples") is blocked
+        let err_c4 = s.execute("cell.set", json!({"cell": "C4", "input": "Revenue"})).unwrap_err().to_string();
+        assert_eq!(err_c4, "Cannot change part of a PivotTable report.");
+
+        // Editing B4 ("Sum of Sales") renames the value field
+        s.execute("cell.set", json!({"cell": "B4", "input": "Revenue"})).unwrap();
+        assert_eq!(text(&s, "B4"), "Revenue");
+        assert_eq!(pt(&s).values[0].name, "Revenue");
+    }
+
+    #[test]
+    fn array_formula_overlapping_pivot_is_blocked() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+
+        // Selection spans from A1 (outside report) into B4 (inside report)
+        s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+        let err = s.execute("cell.set", json!({"cell": "A1", "input": "=1", "array": true})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+    }
+
+    #[test]
+    fn layout_noop_does_not_push_undo() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let u0 = s.doc().unwrap().undo.len();
+
+        // Clearing already-None caption is a no-op and pushes no undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        s.execute("pivot.layout", json!({"colHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0);
+
+        // Setting a new caption pushes undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Setting same caption again is a no-op
+        s.execute("pivot.layout", json!({"rowHeaderCaption": "Territories"})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 1);
+
+        // Clearing an active caption pushes undo
+        s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+        assert_eq!(s.doc().unwrap().undo.len(), u0 + 2);
+    }
+
+    #[test]
+    fn pivot_refresh_updates_report_after_source_edits() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let si = s.doc().unwrap().wb.sheet_index("Sheet2").unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheet(si).unwrap().value(CellRef::parse("B4").unwrap()), Value::Number(415.0));
+
+        // Edit source cell E2 on Sheet1 (East sales increases from 100 to 500)
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "500"})).unwrap();
+
+        // pivot.refresh on Sheet2 recalculates report cells
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        let res = s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(res["records"], 12);
+        let sh = s.doc().unwrap().wb.sheet(si).unwrap();
+        assert_eq!(sh.value(CellRef::parse("B4").unwrap()), Value::Number(815.0));
     }
 }

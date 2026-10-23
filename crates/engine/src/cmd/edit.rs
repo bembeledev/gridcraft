@@ -220,6 +220,7 @@ pub(crate) fn check_arg_counts(expr: &gridcraft_formula::Expr) -> Result<()> {
     }
 }
 
+/// Sets the value, formula, or array formula of a cell, handling PivotTable header renaming and edit protection.
 fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = match cell_param_on(s, p, "cell", sheet)? {
@@ -239,6 +240,90 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let active_sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
+        let pivot_hit = cx.wb.sheet(sheet).and_then(|sh| {
+            sh.pivots.iter().enumerate().find_map(|(pi, pt)| if pt.last_range.is_some_and(|r| r.contains(at)) { Some(pi) } else { None })
+        });
+        if let Some(pi) = pivot_hit {
+            if array {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
+            let target = crate::pivot::cell_target(&cx.wb, sheet, pi, at).unwrap_or(crate::pivot::PivotCellTarget::Data);
+            match target {
+                crate::pivot::PivotCellTarget::ValueHeader(vi) => {
+                    if input.is_empty() {
+                        return Err(EngineError::Other("The name isn't valid.".into()));
+                    }
+                    let pt = cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .cloned()
+                        .ok_or_else(|| EngineError::Other("There's no such PivotTable.".into()))?;
+                    if pt.values.get(vi).is_some_and(|v| v.name == input) {
+                        return Ok(Json::Null);
+                    }
+                    let src = crate::pivot::read_source(&cx.wb, &pt.source, sheet).map_err(EngineError::Other)?;
+                    if src.headers.iter().any(|h| h.eq_ignore_ascii_case(&input)) {
+                        return Err(EngineError::Other("PivotTable field name already exists.".into()));
+                    }
+                    if pt.values.iter().enumerate().any(|(j, x)| j != vi && x.name.eq_ignore_ascii_case(&input)) {
+                        return Err(EngineError::Other("PivotTable field name already exists.".into()));
+                    }
+                    let shm = cx.sheet_mut(sheet)?;
+                    if let Some(p) = shm.pivots.get_mut(pi)
+                        && let Some(v) = p.values.get_mut(vi)
+                    {
+                        v.name = input.clone();
+                    }
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
+                    cx.structural = true;
+                    return Ok(Json::Null);
+                }
+                crate::pivot::PivotCellTarget::RowHeader => {
+                    if input.trim().is_empty() {
+                        return Err(EngineError::Other("A PivotTable report field name cannot be blank.".into()));
+                    }
+                    if cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .is_some_and(|p| p.row_header_caption.as_deref().unwrap_or("Row Labels") == input)
+                    {
+                        return Ok(Json::Null);
+                    }
+                    let shm = cx.sheet_mut(sheet)?;
+                    if let Some(p) = shm.pivots.get_mut(pi) {
+                        p.row_header_caption = Some(input.clone());
+                    }
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
+                    cx.structural = true;
+                    return Ok(Json::Null);
+                }
+                crate::pivot::PivotCellTarget::ColHeader => {
+                    if input.trim().is_empty() {
+                        return Err(EngineError::Other("A PivotTable report field name cannot be blank.".into()));
+                    }
+                    if cx
+                        .wb
+                        .sheet(sheet)
+                        .and_then(|sh| sh.pivots.get(pi))
+                        .is_some_and(|p| p.col_header_caption.as_deref().unwrap_or("Column Labels") == input)
+                    {
+                        return Ok(Json::Null);
+                    }
+                    let shm = cx.sheet_mut(sheet)?;
+                    if let Some(p) = shm.pivots.get_mut(pi) {
+                        p.col_header_caption = Some(input.clone());
+                    }
+                    crate::pivot::refresh(&mut cx.wb, sheet, pi, false).map_err(EngineError::Other)?;
+                    cx.structural = true;
+                    return Ok(Json::Null);
+                }
+                crate::pivot::PivotCellTarget::Data => {
+                    return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+                }
+            }
+        }
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
@@ -247,6 +332,9 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
+            }
+            if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&range)))) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
             }
             let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
@@ -279,6 +367,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": at.a1(), "value": v.display()}))
 }
 
+/// Converts a JSON parameter value into a string representation suitable for cell input.
 pub(crate) fn json_to_input(v: &Json) -> String {
     match v {
         Json::Null => String::new(),
@@ -295,6 +384,7 @@ pub(crate) fn json_to_input(v: &Json) -> String {
     }
 }
 
+/// Sets values across a range of cells from an array of rows, blocking edits into PivotTable reports.
 fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
@@ -320,6 +410,9 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
             };
             for (ci, v) in cols.iter().enumerate() {
                 let Some(at) = start.offset(ri as i64, ci as i64) else { continue };
+                if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.contains(at)))) {
+                    return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+                }
                 let input = json_to_input(v);
                 let cell = match v {
                     Json::Number(n) => Some(Cell {
@@ -359,6 +452,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count}))
 }
 
+/// Fills target ranges with a value, blocking edits into PivotTable reports.
 fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -370,6 +464,9 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
         // the cell's style, so the input is parsed once per style.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
+            if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(r)))) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
             }
@@ -849,6 +946,7 @@ enum What {
     ValuesAndNumberFormats,
 }
 
+/// Pastes clipboard contents or external text into the target selection.
 fn paste(s: &mut Session, p: &Json) -> Result<Json> {
     // External text (from the system clipboard) when it differs from ours.
     if let Some(text) = str_param(p, "text")
@@ -862,6 +960,7 @@ fn paste(s: &mut Session, p: &Json) -> Result<Json> {
     paste_special(s, &json!({"what": "all", "at": p.get("at").cloned().unwrap_or(Json::Null)}))
 }
 
+/// Pastes tabular text into the worksheet, blocking edits intersecting PivotTable reports.
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
@@ -872,6 +971,13 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
     let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
     edit(s, |cx| {
+        if h > 0 && w > 0 {
+            let end = at.offset_clamped(h as i64 - 1, w as i64 - 1);
+            let dest = RangeRef::new(at, end);
+            if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&dest)))) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
+        }
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
@@ -969,6 +1075,7 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
+/// Pastes clipboard contents (formulas, values, formats) with PivotTable range protection.
 fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -1015,6 +1122,15 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The cut area doesn't fit at this position; nothing was moved.".into()));
     }
     edit(s, |cx| {
+        let total_h = (h * tiles_r).max(1);
+        let total_w = (w * tiles_c).max(1);
+        let dest_range = RangeRef::new(at, at.offset_clamped(total_h as i64 - 1, total_w as i64 - 1));
+        if cx.wb.sheet(dest_sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&dest_range)))) {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
+        if cut_move && cx.wb.sheet(clip.sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&src)))) {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
         // Styles from another workbook must be re-interned.
         let mut style_map = std::collections::HashMap::new();
         let mut map_style = |id: StyleId, wb: &mut gridcraft_model::Workbook| -> StyleId {
@@ -1403,6 +1519,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
 
 // ---------------------------------------------------------------- fill
 
+/// Directional fill (Down, Right, Up, Left) with PivotTable range protection.
 fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let mut r = target_range(s, p)?;
@@ -1433,11 +1550,15 @@ fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
         RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)
     };
     edit(s, |cx| {
+        if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&r)))) {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
         crate::fill::fill(cx, sheet, src, r, crate::fill::FillMode::Copy)?;
         Ok(Json::Null)
     })
 }
 
+/// Auto-fills target range from source range, blocking edits into PivotTable reports.
 fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let src = str_param(p, "source").and_then(RangeRef::parse).map_or_else(|| target_range(s, p), Ok)?;
@@ -1460,12 +1581,16 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("edit.autoFill", "the target must contain the source in one of its corners"));
     }
     edit(s, |cx| {
+        if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&target)))) {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
         crate::fill::fill(cx, sheet, src, target, mode)?;
         *cx.sel = crate::Selection { active: src.start, anchor: src.start, ranges: vec![target.union(&src)] };
         Ok(Json::Null)
     })
 }
 
+/// Fills a data series across a range, blocking edits into PivotTable reports.
 fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let r = target_range(s, p)?;
@@ -1475,11 +1600,15 @@ fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     let stop = f64_param(p, "stop");
     let unit = str_param(p, "dateUnit").unwrap_or("day").to_string();
     edit(s, |cx| {
+        if cx.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&r)))) {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
         crate::fill::series(cx, sheet, r, rows, &kind, step, stop, &unit)?;
         Ok(Json::Null)
     })
 }
 
+/// Applies Flash Fill to extrapolate values in the target column from pattern examples.
 fn flash_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let r = target_range(s, p)?;
@@ -1595,6 +1724,7 @@ fn find(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": c.a1(), "sheet": si, "value": t, "count": hits.len()}))
 }
 
+/// Replaces occurrences of a string across cells within the sheet or workbook.
 fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let what = str_param(p, "what").unwrap_or("").to_string();
     let with = str_param(p, "with").unwrap_or("").to_string();
@@ -1608,6 +1738,20 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let active = s.doc()?.selection.active;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet] };
+        for &si in &sheets {
+            if let Some(sh) = cx.wb.sheet(si)
+                && !sh.pivots.is_empty()
+            {
+                for (c, _) in sh.cells.iter() {
+                    if !all && c != active {
+                        continue;
+                    }
+                    if matches(&sh.input_text(c), &what, case, whole) && sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.contains(c))) {
+                        return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+                    }
+                }
+            }
+        }
         let mut n = 0;
         for si in sheets {
             let cells: Vec<(CellRef, String)> =

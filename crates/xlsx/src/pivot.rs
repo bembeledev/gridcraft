@@ -678,6 +678,7 @@ fn item_xml(v: &Value, sys: DateSystem, date: bool) -> String {
     }
 }
 
+/// Serializes a [`Cache`] definition to OpenXML `pivotCacheDefinition` XML.
 fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     let mut s = format!("{XML_DECL}<pivotCacheDefinition xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\"");
     match (records_rid, &c.records) {
@@ -767,6 +768,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     s
 }
 
+/// Serializes a [`PivotTable`] definition to OpenXML `pivotTableDefinition` XML.
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let nf = c.fields.len();
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
@@ -825,6 +827,12 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     if !pt.grand_totals_rows {
         s.push_str(" colGrandTotals=\"0\"");
+    }
+    if let Some(c) = &pt.row_header_caption {
+        s.push_str(&format!(" rowHeaderCaption=\"{}\"", esc_attr(c)));
+    }
+    if let Some(c) = &pt.col_header_caption {
+        s.push_str(&format!(" colHeaderCaption=\"{}\"", esc_attr(c)));
     }
     s.push_str(" multipleFieldFilters=\"0\">");
 
@@ -964,7 +972,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, "<dataFields count=\"{k}\">");
         let mut used: Vec<String> = Vec::new();
         for (i, v) in &vals {
-            let base = if v.name.trim().is_empty() {
+            let base = if v.name.is_empty() {
                 format!("{} of {}", func_caption(v.func), c.fields.get(*i).map(|f| f.name.as_str()).unwrap_or(""))
             } else {
                 v.name.clone()
@@ -1241,6 +1249,7 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Deserializes a [`PivotTable`] definition from an OpenXML XML element.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -1249,6 +1258,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         pt.name = format!("PivotTable{id}");
     }
     pt.source = cache.source.clone();
+    pt.row_header_caption = x.attr("rowHeaderCaption").map(str::to_string);
+    pt.col_header_caption = x.attr("colHeaderCaption").map(str::to_string);
     let Some(loc) = x.child("location").and_then(|l| l.attr("ref")).and_then(|r| RangeRef::parse(&r.replace('$', ""))) else {
         cx.warn(format!("PivotTable \"{}\" has no valid location; kept as plain cells", pt.name));
         return None;

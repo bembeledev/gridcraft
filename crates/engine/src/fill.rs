@@ -505,6 +505,12 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
             n += 1;
         }
     }
+    for pt in &sh.pivots {
+        let pt_range = pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor));
+        if writes.iter().any(|(c, _)| pt_range.contains(*c)) {
+            return Err(crate::EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
+    }
     let sh = cx.sheet_mut(sheet)?;
     for (c, out) in &writes {
         sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
@@ -654,6 +660,31 @@ mod tests {
         s.execute("data.flashFill", serde_json::json!({})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
+    fn flash_fill_rejects_intersecting_pivot_table() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = serde_json::json!([["Alice Smith", "Smith"], ["Bob Jones", null]]);
+        s.execute("range.setValues", serde_json::json!({"range": "A1", "values": values})).unwrap();
+        // Register a PivotTable whose report range covers B2 (row index 1, col index 1)
+        crate::cmd::edit(&mut s, |cx| {
+            let sh = cx.sheet_mut(0)?;
+            sh.pivots.push(gridcraft_model::PivotTable {
+                id: 1,
+                name: "PT".into(),
+                source: "A1:B1".into(),
+                anchor: CellRef::new(1, 1),
+                last_range: Some(RangeRef::new(CellRef::new(1, 1), CellRef::new(3, 1))),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+        s.execute("selection.set", serde_json::json!({"cell": "B2"})).unwrap();
+        let err = s.execute("data.flashFill", serde_json::json!({})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
     }
 
     #[test]

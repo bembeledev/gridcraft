@@ -204,9 +204,15 @@ fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
 /// each sheet's current zoom when they swap in another snapshot of the workbook. Back at the saved
 /// state, the zoom alone doesn't make the workbook dirty, as with `view.zoom`.
 pub(crate) fn keep_zoom(d: &mut crate::DocState, now: &Workbook) {
-    let current = |name: &str| now.sheets.iter().find(|sh| sh.name == name).map(|sh| sh.zoom);
+    // Sheets have no stable id. A name missing from `now` is a rename being undone or redone, which
+    // keeps the sheet count and position: the sheet is the one at the same index, under a name the
+    // restored snapshot doesn't have.
+    let renamed = |i: usize| {
+        (now.sheets.len() == d.wb.sheets.len()).then(|| now.sheets.get(i)).flatten().filter(|sh| !d.wb.sheets.iter().any(|s| s.name == sh.name))
+    };
+    let current = |i: usize, name: &str| now.sheets.iter().find(|sh| sh.name == name).or_else(|| renamed(i)).map(|sh| sh.zoom);
     let changed: Vec<(usize, u16)> =
-        d.wb.sheets.iter().enumerate().filter_map(|(i, sh)| current(&sh.name).filter(|z| *z != sh.zoom).map(|z| (i, z))).collect();
+        d.wb.sheets.iter().enumerate().filter_map(|(i, sh)| current(i, &sh.name).filter(|z| *z != sh.zoom).map(|z| (i, z))).collect();
     if changed.is_empty() {
         return;
     }
@@ -529,6 +535,24 @@ mod tests {
         s.execute("edit.redo", json!({})).unwrap();
         assert!(!s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A1").unwrap()).is_empty());
         assert_eq!(zoom(&s), 50, "redo keeps the zoom");
+    }
+
+    #[test]
+    fn undoing_a_rename_keeps_the_current_zoom() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let active = |s: &Session| {
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            (sh.name.clone(), sh.zoom)
+        };
+        let before = active(&s).0;
+        s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+        s.execute("view.zoom", json!({"percent": 150})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(active(&s), (before, 150), "undoing the rename keeps the zoom");
+        s.execute("view.zoom", json!({"percent": 75})).unwrap();
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(active(&s), ("Data".to_string(), 75), "redoing the rename keeps the zoom");
     }
 
     #[test]

@@ -159,12 +159,31 @@ impl PrintOptions {
         };
         let mut ranges = Vec::new();
         if let Some(r) = str_param(p, "range").map(str::trim).filter(|r| !r.is_empty()) {
-            for part in split_sheet(r).1.split(',') {
-                ranges.push(RangeRef::parse(part.trim()).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?);
+            for part in split_areas(r) {
+                ranges.push(RangeRef::parse(split_sheet(part.trim()).1.trim()).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?);
             }
         }
         Ok(PrintOptions { all_sheets, ranges, fit_to_page: bool_param(p, "fitToPage") })
     }
+}
+
+/// Splits a multi-area reference at the commas outside quoted sheet names, so each area keeps
+/// its own optional `Sheet!` prefix.
+fn split_areas(r: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in r.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                parts.push(&r[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&r[start..]);
+    parts
 }
 
 /// The range a sheet prints: its print area, else the used range grown to cover drawing
@@ -1889,6 +1908,15 @@ mod tests {
         for bad in ["A1:B2,", "A1:B2,nope", ","] {
             assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+        let mut s = s();
+        assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+        assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+        // A comma inside a quoted sheet name is not an area separator.
+        assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
     }
 
     #[test]

@@ -200,10 +200,23 @@ fn paint_title(ui: &Ui, center: egui::Pos2, title: &str, dirty: bool, max_w: f32
     }
 }
 
+/// Draws the ribbon panel, keeping tabs and the active tab's controls reachable on narrow views.
+///
+/// The active tab is revealed when the tab set, language or available width changes; ordinary
+/// scrolling otherwise keeps the user's position. A contextual tab whose object is no longer
+/// selected returns to Home. Command overflow mounts the same controls instead of the strip,
+/// so each editor is drawn at most once per frame. Its open state is separate from egui's child-popup
+/// state, allowing font and colour pickers to remain mounted until they close. Opening an
+/// application dialog dismisses the overflow before handing over.
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
     let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    // A contextual tab exists only while its object is selected (Excel hides Table Design once the
+    // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
+    if CONTEXTUAL_TABS.contains(&app.ui.ribbon_tab.as_str()) && !contextual_tabs(app).contains(&app.ui.ribbon_tab.as_str()) {
+        app.ui.ribbon_tab = "Home".to_string();
+    }
     egui::Panel::top("ribbon")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
@@ -398,7 +411,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         });
 }
 
-/// Shared by the ribbon strip and its overflow: no second command catalog or empty-param dispatch.
+/// Draws the active tab's controls in the caller's horizontal or wrapping layout.
+///
+/// The caller must mount this at most once per frame, either in the strip or in overflow: controls
+/// own persistent editor and popup state. Both placements use the same handlers, preserving
+/// required parameters, clipboard integration and keytip behavior. Unknown tabs fall back to Home.
 fn ribbon_controls(app: &mut SheetApp, ui: &mut Ui) {
     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
     match app.ui.ribbon_tab.as_str() {
@@ -445,6 +462,8 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
         }
     }
 }
+
+const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
 
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
@@ -726,6 +745,11 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
     }
 }
 
+/// Draws Home's editing controls against the active cell style, in the strip or in overflow.
+///
+/// Font, size, colour and format controls collect their parameters before dispatching commands;
+/// clipboard actions use the host clipboard hooks. Colour arrows expose translated accessible
+/// names so the same pickers can be reached in either layout.
 fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
@@ -2162,6 +2186,11 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Draws Data's import, filtering, outline and analysis controls in the current ribbon layout.
+///
+/// Actions needing user input open their existing dialogs. In particular, Data Analysis opens
+/// the ToolPak chooser rather than running a report; its translated accessible name remains
+/// available when these controls are hosted in overflow.
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");

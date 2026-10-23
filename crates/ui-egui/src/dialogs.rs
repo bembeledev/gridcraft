@@ -1137,6 +1137,13 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Draws the pending dialog in a resizable window bounded by the current content viewport.
+///
+/// Short forms shrink to their contents; oversized bodies scroll. ToolPak owns its scroll area
+/// so its action row stays outside it, with remembered sizes separated by tool. The dialog is
+/// temporarily taken from `app` while rendering: child dialogs can take over, while an unfinished
+/// dialog is restored afterward. Confirmation builds command parameters and keeps the dialog
+/// open on errors; Escape or closing the window cancels it.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
@@ -1653,7 +1660,12 @@ fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     d.focus_first_field = false;
 }
 
-/// Draws a dialog's `fields`, editing its values.
+/// Draws a dialog's field descriptors and writes edits into its parameter values.
+///
+/// Labels and choices are translated without changing parameter keys or choice values. Text
+/// and password fields use the caller's available width so resized forms can shrink; the
+/// caller owns scrolling and action buttons. Numeric edits update immediately, including when
+/// Enter confirms in the same frame, and the first eligible field receives opening focus.
 fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
@@ -2814,6 +2826,12 @@ fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
+///
+/// The caller supplies the window's remaining area. This function reserves the action row
+/// before sizing the scrollable chooser or form, keeping OK/Cancel fixed as the body scrolls.
+/// Choosing a tool replaces the draft with defaults from the current selection and consumes
+/// that Enter press without submitting the new form. In a tool form, `confirm` requests command
+/// execution by the caller and `open` records cancellation; drawing alone never writes a report.
 fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {

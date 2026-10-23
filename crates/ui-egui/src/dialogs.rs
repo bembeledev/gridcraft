@@ -4,7 +4,7 @@
 //! Every dialog is also reachable programmatically: `ui.dialog {name}` opens one,
 //! `ui.dialog.set {field, value}` edits a field and `ui.dialog.confirm` presses OK.
 
-use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
+use egui::{Color32, Key, Modifiers, Sense, Stroke, StrokeKind, vec2};
 
 use crate::icons::{self, Icon};
 use serde_json::{Map, Value as Json, json};
@@ -2084,6 +2084,16 @@ fn function_category_label(id: &str) -> &str {
 }
 
 fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
+    // is undone without closing it first); inside a text box they edit the typed text instead.
+    if !ui.ctx().egui_wants_keyboard_input() {
+        let redo = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y));
+        if redo {
+            app.run_or_alert("edit.redo", json!({}));
+        } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Z)) {
+            app.run_or_alert("edit.undo", json!({}));
+        }
+    }
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {

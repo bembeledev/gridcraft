@@ -70,8 +70,11 @@ impl Dialog {
         &self.name
     }
 
-    /// Freeze relative references before changing worksheets. Workbook identity is never
-    /// rebound: neither a picker nor a later confirmation may write to another document.
+    /// Checks that an analysis dialog still belongs to the active document; other dialogs are unchanged.
+    /// On a worksheet switch, qualifies pending relative ranges against the previously recorded sheet
+    /// before remembering the new sheet. Returns an error if the owner is inactive, closed or missing,
+    /// leaving the dialog available for cancellation or recovery when its owner becomes active again.
+    /// Qualified references remain name-based; this does not establish stable worksheet identity.
     pub(crate) fn prepare_analysis(&mut self, session: &gridcraft_engine::Session) -> Result<(), String> {
         if self.name != "analysisToolPak" {
             return Ok(());
@@ -88,6 +91,9 @@ impl Dialog {
         Ok(())
     }
 
+    /// Anchors bare A1 input/output ranges to the recorded analysis sheet, quoting its name.
+    /// Already qualified, blank and unparseable values are left for normal engine validation;
+    /// dialogs without analysis context are unchanged. Does not run a command or move the selection.
     fn qualify_analysis_ranges(&mut self) {
         let Some(context) = &self.analysis_context else { return };
         for key in ANALYSIS_RANGES {
@@ -100,6 +106,9 @@ impl Dialog {
         }
     }
 
+    /// Prepares the parameters a control-channel confirmation will send to the dialog's command.
+    /// Verifies analysis ownership and freezes relative ranges before the usual per-dialog reshaping.
+    /// An error must keep the dialog open and must not execute its command in the active workbook.
     pub(crate) fn command_params(&mut self, session: &gridcraft_engine::Session) -> Result<Json, String> {
         self.prepare_analysis(session)?;
         self.qualify_analysis_ranges();
@@ -132,6 +141,9 @@ impl Dialog {
         self.values.insert(key.into(), value);
     }
 
+    /// Creates a field-driven dialog whose OK action submits its values to `command`.
+    /// Object defaults initialize the values; other JSON values produce an empty value map. Requests
+    /// initial field focus, but leaves document ownership and picker state for the opener to bind.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -154,6 +166,9 @@ impl Dialog {
         }
     }
 
+    /// Creates a dialog whose custom renderer owns its controls and completion behavior.
+    /// Starts without fields, a command or an initial field-focus request; a specific opener may
+    /// attach a command and document context, as the Analysis ToolPak chooser does.
     fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -176,6 +191,9 @@ impl Dialog {
         }
     }
 
+    /// Builds a named UI dialog using the active workbook and selection for its starting values.
+    /// Returns `None` for an unsupported dialog name. Analysis dialogs capture the document UID
+    /// and qualify their initial ranges here, so later worksheet changes cannot retarget those inputs.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -1202,6 +1220,10 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Renders the active dialog and handles confirmation, cancellation and child-dialog handoff.
+/// Temporarily takes the dialog out of `app` while rendering, then restores it if still open.
+/// Analysis confirmation validates the owning document before command execution; an execution
+/// error keeps the form available, and occupied report output enters its overwrite-confirmation flow.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
@@ -1707,7 +1729,9 @@ fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     d.focus_first_field = false;
 }
 
-/// Draws a dialog's `fields`, editing its values.
+/// Draws a dialog's declared fields and updates its draft values without submitting its command.
+/// Range fields share the analysis picker editor; text/number fields use the dialog's one-time
+/// focus request. Field labels are translated while stored keys and command values remain stable.
 fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
@@ -2798,6 +2822,9 @@ fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mu
     }
 }
 
+/// Edits one analysis range and toggles worksheet selection for that field with Select… / Finish.
+/// Typing cancels the active picker; editing `output` also selects range output. `single_cell`
+/// makes subsequent grid picking keep only the drag's starting cell, as report output requires.
 fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_cell: bool) {
     ui.push_id(key, |ui| {
         ui.horizontal(|ui| {
@@ -2819,6 +2846,9 @@ fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_cell: bool)
     });
 }
 
+/// Reports whether the grid may route pointer input to the dialog's pending range field.
+/// Requires the owning document UID to be active, while permitting worksheet changes within it.
+/// An inactive owner's picker is suspended, so returning to that document can resume selection.
 pub(crate) fn dialog_range_picker_active(app: &SheetApp) -> bool {
     app.dialog.as_ref().is_some_and(|d| {
         d.range_picker.is_some()
@@ -2826,6 +2856,10 @@ pub(crate) fn dialog_range_picker_active(app: &SheetApp) -> bool {
     })
 }
 
+/// Stores a grid-picked, worksheet-qualified range and mirrors it in the worksheet selection.
+/// Ignores updates without a picker, from another document, or for a non-active worksheet.
+/// Preserves other fields' relative-reference meaning before a sheet switch; output picking
+/// uses only `start` and selects range output. Does not write report data or submit the analysis.
 pub(crate) fn update_dialog_range_picker(app: &mut SheetApp, sheet: usize, start: CellRef, end: CellRef) {
     let Some(d) = app.dialog.as_mut() else { return };
     if d.prepare_analysis(&app.session).is_err() {
@@ -2842,7 +2876,9 @@ pub(crate) fn update_dialog_range_picker(app: &mut SheetApp, sheet: usize, start
     let _ = app.session.run("selection.set", json!({"range": range.a1()}));
 }
 
-/// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
+/// Declares one Analysis ToolPak tool's input/options schema; output controls are rendered separately.
+/// Regression keeps the Y/X ranges and label checkbox first, then model choice and fit options:
+/// its renderer groups these slices so labels and the zero-intercept option are not model choices.
 fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
@@ -2906,7 +2942,9 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     }
 }
 
-/// The starting values of a tool's form: the selection as its input, a new sheet as output.
+/// Initializes a tool's draft values with `sel` as input and a new worksheet as report output.
+/// Regression defaults to a linear model and 95% confidence; the opener/chooser qualifies the
+/// selection against its bound worksheet after installing these values on the dialog.
 fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
     let mut v = json!({
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
@@ -2924,6 +2962,9 @@ fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
+/// A mismatched document offers cancellation instead of execution. While picking a range, shows
+/// only that field so grid selection remains available; regression otherwise separates inputs,
+/// model and fit options and explains diagnostics for a transformed response.
 fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     let lang = app.ui.language;

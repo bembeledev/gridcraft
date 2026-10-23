@@ -49,6 +49,8 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("tTestUnequal", "t-Test: Two-Sample Assuming Unequal Variances"),
 ];
 
+/// Registers the Analysis ToolPak command and its parameter contract for UI and control clients.
+/// Regression models share this command; choosing a model does not register a separate tool.
 pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "data.analysisToolPak",
@@ -637,6 +639,16 @@ fn ols(y: &[f64], xs: &[Vec<f64>], zero: bool) -> Option<Fit> {
     Some(Fit { coef, se, predicted, sse, ssr, dfr, dfe, dft })
 }
 
+/// Builds a static regression report without modifying the session or selecting an output sheet.
+///
+/// An absent `model` selects linear regression; explicit values must name a supported model.
+/// Exponential fits transform Y, logarithmic fits transform X, and power fits transform both.
+/// Logarithmic and power fits require one X column; every logged value must be finite and positive.
+/// Y must be one column with as many rows as X, and observations must exceed fitted parameters.
+///
+/// All coefficients, inference, predictions and residuals stay in the fitted domain. In the
+/// exponential and power models the intercept is ln(amplitude), so `constantZero` fixes amplitude
+/// to 1. The caller writes the returned grid only after validation and fitting have succeeded.
 fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let labels = flag(p, "labels");
     let model = match p.get("model") {
@@ -802,6 +814,8 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     Ok(g)
 }
 
+/// Takes a natural logarithm only for a finite, strictly positive observation.
+/// `axis` identifies the offending input in the error returned for zero, negative or nonfinite data.
 fn positive_ln(value: f64, axis: &str) -> Result<f64> {
     if value <= 0.0 || !value.is_finite() {
         return Err(EngineError::Other(format!("{axis} values must be positive for this regression model.")));

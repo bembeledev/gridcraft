@@ -67,4 +67,5 @@ cargo check -p gridcraft-ui-egui --target wasm32-unknown-unknown
 
 | Date | Change |
 |---|---|
+| 2026-10-23 | Sync with main; document production API behavior for regression model validation, fitted-domain reports and analysis dialog ownership |
 | 2026-10-23 | Describe transformed regression diagnostics, range selection and the PR2 validation plan |

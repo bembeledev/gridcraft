@@ -5,6 +5,7 @@
 //! `ui.dialog.set {field, value}` edits a field and `ui.dialog.confirm` presses OK.
 
 use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
+use gridcraft_engine::core::{CellRef, RangeRef};
 
 use crate::icons::{self, Icon};
 use serde_json::{Map, Value as Json, json};
@@ -15,11 +16,23 @@ use crate::theme;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
+    Range { key: &'static str, label: &'static str },
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
     Check { key: &'static str, label: &'static str },
     Note(String),
+}
+
+/// State shared between a dialog's range button and the worksheet grid. The grid is rendered
+/// before the dialog in each frame, so this state deliberately lives on the dialog and survives
+/// the dialog's temporary removal while it is being painted.
+#[derive(Clone, Debug)]
+pub(crate) struct RangePicker {
+    pub key: String,
+    pub sheet: usize,
+    pub start: Option<CellRef>,
+    pub single_cell: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +52,7 @@ pub struct Dialog {
     /// The first text or number field still has to take keyboard focus (set when a form opens,
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
+    pub(crate) range_picker: Option<RangePicker>,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
@@ -90,6 +104,7 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: true,
+            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -110,6 +125,7 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: false,
+            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -826,6 +842,22 @@ impl Dialog {
                 d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
+            "chartExport" => Dialog::form(
+                "chartExport",
+                "Save as Picture",
+                "chart.export",
+                vec![],
+                json!({"chart":p("chart"),"format":"png","scale":2,"transparent":false}),
+            ),
+            "saveChartTemplate" => {
+                let name = app
+                    .selected_chart_snapshot()
+                    .filter(|chart| Some(chart.id) == p("chart").as_u64().and_then(|id| u32::try_from(id).ok()))
+                    .and_then(|chart| chart.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "My Chart Template".into());
+                Dialog::custom("saveChartTemplate", "Save Chart Template", json!({"chart":p("chart"),"name":name}))
+            }
             "chartTitle" => Dialog::form(
                 "chartTitle",
                 "Chart Title",
@@ -1026,7 +1058,7 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
     let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");
     let operator = d.values.get("operator").and_then(Json::as_str).unwrap_or("between");
     d.fields = data_validation_fields(kind, operator);
-    form_fields(ui, d);
+    form_fields(ui, d, 0);
     ok_cancel(ui, confirm, open);
 }
 
@@ -1046,7 +1078,7 @@ fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
         d.fields.push(Text { key: "copyTo", label: "Copy to:" });
     }
     d.fields.push(Check { key: "unique", label: "Unique rows only" });
-    form_fields(ui, d);
+    form_fields(ui, d, 0);
     // Constrain the button row: the shared right-to-left layout otherwise
     // consumes the window's remaining height instead of fitting the buttons.
     ui.allocate_ui(vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0), |ui| ok_cancel(ui, confirm, open));
@@ -1150,29 +1182,76 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
+        "analysisToolPak" if d.values.get("tool").and_then(Json::as_str).unwrap_or_default().is_empty() => 500.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let dialog_id = if d.name == "analysisToolPak" && d.values.get("tool").and_then(Json::as_str).unwrap_or_default().is_empty() {
+        "analysisToolPakChooser"
+    } else {
+        d.name.as_str()
+    };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::new("dialog").with(&d.name))
+        .id(egui::Id::new("dialog").with(dialog_id))
         .collapsible(false)
-        .resizable(false)
+        .movable(true)
+        .resizable(true)
         .default_width(width)
-        // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
-        .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
+        .pivot(egui::Align2::CENTER_CENTER)
+        .constrain(true)
         .open(&mut win_open);
+    let chooser = dialog_id == "analysisToolPakChooser";
     let window = match d.name.as_str() {
+        "analysisToolPak" if chooser => window.default_height(500.0),
+        "analysisToolPak" if d.values.get("tool").and_then(Json::as_str) == Some("regression") => window.default_height(680.0),
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
     window.show(ctx, |ui| {
-            ui.set_min_width(width - 20.0);
+        ui.set_min_width(width - 20.0);
+        // The chooser owns its scrolling: its footer must never enter the generic body scroll.
+        if chooser {
+            analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open);
+            return;
+        }
+        // Let the body use the window's full available height. Scrolling is only needed when
+        // the user makes the dialog shorter than its contents or the display is low-resolution.
+        let regression = d.name == "analysisToolPak" && d.values.get("tool").and_then(Json::as_str) == Some("regression");
+        let footer_height = if regression { 48.0 } else { 0.0 };
+        let body_height = (ui.available_height() - footer_height).max(80.0);
+        egui::ScrollArea::vertical().id_salt("dialog_body").max_height(body_height).show(ui, |ui| {
             match d.name.as_str() {
+                "chartExport" => {
+                    ui.label(crate::widgets::tr(ui,"Image Format"));
+                    let mut format=d.values.get("format").and_then(Json::as_str).unwrap_or("png").to_string();
+                    ui.horizontal(|ui| {ui.selectable_value(&mut format,"png".into(),"PNG");ui.selectable_value(&mut format,"svg".into(),"SVG");});
+                    d.values.insert("format".into(),json!(format));
+                    if format=="png" {
+                        ui.label(crate::widgets::tr(ui,"Resolution"));
+                        let mut scale=d.values.get("scale").and_then(Json::as_u64).unwrap_or(2);
+                        ui.horizontal(|ui| {for v in [1,2,4] {ui.selectable_value(&mut scale,v,format!("{v}×"));}});
+                        d.values.insert("scale".into(),json!(scale));
+                        ui.label(crate::widgets::tr(ui,"Lossless PNG; higher resolution creates a larger image."));
+                    } else {ui.label(crate::widgets::tr(ui,"SVG stays sharp at any size. Fonts are not embedded."));}
+                    let mut transparent=d.values.get("transparent").and_then(Json::as_bool).unwrap_or(false);
+                    ui.checkbox(&mut transparent,crate::widgets::tr(ui,"Transparent Background"));
+                    d.values.insert("transparent".into(),json!(transparent));
+                    ok_cancel(ui,&mut confirm,&mut open);
+                }
+                "saveChartTemplate" => {
+                    ui.label(crate::widgets::tr(ui, "Template name"));
+                    let mut name = d.values.get("name").and_then(Json::as_str).unwrap_or("").to_string();
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        d.values.insert("name".into(), json!(name));
+                    }
+                    ui.label(crate::widgets::tr(ui, "Templates are saved in this GridCraft installation and apply to charts of the same type."));
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
@@ -1379,6 +1458,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+        if regression {
+            ui.separator();
+            ok_cancel(ui, &mut confirm, &mut open);
+        }
+    });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -1404,7 +1488,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
+    if confirm && d.name == "saveChartTemplate" {
+        let chart = d.values.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap_or_default();
+        let name = d.values.get("name").and_then(Json::as_str).unwrap_or("");
+        if let Err(error) = crate::chart_tools::save_template(app, chart, name) {
+            app.message = Some((d.title.clone(), error));
+            open = true;
+        }
+    } else if confirm && d.name == "chartExport" {
+        match app.save_chart_image(build_params(&d)) {
+            Ok(saved) => open = !saved,
+            Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+        }
+    } else if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
             Ok(r) => {
@@ -1597,10 +1693,13 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
                 egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE))
                     .fill(crate::theme::Tokens::get(ui.ctx()).accent),
             );
+            ok.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, lang.tr("OK")));
             if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 *confirm = true;
             }
-            if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
+            let cancel = ui.button(format!(" {} ", lang.tr("Cancel")));
+            cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, lang.tr("Cancel")));
+            if cancel.clicked() {
                 *open = false;
             }
         })
@@ -1608,7 +1707,7 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
 }
 
 fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(ui, d);
+    form_fields(ui, d, 0);
     ok_cancel(ui, confirm, open);
 }
 
@@ -1635,7 +1734,7 @@ fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
 }
 
 /// Draws a dialog's `fields`, editing its values.
-fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
+fn form_fields(ui: &mut egui::Ui, d: &mut Dialog, active_sheet: usize) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -1650,10 +1749,11 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| if v.is_null() { String::new() } else { v.to_string() }))
                             .unwrap_or_default();
                         let multiline = key == "text";
+                        let width = ui.available_width().max(320.0);
                         let r = if multiline {
-                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0))
+                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(width))
                         } else {
-                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
+                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(width))
                         };
                         take_first_focus(d, &r);
                         if r.changed() {
@@ -1661,12 +1761,16 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         }
                     });
                 }
+                Field::Range { key, label } => {
+                    range_field(ui, d, key, label, active_sheet, false);
+                }
                 Field::Password { key, label } => {
                     // Masked as typed (Excel shows dots); "Show password" reveals it on purpose.
                     ui.vertical(|ui| {
                         ui.label(lang.tr(label));
                         let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(320.0)).changed() {
+                        let width = ui.available_width().max(320.0);
+                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(width)).changed() {
                             d.values.insert(key.into(), json!(s));
                         }
                         ui.checkbox(&mut d.show_password, lang.tr("Show password"));
@@ -1723,6 +1827,69 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.end_row();
         }
     });
+}
+
+fn range_field(ui: &mut egui::Ui, d: &mut Dialog, key: &'static str, label: &'static str, active_sheet: usize, single_cell: bool) {
+    ui.vertical(|ui| {
+        ui.label(crate::widgets::tr(ui, label));
+        range_editor(ui, d, key, active_sheet, single_cell);
+    });
+}
+
+fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, active_sheet: usize, single_cell: bool) {
+    ui.horizontal(|ui| range_editor_contents(ui, d, key, active_sheet, single_cell));
+}
+
+fn range_editor_contents(ui: &mut egui::Ui, d: &mut Dialog, key: &str, active_sheet: usize, single_cell: bool) {
+    let mut text = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
+    let button_width = 94.0;
+    let width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(120.0);
+    let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width));
+    take_first_focus(d, &edit);
+    if edit.changed() {
+        d.values.insert(key.into(), json!(text));
+        d.range_picker = None;
+    }
+    let picking = d.range_picker.as_ref().is_some_and(|p| p.key == key);
+    let button = if picking { "Finish" } else { "Select…" };
+    if ui.button(crate::widgets::tr(ui, button)).clicked() {
+        if picking {
+            d.range_picker = None;
+        } else {
+            d.range_picker = Some(RangePicker { key: key.to_string(), sheet: active_sheet, start: None, single_cell });
+        }
+    }
+}
+
+pub(crate) fn dialog_range_picker_active(app: &SheetApp, sheet: usize) -> bool {
+    app.dialog.as_ref().and_then(|d| d.range_picker.as_ref()).is_some_and(|p| p.sheet == sheet)
+}
+
+pub(crate) fn update_dialog_range_picker(app: &mut SheetApp, sheet: usize, start: CellRef, end: CellRef) {
+    let Some((key, single_cell)) =
+        app.dialog.as_ref().and_then(|d| d.range_picker.as_ref()).filter(|p| p.sheet == sheet).map(|p| (p.key.clone(), p.single_cell))
+    else {
+        return;
+    };
+    let end = if single_cell { start } else { end };
+    let range = RangeRef::new(start, end);
+    let text = app.session.active().and_then(|doc| doc.wb.sheets.get(sheet)).map_or_else(
+        || range.a1(),
+        |sh| {
+            if sheet == app.session.active().map(|doc| doc.wb.active_sheet).unwrap_or(sheet) {
+                range.a1()
+            } else {
+                format!("{}!{}", gridcraft_engine::formula::quote_sheet(&sh.name), range.a1())
+            }
+        },
+    );
+    if let Some(d) = app.dialog.as_mut() {
+        if let Some(p) = d.range_picker.as_mut() {
+            p.start = Some(start);
+        }
+        d.values.insert(key, json!(text));
+    }
+    let _ = app.session.run("selection.set", json!({"range": range.a1()}));
 }
 
 /// Help ▸ About GridCraft: the app, its contributors and the AI models that helped. The credits
@@ -2724,8 +2891,8 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Range { key: "range", label: "Input Range:" };
+    let two = || vec![Range { key: "range1", label: "Variable 1 Range:" }, Range { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -2738,7 +2905,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Range { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
@@ -2746,9 +2913,14 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Range { key: "inputY", label: "Input Y Range:" },
+            Range { key: "inputX", label: "Input X Range:" },
             labels(),
+            Choice {
+                key: "model",
+                label: "Regression Type:",
+                options: vec![("linear", "Linear"), ("exponential", "Exponential"), ("logarithmic", "Logarithmic"), ("power", "Power / Geometric")],
+            },
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
             Check { key: "residuals", label: "Residuals" },
@@ -2784,11 +2956,13 @@ fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
+        "model": "linear",
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
     if tool == "regression" {
         v["confidence"] = json!("95");
         v["inputY"] = json!(sel);
+        v["model"] = json!("linear");
     }
     v.as_object().cloned().unwrap_or_default()
 }
@@ -2813,20 +2987,26 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     }
     let tool = d.values.get("tool").and_then(Json::as_str).unwrap_or("").to_string();
     let Some((_, label)) = TOOLS.iter().find(|(id, _)| *id == tool) else {
-        ui.label(egui::RichText::new("Analysis Tools").strong());
+        ui.label(egui::RichText::new(app.ui.language.tr("Analysis Tools")).strong());
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
         let mut chosen = false;
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            for (id, label) in TOOLS {
-                let r = ui.selectable_label(pick == *id, *label);
-                if r.clicked() {
-                    d.values.insert("pick".into(), json!(id));
+        let list_height = (ui.available_height() - 44.0).max(80.0);
+        egui::ScrollArea::vertical()
+            .id_salt("analysis_tool_list")
+            .min_scrolled_height(list_height)
+            .max_height(list_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (id, label) in TOOLS {
+                    let r = ui.selectable_label(pick == *id, app.ui.language.tr(label));
+                    if r.clicked() {
+                        d.values.insert("pick".into(), json!(id));
+                    }
+                    if r.double_clicked() {
+                        chosen = true;
+                    }
                 }
-                if r.double_clicked() {
-                    chosen = true;
-                }
-            }
-        });
+            });
         let mut ok = false;
         ok_cancel(ui, &mut ok, open);
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
@@ -2838,7 +3018,25 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    let active_sheet = app.session.active().map(|doc| doc.wb.active_sheet).unwrap_or(0);
+    if tool == "regression" {
+        // Keep input ranges and their label option together. The model choice and fit options
+        // have separate visual groups so the first-row setting cannot be mistaken for a model.
+        let fields = std::mem::take(&mut d.fields);
+        d.fields = fields.iter().take(3).cloned().collect();
+        ui.push_id("regression-inputs", |ui| form_fields(ui, d, active_sheet));
+        ui.separator();
+        ui.label(egui::RichText::new(app.ui.language.tr("Regression method")).strong());
+        d.fields = fields.get(3..4).unwrap_or_default().to_vec();
+        ui.push_id("regression-method", |ui| form_fields(ui, d, active_sheet));
+        ui.separator();
+        ui.label(egui::RichText::new(app.ui.language.tr("Regression options")).strong());
+        d.fields = fields.get(4..).unwrap_or_default().to_vec();
+        ui.push_id("regression-options", |ui| form_fields(ui, d, active_sheet));
+        d.fields = fields;
+    } else {
+        form_fields(ui, d, active_sheet);
+    }
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
@@ -2847,14 +3045,20 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
             if ui.radio(to == choice, text_label).clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if choice == "range" {
+                range_editor_contents(ui, d, key, active_sheet, true);
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(ui.available_width().max(160.0))).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }
-    ok_cancel(ui, confirm, open);
+    if tool != "regression" {
+        ok_cancel(ui, confirm, open);
+    }
 }
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
@@ -3124,6 +3328,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn regression_dialog_offers_the_supported_fit_models() {
+        let fields = toolpak_fields("regression");
+        let model = fields.iter().find_map(|field| match field {
+            Field::Choice { key: "model", label, options } => Some((*label, options.clone())),
+            _ => None,
+        });
+        let (label, options) = model.expect("regression model choice");
+        assert_eq!(label, "Regression Type:");
+        assert_eq!(
+            options,
+            vec![("linear", "Linear"), ("exponential", "Exponential"), ("logarithmic", "Logarithmic"), ("power", "Power / Geometric")]
+        );
+
+        let dialog =
+            Dialog::form("analysisToolPak", "Regression", "data.analysisToolPak", fields, Json::Object(toolpak_defaults("A1:A5", "regression")));
+        let params = build_params(&dialog);
+        assert_eq!(params["model"], "linear");
+        assert_eq!(params["inputY"], "A1:A5");
+    }
+
+    #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
         let mut session = gridcraft_engine::Session::default();
         session.new_workbook();
@@ -3146,6 +3371,25 @@ mod tests {
         let mut app = SheetApp::new(session, Default::default());
         let dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
         assert_eq!(dialog.values.get("range"), Some(&json!("B2:C4")));
+    }
+
+    #[test]
+    fn analysis_ranges_use_pickers_and_write_the_selected_a1_range() {
+        let fields = toolpak_fields("regression");
+        assert!(fields.iter().any(|f| matches!(f, Field::Range { key: "inputY", .. })));
+        assert!(fields.iter().any(|f| matches!(f, Field::Range { key: "inputX", .. })));
+
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.dialog = Some(Dialog::open(&mut app, "analysisToolPak", json!({"tool": "regression"})).expect("regression dialog"));
+        app.dialog.as_mut().expect("dialog").range_picker = Some(RangePicker { key: "inputX".into(), sheet: 0, start: None, single_cell: false });
+
+        update_dialog_range_picker(&mut app, 0, CellRef::new(0, 1), CellRef::new(2, 3));
+
+        let dialog = app.dialog.as_ref().expect("dialog");
+        assert_eq!(dialog.values.get("inputX"), Some(&json!("B1:D3")));
+        assert_eq!(app.session.active().expect("document").selection.current().a1(), "B1:D3");
     }
 
     #[test]

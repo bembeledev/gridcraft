@@ -60,6 +60,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
     }
 }
 
@@ -73,6 +74,87 @@ const KINDS: [ChartKind; 8] = [
     ChartKind::ScatterLines,
     ChartKind::Bubble,
 ];
+
+#[test]
+fn hollow_marker_contours_transparency_and_smoothing_are_written_natively() {
+    let mut wb = workbook();
+    let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[0];
+    let style = gridcraft_model::ChartSeriesFormat {
+        marker: Some("plus".into()),
+        marker_size: Some(72.0),
+        marker_no_fill: true,
+        marker_border_color: Some([255, 0, 0, 255]),
+        marker_border_width: Some(2.0),
+        line_color: Some([10, 20, 30, 128]),
+        smooth: Some(true),
+        ..Default::default()
+    };
+    c.format.series.insert(0, style.clone());
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(0);
+    assert_eq!(xml.matches("<c:marker>").count(), 1);
+    assert!(xml.contains("<c:symbol val=\"plus\"/>"));
+    assert!(xml.contains("<c:size val=\"72\"/>"));
+    assert!(xml.contains("<a:noFill/>"));
+    assert!(xml.contains("<a:srgbClr val=\"FF0000\">"));
+    assert!(xml.contains("<c:smooth val=\"1\"/>"));
+    assert!(xml.contains("<a:alpha val=\"50196\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].format.series.get(&0), Some(&style));
+}
+
+#[test]
+fn axis_and_series_format_roundtrip_and_native_axis_xml() {
+    let mut wb = workbook();
+    let sheet = Arc::make_mut(&mut wb.sheets[0]);
+    let c = &mut sheet.charts[0];
+    c.format.y_axis =
+        gridcraft_model::ChartAxis { minimum: Some(1.0), maximum: Some(1000.0), logarithmic: true, reversed: true, ..Default::default() };
+    c.format.vertical_gridlines = true;
+    c.format.series.insert(
+        0,
+        gridcraft_model::ChartSeriesFormat {
+            marker: Some("diamond".into()),
+            marker_size: Some(9.0),
+            line_width: Some(3.0),
+            dashed: true,
+            ..Default::default()
+        },
+    );
+    let expected = c.format.clone();
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(0);
+    assert!(xml.contains("<c:logBase val=\"10\"/>"));
+    assert!(xml.contains("<c:orientation val=\"maxMin\"/>"));
+    assert!(xml.contains("<c:min val=\"1\"/>"));
+    assert!(xml.contains("<c:max val=\"1000\"/>"));
+    assert!(xml.contains("<c:symbol val=\"diamond\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].format, expected);
+}
+
+#[test]
+fn independent_marker_fills_surfaces_spacing_and_axis_masks_are_native_and_preserved() {
+    let mut wb = workbook();
+    let c = &mut Arc::make_mut(&mut wb.sheets[0]).charts[2];
+    c.format.y_axis.number_format = Some("0 \"kg\"".into());
+    c.format.gap_width = Some(80.0);
+    c.format.overlap = Some(25.0);
+    c.format.chart_area.fill = Some([240, 240, 240, 255]);
+    c.format.plot_area.fill = Some([200, 210, 220, 128]);
+    c.format
+        .series
+        .insert(0, gridcraft_model::ChartSeriesFormat { fill_color: Some([40, 80, 120, 128]), border_width: Some(2.0), ..Default::default() });
+    let expected = c.format.clone();
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = chart_parts(&bytes).remove(2);
+    assert!(xml.contains("<c:gapWidth val=\"80\"/>"));
+    assert!(xml.contains("<c:overlap val=\"25\"/>"));
+    assert!(xml.contains("formatCode=\"0 &quot;kg&quot;\" sourceLinked=\"0\""));
+    assert!(xml.contains("<a:alpha val=\"50196\"/>"));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[2].format, expected);
+}
 
 fn workbook() -> Workbook {
     let mut s = Sheet::new("Data");

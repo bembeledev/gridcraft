@@ -137,6 +137,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: None,
+        format: crate::chart::read_custom_format(root).unwrap_or_default(),
     })
 }
 
@@ -369,8 +370,10 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
     // A white chart area with a light border, like other charts.
     let _ = write!(
         s,
-        "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:chartSpace>"
+        "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr>"
     );
+    s.push_str(&crate::chart::format_extension(&ch.format, "cx"));
+    s.push_str("</cx:chartSpace>");
     s
 }
 

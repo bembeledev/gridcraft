@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Data Analysis…",
         ["Data", "Analysis"],
         None,
-        "{tool: anovaSingle|correlation|covariance|descriptive|exponentialSmoothing|fTest|histogram|movingAverage|rankPercentile|regression|tTestPaired|tTestEqual|tTestUnequal (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
+        "{tool: anovaSingle|correlation|covariance|descriptive|exponentialSmoothing|fTest|histogram|movingAverage|rankPercentile|regression|tTestPaired|tTestEqual|tTestUnequal (or the tool's label), output?: \"E1\" (top-left of the report; default a new sheet), newSheet?: name, outputTo?: range|newSheet (picks between the two), overwrite?: bool (else non-empty output cells are refused), labels?: bool (first row/column holds names), groupedBy?: columns|rows, …tool params} — range tools take `range`; descriptive: summary? (default true), confidence?: 95, kthLargest?, kthSmallest?; histogram: bins?: range (default evenly spaced), pareto?, cumulative?; regression: inputY, inputX, model?: linear|exponential|logarithmic|power (default linear), constantZero?, confidence?: 95, residuals?, standardizedResiduals?, normalProbability?; movingAverage: interval? (3), standardErrors?; exponentialSmoothing: damping? (0.3), standardErrors?; t-tests and fTest: range1, range2, alpha? (0.05), hypothesizedDifference? (0); anovaSingle: alpha?. Writes static values. No `tool` → {tools} (the menu opens the dialog).",
         has_doc,
         run
     )]
@@ -639,6 +639,7 @@ fn ols(y: &[f64], xs: &[Vec<f64>], zero: bool) -> Option<Fit> {
 
 fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let labels = flag(p, "labels");
+    let model = text(p, &["model"]).unwrap_or("linear");
     let (ysi, yr) = input_range(s, p, &["inputY", "y"])?;
     let (xsi, xr) = input_range(s, p, &["inputX", "x"])?;
     if yr.width() != 1 {
@@ -653,8 +654,40 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let yv = variables(s, ysi, yr, false, labels, &|_| "Y".into())?;
     let xv = variables(s, xsi, xr, false, labels, &|i| format!("X Variable {}", i + 1))?;
     let yvar = yv.first().ok_or_else(|| bad(CMD, "empty input Y range"))?;
-    let y = numbers(&yvar.vals, false)?;
-    let xs: Vec<Vec<f64>> = xv.iter().map(|v| numbers(&v.vals, false)).collect::<Result<_>>()?;
+    let mut y = numbers(&yvar.vals, false)?;
+    let mut xs: Vec<Vec<f64>> = xv.iter().map(|v| numbers(&v.vals, false)).collect::<Result<_>>()?;
+    let model_label = match model {
+        "linear" => "Linear",
+        "exponential" => {
+            for v in &mut y {
+                *v = positive_ln(*v, "Y")?;
+            }
+            "Exponential (log-linear fit)"
+        }
+        "logarithmic" => {
+            if xs.len() != 1 {
+                return Err(EngineError::Other("Logarithmic regression requires exactly one X column.".into()));
+            }
+            for v in xs.first_mut().into_iter().flatten() {
+                *v = positive_ln(*v, "X")?;
+            }
+            "Logarithmic (Y versus ln(X))"
+        }
+        "power" => {
+            if xs.len() != 1 {
+                return Err(EngineError::Other("Power regression requires exactly one X column.".into()));
+            }
+            for v in &mut y {
+                *v = positive_ln(*v, "Y")?;
+            }
+            for v in xs.first_mut().into_iter().flatten() {
+                *v = positive_ln(*v, "X")?;
+            }
+            "Power (log-log fit)"
+        }
+        _ => return Err(bad(CMD, "model must be linear, exponential, logarithmic or power")),
+    };
+    let response_label = if matches!(model, "exponential" | "power") { format!("ln({})", yvar.name) } else { yvar.name.clone() };
     let zero = flag(p, "constantZero");
     let k = xs.len();
     let n = y.len();
@@ -668,7 +701,8 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let r2 = if sst > 0.0 { fit.ssr / sst } else { f64::NAN };
     let mut g = Grid::default();
     g.txt(0, 0, "SUMMARY OUTPUT");
-    g.txt(2, 0, "Regression Statistics");
+    g.txt(1, 0, model_label);
+    g.txt(2, 0, if model == "linear" { "Regression Statistics" } else { "Regression Statistics (transformed domain)" });
     let stats: [(&str, Value); 5] = [
         ("Multiple R", n_or_div0(r2.sqrt())),
         ("R Square", n_or_div0(r2)),
@@ -704,7 +738,9 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let tc = f64_of(&callf("T.INV.2T", &[1.0 - conf / 100.0, fit.dfe]));
     for (j, (b, se)) in fit.coef.iter().zip(&fit.se).enumerate() {
         let row = 16 + idx(j);
-        g.txt(row, 0, if j == 0 { "Intercept" } else { xv.get(j - 1).map_or("", |v| v.name.as_str()) });
+        let variable = xv.get(j.saturating_sub(1)).map(|v| v.name.as_str()).unwrap_or("");
+        let variable = if j > 0 && matches!(model, "logarithmic" | "power") { format!("ln({variable})") } else { variable.to_string() };
+        g.txt(row, 0, if j == 0 { "Intercept".into() } else { variable });
         g.num(row, 1, *b);
         if j == 0 && zero {
             for c in 2..=8 {
@@ -726,7 +762,7 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
     let standardized = flag(p, "standardizedResiduals");
     if residuals || standardized {
         g.txt(row, 0, "RESIDUAL OUTPUT");
-        let pred = format!("Predicted {}", yvar.name);
+        let pred = format!("Predicted {response_label}");
         let mut head = vec!["Observation", pred.as_str(), "Residuals"];
         if standardized {
             head.push("Standard Residuals");
@@ -750,7 +786,7 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
             row = 16 + idx(fit.coef.len()) + 3;
         }
         g.txt(row, c, "PROBABILITY OUTPUT");
-        g.labels(row + 2, c, &["Percentile", &yvar.name]);
+        g.labels(row + 2, c, &["Percentile", &response_label]);
         let mut sorted = y.clone();
         sorted.sort_by(f64::total_cmp);
         for (i, v) in sorted.iter().enumerate() {
@@ -760,6 +796,13 @@ fn regression(s: &Session, p: &Json) -> Result<Grid> {
         }
     }
     Ok(g)
+}
+
+fn positive_ln(value: f64, axis: &str) -> Result<f64> {
+    if value <= 0.0 || !value.is_finite() {
+        return Err(EngineError::Other(format!("{axis} values must be positive for this regression model.")));
+    }
+    Ok(value.ln())
 }
 
 // ---------------------------------------------------------------- smoothing
@@ -1307,6 +1350,46 @@ mod tests {
         assert!(close(n(&s, "Multi!B19"), slope2, 1e-9));
         assert!(close(n(&s, "Multi!C18"), se1, 1e-9));
         assert_eq!(v(&s, "Multi!A19"), Value::text("X Variable 2"));
+    }
+
+    #[test]
+    fn regression_supports_exponential_logarithmic_and_power_models() {
+        let mut s = s();
+        s.execute(
+            "range.setValues",
+            json!({"range":"A1","values":[["Y","X"],[2.0*1.0f64.exp(),1],[2.0*2.0f64.exp(),2],[2.0*3.0f64.exp(),3],[2.0*4.0f64.exp(),4]]}),
+        )
+        .unwrap();
+        s.execute("data.analysisToolPak", json!({"tool":"regression","model":"exponential","inputY":"A2:A5","inputX":"B2:B5","newSheet":"Exp"}))
+            .unwrap();
+        assert!(close(n(&s, "Exp!B17"), 2.0f64.ln(), 1e-10), "ln(amplitude)");
+        assert!(close(n(&s, "Exp!B18"), 1.0, 1e-10), "exponential rate");
+        assert_eq!(v(&s, "Exp!A2"), Value::text("Exponential (log-linear fit)"));
+
+        s.execute(
+            "range.setValues",
+            json!({"range":"D1","values":[["Y","X"],[3.0,1],[3.0+2.0*2.0f64.ln(),2],[3.0+2.0*3.0f64.ln(),3],[3.0+2.0*4.0f64.ln(),4]]}),
+        )
+        .unwrap();
+        s.execute("data.analysisToolPak", json!({"tool":"regression","model":"logarithmic","inputY":"D2:D5","inputX":"E2:E5","newSheet":"Log"}))
+            .unwrap();
+        assert!(close(n(&s, "Log!B17"), 3.0, 1e-10));
+        assert!(close(n(&s, "Log!B18"), 2.0, 1e-10));
+
+        s.execute("range.setValues", json!({"range":"G1","values":[["Y","X"],[4.0,1],[16.0,2],[36.0,3],[64.0,4]]})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool":"regression","model":"power","inputY":"G2:G5","inputX":"H2:H5","newSheet":"Power"})).unwrap();
+        assert!(close(n(&s, "Power!B17"), 4.0f64.ln(), 1e-10), "ln(amplitude)");
+        assert!(close(n(&s, "Power!B18"), 2.0, 1e-10), "power exponent");
+    }
+
+    #[test]
+    fn transformed_regression_rejects_nonpositive_data_and_multiple_x_columns() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Y","X","X2"],[-1,1,2],[2,2,3],[3,3,4]]})).unwrap();
+        assert!(s.execute("data.analysisToolPak", json!({"tool":"regression","model":"exponential","inputY":"A2:A4","inputX":"B2:B4"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool":"regression","model":"logarithmic","inputY":"A2:A4","inputX":"B2:C4"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool":"regression","model":"power","inputY":"A2:A4","inputX":"B2:B4"})).is_err());
+        assert!(s.execute("data.analysisToolPak", json!({"tool":"regression","model":"other","inputY":"A2:A4","inputX":"B2:B4"})).is_err());
     }
 
     #[test]

@@ -211,53 +211,96 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                let mut tabs: Vec<&str> = TABS.to_vec();
+                let ctx_tabs = contextual_tabs(app);
+                tabs.extend(ctx_tabs.iter());
+                let tabs_width: f32 = tabs
+                    .iter()
+                    .map(|tab| {
+                        let label = app.ui.language.tr(tab);
+                        ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(13.5), t.text).size().x + 24.0
+                    })
+                    .sum();
+                let overflow = tabs_width + 64.0 > ui.available_width();
+                let reveal_id = ui.id().with("ribbon_tabs_reveal");
+                let reveal_key = egui::Id::new((app.ui.ribbon_tab.as_str(), tabs.len(), ui.available_width().to_bits()));
+                let reveal_active = ui.ctx().data_mut(|data| {
+                    let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
+                    data.insert_temp(reveal_id, reveal_key);
+                    changed
+                });
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
                     if app.chrome.file_tab {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
-                        }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                    let mut draw_tabs = |ui: &mut Ui| {
+                        for &tab in &tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            if active && reveal_active {
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
+                    };
+                    if overflow {
+                        let visible_width = (ui.available_width() - 34.0).max(40.0);
+                        egui::ScrollArea::horizontal()
+                            .id_salt("ribbon_tabs_horizontal")
+                            .max_width(visible_width)
+                            .auto_shrink([false, false])
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                            .show(ui, |ui| draw_tabs(ui));
+                        let arrow = ui.add(egui::Button::new(egui::RichText::new("▼").color(t.text)).min_size(vec2(30.0, 28.0)).fill(t.window));
+                        arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, app.ui.language.tr("More tabs")));
+                        arrow.clone().on_hover_text(app.ui.language.tr("More tabs"));
+                        egui::Popup::menu(&arrow).show(|ui| {
+                            for tab in &tabs {
+                                if ui.selectable_label(app.ui.ribbon_tab == *tab, app.ui.language.tr(tab)).clicked() {
+                                    app.ui.ribbon_tab = (*tab).to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                    ui.close();
+                                }
+                            }
+                        });
+                    } else {
+                        draw_tabs(ui);
                     }
                 });
             });
@@ -270,28 +313,69 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
-                            "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
-                            "Draw" => draw(app, ui),
-                            "Page Layout" => page_layout(app, ui),
-                            "Formulas" => formulas(app, ui),
-                            "Data" => data(app, ui),
-                            "Review" => review(app, ui),
-                            "View" => view(app, ui),
-                            "Automate" => automate(app, ui),
-                            "Table Design" => table_design(app, ui),
-                            "Chart Design" => chart_design(app, ui),
-                            crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
-                            _ => home(app, ui),
-                        }
+                let ribbon_content =
+                    egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                            match app.ui.ribbon_tab.as_str() {
+                                "Home" => home(app, ui),
+                                "Insert" => insert(app, ui),
+                                "Draw" => draw(app, ui),
+                                "Page Layout" => page_layout(app, ui),
+                                "Formulas" => formulas(app, ui),
+                                "Data" => data(app, ui),
+                                "Review" => review(app, ui),
+                                "View" => view(app, ui),
+                                "Automate" => automate(app, ui),
+                                "Table Design" => table_design(app, ui),
+                                "Chart Design" => chart_design(app, ui),
+                                crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
+                                _ => home(app, ui),
+                            }
+                        });
                     });
-                });
+                if ribbon_content.content_size.x > ribbon_content.inner_rect.width() + 1.0 {
+                    let arrow_rect = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top()), vec2(30.0, inner.height()));
+                    let arrow = ui.put(
+                        arrow_rect,
+                        egui::Button::new(egui::RichText::new("▼").color(t.text)).fill(t.ribbon).stroke(Stroke::new(1.0, t.ribbon_border)),
+                    );
+                    arrow.clone().on_hover_text(app.ui.language.tr("More commands on this tab"));
+                    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, app.ui.language.tr("More commands on this tab")));
+                    egui::Popup::menu(&arrow).show(|ui| ribbon_overflow_menu(app, ui));
+                }
             });
         });
+}
+
+/// Commands that belong to the active tab but do not fit in the visible ribbon card.
+/// The second menu level preserves the ribbon's group structure, so narrow windows still expose
+/// every registered command without requiring a hidden horizontal scrollbar.
+fn ribbon_overflow_menu(app: &mut SheetApp, ui: &mut Ui) {
+    let tab = app.ui.ribbon_tab.to_string();
+    let mut groups: Vec<(String, Vec<(&'static str, &'static str)>)> = Vec::new();
+    for command in app.session.commands().into_iter().filter(|command| command.enabled && command.menu.first().copied() == Some(tab.as_str())) {
+        let group = command.menu.get(1).copied().unwrap_or("Other");
+        if let Some((_, items)) = groups.iter_mut().find(|(name, _)| name == group) {
+            items.push((command.id, command.label));
+        } else {
+            groups.push((group.to_string(), vec![(command.id, command.label)]));
+        }
+    }
+    if groups.is_empty() {
+        ui.label(app.ui.language.tr("No additional commands available"));
+        return;
+    }
+    for (group, items) in groups {
+        ui.menu_button(app.ui.language.tr(&group), |ui| {
+            for (id, label) in items {
+                if ui.button(app.ui.language.tr(label)).clicked() {
+                    act(app, id, json!({}));
+                    ui.close();
+                }
+            }
+        });
+    }
 }
 
 /// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
@@ -604,7 +688,20 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
 
 fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let st = active_style(app);
+    let mut st = active_style(app);
+    if let Some(font) = app.selected_chart_font() {
+        if let Some(name) = font.name {
+            st.font.name = name;
+        }
+        if let Some(size) = font.size {
+            st.font.size = size;
+        }
+        st.font.bold = font.bold.unwrap_or(false);
+        st.font.italic = font.italic.unwrap_or(false);
+        if let Some(c) = font.color {
+            st.font.color = gridcraft_engine::model::Color::rgb(c[0], c[1], c[2]);
+        }
+    }
     // Clipboard
     let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
     paste.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Paste"));
@@ -2529,21 +2626,7 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
         keytip(app, ui, sequence, ae.rect.center_bottom());
     }
     egui::Popup::menu(&ae).show(|ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Legend: Bottom", "chart.set", json!({"chart": id, "legend": "bottom"})),
-                ("Legend: Right", "chart.set", json!({"chart": id, "legend": "right"})),
-                ("Legend: Top", "chart.set", json!({"chart": id, "legend": "top"})),
-                ("Legend: None", "chart.set", json!({"chart": id, "legend": "none"})),
-                ("-", "", json!(null)),
-                ("Data Labels: Show", "chart.set", json!({"chart": id, "dataLabels": true})),
-                ("Data Labels: None", "chart.set", json!({"chart": id, "dataLabels": false})),
-                ("Gridlines: Show", "chart.set", json!({"chart": id, "gridlines": true})),
-                ("Gridlines: None", "chart.set", json!({"chart": id, "gridlines": false})),
-            ],
-        );
+        crate::chart_tools::element_menu(app, ui, id);
     });
     let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
     control_keytip(app, ui, &__k, "chart.switchRowColumn");
@@ -2639,7 +2722,14 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::T => Some(("insert.table", json!({}))),
         Key::E => Some(("edit.flashFill", json!({}))),
         Key::Num1 => {
-            app.open_dialog("formatCells", json!({}));
+            let selected_chart = app
+                .selected_chart
+                .is_some_and(|id| app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.charts.iter().any(|c| c.id == id)));
+            if selected_chart {
+                app.grid.pane = Some("formatChart".into());
+            } else {
+                app.open_dialog("formatCells", json!({}));
+            }
             None
         }
         Key::Num9 if shift => Some(("home.unhideRows", json!({}))),

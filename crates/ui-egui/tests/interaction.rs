@@ -157,8 +157,9 @@ fn click_chart(h: &mut egui_kittest::Harness<'static, SheetApp>, id: u32) {
     let sheet = app.session.active().unwrap().wb.active().unwrap();
     let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
     let anchor = sheet.charts.iter().find(|chart| chart.id == id).unwrap().anchor;
+    // Select the chart object at its outer border. The center now selects a plot element.
     let pos = egui::pos2(geo.x(sheet, anchor.cell.col) + anchor.dx * geo.z, geo.y(sheet, anchor.cell.row) + anchor.dy * geo.z)
-        + egui::vec2(anchor.width, anchor.height) * geo.z / 2.0;
+        + egui::vec2(2.0, 2.0) * geo.z;
     h.input_mut().events.extend([
         Event::PointerMoved(pos),
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },

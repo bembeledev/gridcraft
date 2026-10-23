@@ -49,6 +49,187 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
+    }
+}
+
+#[test]
+fn chart_svg_export_preserves_text_and_escapes_xml() {
+    for kind in ALL_KINDS {
+        let mut c = chart(kind);
+        c.anchor.width = 640.0;
+        c.anchor.height = 400.0;
+        c.title = Some("Sales < 5 & \"profit\"".into());
+        let svg = export_svg(&c, &sample(kind), &ApproxMeasure, 2.0, false).unwrap();
+        assert!(svg.contains("width=\"1280\""));
+        assert!(svg.contains("Sales &lt; 5 &amp; &quot;profit&quot;"));
+        let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default());
+        assert!(tree.is_ok(), "{kind:?}: {tree:?}");
+        assert!(!svg.contains("NaN"));
+    }
+}
+
+#[test]
+fn chart_png_export_quality_transparency_and_size_limits() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.anchor.width = 320.0;
+    c.anchor.height = 200.0;
+    let data = sample(c.kind);
+    let png = export_png(&c, &data, &ApproxMeasure, 2.0, true).unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 640);
+    assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 400);
+    let svg = export_svg(&c, &data, &ApproxMeasure, 1.0, true).unwrap();
+    assert!(svg.contains("fill=\"none\" stroke="));
+    c.anchor.width = 10000.0;
+    assert!(export_png(&c, &data, &ApproxMeasure, 4.0, false).is_err());
+    assert!(export_svg(&c, &data, &ApproxMeasure, f32::NAN, false).is_err());
+}
+
+#[test]
+fn chart_overlay_and_equation_positions_move_only_the_annotation() {
+    let mut c = chart(ChartKind::ScatterLines);
+    let mut data = sample(c.kind);
+    data.series[0].trendlines.push(TrendlineData { spec: Trendline { display_equation: true, ..Default::default() }, color: [1, 2, 3, 255] });
+    c.format.legend_overlay = true;
+    c.format.legend_position = Some([0.3, 0.25]);
+    c.format.trendline_label_position = Some([0.15, 0.7]);
+    let before = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    c.format.legend_position = Some([0.6, 0.5]);
+    c.format.trendline_label_position = Some([0.4, 0.2]);
+    let after = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    let labels = |p: &[Prim], wanted: &str| {
+        p.iter()
+            .filter_map(|p| match p {
+                Prim::Text { x, y, role, .. } if role == wanted => Some((*x, *y)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(labels(&before, "legend"), labels(&after, "legend"));
+    assert_ne!(labels(&before, "trendline"), labels(&after, "trendline"));
+    assert_eq!(labels(&before, "x_axis"), labels(&after, "x_axis"));
+    assert_sane(&after, 640.0, 400.0);
+}
+
+#[test]
+fn chart_legend_uses_series_marker_style() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.series.insert(0, gridcraft_model::ChartSeriesFormat { marker: Some("square".into()), marker_size: Some(18.0), ..Default::default() });
+    let data = sample(ChartKind::ScatterLines);
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(
+        prims.iter().any(|p| matches!(p,Prim::Polygon {pts,fill,..} if pts.len()==4 && *fill==data.series[0].color && pts.iter().all(|p|p[1]>350.0)))
+    );
+}
+
+#[test]
+fn chart_text_roles_keep_axis_titles_independent_from_tick_labels() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.format.text.insert("x_axis".into(), gridcraft_model::ChartTextFormat { size: Some(16.0), ..Default::default() });
+    c.format.text.insert("x_axis_title".into(), gridcraft_model::ChartTextFormat { size: Some(24.0), ..Default::default() });
+    let prims = render(&c, &sample(ChartKind::ColumnClustered), 640.0, 400.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p,Prim::Text {role,size,..} if role=="x_axis" && *size==16.0)));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Text {role,size,..} if role=="x_axis_title" && *size==24.0)));
+}
+
+#[test]
+fn chart_minor_ticks_and_custom_grid_strokes_are_bounded() {
+    let mut c = chart(ChartKind::ScatterLines);
+    let data = sample(ChartKind::ScatterLines);
+    c.format.y_axis.minor_tick = Some("out".into());
+    c.format.y_axis.minor_unit = Some(0.00000001);
+    c.format.y_axis.tick_line.color = Some([255, 0, 128, 255]);
+    c.format.y_axis.tick_line.width = Some(2.0);
+    c.format.horizontal_gridline.color = Some([1, 2, 3, 255]);
+    c.format.horizontal_gridline.width = Some(2.5);
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p,Prim::Line {color,width,..} if *color==[255,0,128,255] && *width==2.0)));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Line {color,width,..} if *color==[1,2,3,255] && *width==2.5)));
+    assert!(prims.len() < 2000);
+}
+
+#[test]
+fn primary_tick_marks_add_short_axis_lines_in_both_orientations() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::ScatterLines] {
+        let mut c = chart(kind);
+        let data = sample(kind);
+        let before = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+        c.format.x_axis.major_tick = Some("cross".into());
+        c.format.y_axis.major_tick = Some("out".into());
+        let after = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+        assert!(after.len() > before.len(), "{kind:?}");
+        let texts =
+            |prims: Vec<Prim>| prims.into_iter().filter_map(|p| if let Prim::Text { text, .. } = p { Some(text) } else { None }).collect::<Vec<_>>();
+        assert_eq!(texts(before), texts(after));
+        c.format.x_axis.major_tick = Some("none".into());
+        c.format.y_axis.major_tick = Some("none".into());
+        assert_eq!(render(&c, &data, 640.0, 400.0, &ApproxMeasure).len(), render(&chart(kind), &data, 640.0, 400.0, &ApproxMeasure).len());
+    }
+}
+
+#[test]
+fn scatter_series_format_changes_real_geometry_and_can_hide_lines() {
+    let mut c = chart(ChartKind::ScatterLines);
+    let data = sample(ChartKind::ScatterLines);
+    let color = data.series[0].color;
+    c.format
+        .series
+        .insert(0, gridcraft_model::ChartSeriesFormat { marker: Some("square".into()), line_width: Some(4.0), dashed: true, ..Default::default() });
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p,Prim::Polygon {pts,fill,..} if pts.len()==4 && *fill==color)));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Line {color:c,width,dash,..} if *c==color && *width==4.0 && *dash)));
+    c.format.series.get_mut(&0).unwrap().no_line = true;
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(!prims.iter().any(|p| matches!(p,Prim::Line {color:c,dash:true,..} if *c==color)));
+}
+
+#[test]
+fn hollow_markers_have_independent_contours_and_number_formats_are_axis_only() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.y_axis.number_format = Some("0.0 \"kg\"".into());
+    c.format.series.insert(
+        0,
+        gridcraft_model::ChartSeriesFormat {
+            marker_no_fill: true,
+            marker_border_color: Some([220, 0, 0, 255]),
+            marker_border_width: Some(2.0),
+            line_color: Some([10, 20, 30, 128]),
+            ..Default::default()
+        },
+    );
+    let mut data = sample(ChartKind::ScatterLines);
+    data.series[0].number_format = "0.0".into();
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p,Prim::Circle {fill:None,stroke:Some((color,w)),..} if *color==[220,0,0,255] && *w==2.0)));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Line {color,..} if *color==[10,20,30,128])));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Text {text,..} if text.ends_with("kg"))));
+    assert!(prims.iter().any(|p| matches!(p,Prim::Text {text,..} if text=="12000.0")));
+}
+
+#[test]
+fn gap_width_changes_column_geometry_and_new_markers_stay_finite() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    let data = sample(ChartKind::ColumnClustered);
+    let width = |prims: Vec<Prim>| {
+        prims
+            .into_iter()
+            .find_map(|p| match p {
+                Prim::Rect { w, h, fill: Some(color), .. } if color == data.series[0].color && h > 20.0 => Some(w),
+                _ => None,
+            })
+            .unwrap()
+    };
+    c.format.gap_width = Some(0.0);
+    let wide = width(render(&c, &data, 640.0, 400.0, &ApproxMeasure));
+    c.format.gap_width = Some(500.0);
+    let narrow = width(render(&c, &data, 640.0, 400.0, &ApproxMeasure));
+    assert!(wide > narrow);
+    c.kind = ChartKind::Scatter;
+    for marker in ["star", "plus", "dash"] {
+        c.format.series.insert(0, gridcraft_model::ChartSeriesFormat { marker: Some(marker.into()), marker_size: Some(72.0), ..Default::default() });
+        let prims = render(&c, &sample(ChartKind::Scatter), 640.0, 400.0, &ApproxMeasure);
+        assert_sane(&prims, 640.0, 400.0);
     }
 }
 
@@ -1169,6 +1350,55 @@ fn two_level_categories_resolve_and_draw() {
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.categories, months);
     assert!(d.category_levels.is_empty());
+}
+
+#[test]
+fn multilevel_categories_follow_axis_reversal_and_inherit_axis_fonts() {
+    let d = ChartData {
+        categories: ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"].map(String::from).to_vec(),
+        category_levels: vec![["2023", "", "", "2024", "", ""].map(String::from).to_vec()],
+        series: vec![series("Sales", &[1., 2., 3., 4., 5., 6.], [12, 34, 56, 255], ChartKind::Line)],
+        ..Default::default()
+    };
+    for (kind, role) in [(ChartKind::Line, "x_axis"), (ChartKind::BarClustered, "y_axis")] {
+        let mut c = chart(kind);
+        let style = gridcraft_model::ChartTextFormat {
+            name: Some("DejaVu Sans".into()),
+            size: Some(12.0),
+            italic: Some(true),
+            color: Some([128, 32, 64, 255]),
+            ..Default::default()
+        };
+        c.format.text.insert(role.into(), style.clone());
+        c.format.text.insert("data_labels".into(), gridcraft_model::ChartTextFormat { size: Some(7.0), ..Default::default() });
+        for reversed in [false, true] {
+            if role == "x_axis" {
+                c.format.x_axis.reversed = reversed;
+            } else {
+                c.format.y_axis.reversed = reversed;
+            }
+            let prims = render(&c, &d, 640., 400., &ApproxMeasure);
+            assert_sane(&prims, 640., 400.);
+            let at = |label: &str| {
+                prims
+                    .iter()
+                    .find_map(|p| match p {
+                        Prim::Text { x, y, text, role: actual, format, size, color, .. } if text == label => {
+                            assert_eq!(actual, role);
+                            assert_eq!(format, &style);
+                            assert_eq!(*size, 12.0);
+                            assert_eq!(*color, [128, 32, 64, 255]);
+                            Some(if role == "x_axis" { *x } else { *y })
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let (year, first, last) = (at("2023"), at("Oct"), at("Dec"));
+            assert!(year > first.min(last) && year < first.max(last));
+            assert_eq!(at("2023") < at("2024"), (role == "x_axis") != reversed);
+        }
+    }
 }
 
 #[test]

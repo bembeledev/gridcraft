@@ -8,7 +8,7 @@ use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
-use crate::xml::{El, esc, num};
+use crate::xml::{El, esc, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
 
@@ -246,6 +246,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
         let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
         (x, y)
+    } else if matches!(first_kind, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100) {
+        (val_axes.first().copied(), cat_ax)
     } else {
         (cat_ax, val_axes.first().copied())
     };
@@ -266,14 +268,161 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
-        gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
+        gridlines: if scatter { y_ax } else { val_axes.first().copied() }.is_some_and(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        format: read_format(root, plot),
     })
+}
+
+fn read_format(root: &El, plot: &El) -> gridcraft_model::ChartFormat {
+    if let Some(format) = read_custom_format(root) {
+        return format;
+    }
+    let mut format = gridcraft_model::ChartFormat {
+        legend_overlay: root.path(&["chart", "legend"]).is_some_and(|l| bool_val(l, "overlay")),
+        ..Default::default()
+    };
+    let mut seen_x = false;
+    let mut seen_y = false;
+    for a in plot.children.iter().filter(|a| matches!(a.name.as_str(), "catAx" | "dateAx" | "valAx")) {
+        let x = matches!(a.child_val("axPos"), Some("b") | Some("t"));
+        let seen = if x { &mut seen_x } else { &mut seen_y };
+        if *seen {
+            continue;
+        }
+        *seen = true;
+        let options = if x { &mut format.x_axis } else { &mut format.y_axis };
+        if let Some(scale) = a.child("scaling") {
+            options.minimum = scale.child_val("min").and_then(|v| v.parse().ok());
+            options.maximum = scale.child_val("max").and_then(|v| v.parse().ok());
+            options.reversed = scale.child_val("orientation") == Some("maxMin");
+            options.logarithmic = scale.child("logBase").is_some();
+        }
+        options.major_unit = a.child_val("majorUnit").and_then(|v| v.parse().ok());
+        options.major_tick = a.child_val("majorTickMark").filter(|v| matches!(*v, "none" | "in" | "out" | "cross")).map(str::to_string);
+        options.minor_tick = a.child_val("minorTickMark").filter(|v| matches!(*v, "none" | "in" | "out" | "cross")).map(str::to_string);
+        options.minor_unit = a.child_val("minorUnit").and_then(|v| v.parse().ok());
+        let surface = read_surface(a.child("spPr"));
+        options.line.color = surface.border;
+        options.line.width = surface.border_width;
+        if let Some(grid) = a.child("majorGridlines") {
+            let surface = read_surface(grid.child("spPr"));
+            let style = gridcraft_model::ChartStroke { color: surface.border, width: surface.border_width };
+            if x {
+                format.vertical_gridline = style;
+            } else {
+                format.horizontal_gridline = style;
+            }
+        }
+        options.number_format =
+            a.child("numFmt").filter(|n| n.attr("sourceLinked") == Some("0")).and_then(|n| n.attr("formatCode")).map(str::to_string);
+    }
+    format.vertical_gridlines = plot
+        .children
+        .iter()
+        .find(|g| group_kind(g).is_some())
+        .and_then(|g| g.child_val("axId"))
+        .and_then(|id| plot.children.iter().find(|a| a.child_val("axId") == Some(id)))
+        .is_some_and(|a| a.child("majorGridlines").is_some());
+    for (i, ser) in plot.children.iter().filter(|g| group_kind(g).is_some()).flat_map(|g| g.kids("ser")).enumerate() {
+        let ln = ser.path(&["spPr", "ln"]);
+        let marker = ser.child("marker");
+        if ln.is_none() && marker.is_none() {
+            continue;
+        }
+        let spec = gridcraft_model::ChartSeriesFormat {
+            line_width: ln.and_then(|l| l.attr("w")).and_then(|w| w.parse::<f32>().ok()).map(|w| w / 12700.0),
+            no_line: ln.is_some_and(|l| l.child("noFill").is_some()),
+            dashed: ln.and_then(|l| l.child_val("prstDash")).is_some_and(|v| v != "solid"),
+            marker: marker
+                .and_then(|m| m.child_val("symbol"))
+                .filter(|v| matches!(*v, "none" | "circle" | "square" | "diamond" | "triangle" | "x" | "plus" | "star" | "dash"))
+                .map(|v| if v == "x" { "cross".into() } else { v.into() }),
+            marker_size: marker.and_then(|m| m.child_val("size")).and_then(|v| v.parse().ok()),
+            marker_no_fill: marker.and_then(|m| m.path(&["spPr", "noFill"])).is_some(),
+            marker_fill: marker.and_then(|m| m.path(&["spPr", "solidFill"])).and_then(read_rgba),
+            marker_border_color: marker.and_then(|m| m.path(&["spPr", "ln", "solidFill"])).and_then(read_rgba),
+            marker_border_width: marker
+                .and_then(|m| m.path(&["spPr", "ln"]))
+                .and_then(|l| l.attr("w"))
+                .and_then(|w| w.parse::<f32>().ok())
+                .map(|w| w / 12700.0),
+            line_color: ln.and_then(|l| l.child("solidFill")).and_then(read_rgba),
+            fill_color: ser.path(&["spPr", "solidFill"]).and_then(read_rgba),
+            ..Default::default()
+        };
+        format.series.insert(i, spec);
+    }
+    if let Some(group) = plot.children.iter().find(|g| g.name == "barChart") {
+        format.gap_width = group.child_val("gapWidth").and_then(|s| s.parse().ok());
+        format.overlap = group.child_val("overlap").and_then(|s| s.parse().ok());
+    }
+    format.plot_area = read_surface(plot.child("spPr"));
+    format.chart_area = read_surface(root.child("spPr"));
+    format
+}
+
+fn read_rgba(fill: &El) -> Option<[u8; 4]> {
+    let color = fill.child("srgbClr")?;
+    let rgb = Color::from_hex(color.attr("val")?)?.resolve(&Default::default())?;
+    let alpha = color.child_val("alpha").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100000.0).clamp(0.0, 100000.0);
+    Some([rgb[0], rgb[1], rgb[2], (alpha * 255.0 / 100000.0).round() as u8])
+}
+
+fn read_surface(sp: Option<&El>) -> gridcraft_model::ChartSurface {
+    let mut surface = gridcraft_model::ChartSurface::default();
+    if let Some(sp) = sp {
+        surface.fill = sp.child("solidFill").and_then(read_rgba);
+        surface.border = sp.path(&["ln", "solidFill"]).and_then(read_rgba);
+        surface.border_width = sp.child("ln").and_then(|l| l.attr("w")).and_then(|v| v.parse::<f32>().ok()).map(|v| v / 12700.0);
+        if sp.path(&["ln", "noFill"]).is_some() {
+            surface.border_width = Some(0.0);
+        }
+        if sp.child("noFill").is_some() {
+            surface.fill = Some([0, 0, 0, 0]);
+        }
+    }
+    surface
+}
+
+fn rgba_xml(c: [u8; 4]) -> String {
+    format!("<a:srgbClr val=\"{:02X}{:02X}{:02X}\"><a:alpha val=\"{}\"/></a:srgbClr>", c[0], c[1], c[2], (c[3] as u32 * 100000 + 127) / 255)
+}
+
+pub(crate) fn surface_xml(style: &gridcraft_model::ChartSurface, prefix: &str) -> String {
+    if *style == Default::default() {
+        return String::new();
+    }
+    let mut s = format!("<{prefix}:spPr>");
+    if let Some(fill) = style.fill {
+        let _ = write!(s, "<a:solidFill>{}</a:solidFill>", rgba_xml(fill));
+    }
+    if style.border.is_some() || style.border_width.is_some() {
+        let w = style.border_width.unwrap_or(1.0);
+        let _ = write!(s, "<a:ln w=\"{}\">", (w * 12700.0).round() as u32);
+        if w == 0.0 {
+            s.push_str("<a:noFill/>");
+        } else {
+            let _ = write!(s, "<a:solidFill>{}</a:solidFill>", rgba_xml(style.border.unwrap_or([217, 217, 217, 255])));
+        }
+        s.push_str("</a:ln>");
+    }
+    let _ = write!(s, "</{prefix}:spPr>");
+    s
+}
+
+pub(crate) fn read_custom_format(root: &El) -> Option<gridcraft_model::ChartFormat> {
+    let ext = root.child("extLst")?.kids("ext").find(|e| e.attr("uri") == Some("{CE01AC23-6FC7-453A-BE98-475249444346}"))?.child("format")?;
+    serde_json::from_str(&ext.text).ok()
+}
+
+pub(crate) fn format_extension(format: &gridcraft_model::ChartFormat, prefix: &str) -> String {
+    serde_json::to_string(format).map(|format|format!("<{prefix}:extLst><{prefix}:ext uri=\"{{CE01AC23-6FC7-453A-BE98-475249444346}}\"><gc:format xmlns:gc=\"urn:gridcraft:chart-format:1\">{}</gc:format></{prefix}:ext></{prefix}:extLst>",esc(&format))).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------- writing
@@ -519,7 +668,8 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
     Some(s)
 }
 
-fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String {
+fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Option<&gridcraft_model::ChartSeriesFormat>) -> String {
+    let smooth = spec.and_then(|s| s.smooth).unwrap_or(s.smooth);
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
     if let Some(n) = &s.name {
         if is_ref(n) || is_defined_name(wb, si, n) {
@@ -531,25 +681,75 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
-    match (&color, line_like) {
-        (Some(c), true) => {
-            let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
+    if let Some(spec) = spec {
+        let c = color
+            .clone()
+            .or_else(|| srgb(&Color::Theme(4 + (idx % 6) as u8, 0), &wb.theme))
+            .unwrap_or_else(|| "<a:schemeClr val=\"accent1\"/>".into());
+        let width = if matches!(g, G::Bar { .. } | G::Area { .. }) { spec.border_width.unwrap_or(0.0) } else { spec.line_width.unwrap_or(2.25) };
+        let fill = spec.fill_color.map(rgba_xml).unwrap_or_else(|| c.clone());
+        let line = spec.line_color.map(rgba_xml).unwrap_or_else(|| c.clone());
+        let _ = write!(x, "<c:spPr><a:solidFill>{fill}</a:solidFill><a:ln w=\"{}\">", (width * 12700.0).round() as u32);
+        if spec.no_line || width == 0.0 || (g == (G::Scatter { lines: false }) && spec.line_width.is_none()) {
+            x.push_str("<a:noFill/>");
+        } else {
+            if matches!(g, G::Bar { .. } | G::Area { .. }) {
+                x.push_str("<a:solidFill><a:srgbClr val=\"262626\"/></a:solidFill>");
+            } else {
+                let _ = write!(x, "<a:solidFill>{line}</a:solidFill>");
+            }
         }
-        (Some(c), false) if g == (G::Scatter { lines: false }) => {
+        let _ = write!(x, "<a:prstDash val=\"{}\"/></a:ln></c:spPr>", if spec.dashed { "dash" } else { "solid" });
+        if matches!(g, G::Line { .. } | G::Scatter { .. }) {
+            let marker = spec.marker.as_deref().unwrap_or(if matches!(g, G::Line { markers: false, .. }) { "none" } else { "circle" });
+            let marker = if marker == "cross" { "x" } else { marker };
+            let fill = if spec.marker_no_fill {
+                "<a:noFill/>".into()
+            } else {
+                format!("<a:solidFill>{}</a:solidFill>", spec.marker_fill.map(rgba_xml).unwrap_or_else(|| c.clone()))
+            };
+            let border_width = spec
+                .marker_border_width
+                .or(spec.border_width)
+                .unwrap_or(if spec.marker_border_color.is_some() || spec.marker_no_fill { 1.0 } else { 0.75 });
+            let border = if border_width == 0.0 {
+                "<a:noFill/>".into()
+            } else {
+                format!(
+                    "<a:solidFill>{}</a:solidFill>",
+                    rgba_xml(spec.marker_border_color.unwrap_or(if spec.marker_no_fill { [38, 38, 38, 255] } else { [255, 255, 255, 255] }))
+                )
+            };
             let _ = write!(
                 x,
-                "<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/><c:spPr><a:solidFill>{c}</a:solidFill></c:spPr></c:marker>"
+                "<c:marker><c:symbol val=\"{marker}\"/><c:size val=\"{}\"/><c:spPr>{fill}<a:ln w=\"{}\">{border}</a:ln></c:spPr></c:marker>",
+                spec.marker_size.unwrap_or(7.0).round() as u32,
+                (border_width * 12700.0).round() as u32
             );
         }
-        (Some(c), false) => {
-            let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
+    } else {
+        match (&color, line_like) {
+            (Some(c), true) => {
+                let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
+            }
+            (Some(c), false) if g == (G::Scatter { lines: false }) => {
+                let _ = write!(
+                    x,
+                    "<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/><c:spPr><a:solidFill>{c}</a:solidFill></c:spPr></c:marker>"
+                );
+            }
+            (Some(c), false) => {
+                let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
+            }
+            (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
+            _ => {}
         }
-        (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
-        _ => {}
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
+        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock if spec.is_none() => {
+            x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
+        }
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
     }
@@ -570,7 +770,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
                 x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), wb, si));
                 x.push_str("<c:bubble3D val=\"0\"/>");
             } else {
-                let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
+                let _ = write!(x, "<c:smooth val=\"{}\"/>", smooth as u8);
             }
         }
         _ => {
@@ -579,7 +779,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
             if matches!(g, G::Line { .. }) {
-                let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
+                let _ = write!(x, "<c:smooth val=\"{}\"/>", smooth as u8);
             }
         }
     }
@@ -652,14 +852,26 @@ fn dlbls(show: bool) -> String {
 }
 
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
+    let g = if g == (G::Scatter { lines: false })
+        && series.iter().any(|(i, _)| ch.format.series.get(i).is_some_and(|s| s.line_width.is_some() && !s.no_line))
+    {
+        G::Scatter { lines: true }
+    } else {
+        g
+    };
+    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si, ch.format.series.get(i))).collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
-            let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
+            let overlap = ch
+                .format
+                .overlap
+                .map(|n| format!("<c:overlap val=\"{}\"/>", n.round() as i32))
+                .unwrap_or_else(|| if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() });
+            let gap = ch.format.gap_width.unwrap_or(150.0).round() as u32;
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
@@ -704,30 +916,65 @@ struct Ax<'a> {
     crosses_max: bool,
 }
 
-fn axis_xml(a: &Ax<'_>) -> String {
-    let mut s = format!(
-        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
-        if a.cat { "catAx" } else { "valAx" },
-        a.id,
-        a.delete as u8,
-        a.pos
-    );
-    if a.grid {
-        s.push_str("<c:majorGridlines/>");
+fn axis_xml(a: &Ax<'_>, chart: &Chart) -> String {
+    let automatic = gridcraft_model::ChartAxis::default();
+    let options = if a.id > 2 {
+        &automatic
+    } else if matches!(a.pos, "b" | "t") {
+        &chart.format.x_axis
+    } else {
+        &chart.format.y_axis
+    };
+    let mut s = format!("<c:{0}><c:axId val=\"{1}\"/><c:scaling>", if a.cat { "catAx" } else { "valAx" }, a.id,);
+    if options.logarithmic && !a.cat {
+        s.push_str("<c:logBase val=\"10\"/>");
+    }
+    let _ = write!(s, "<c:orientation val=\"{}\"/>", if options.reversed { "maxMin" } else { "minMax" });
+    if !a.cat {
+        if let Some(v) = options.maximum {
+            let _ = write!(s, "<c:max val=\"{v}\"/>");
+        }
+        if let Some(v) = options.minimum {
+            let _ = write!(s, "<c:min val=\"{v}\"/>");
+        }
+    }
+    let _ = write!(s, "</c:scaling><c:delete val=\"{}\"/><c:axPos val=\"{}\"/>", a.delete as u8, a.pos);
+    if a.grid || (a.id == 1 && chart.format.vertical_gridlines) {
+        let style = if matches!(a.pos, "b" | "t") { &chart.format.vertical_gridline } else { &chart.format.horizontal_gridline };
+        let sp = surface_xml(&gridcraft_model::ChartSurface { border: style.color, border_width: style.width, ..Default::default() }, "c");
+        if sp.is_empty() {
+            s.push_str("<c:majorGridlines/>");
+        } else {
+            let _ = write!(s, "<c:majorGridlines>{sp}</c:majorGridlines>");
+        }
     }
     if let Some(t) = a.title {
         s.push_str(&title_xml(t));
     }
     let _ = write!(
         s,
-        "<c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"out\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"{}\"/><c:crosses val=\"{}\"/>",
-        a.cross,
-        if a.crosses_max { "max" } else { "autoZero" }
+        "<c:numFmt formatCode=\"{}\" sourceLinked=\"{}\"/><c:majorTickMark val=\"{}\"/><c:minorTickMark val=\"{}\"/><c:tickLblPos val=\"nextTo\"/>",
+        esc_attr(options.number_format.as_deref().unwrap_or("General")),
+        if options.number_format.is_some() { 0 } else { 1 },
+        esc_attr(options.major_tick.as_deref().unwrap_or("none")),
+        esc_attr(options.minor_tick.as_deref().unwrap_or("none")),
     );
+    s.push_str(&surface_xml(
+        &gridcraft_model::ChartSurface { border: options.line.color, border_width: options.line.width, ..Default::default() },
+        "c",
+    ));
+    let _ = write!(s, "<c:crossAx val=\"{}\"/><c:crosses val=\"{}\"/>", a.cross, if a.crosses_max { "max" } else { "autoZero" });
     if a.cat {
         s.push_str("<c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>");
     } else {
-        s.push_str("<c:crossBetween val=\"between\"/></c:valAx>");
+        s.push_str("<c:crossBetween val=\"between\"/>");
+        if let Some(v) = options.major_unit.filter(|_| !options.logarithmic) {
+            let _ = write!(s, "<c:majorUnit val=\"{v}\"/>");
+        }
+        if let Some(v) = options.minor_unit.filter(|_| !options.logarithmic) {
+            let _ = write!(s, "<c:minorUnit val=\"{v}\"/>");
+        }
+        s.push_str("</c:valAx>");
     }
     s
 }
@@ -739,6 +986,7 @@ fn strip_book(link: &str) -> &str {
 
 /// Chart part XML for a model chart on sheet `si`.
 pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
+    let axis_xml = |a: &Ax<'_>| axis_xml(a, ch);
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:roundedCorners val=\"0\"/>",
     );
@@ -825,7 +1073,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 pos: "l",
                 delete: false,
                 grid: false,
-                title: ch.x_title.as_deref(),
+                title: ch.y_title.as_deref(),
                 crosses_max: false,
             }));
             s.push_str(&axis_xml(&Ax {
@@ -835,7 +1083,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 pos: "b",
                 delete: false,
                 grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
+                title: ch.x_title.as_deref(),
                 crosses_max: false,
             }));
         }
@@ -866,6 +1114,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
         s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
     }
+    s.push_str(&surface_xml(&ch.format.plot_area, "c"));
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
         LegendPos::None => None,
@@ -875,8 +1124,13 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         LegendPos::Right => Some("r"),
     };
     if let Some(p) = pos {
-        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
+        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"{}\"/></c:legend>", u8::from(ch.format.legend_overlay));
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart>");
+    let mut chart_area = ch.format.chart_area.clone();
+    chart_area.border_width = chart_area.border_width.or(ch.format.border_width);
+    s.push_str(&surface_xml(&chart_area, "c"));
+    s.push_str(&format_extension(&ch.format, "c"));
+    s.push_str("</c:chartSpace>");
     s
 }

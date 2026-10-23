@@ -14,3 +14,4 @@ gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 gridcraft-numfmt = { workspace = true }
 serde = { workspace = true }
+resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts"] }

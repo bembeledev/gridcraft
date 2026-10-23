@@ -61,6 +61,10 @@ pub enum Drag {
     #[default]
     None,
     Select,
+    /// Selecting a worksheet range for a dialog field (for example Regression's Input X Range).
+    DialogRange {
+        start: CellRef,
+    },
     Rows(u32),
     Cols(u32),
     /// Reordering one contiguous whole-column selection by its header.
@@ -99,6 +103,14 @@ pub enum Drag {
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
         resize: bool,
+    },
+    ChartLabel {
+        id: u32,
+        legend: bool,
+        start: Pos2,
+        position: [f32; 2],
+        size: [f32; 2],
+        edited: bool,
     },
 }
 
@@ -1965,10 +1977,10 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     if resp.dragged() && pointer.primary_down() {
         let cursor = match app.grid.drag {
             Drag::None => None,
-            Drag::Select => Some(CursorIcon::Cell),
+            Drag::Select | Drag::DialogRange { .. } => Some(CursorIcon::Cell),
             Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
             Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::ChartLabel { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
             Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
             Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
             Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
@@ -2048,6 +2060,19 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
+    // Range picking takes precedence over chart objects and the worksheet's fill handle.
+    if crate::dialogs::dialog_range_picker_active(app, wb.active_sheet)
+        && in_cells
+        && (primary_clicked || resp.drag_started_by(egui::PointerButton::Primary))
+        && let Some(p) = pos
+    {
+        let end = geo.cell_at(sh, p);
+        let start = pointer.press_origin().map(|p| geo.cell_at(sh, geo.mirror_pos(p))).unwrap_or(end);
+        crate::dialogs::update_dialog_range_picker(app, wb.active_sheet, start, end);
+        app.grid.drag = Drag::DialogRange { start };
+        app.grid.drag_select = true;
+        return;
+    }
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
     // The fill handle and the move border only react in the panes where they are painted, not
@@ -2131,6 +2156,32 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
             app.selected_chart = Some(id);
+            let mut label_drag = None;
+            if kind == "chart"
+                && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+            {
+                let element = crate::chartview::element_at(ui, wb, wb.active_sheet, chart, rect, p);
+                crate::chartview::select_element(ui.ctx(), id, element);
+                use crate::chartview::ChartElement;
+                let legend = element == ChartElement::Legend;
+                if resp.drag_started() && (element == ChartElement::TrendlineText || (legend && chart.format.legend_overlay)) {
+                    let bounds = ui
+                        .ctx()
+                        .data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::new(("chart_element_bounds", id))))
+                        .map(|(_, r)| r.min)
+                        .unwrap_or_default();
+                    let position = if legend { chart.format.legend_position } else { chart.format.trendline_label_position }
+                        .unwrap_or([bounds.x / chart.anchor.width.max(1.0), bounds.y / chart.anchor.height.max(1.0)]);
+                    label_drag = Some(Drag::ChartLabel {
+                        id,
+                        legend,
+                        start: p,
+                        position,
+                        size: [rect.width().max(1.0), rect.height().max(1.0)],
+                        edited: false,
+                    });
+                }
+            }
             if kind == "shape"
                 && resp.double_clicked()
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
@@ -2142,6 +2193,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 app.grid.pane = Some("formatChart".into());
             }
             if primary_drag {
+                if let Some(drag) = label_drag {
+                    app.grid.drag = drag;
+                    return;
+                }
                 let a = object_anchor(sh, kind, id);
                 let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
                 if let Some(a) = a {
@@ -2158,9 +2213,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
-        && let Some((kind, id, _)) = crate::chartview::hit(app, geo, sh, p)
+        && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_chart = Some(id);
+        if kind == "chart"
+            && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+        {
+            let element = crate::chartview::element_at(ui, wb, wb.active_sheet, chart, rect, p);
+            crate::chartview::select_element(ui.ctx(), id, element);
+        }
         app.grid.object_menu = Some((geo.mirror_pos(p), kind, id));
         return;
     }
@@ -2416,6 +2477,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
         );
         match app.grid.drag.clone() {
+            Drag::DialogRange { start } => {
+                crate::dialogs::update_dialog_range_picker(app, wb.active_sheet, start, pc);
+                scroll_by(app, auto);
+            }
             Drag::Select => {
                 select_to_pointer(app, geo, sh, wb, p);
                 scroll_by(app, auto);
@@ -2486,6 +2551,24 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
             }
+            Drag::ChartLabel { id, legend, start, position, size, edited } => {
+                if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+                    let delta = p - start;
+                    let new = [(position[0] + delta.x / size[0]).clamp(0.0, 1.0), (position[1] + delta.y / size[1]).clamp(0.0, 1.0)];
+                    let mut format = chart.format.clone();
+                    if legend {
+                        format.legend_position = Some(new);
+                    } else {
+                        format.trendline_label_position = Some(new);
+                    }
+                    if app.run("chart.set", json!({"chart":id,"format":format})).is_ok() {
+                        if edited {
+                            coalesce_last_undo(app);
+                        }
+                        app.grid.drag = Drag::ChartLabel { id, legend, start, position, size, edited: true };
+                    }
+                }
+            }
             Drag::Object { kind, id, start, orig, resize } => {
                 let d = (p - start) / geo.z;
                 let (cell, dx, dy, w, h) = orig;
@@ -2508,6 +2591,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Release.
     if resp.drag_stopped() || (!pointer.any_down() && app.grid.drag != Drag::None && !resp.dragged()) {
         match std::mem::take(&mut app.grid.drag) {
+            Drag::DialogRange { start } if resp.drag_stopped() => {
+                if let Some(p) = pos {
+                    let end = geo.cell_at(sh, p);
+                    crate::dialogs::update_dialog_range_picker(app, wb.active_sheet, start, end);
+                }
+            }
             Drag::Select => {
                 if resp.drag_stopped()
                     && let Some(p) = pos
@@ -2567,6 +2656,17 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if resp.secondary_clicked()
         && let Some(p) = pos
     {
+        if let Some(("chart", id, rect)) = crate::chartview::hit(app, geo, sh, p)
+            && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+        {
+            app.selected_chart = Some(id);
+            crate::chartview::element_at(ui, wb, wb.active_sheet, chart, rect, p);
+            app.grid.context_menu = Some(geo.mirror_pos(p));
+            app.grid.header_menu = None;
+            resp.request_focus();
+            return;
+        }
+        app.selected_chart = None;
         if in_cells && !sel.contains(geo.cell_at(sh, p)) {
             let _ = app.session.run("selection.set", json!({"cell": geo.cell_at(sh, p).a1()}));
         }
@@ -2846,8 +2946,36 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     }
 }
 
-fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
+fn delete_selected_object(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> bool {
     let Some(id) = app.selected_chart else { return false };
+    if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+        use crate::chartview::ChartElement;
+        match crate::chartview::selected_element(ctx, id) {
+            ChartElement::ChartArea => {}
+            ChartElement::Title => app.run_or_alert("chart.set", json!({"chart":id,"title":""})),
+            ChartElement::Legend => app.run_or_alert("chart.set", json!({"chart":id,"legend":"none"})),
+            ChartElement::XAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"xTitle":null})),
+            ChartElement::YAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"yTitle":null})),
+            ChartElement::Gridlines => {
+                let mut format = chart.format.clone();
+                format.vertical_gridlines = false;
+                app.run_or_alert("chart.set", json!({"chart":id,"gridlines":false,"format":format}));
+            }
+            ChartElement::Series(i) if chart.series.len() > 1 => app.run_or_alert("chart.selectData", json!({"chart":id,"removeSeries":[i]})),
+            ChartElement::Series(_) => {
+                app.message = Some(("Data Series".into(), "The last series cannot be removed. To delete the entire chart, select Chart Area.".into()))
+            }
+            ChartElement::XAxis | ChartElement::YAxis | ChartElement::PlotArea | ChartElement::DataLabels | ChartElement::TrendlineText => {
+                app.message = Some(("Chart Element".into(), "Deleting this element is not supported yet. The chart was kept.".into()))
+            }
+        }
+        if crate::chartview::selected_element(ctx, id) != ChartElement::ChartArea {
+            // Keep the element selected: a repeated Delete must not fall through to deleting
+            // the entire chart after the first key press removed its title or legend.
+            ctx.data_mut(|d| d.remove::<(ChartElement, Rect)>(egui::Id::new(("chart_element_bounds", id))));
+            return true;
+        }
+    }
     let kind = if sh.charts.iter().any(|object| object.id == id) {
         "chart"
     } else if sh.images.iter().any(|object| object.id == id) {
@@ -2932,6 +3060,15 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
     let events = ctx.input(|i| i.events.clone());
+    // egui-winit consumes Ctrl+V on press even when its text clipboard is empty.
+    // The matching key release remains available for native image-only clipboard data.
+    if events.iter().any(|e| matches!(e,egui::Event::Key {key:egui::Key::V,pressed:false,modifiers,..} if modifiers.command))
+        && !events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+        && app.system_clipboard_text().is_none()
+        && app.paste_chart_image()
+    {
+        return;
+    }
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -3012,9 +3149,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    Key::Delete if delete_selected_object(app, ctx, sh) => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
+                    Key::Backspace if delete_selected_object(app, ctx, sh) => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
@@ -3235,6 +3372,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
+            if let Some(chart) = app.selected_chart_snapshot() {
+                close = crate::chart_tools::context_menu(app, ui, chart.id);
+                return;
+            }
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
@@ -3309,6 +3450,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
         || (!opened_now
             && ui.input(|i| i.pointer.any_pressed())
+            && !egui::Popup::is_any_open(ui.ctx())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
@@ -3363,10 +3505,11 @@ fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::new("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            let mut items = vec![("Delete", "object.delete")];
             if kind == "chart" {
-                items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
+                close = crate::chart_tools::context_menu(app, ui, id);
+                return;
             }
+            let items = vec![("Delete", "object.delete")];
             let lang = crate::i18n::current(ui.ctx());
             for (label, action) in items {
                 if label == "-" {
@@ -3390,6 +3533,7 @@ fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
         || (ui.input(|i| i.pointer.any_pressed())
+            && !egui::Popup::is_any_open(ui.ctx())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
@@ -3929,6 +4073,31 @@ mod tests {
         for index in [0, 57, 255] {
             assert_eq!(numfmt_color(F::Indexed(index)), Color32::BLACK);
         }
+    }
+
+    #[test]
+    fn delete_chart_title_keeps_chart_and_axis_delete_is_guarded() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        let result = session.execute("insert.chart", json!({"range":"A1","type":"column","title":"Title"})).unwrap();
+        let id = result["chart"].as_u64().unwrap() as u32;
+        let mut app = SheetApp::new(session, Default::default());
+        app.selected_chart = Some(id);
+        let ctx = egui::Context::default();
+        crate::chartview::select_element(&ctx, id, crate::chartview::ChartElement::Title);
+        let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+        assert!(delete_selected_object(&mut app, &ctx, &sh));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts[0].title.as_deref(), Some(""));
+        let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+        assert!(delete_selected_object(&mut app, &ctx, &sh));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+        crate::chartview::select_element(&ctx, id, crate::chartview::ChartElement::XAxis);
+        let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+        assert!(delete_selected_object(&mut app, &ctx, &sh));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().charts.len(), 1);
+        assert!(app.message.is_some());
     }
 
     #[test]

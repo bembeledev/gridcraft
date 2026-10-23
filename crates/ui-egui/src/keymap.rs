@@ -177,6 +177,39 @@ pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
 
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
+    if !m.ctrl
+        && !m.command
+        && !m.alt
+        && !m.shift
+        && matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)
+        && let Some(id) = app.selected_chart
+        && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+    {
+        use crate::chartview::ChartElement;
+        let mut elements = vec![
+            ChartElement::ChartArea,
+            ChartElement::PlotArea,
+            ChartElement::Title,
+            ChartElement::XAxis,
+            ChartElement::YAxis,
+            ChartElement::XAxisTitle,
+            ChartElement::YAxisTitle,
+            ChartElement::Gridlines,
+            ChartElement::Legend,
+            ChartElement::DataLabels,
+            ChartElement::TrendlineText,
+        ];
+        elements.extend((0..chart.series.len()).map(ChartElement::Series));
+        let current = crate::chartview::selected_element(ctx, id);
+        let at = elements.iter().position(|e| *e == current).unwrap_or(0);
+        let forward = matches!(key, Key::ArrowRight | Key::ArrowDown);
+        let at = if forward { (at + 1) % elements.len() } else { (at + elements.len() - 1) % elements.len() };
+        if let Some(element) = elements.get(at) {
+            crate::chartview::select_element(ctx, id, *element);
+        }
+        app.grid.pane = Some("formatChart".into());
+        return true;
+    }
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     if altgr_text(ctx, m, mac) {
         return false;

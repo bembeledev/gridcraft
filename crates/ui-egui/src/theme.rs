@@ -832,19 +832,23 @@ fn indic(script: Indic) -> Vec<(String, u32)> {
     };
     let mut v: Vec<(String, u32)> = vec![(format!("{win}\\Nirmala.ttc"), 0), (format!("{win}\\Nirmala.ttf"), 0), (format!("{win}\\{win_face}"), 0)];
     v.extend(mac.iter().map(|(m, index)| (m.replace("{sys}", mac_sys).replace("{sup}", mac_sup), *index)));
-    for d in [
-        "/usr/share/fonts/truetype/noto",
-        "/usr/share/fonts/opentype/noto",
-        "/usr/share/fonts/google-noto",
-        "/usr/share/fonts/noto",
-        "/usr/share/fonts/TTF",
-        "/usr/local/share/fonts/noto",
-    ] {
-        v.push((format!("{d}/NotoSans{noto}-Regular.ttf"), 0));
+    let mut linux: Vec<String> = Vec::new();
+    for d in ["truetype/noto", "opentype/noto", "google-noto", "noto", "TTF"] {
+        linux.push(format!("{d}/NotoSans{noto}-Regular.ttf"));
     }
+    // Fedora ships the variable Noto Sans faces; their default instance is Regular.
+    linux.push(format!("google-noto-vf/NotoSans{noto}[wght].ttf"));
     let (dir, file) = lohit;
-    for d in ["/usr/share/fonts/truetype", "/usr/share/fonts", "/usr/local/share/fonts"] {
-        v.push((format!("{d}/{dir}/{file}.ttf"), 0));
+    for d in ["truetype/", ""] {
+        linux.push(format!("{d}{dir}/{file}.ttf"));
+    }
+    // The system fonts, then the same layouts under a Flatpak sandbox's read-only host mounts.
+    for root in ["/usr/share/fonts", "/run/host/fonts"] {
+        v.extend(linux.iter().map(|f| (format!("{root}/{f}"), 0)));
+    }
+    for root in ["/usr/local/share/fonts", "/run/host/local-fonts"] {
+        v.push((format!("{root}/noto/NotoSans{noto}-Regular.ttf"), 0));
+        v.push((format!("{root}/{dir}/{file}.ttf"), 0));
     }
     v
 }
@@ -1225,6 +1229,34 @@ mod tests {
                 let Ok(font) = skrifa::FontRef::from_index(&bytes, index) else { continue };
                 let weight = font.attributes().weight.value();
                 assert!((350.0..=500.0).contains(&weight), "{script:?}: {path} face {index} has weight {weight}");
+            }
+        }
+    }
+
+    #[test]
+    fn indic_faces_reach_fedora_and_flatpak_layouts() {
+        // Fedora installs only the variable Noto Sans faces; a Flatpak sees the host's fonts under
+        // /run/host. Missing either leaves the interface in tofu boxes there.
+        let cases = [
+            (Indic::Devanagari, "Devanagari"),
+            (Indic::Bengali, "Bengali"),
+            (Indic::Gurmukhi, "Gurmukhi"),
+            (Indic::Gujarati, "Gujarati"),
+            (Indic::Odia, "Oriya"),
+            (Indic::Tamil, "Tamil"),
+            (Indic::Telugu, "Telugu"),
+            (Indic::Kannada, "Kannada"),
+            (Indic::Malayalam, "Malayalam"),
+        ];
+        for (script, noto) in cases {
+            let paths: Vec<String> = indic(script).into_iter().map(|(path, _)| path).collect();
+            for expected in [
+                format!("/usr/share/fonts/google-noto-vf/NotoSans{noto}[wght].ttf"),
+                format!("/run/host/fonts/google-noto-vf/NotoSans{noto}[wght].ttf"),
+                format!("/run/host/fonts/truetype/noto/NotoSans{noto}-Regular.ttf"),
+                format!("/run/host/local-fonts/noto/NotoSans{noto}-Regular.ttf"),
+            ] {
+                assert!(paths.contains(&expected), "{script:?} doesn't probe {expected}");
             }
         }
     }

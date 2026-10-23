@@ -246,6 +246,14 @@ pub struct SheetApp {
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
+    /// Set when the last workbook was closed (or Close was pressed with none open): `logic` then
+    /// closes the window once, so the app quits like closing its last window.
+    pub quit_requested: bool,
+    /// Whether this frame's input carried a control client's synthetic events (`ui.key`,
+    /// `ui.click`, ...): set by [`Self::raw_input_hook`] every frame, so it never sticks.
+    control_input: bool,
+    /// [`Self::control_input`] of the previous frame, whose `ui` produced any quit `logic` sees now.
+    control_input_last: bool,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
@@ -310,6 +318,9 @@ impl SheetApp {
             dialog: None,
             backstage: None,
             message: None,
+            quit_requested: false,
+            control_input: false,
+            control_input_last: false,
             toast: None,
             notice: None,
             services,
@@ -416,8 +427,17 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // Close with nothing open quits (the command itself is disabled without a workbook).
+        if id == "file.close" && self.session.documents().is_empty() {
+            self.quit_requested = true;
+            return Ok(json!({"closed": true, "quit": true}));
+        }
         let r = self.session.run(id, params);
         self.after_engine();
+        // Closing the last workbook (the unsaved-changes prompt already resolved) quits.
+        if id == "file.close" && self.session.documents().is_empty() && r.as_ref().is_ok_and(|r| r.get("closed") == Some(&json!(true))) {
+            self.quit_requested = true;
+        }
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if id == "insert.chart"
             && let Ok(r) = &r
@@ -1150,6 +1170,13 @@ impl SheetApp {
             let ctx = ctx.clone();
             self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));
         }
+        // A quit requested by the previous frame's `ui` is dropped when that frame dispatched a
+        // control client's synthetic input: a script's Cmd+W keeps the app running, as a direct
+        // control command does (see `control::handle`).
+        let from_control = std::mem::replace(&mut self.control_input_last, self.control_input);
+        if std::mem::take(&mut self.quit_requested) && !from_control {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
@@ -1255,7 +1282,9 @@ impl SheetApp {
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        self.control_input = false;
         if let Some(mut batch) = self.synthetic.pop_front() {
+            self.control_input = !batch.is_empty();
             raw.events.append(&mut batch);
         }
     }

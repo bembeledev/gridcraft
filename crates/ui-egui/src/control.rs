@@ -215,7 +215,17 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// Runs one control request. A script closing the last workbook keeps the app (and its control
+/// channel) running: any quit a command requests is dropped, whichever method ran it.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
+    let quit = app.quit_requested;
+    let out = dispatch(app, ctx, method, p);
+    app.quit_requested = quit;
+    out
+}
+
+/// Routes a control request to its handler; [`handle`] wraps it.
+fn dispatch(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let out = match method {

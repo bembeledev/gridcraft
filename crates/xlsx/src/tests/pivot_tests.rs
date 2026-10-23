@@ -746,3 +746,23 @@ fn row_and_col_header_captions_roundtrip() {
     assert_eq!(pt.row_header_caption.as_deref(), Some("Custom Rows"));
     assert_eq!(pt.col_header_caption.as_deref(), Some("Custom Cols"));
 }
+
+#[test]
+fn whitespace_and_trailing_space_value_field_names_roundtrip() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(0).unwrap();
+        p.values = vec![
+            PivotValue { source_col: "Sales".into(), name: " ".into(), ..PivotValue::default() },
+            PivotValue { source_col: "Units".into(), name: "Sales ".into(), ..PivotValue::default() },
+        ];
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let t1 = String::from_utf8(unzip(&bytes).get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+    assert!(t1.contains("name=\" \""), "{t1}");
+    assert!(t1.contains("name=\"Sales \""), "{t1}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    assert_eq!(pt.values[0].name, " ");
+    assert_eq!(pt.values[1].name, "Sales ");
+}

@@ -971,7 +971,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, "<dataFields count=\"{k}\">");
         let mut used: Vec<String> = Vec::new();
         for (i, v) in &vals {
-            let base = if v.name.trim().is_empty() {
+            let base = if v.name.is_empty() {
                 format!("{} of {}", func_caption(v.func), c.fields.get(*i).map(|f| f.name.as_str()).unwrap_or(""))
             } else {
                 v.name.clone()

@@ -1714,6 +1714,20 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let active = s.doc()?.selection.active;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet] };
+        for &si in &sheets {
+            if let Some(sh) = cx.wb.sheet(si)
+                && !sh.pivots.is_empty()
+            {
+                for (c, _) in sh.cells.iter() {
+                    if !all && c != active {
+                        continue;
+                    }
+                    if matches(&sh.input_text(c), &what, case, whole) && sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.contains(c))) {
+                        return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+                    }
+                }
+            }
+        }
         let mut n = 0;
         for si in sheets {
             let cells: Vec<(CellRef, String)> =

@@ -2560,6 +2560,11 @@ mod tests {
         s.execute("edit.copy", json!({})).unwrap();
         let err_paste = s.execute("edit.paste", json!({"at": "B4"})).unwrap_err().to_string();
         assert_eq!(err_paste, "Cannot change part of a PivotTable report.");
+
+        // edit.replace on pivot cells is blocked
+        let err_rep = s.execute("edit.replace", json!({"what": "415", "with": "999"})).unwrap_err().to_string();
+        assert_eq!(err_rep, "Cannot change part of a PivotTable report.");
+        assert_eq!(text(&s, "B4"), "415");
     }
 
     #[test]

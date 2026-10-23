@@ -46,6 +46,103 @@ fn bytes(out: &Json) -> Vec<u8> {
 }
 
 #[test]
+fn insert_chart_appearance_is_one_undo_step_and_replays_with_undo_and_redo() {
+    let mut s = source();
+    let original = chart(&s).clone();
+    let before = s.doc().unwrap().wb.clone();
+    let history = s.doc().unwrap().undo.len();
+    let journal = s.journal.len();
+    let params = json!({
+        "range":"A1:E6", "type":"column", "style":99, "legend":"top", "dataLabels":true, "gridlines":false,
+        "format":{"border_width":2.5,"vertical_gridlines":true,"text":{"title":{"size":18.0,"bold":true}}}
+    });
+    let (_, preview) = gridcraft_engine::cmd::insert::build_chart(&s, &params).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().undo.len(), history);
+    let result = s.execute("insert.chart", params.clone()).unwrap();
+    assert_eq!(result["chart"].as_u64(), Some(u64::from(preview.id)));
+    assert_eq!(chart(&s), &preview);
+    assert_eq!(preview.style, 16);
+    assert_eq!(preview.legend, gridcraft_engine::model::LegendPos::Top);
+    assert!(preview.data_labels && !preview.gridlines);
+    assert_eq!(preview.format, serde_json::from_value::<gridcraft_engine::model::ChartFormat>(params["format"].clone()).unwrap());
+    assert_eq!(s.doc().unwrap().undo.len(), history + 1);
+    assert_eq!(s.journal.len(), journal + 1);
+    assert_eq!(s.journal.last().unwrap(), &("insert.chart".into(), params));
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts.as_slice(), std::slice::from_ref(&original));
+    let mut replay = Session::new();
+    replay.new_workbook();
+    for (id, params) in &s.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.doc().unwrap().wb.active().unwrap().charts, [original]);
+
+    s.execute("edit.redo", json!({})).unwrap();
+    replay.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(chart(&s), &preview);
+    assert_eq!(replay.doc().unwrap().wb.active().unwrap().charts, s.doc().unwrap().wb.active().unwrap().charts);
+}
+
+#[test]
+fn insert_chart_appearance_matches_chart_set_parsing_and_defaults() {
+    for (legend, style) in [("none", 0_u32), ("bottom", 1), ("top", 16), ("left", 17), ("right", u32::MAX), ("unknown", 2)] {
+        let mut inserted = source();
+        let mut updated = source();
+        let params = json!({"legend":legend,"style":style,"dataLabels":true,"gridlines":false,"format":{"border_width":2.0}});
+        let mut insertion = params.clone();
+        insertion["range"] = json!("A1:E6");
+        inserted.execute("insert.chart", insertion).unwrap();
+        updated.execute("insert.chart", json!({"range":"A1:E6"})).unwrap();
+        updated.execute("chart.set", params).unwrap();
+        assert_eq!(chart(&inserted), chart(&updated), "{legend}, {style}");
+    }
+    let s = source();
+    for kind in ["column", "pie", "doughnut", "treemap", "sunburst", "funnel"] {
+        let (_, c) = gridcraft_engine::cmd::insert::build_chart(&s, &json!({"range":"A1:E6","type":kind})).unwrap();
+        let pie = matches!(kind, "pie" | "doughnut");
+        assert_eq!(c.legend, if pie { gridcraft_engine::model::LegendPos::Right } else { gridcraft_engine::model::LegendPos::Bottom });
+        assert_eq!(c.gridlines, kind == "column");
+        assert!(!c.data_labels);
+        assert_eq!(c.style, 1);
+        assert_eq!(c.format, Default::default());
+    }
+}
+
+#[test]
+fn insert_chart_invalid_format_preserves_workbook_history_redo_and_journal() {
+    let mut s = source();
+    s.execute("cell.set", json!({"cell":"G10","input":"42"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let history = s.doc().unwrap().undo.len();
+    let redo = s.doc().unwrap().redo.clone();
+    let revision = s.doc().unwrap().revision;
+    let journal = s.journal.clone();
+    for format in [
+        Json::Null,
+        json!("not a format"),
+        json!({"text":{"title":{"size":0}}}),
+        json!({"legend_position":[2,0]}),
+        json!({"y_axis":{"minimum":30,"maximum":20}}),
+        json!({"series":{"0":{"marker":"bogus"}}}),
+    ] {
+        let params = json!({"range":"A1:E6","style":16,"legend":"none","dataLabels":true,"gridlines":false,"format":format});
+        assert!(gridcraft_engine::cmd::insert::build_chart(&s, &params).is_err(), "{params}");
+        assert!(s.execute("insert.chart", params.clone()).is_err(), "{params}");
+        assert!(Arc::ptr_eq(&before, &s.doc().unwrap().wb), "{params}");
+        assert_eq!(s.doc().unwrap().undo.len(), history);
+        assert_eq!(s.doc().unwrap().redo.len(), redo.len());
+        assert!(s.doc().unwrap().redo.iter().zip(&redo).all(|(a, b)| Arc::ptr_eq(&a.wb, &b.wb)));
+        assert_eq!(s.doc().unwrap().revision, revision);
+        assert_eq!(s.journal, journal);
+    }
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("G10").unwrap()).as_f64(), Some(42.0));
+}
+
+#[test]
 fn duplicate_preserves_chart_and_upstream_series_properties_as_one_undo_step() {
     let mut s = source();
     styled(&mut s);

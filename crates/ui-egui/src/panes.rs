@@ -244,7 +244,7 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
                 }
             });
         });
-        ui.collapsing(crate::widgets::tr(ui, "Series"), |ui| {
+        ui.collapsing(crate::widgets::tr(ui, "Chart|Series"), |ui| {
             let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, chart));
             for (i, s) in chart.series.iter().enumerate() {
                 let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series {}", i + 1));
@@ -342,7 +342,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                 ChartElement::Series(i),
                 format!(
                     "{} {} — {}",
-                    crate::widgets::tr(ui, "Series"),
+                    crate::widgets::tr(ui, "Chart|Series"),
                     i + 1,
                     names.get(i).map(String::as_str).or(s.name.as_deref()).unwrap_or(crate::widgets::tr(ui, "Data"))
                 ),
@@ -409,7 +409,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
         ui.push_id(("chart_format", id, format!("{selected:?}")), |ui| match selected {
             ChartElement::XAxis | ChartElement::YAxis if supported && page == 0 => {
                 let axis = if selected == ChartElement::XAxis { &mut format.x_axis } else { &mut format.y_axis };
-                chart_section(ui, "Line", |ui| {
+                chart_section(ui, "Chart|Line", |ui| {
                     changed |= chart_stroke(ui, &mut axis.line);
                 });
                 chart_section(ui, "Tick Marks", |ui| {
@@ -557,12 +557,12 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     let marker_id = ui.id().with("line_or_marker");
                     let mut marker = ui.ctx().data_mut(|d| d.get_temp::<bool>(marker_id)).unwrap_or(false);
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut marker, false, crate::widgets::tr(ui, "Line"));
+                        ui.selectable_value(&mut marker, false, crate::widgets::tr(ui, "Chart|Line"));
                         ui.selectable_value(&mut marker, true, crate::widgets::tr(ui, "Marker"));
                     });
                     ui.ctx().data_mut(|d| d.insert_temp(marker_id, marker));
                     if !marker {
-                        chart_section(ui, "Line", |ui| {
+                        chart_section(ui, "Chart|Line", |ui| {
                             let mut visible = !spec.no_line && (chart.kind != ChartKind::Scatter || spec.line_width.is_some());
                             if ui.checkbox(&mut visible, crate::widgets::tr(ui, "Show Line")).changed() {
                                 spec.no_line = !visible;
@@ -623,7 +623,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                             changed |= ui.checkbox(&mut spec.marker_no_fill, crate::widgets::tr(ui, "No Fill Marker")).changed();
                             changed |= chart_color(ui, "Marker Fill", &mut spec.marker_fill);
                         });
-                        chart_section(ui, "Border", |ui| {
+                        chart_section(ui, "Chart|Border", |ui| {
                             changed |= chart_color(ui, "Marker Border Color", &mut spec.marker_border_color);
                             changed |= chart_number_f32(ui, "Marker Border Width (pt)", &mut spec.marker_border_width);
                         });
@@ -633,7 +633,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     chart_section(ui, "Chart Fill|Fill", |ui| {
                         changed |= chart_fill(ui, &mut spec.fill_color);
                     });
-                    chart_section(ui, "Border", |ui| {
+                    chart_section(ui, "Chart|Border", |ui| {
                         changed |= chart_number_f32(ui, "Border Width (pt)", &mut spec.border_width);
                     });
                 }
@@ -688,10 +688,10 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     let key = ui.id().with(("trendline_series", id));
                     let mut i = ui.ctx().data_mut(|d| d.get_temp::<usize>(key)).unwrap_or(0).min(chart.series.len().saturating_sub(1));
                     egui::ComboBox::from_id_salt("trendline_series")
-                        .selected_text(format!("{} {}", crate::widgets::tr(ui, "Series"), i + 1))
+                        .selected_text(format!("{} {}", crate::widgets::tr(ui, "Chart|Series"), i + 1))
                         .show_ui(ui, |ui| {
                             for j in 0..chart.series.len() {
-                                ui.selectable_value(&mut i, j, format!("{} {}", crate::widgets::tr(ui, "Series"), j + 1));
+                                ui.selectable_value(&mut i, j, format!("{} {}", crate::widgets::tr(ui, "Chart|Series"), j + 1));
                             }
                         });
                     ui.ctx().data_mut(|d| d.insert_temp(key, i));
@@ -776,7 +776,7 @@ fn chart_surface(ui: &mut Ui, surface: &mut gridcraft_engine::model::ChartSurfac
     chart_section(ui, "Chart Fill|Fill", |ui| {
         changed |= chart_fill(ui, &mut surface.fill);
     });
-    chart_section(ui, "Border", |ui| {
+    chart_section(ui, "Chart|Border", |ui| {
         changed |= chart_color(ui, "Border Color", &mut surface.border);
         changed |= chart_number_f32(ui, "Border Width (pt; 0 = no border)", &mut surface.border_width);
     });

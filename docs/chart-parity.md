@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** chart editing and formatting controls, image export and clipboard integration · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** review fixes for text bounds, tick/legend roles, template undo and XLSX formatting persistence · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -94,6 +94,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | review follow-up | Resolved-font text fitting, category legend colors, offset minor ticks, automatic series colors and native borders, combo/ChartEx axes, one-step template insertion and chart-specific translations |
 | 2026-10-23 | local contribution | Element formatting, primary axes, tick strokes, markers, text fonts, overlay legend placement, chart menus and PNG/SVG export |
 | 2026-10-23 | review fixes | Browser PNG fallback fonts, clipped line labels, stable category-label ordering for fixed-order renderers, and independent category/value gridlines in horizontal-bar XLSX round-trips |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |

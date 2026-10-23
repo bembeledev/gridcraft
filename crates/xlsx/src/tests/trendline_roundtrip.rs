@@ -76,6 +76,207 @@ const KINDS: [ChartKind; 8] = [
 ];
 
 #[test]
+fn chart_styled_automatic_series_keep_theme_accents_and_do_not_gain_overrides() {
+    let wb = workbook();
+    for kind in KINDS {
+        let mut c = chart(1, kind, vec![]);
+        let mut series = c.series[0].clone();
+        series.color = None;
+        c.series = vec![series; 8]; // Exercise every accent and wrapping back to accent1.
+        for i in 0..c.series.len() {
+            c.format.series.insert(i, gridcraft_model::ChartSeriesFormat { dashed: true, ..Default::default() });
+        }
+        let expected = c.format.clone();
+        for _ in 0..2 {
+            let xml = crate::chart::write_chart(&wb, 0, &c, "Book.xlsx");
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let group = root.path(&["chart", "plotArea"]).unwrap().children.iter().find(|g| g.child("ser").is_some()).unwrap();
+            for (i, ser) in group.kids("ser").enumerate() {
+                let accent = format!("accent{}", i % 6 + 1);
+                assert_eq!(ser.path(&["spPr", "solidFill", "schemeClr"]).unwrap().attr("val"), Some(accent.as_str()), "{kind:?}");
+                if matches!(kind, ChartKind::Line | ChartKind::LineMarkers | ChartKind::Scatter | ChartKind::ScatterLines) {
+                    assert_eq!(ser.path(&["marker", "spPr", "solidFill", "schemeClr"]).unwrap().attr("val"), Some(accent.as_str()));
+                }
+                if matches!(kind, ChartKind::Line | ChartKind::LineMarkers | ChartKind::ScatterLines | ChartKind::Bubble) {
+                    assert_eq!(ser.path(&["spPr", "ln", "solidFill", "schemeClr"]).unwrap().attr("val"), Some(accent.as_str()));
+                }
+            }
+            c = crate::chart::read_chart(&root).unwrap();
+            assert!(c.series.iter().all(|s| s.color.is_none()), "{kind:?}");
+            assert_eq!(c.format, expected, "{kind:?}");
+        }
+    }
+}
+
+#[test]
+fn chart_native_seventh_series_keeps_explicit_accent_without_a_matching_series_extension() {
+    let wb = workbook();
+    let expected = Color::Theme(4, 0).resolve(&wb.theme).unwrap();
+    let series: String = (0..7)
+        .map(|i| {
+            let color = if i == 6 { "<c:spPr><a:solidFill><a:schemeClr val=\"accent1\"/></a:solidFill></c:spPr>" } else { "" };
+            format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{color}<c:val><c:numRef><c:f>Data!$B$2:$B$6</c:f></c:numRef></c:val></c:ser>")
+        })
+        .collect();
+    let mut unrelated_format = gridcraft_model::ChartFormat::default();
+    unrelated_format.series.insert(0, gridcraft_model::ChartSeriesFormat { dashed: true, ..Default::default() });
+    for extension in [String::new(), crate::chart::format_extension(&Default::default(), "c"), crate::chart::format_extension(&unrelated_format, "c")]
+    {
+        let xml = format!(
+            "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" \
+             xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>\
+             <c:lineChart>{series}</c:lineChart></c:plotArea></c:chart>{extension}</c:chartSpace>"
+        );
+        let mut c = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+        // An explicit accent1 on series seven must not become the automatic tinted accent1.
+        assert_eq!(c.series[6].color, Some(Color::Theme(4, 0)), "{extension}");
+        for _ in 0..2 {
+            assert_eq!(c.series[6].color.as_ref().and_then(|color| color.resolve(&wb.theme)), Some(expected));
+            let saved = crate::chart::write_chart(&wb, 0, &c, "Book.xlsx");
+            c = crate::chart::read_chart(&crate::xml::parse(saved.as_bytes()).unwrap()).unwrap();
+        }
+        assert_eq!(c.series[6].color.as_ref().and_then(|color| color.resolve(&wb.theme)), Some(expected));
+    }
+}
+
+#[test]
+fn chart_explicit_marker_sizes_and_colors_equal_to_series_color_survive() {
+    let wb = workbook();
+    for kind in [ChartKind::Line, ChartKind::LineMarkers, ChartKind::Scatter, ChartKind::ScatterLines] {
+        for size in [5.0, 7.0, 9.0] {
+            let mut c = chart(1, kind, vec![]);
+            let color = Some([0x44, 0x72, 0xC4, 255]);
+            let spec = gridcraft_model::ChartSeriesFormat {
+                marker_size: Some(size),
+                fill_color: color,
+                line_color: if kind == ChartKind::Scatter { None } else { color },
+                marker_fill: color,
+                ..Default::default()
+            };
+            c.format.series.insert(0, spec.clone());
+            for _ in 0..2 {
+                let xml = crate::chart::write_chart(&wb, 0, &c, "Book.xlsx");
+                c = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+                assert_eq!(c.format.series.get(&0), Some(&spec), "{kind:?}, size={size}");
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_bar_and_area_border_colors_are_native_and_preserved_including_default_dark() {
+    let wb = workbook();
+    for kind in [
+        ChartKind::ColumnClustered,
+        ChartKind::ColumnStacked,
+        ChartKind::ColumnStacked100,
+        ChartKind::BarClustered,
+        ChartKind::BarStacked,
+        ChartKind::BarStacked100,
+        ChartKind::Area,
+        ChartKind::AreaStacked,
+    ] {
+        for color in [[1, 2, 3, 255], [38, 38, 38, 255], [10, 20, 30, 128], [0x44, 0x72, 0xC4, 255]] {
+            let mut c = chart(1, kind, vec![]);
+            let spec = gridcraft_model::ChartSeriesFormat { border_width: Some(2.0), line_color: Some(color), ..Default::default() };
+            c.format.series.insert(0, spec.clone());
+            for _ in 0..2 {
+                let xml = crate::chart::write_chart(&wb, 0, &c, "Book.xlsx");
+                let root = crate::xml::parse(xml.as_bytes()).unwrap();
+                let ser = root.path(&["chart", "plotArea"]).unwrap().children.iter().find_map(|g| g.child("ser")).unwrap();
+                let line = ser.path(&["spPr", "ln"]).unwrap();
+                let rgb = format!("{:02X}{:02X}{:02X}", color[0], color[1], color[2]);
+                assert_eq!(line.path(&["solidFill", "srgbClr"]).unwrap().attr("val"), Some(rgb.as_str()), "{kind:?}");
+                c = crate::chart::read_chart(&root).unwrap();
+                assert_eq!(c.format.series.get(&0), Some(&spec), "{kind:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_hidden_bar_and_area_borders_retain_explicit_dark_color() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::Area] {
+        for width in [None, Some(0.0)] {
+            let mut c = chart(1, kind, vec![]);
+            let spec = gridcraft_model::ChartSeriesFormat { border_width: width, line_color: Some([38, 38, 38, 255]), ..Default::default() };
+            c.format.series.insert(0, spec.clone());
+            for _ in 0..2 {
+                let saved = crate::chart::write_chart(&Workbook::default(), 0, &c, "Book.xlsx");
+                let root = crate::xml::parse(saved.as_bytes()).unwrap();
+                let ser = root.path(&["chart", "plotArea"]).unwrap().children.iter().find_map(|g| g.child("ser")).unwrap();
+                assert!(ser.path(&["spPr", "ln", "noFill"]).is_some());
+                c = crate::chart::read_chart(&root).unwrap();
+                assert_eq!(c.format.series.get(&0), Some(&spec), "{kind:?}, width={width:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_ex_horizontal_and_vertical_gridlines_remain_independent_on_second_save() {
+    for kind in [ChartKind::Histogram, ChartKind::BoxWhisker, ChartKind::Waterfall] {
+        for (horizontal, vertical) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut wb = workbook();
+            let sheet = Arc::make_mut(&mut wb.sheets[0]);
+            sheet.charts = vec![chart(1, kind, vec![])];
+            sheet.charts[0].gridlines = horizontal;
+            sheet.charts[0].format.vertical_gridlines = vertical;
+            for _ in 0..2 {
+                let bytes = write_xlsx(&wb).unwrap();
+                let parts = chart_parts(&bytes);
+                assert_eq!(parts.len(), 1);
+                let root = crate::xml::parse(parts[0].as_bytes()).unwrap();
+                let plot = root.path(&["chart", "plotArea"]).unwrap();
+                for (id, expected) in [("0", vertical), ("1", horizontal)] {
+                    let axis = plot.kids("axis").find(|a| a.attr("id") == Some(id)).unwrap();
+                    assert_eq!(axis.child("majorGridlines").is_some(), expected, "{kind:?}, axis {id}");
+                }
+                wb = read_xlsx(&bytes).unwrap().0;
+                let c = &wb.sheets[0].charts[0];
+                assert_eq!((c.gridlines, c.format.vertical_gridlines), (horizontal, vertical), "{kind:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_native_dark_bar_and_area_borders_survive_without_an_extension() {
+    for group in ["barChart", "areaChart"] {
+        for fill in ["", "<a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill>"] {
+            let xml = format!(
+                "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" \
+                 xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>\
+                 <c:{group}><c:ser><c:spPr>{fill}<a:ln w=\"25400\"><a:solidFill>\
+                 <a:srgbClr val=\"262626\"/></a:solidFill></a:ln></c:spPr></c:ser></c:{group}>\
+                 </c:plotArea></c:chart></c:chartSpace>"
+            );
+            let mut c = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+            for _ in 0..2 {
+                let spec = c.format.series.get(&0).unwrap();
+                assert_eq!(spec.line_color, Some([38, 38, 38, 255]), "{group}, fill={fill}");
+                assert_eq!(spec.border_width, Some(2.0));
+                let saved = crate::chart::write_chart(&Workbook::default(), 0, &c, "Book.xlsx");
+                c = crate::chart::read_chart(&crate::xml::parse(saved.as_bytes()).unwrap()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn chart_native_marker_size_seven_is_explicit_without_an_extension() {
+    let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>
+        <c:lineChart><c:ser><c:marker><c:symbol val="circle"/><c:size val="7"/></c:marker></c:ser></c:lineChart>
+        </c:plotArea></c:chart></c:chartSpace>"#;
+    let mut c = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+    for _ in 0..2 {
+        assert_eq!(c.format.series.get(&0).unwrap().marker_size, Some(7.0));
+        let saved = crate::chart::write_chart(&Workbook::default(), 0, &c, "Book.xlsx");
+        c = crate::chart::read_chart(&crate::xml::parse(saved.as_bytes()).unwrap()).unwrap();
+    }
+}
+
+#[test]
 fn scatter_lines_keep_markers_opt_in_when_only_line_styling_changes() {
     for marker in [None, Some("none"), Some("diamond")] {
         let mut wb = workbook();
@@ -244,7 +445,9 @@ fn every_trendline_kind_round_trips_in_every_chart_group() {
     // A second save writes the same parts (nothing drifts on the way round).
     let again = write_xlsx(&back).unwrap();
     let expected = chart_parts(&bytes);
-    for (index, (actual, expected)) in chart_parts(&again).iter().zip(&expected).enumerate() {
+    let actual_parts = chart_parts(&again);
+    assert_eq!(actual_parts.len(), expected.len(), "chart part count changes on the second save");
+    for (index, (actual, expected)) in actual_parts.iter().zip(&expected).enumerate() {
         if actual != expected {
             let mismatch = actual.chars().zip(expected.chars()).take_while(|(a, b)| a == b).count();
             let start = mismatch.saturating_sub(100);

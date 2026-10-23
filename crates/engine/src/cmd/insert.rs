@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 1), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -787,6 +787,12 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
+    let format = p
+        .get("format")
+        .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("insert.chart", "invalid chart format")))
+        .transpose()?
+        .unwrap_or_default();
+    validate_chart_format(&format)?;
     let areas = chart_areas(s, p)?;
     if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
@@ -829,16 +835,21 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         },
         title,
         series,
-        legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
-        data_labels: false,
-        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
+        legend: str_param(p, "legend").map(chart_legend).unwrap_or(if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) {
+            LegendPos::Right
+        } else {
+            LegendPos::Bottom
+        }),
+        data_labels: bool_param(p, "dataLabels").unwrap_or(false),
+        gridlines: bool_param(p, "gridlines")
+            .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),
+        style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(1),
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
-        format: Default::default(),
+        format,
     };
     Ok((sheet, chart))
 }
@@ -918,6 +929,16 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
     Ok(())
 }
 
+fn chart_legend(legend: &str) -> LegendPos {
+    match legend {
+        "none" => LegendPos::None,
+        "top" => LegendPos::Top,
+        "left" => LegendPos::Left,
+        "right" => LegendPos::Right,
+        _ => LegendPos::Bottom,
+    }
+}
+
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     let format = p
@@ -954,13 +975,7 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.title = t.as_str().map(str::to_string);
         }
         if let Some(l) = str_param(p, "legend") {
-            c.legend = match l {
-                "none" => LegendPos::None,
-                "top" => LegendPos::Top,
-                "left" => LegendPos::Left,
-                "right" => LegendPos::Right,
-                _ => LegendPos::Bottom,
-            };
+            c.legend = chart_legend(l);
         }
         if let Some(v) = bool_param(p, "dataLabels") {
             c.data_labels = v;

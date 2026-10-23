@@ -3,6 +3,9 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Chart|Series" => "Série",
+        "Chart|Line" => "Linha",
+        "Chart|Border" => "Borda",
         "Duplicate Chart" => "Duplicar Gráfico",
         "Copy as Picture" => "Copiar como Imagem",
         "Save as Picture…" => "Salvar como Imagem…",

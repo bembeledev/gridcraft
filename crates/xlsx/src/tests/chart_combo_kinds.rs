@@ -44,3 +44,32 @@ fn line_first_group_stays_a_line() {
     assert!(matches!(k[0], Some(ChartKind::Line | ChartKind::LineMarkers)));
     assert_eq!(k[1], Some(ChartKind::ColumnClustered));
 }
+
+#[test]
+fn chart_combo_horizontal_bars_keep_titles_on_category_and_value_axes_after_save() {
+    let title = |text: &str| format!("<c:title><c:tx><c:rich><a:p><a:r><a:t>{text}</a:t></a:r></a:p></c:rich></c:tx></c:title>");
+    let bars = bar(&ser(0)).replace("val=\"col\"", "val=\"bar\"");
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" \
+         xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>\
+         {bars}{}<c:catAx><c:axId val=\"1\"/><c:axPos val=\"l\"/>{}</c:catAx>\
+         <c:valAx><c:axId val=\"2\"/><c:axPos val=\"b\"/>{}</c:valAx>\
+         </c:plotArea></c:chart></c:chartSpace>",
+        line(&ser(1)),
+        title("Region"),
+        title("Sales")
+    );
+    let mut chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let wb = gridcraft_model::Workbook::default();
+    for _ in 0..2 {
+        assert_eq!(chart.kind, ChartKind::Combo);
+        assert_eq!(chart.x_title.as_deref(), Some("Region"));
+        assert_eq!(chart.y_title.as_deref(), Some("Sales"));
+        let saved = crate::chart::write_chart(&wb, 0, &chart, "Book.xlsx");
+        let root = parse(saved.as_bytes()).unwrap();
+        let plot = root.path(&["chart", "plotArea"]).unwrap();
+        assert_eq!(plot.path(&["catAx", "title", "tx", "rich", "p", "r", "t"]).unwrap().text, "Region");
+        assert_eq!(plot.path(&["valAx", "title", "tx", "rich", "p", "r", "t"]).unwrap().text, "Sales");
+        chart = read_chart(&root).unwrap();
+    }
+}

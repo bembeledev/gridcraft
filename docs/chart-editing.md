@@ -27,6 +27,13 @@ complete formatting model, including ChartEx. Native properties take precedence 
 Clipping, horizontal-bar axis/gridline roles and marker tokens are preserved on round-trip.
 Styling a `ScatterLines` series does not introduce a circle marker when saving; explicit markers remain supported.
 
+The review follow-up measures axis titles and trendline labels at their configured font size,
+keeps non-cartesian category labels separate from data-label styling, and aligns minor ticks
+with a nonzero manual minimum. Category legends retain their category colors. XLSX round-trips
+preserve automatic series colors, explicit bar/area borders, combo axis titles, and independent
+ChartEx gridlines. A default template and chart insertion share one undo step; invalid templates
+produce a visible error rather than silently losing the selected appearance.
+
 ## Concurrent upstream work
 
 [PR #2265](https://github.com/storytold/gridcraft/pull/2265) was open at review time, head
@@ -57,4 +64,5 @@ Some extension-only properties can become stale after another editor changes a w
 
 | Date | Change |
 |---|---|
+| 2026-10-23 | Address chart review: role-aware text layout, ticks/legends, native XLSX defaults, template undo and contextual translations |
 | 2026-10-23 | Port chart editing/export and persistence, preserve donor review fixes, document #2265 overlap |

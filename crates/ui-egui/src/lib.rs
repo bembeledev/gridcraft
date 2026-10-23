@@ -446,17 +446,20 @@ impl SheetApp {
         ))
     }
 
+    /// The rendered default size for a chart text role, shared with Home's size controls.
+    fn chart_font_default_size(role: &str) -> f32 {
+        match role {
+            "title" => 14.0,
+            "x_axis_title" | "y_axis_title" => 10.0,
+            _ => 9.0,
+        }
+    }
+
     pub(crate) fn selected_chart_font(&self) -> Option<gridcraft_engine::model::ChartTextFormat> {
         let (id, role) = self.chart_font_target()?;
         let doc = self.session.active()?;
         let mut style = doc.wb.active()?.charts.iter().find(|c| c.id == id)?.format.text_style(role);
-        style.size.get_or_insert(if role == "title" {
-            14.0
-        } else if role.ends_with("_title") {
-            10.0
-        } else {
-            9.0
-        });
+        style.size.get_or_insert(Self::chart_font_default_size(role));
         style.name.get_or_insert(doc.wb.theme.minor_font.clone());
         Some(style)
     }
@@ -507,7 +510,7 @@ impl SheetApp {
             "home.italic" => style.italic = Some(p["on"].as_bool().unwrap_or(!current.italic.unwrap_or(false))),
             "home.increaseFontSize" | "home.decreaseFontSize" => {
                 style.size = Some(
-                    (current.size.unwrap_or(if role == "title" { 14.0 } else { 9.0 }) + if command == "home.increaseFontSize" { 1.0 } else { -1.0 })
+                    (current.size.unwrap_or(Self::chart_font_default_size(role)) + if command == "home.increaseFontSize" { 1.0 } else { -1.0 })
                         .clamp(1.0, 144.0),
                 )
             }
@@ -549,14 +552,15 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
-        let r = self.session.run(id, params);
-        if id == "insert.chart"
-            && let Ok(result) = &r
-            && let Some(chart_id) = result.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
-            && let Some(kind) =
-                self.session.active().and_then(|doc| doc.wb.active()?.charts.iter().find(|chart| chart.id == chart_id).map(|chart| chart.kind))
-            && let Some(template) = self.ui.chart_templates.iter().find(|template| template.use_for_new && template.kind == kind).cloned()
-        {
+        let template = if id == "insert.chart" && self.ui.chart_templates.iter().any(|template| template.use_for_new) {
+            gridcraft_engine::cmd::insert::build_chart(&self.session, &params)
+                .ok()
+                .and_then(|(_, chart)| self.ui.chart_templates.iter().find(|template| template.use_for_new && template.kind == chart.kind).cloned())
+        } else {
+            None
+        };
+        let mut resolved = params.clone();
+        if let Some(template) = &template {
             let legend = match template.legend {
                 gridcraft_engine::model::LegendPos::None => "none",
                 gridcraft_engine::model::LegendPos::Top => "top",
@@ -564,20 +568,32 @@ impl SheetApp {
                 gridcraft_engine::model::LegendPos::Bottom => "bottom",
                 gridcraft_engine::model::LegendPos::Right => "right",
             };
-            // The user's selected template is a local UI preference. Applying it as a regular
-            // chart command keeps the change undoable and preserves the workbook's normal model.
-            let _ = self.session.run(
-                "chart.set",
-                json!({
-                    "chart": chart_id,
-                    "style": template.style,
-                    "legend": legend,
-                    "dataLabels": template.data_labels,
-                    "gridlines": template.gridlines,
-                    "format": template.format,
-                }),
-            );
+            if !resolved.is_object() {
+                resolved = json!({});
+            }
+            // Resolve local defaults into the single engine command. Undo and journal/script
+            // replay must see exactly the same operation, even at the history cap.
+            if let Some(map) = resolved.as_object_mut() {
+                for (key, value) in [
+                    ("style", json!(template.style)),
+                    ("legend", json!(legend)),
+                    ("dataLabels", json!(template.data_labels)),
+                    ("gridlines", json!(template.gridlines)),
+                    ("format", json!(template.format)),
+                ] {
+                    map.entry(key).or_insert(value);
+                }
+            }
         }
+        let r = match self.session.run(id, resolved) {
+            Err(error) if template.is_some() => {
+                // A malformed saved preference must be visible, but should not prevent inserting
+                // the ordinary chart. Engine validation happens before any workbook mutation.
+                self.alert(error);
+                self.session.run(id, params)
+            }
+            result => result,
+        };
         self.after_engine();
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if matches!(id, "insert.chart" | "chart.paste" | "chart.duplicate")

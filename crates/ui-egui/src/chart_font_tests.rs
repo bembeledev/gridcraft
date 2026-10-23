@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn chart_axis_title_font_steps_from_the_displayed_default_without_changing_cells() {
+    for element in [chartview::ChartElement::XAxisTitle, chartview::ChartElement::YAxisTitle] {
+        for (command, expected) in [("home.increaseFontSize", 11.0), ("home.decreaseFontSize", 9.0)] {
+            let mut session = Session::new();
+            session.new_workbook();
+            session.execute("cell.set", json!({"cell":"A1", "input":"1"})).unwrap();
+            let id = session.execute("insert.chart", json!({"range":"A1", "type":"column"})).unwrap()["chart"].as_u64().unwrap() as u32;
+            let mut app = SheetApp::new(session, Default::default());
+            let ctx = egui::Context::default();
+            chartview::select_element(&ctx, id, element);
+            app.chart_context = Some(ctx);
+            app.selected_chart = Some(id);
+            let before = serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap();
+            assert_eq!(app.selected_chart_font().unwrap().size, Some(10.0));
+            app.run(command, json!({})).unwrap();
+            assert_eq!(app.selected_chart_font().unwrap().size, Some(expected));
+            assert_eq!(serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn chart_home_font_targets_text_without_touching_source_cells_and_supports_undo() {
     let mut session = Session::new();
     session.new_workbook();

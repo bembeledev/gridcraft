@@ -120,7 +120,7 @@ fn data_ref(e: Option<&El>) -> Option<String> {
     None
 }
 
-fn read_series(s: &El) -> Series {
+fn read_series(s: &El, automatic_accent: Option<Color>) -> Series {
     let name = s
         .child("tx")
         .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
@@ -129,7 +129,9 @@ fn read_series(s: &El) -> Series {
         .and_then(|p| p.child("solidFill"))
         .and_then(dml_color)
         .or_else(|| sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color))
-        .or_else(|| s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color));
+        .or_else(|| s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color))
+        // Only a styled series recorded in our extension has a writer-generated accent.
+        .filter(|color| Some(color) != automatic_accent.as_ref());
     Series {
         name,
         categories: data_ref(s.child("cat")).or_else(|| data_ref(s.child("xVal"))),
@@ -222,10 +224,16 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
     let (first, first_kind) = *groups.first()?;
     let first_axes = axis_ids(first);
+    let custom_format = read_custom_format(root);
     let mut series = vec![];
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
-            let mut ser = read_series(s);
+            let automatic_accent = s
+                .child_val("idx")
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|index| custom_format.as_ref().is_some_and(|format| format.series.contains_key(index)))
+                .map(|index| Color::Theme(4 + (index % 6) as u8, 0));
+            let mut ser = read_series(s, automatic_accent);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
                 ser.kind = Some(*k);
@@ -246,7 +254,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
         let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
         (x, y)
-    } else if matches!(first_kind, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100) {
+    } else if kind != ChartKind::Combo && matches!(first_kind, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100) {
         (val_axes.first().copied(), cat_ax)
     } else {
         (cat_ax, val_axes.first().copied())
@@ -351,7 +359,19 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
     let mut series_index = 0;
     for group in plot.children.iter().filter(|g| group_kind(g).is_some()) {
         let Some(kind) = group_kind(group) else { continue };
+        let bar_area = matches!(
+            kind,
+            ChartKind::ColumnClustered
+                | ChartKind::ColumnStacked
+                | ChartKind::ColumnStacked100
+                | ChartKind::BarClustered
+                | ChartKind::BarStacked
+                | ChartKind::BarStacked100
+                | ChartKind::Area
+                | ChartKind::AreaStacked
+        );
         for ser in group.kids("ser") {
+            let custom = format.series.get(&series_index);
             let ln = ser.path(&["spPr", "ln"]);
             let marker = ser.child("marker");
             let native_smooth = bool_val(ser, "smooth");
@@ -359,13 +379,22 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
             let series_color = series.get(series_index).and_then(|series| series.color.as_ref());
             let series_fill = ser.path(&["spPr", "solidFill"]);
             let series_fill_color = series_fill.and_then(dml_color);
-            let fill_color = series_fill.and_then(read_rgba).filter(|fill| fill[3] != 255 || series_fill_color.as_ref() != series_color);
+            let fill_color = series_fill.and_then(read_rgba).filter(|fill| {
+                custom.is_some_and(|style| style.fill_color.is_some()) || fill[3] != 255 || series_fill_color.as_ref() != series_color
+            });
             let line_fill = ln.and_then(|line| line.child("solidFill"));
-            let line_color = line_fill.and_then(read_rgba).filter(|fill| fill[3] != 255 || line_fill.and_then(dml_color).as_ref() != series_color);
+            let line_color = line_fill.and_then(read_rgba).filter(|fill| {
+                bar_area
+                    || custom.is_some_and(|style| style.line_color.is_some())
+                    || fill[3] != 255
+                    || line_fill.and_then(dml_color).as_ref() != series_color
+            });
             let marker_no_fill = marker.and_then(|m| m.path(&["spPr", "noFill"])).is_some();
             let marker_fill_el = marker.and_then(|m| m.path(&["spPr", "solidFill"]));
             let marker_fill_color = marker_fill_el.and_then(dml_color);
-            let marker_fill = marker_fill_el.and_then(read_rgba).filter(|fill| fill[3] != 255 || marker_fill_color.as_ref() != series_color);
+            let marker_fill = marker_fill_el.and_then(read_rgba).filter(|fill| {
+                custom.is_some_and(|style| style.marker_fill.is_some()) || fill[3] != 255 || marker_fill_color.as_ref() != series_color
+            });
             let marker_border_fill = marker.and_then(|m| m.path(&["spPr", "ln", "solidFill"]));
             let marker_border_color = marker_border_fill.and_then(read_rgba).filter(|color| *color != [255, 255, 255, 255]);
             let marker_border_width = marker
@@ -387,46 +416,34 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
                     .filter(|v| matches!(*v, "none" | "circle" | "square" | "diamond" | "triangle" | "x" | "plus" | "star" | "dash"))
                     .filter(|v| Some(*v) != default_marker)
                     .map(|v| if v == "x" { "cross".into() } else { v.into() }),
-                marker_size: marker
-                    .and_then(|m| m.child_val("size"))
-                    .and_then(|v| v.parse().ok())
-                    .filter(|size| !matches!(kind, ChartKind::Scatter) || *size != 5.0),
+                marker_size: marker.and_then(|m| m.child_val("size")).and_then(|v| v.parse().ok()).filter(|size| {
+                    // Size 7 is generated only for a styled series. Keep a native-only
+                    // size 7, and any size explicitly recorded in our extension.
+                    custom.is_some_and(|style| style.marker_size.is_some())
+                        || ((*size != 7.0 || custom.is_none()) && (!matches!(kind, ChartKind::Scatter) || *size != 5.0))
+                }),
                 marker_no_fill,
                 marker_fill,
                 marker_border_color,
                 marker_border_width,
                 line_color: line_color.filter(|color| {
-                    !matches!(
-                        kind,
-                        ChartKind::ColumnClustered
-                            | ChartKind::ColumnStacked
-                            | ChartKind::ColumnStacked100
-                            | ChartKind::BarClustered
-                            | ChartKind::BarStacked
-                            | ChartKind::BarStacked100
-                            | ChartKind::Area
-                            | ChartKind::AreaStacked
-                    ) || *color != [38, 38, 38, 255]
+                    // Only a writer-generated border is automatic. A native-only dark
+                    // border or an explicitly configured dark border must survive.
+                    !bar_area || *color != [38, 38, 38, 255] || custom.is_none_or(|style| style.line_color.is_some())
                 }),
                 fill_color,
                 ..Default::default()
             };
-            if matches!(
-                kind,
-                ChartKind::ColumnClustered
-                    | ChartKind::ColumnStacked
-                    | ChartKind::ColumnStacked100
-                    | ChartKind::BarClustered
-                    | ChartKind::BarStacked
-                    | ChartKind::BarStacked100
-                    | ChartKind::Area
-                    | ChartKind::AreaStacked
-            ) {
-                let custom = format.series.get(&series_index);
+            if bar_area {
                 // The bar/area writer uses border_width, not line_width. Keep the latter
                 // as an extension-only field and normalize the automatic zero-width border.
                 spec.line_width = custom.and_then(|style| style.line_width);
                 spec.border_width = width.filter(|width| *width != 0.0 || custom.is_some_and(|style| style.border_width == Some(0.0)));
+                if ln.is_some_and(|line| line.child("noFill").is_some()) {
+                    // A hidden border has no native colour; retain its configured colour
+                    // so showing the border later does not discard the user's choice.
+                    spec.line_color = custom.and_then(|style| style.line_color);
+                }
                 if width == Some(0.0) {
                     spec.no_line = custom.is_some_and(|style| style.no_line);
                 }
@@ -770,10 +787,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
     if let Some(spec) = spec {
-        let c = color
-            .clone()
-            .or_else(|| srgb(&Color::Theme(4 + (idx % 6) as u8, 0), &wb.theme))
-            .unwrap_or_else(|| "<a:schemeClr val=\"accent1\"/>".into());
+        let c = color.clone().unwrap_or_else(|| format!("<a:schemeClr val=\"accent{}\"/>", idx % 6 + 1));
         let width = if matches!(g, G::Bar { .. } | G::Area { .. }) { spec.border_width.unwrap_or(0.0) } else { spec.line_width.unwrap_or(2.25) };
         let fill = spec.fill_color.map(rgba_xml).unwrap_or_else(|| c.clone());
         let line = spec.line_color.map(rgba_xml).unwrap_or_else(|| c.clone());
@@ -781,7 +795,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
         if spec.no_line || width == 0.0 || (g == (G::Scatter { lines: false }) && spec.line_width.is_none()) {
             x.push_str("<a:noFill/>");
         } else {
-            if matches!(g, G::Bar { .. } | G::Area { .. }) {
+            if matches!(g, G::Bar { .. } | G::Area { .. }) && spec.line_color.is_none() {
                 x.push_str("<a:solidFill><a:srgbClr val=\"262626\"/></a:solidFill>");
             } else {
                 let _ = write!(x, "<a:solidFill>{line}</a:solidFill>");

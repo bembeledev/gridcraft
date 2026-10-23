@@ -466,8 +466,8 @@ fn drawing_with_picture_and_chart() {
     assert_eq!(ch.series[1].kind, Some(gridcraft_model::ChartKind::LineMarkers));
     assert!(ch.data_labels && ch.gridlines);
     assert_eq!(ch.legend, gridcraft_model::LegendPos::Top);
-    // The first group uses horizontal bars: the category axis is physically vertical.
-    assert_eq!(ch.y_title.as_deref(), Some("Region"));
+    // Combo charts keep category/value titles in the column layout used on save.
+    assert_eq!(ch.x_title.as_deref(), Some("Region"));
     // A twoCellAnchor with editAs="absolute" is "Don't move or size with cells".
     let sp = &s.shapes[0];
     assert_eq!(sp.kind, gridcraft_model::ShapeKind::Ellipse);

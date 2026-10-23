@@ -180,7 +180,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
-        gridlines: plot.kids("axis").any(|a| a.child("majorGridlines").is_some()),
+        gridlines: plot.kids("axis").find(|a| a.attr("id") == Some("1")).is_some_and(|a| a.child("majorGridlines").is_some()),
         style: 2,
         x_title: axis_title("0"),
         y_title: axis_title("1"),

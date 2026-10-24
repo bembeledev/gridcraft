@@ -298,6 +298,8 @@ fn main() -> eframe::Result<()> {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
+    // Lay sheets out as Excel for Mac does on macOS (a point per pixel, 72-dpi column widths).
+    app.grid.mac_density = cfg!(target_os = "macos");
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;

@@ -4,7 +4,7 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, Shape, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -246,6 +246,26 @@ pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
 }
 
+/// A shape's rectangle. Ink is drawn over the cells it was drawn on, so it is the bounds of its
+/// points mapped like the pen's, widened by half the stroke so a flat stroke has a size and a
+/// wide one is hit on its edges; other objects keep the object scale `z`.
+pub(crate) fn shape_rect(geo: &Geo, sh: &Sheet, sp: &Shape) -> Rect {
+    let pts = if sp.kind == ShapeKind::Ink { ink_screen_points(geo, sh, sp) } else { Vec::new() };
+    if pts.is_empty() {
+        anchor_rect(geo, sh, &sp.anchor)
+    } else {
+        Rect::from_points(&pts).expand(gridcraft_engine::cmd::draw::ink_width(sp) * geo.z * 0.5)
+    }
+}
+
+/// Logical screen points of an Ink stroke, each through `Geo::screen_point` (as the pen previews
+/// them), so a stroke across the freeze line stays where it was drawn.
+pub(crate) fn ink_screen_points(geo: &Geo, sh: &Sheet, sp: &Shape) -> Vec<Pos2> {
+    let a = &sp.anchor;
+    let (x, y) = (sh.col_left(a.cell.col) as f32 + a.dx, sh.row_top(a.cell.row) as f32 + a.dy);
+    gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| geo.screen_point(sh, [x + q[0], y + q[1]])).collect()
+}
+
 /// The shapes one floating object painted (indices into the painter's layer) and its logical
 /// rectangle, so a right-to-left sheet can move it as a whole instead of mirroring it.
 pub(crate) struct PaintedObject {
@@ -268,7 +288,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
     for sp in &sh.shapes {
-        let r = anchor_rect(geo, sh, &sp.anchor);
+        let r = shape_rect(geo, sh, sp);
         if !r.intersects(p.clip_rect()) {
             continue;
         }
@@ -300,8 +320,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
             ShapeKind::Ink => {
                 let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
-                let pts: Vec<Pos2> =
-                    gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
+                let pts = ink_screen_points(geo, sh, sp);
                 if pts.len() >= 2 {
                     let col = if w > 8.0 { line.gamma_multiply(0.45) } else { line };
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
@@ -523,7 +542,7 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
         }
     }
     for s in sh.shapes.iter().rev() {
-        let r = anchor_rect(geo, sh, &s.anchor);
+        let r = shape_rect(geo, sh, s);
         if r.expand(3.0).contains(p) && geo.cells.contains(p) {
             return Some(("shape", s.id, r));
         }

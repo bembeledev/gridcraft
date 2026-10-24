@@ -5,8 +5,8 @@
 use egui::Shape;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
-use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::grid::{Density, Geo};
+use gridcraft_ui_egui::{SheetApp, theme};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -54,10 +54,24 @@ fn check(mac: bool) {
         let r = geo.cell_rect(sheet, CellRef::parse(cell).unwrap());
         drawn.iter().any(|(t, x, w)| t == text && *x >= r.left() - 0.01 && x + w <= r.right() + 0.01)
     };
-    assert!(inside("A1", "24959397"), "8 digits fit a default column (mac: {mac}): {drawn:?}");
-    assert!(inside("B1", "100105891"), "9 digits fit a 9-character column (mac: {mac}): {drawn:?}");
-    assert!(inside("C1", "1.23E+09"), "10 digits narrow in a default column (mac: {mac}): {drawn:?}");
+    // Whatever font draws them, the numbers stay inside their cells and none turns into ####.
+    for (cell, value) in [("A1", "24959397"), ("B1", "100105891"), ("C1", "1234567890")] {
+        let r = geo.cell_rect(sheet, CellRef::parse(cell).unwrap());
+        let number = |t: &str| !t.is_empty() && t.chars().all(|ch| ch.is_ascii_digit() || ".E+".contains(ch));
+        let shown = drawn.iter().find(|(t, x, w)| number(t) && *x + w > r.left() && *x < r.right());
+        assert!(shown.is_some_and(|(_, x, w)| *x >= r.left() - 0.01 && x + w <= r.right() + 0.01), "{value} stays in {cell} (mac: {mac}): {drawn:?}");
+    }
     assert!(!drawn.iter().any(|(t, _, _)| t.starts_with('#')), "no ####: {drawn:?}");
+    // Excel's counts hold where the cells are drawn in Calibri or its metric twin Carlito, whose
+    // digits are about as wide as the hinted 7 px. A wider substitute narrows the numbers instead.
+    let st = wb.styles.get(sheet.style_id(CellRef::parse("A1").unwrap()));
+    let font = egui::FontId::new(st.font.size * 96.0 / 72.0, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
+    let digit = h.ctx.fonts_mut(|f| f.layout_no_wrap("0".into(), font, egui::Color32::PLACEHOLDER).size().x);
+    if digit < 7.5 {
+        assert!(inside("A1", "24959397"), "8 digits fit a default column (mac: {mac}): {drawn:?}");
+        assert!(inside("B1", "100105891"), "9 digits fit a 9-character column (mac: {mac}): {drawn:?}");
+        assert!(inside("C1", "1.23E+09"), "10 digits narrow in a default column (mac: {mac}): {drawn:?}");
+    }
 }
 
 #[test]

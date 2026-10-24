@@ -1309,7 +1309,15 @@ pub(crate) fn paint_quadrant(
         let digit_px = gridcraft_engine::model::max_digit_width_at(&st.font.name, st.font.size, 96.0) as f32;
         let digit_w = (digit_px * geo.zx).max(0.1);
         let avail_w = rect.right() - text_left;
-        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / geo.zx.max(0.001), digit_px);
+        let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / geo.zx.max(0.001), digit_px);
+        // The drawn digits can be wider still than the hinted count allows for (a substitute font
+        // when Calibri and Carlito are missing): a General number that would not fit its cell as
+        // drawn narrows by the drawn digit instead, so it never runs past the cell edge.
+        let mut text = if matches!(v, Value::Number(_)) && p.layout_no_wrap(text.clone(), font.clone(), Color32::PLACEHOLDER).size().x > avail_w {
+            display_text(wb, sh, c, &v, st, avail_w / geo.zx.max(0.001), char_w / geo.zx.max(0.001)).0
+        } else {
+            text
+        };
         if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
             text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
         }

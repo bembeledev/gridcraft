@@ -268,10 +268,11 @@ pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
         let caret = a + INDENT.len();
         return Edit { anchor: caret, caret };
     }
-    // Line starts (char indices) of every line the selection touches.
+    // Line starts (char indices) of every line the selection touches. A selection that ends at
+    // the start of the next line (`"a\n"` in `"a\nb"`) does not touch that line.
     let mut starts = vec![line_start(text, a)];
     for (i, c) in text.chars().enumerate().skip(a).take(b - a) {
-        if c == '\n' && i < b {
+        if c == '\n' && i + 1 < b {
             starts.push(i + 1);
         }
     }
@@ -492,6 +493,21 @@ mod tests {
         h.input_mut().events.push(tab(Modifiers::NONE));
         h.run_steps(1);
         assert_eq!(h.state(), "    x    ");
+    }
+
+    #[test]
+    fn a_selection_ending_at_a_line_start_leaves_that_line_alone() {
+        // Selecting "a\n" in "a\nb" ends at the start of the second line, which is not selected.
+        let mut s = "a\nb".to_string();
+        indent(&mut s, (0, 2), false);
+        assert_eq!(s, "    a\nb");
+        let mut s = "    a\n    b".to_string();
+        indent(&mut s, (0, 6), true);
+        assert_eq!(s, "a\n    b");
+        // One character into the second line, both lines are touched.
+        let mut s = "a\nb".to_string();
+        indent(&mut s, (0, 3), false);
+        assert_eq!(s, "    a\n    b");
     }
 
     #[test]

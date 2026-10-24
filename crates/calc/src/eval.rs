@@ -570,6 +570,8 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Dispatch evaluator special forms before evaluating ordinary function arguments.
+    /// Reference-aware lookups retain their ranges so unrelated result cells stay unevaluated.
     fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => {

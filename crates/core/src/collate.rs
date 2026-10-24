@@ -818,6 +818,9 @@ fn fold_char(c: char, mut emit: impl FnMut(char)) {
 thread_local! {
     /// How many times [`fold_key`] ran on this thread (tests only: proves a caller folds once).
     static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Byte comparisons [`contains_prefolded`] made on this thread (tests only: proves the search
+    /// is linear, which a wall-clock assertion could not do on an unknown machine).
+    static SEARCH_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The form two strings must share to be equal as text: lowercased one char to one char, fully
@@ -1017,23 +1020,64 @@ pub fn contains_folded(haystack: &str, needle: &str) -> bool {
     contains_prefolded(haystack, &fold_key(needle))
 }
 
+/// The Knuth–Morris–Pratt failure function of `needle`: `f[i]` is the length of the longest
+/// proper prefix of `needle[..=i]` that is also a suffix of it. Built once per needle, which is
+/// what keeps [`contains_prefolded`] linear.
+fn kmp_failure(needle: &[u8]) -> Vec<usize> {
+    let mut f = vec![0usize; needle.len()];
+    let mut len = 0usize;
+    for i in 1..needle.len() {
+        while len > 0 && needle.get(i) != needle.get(len) {
+            len = len.checked_sub(1).and_then(|j| f.get(j).copied()).unwrap_or(0);
+        }
+        if needle.get(i) == needle.get(len) {
+            len = len.saturating_add(1);
+        }
+        if let Some(slot) = f.get_mut(i) {
+            *slot = len;
+        }
+    }
+    f
+}
+
 /// [`contains_folded`] with the needle already folded (`folded_needle == fold_key(needle)`), so
 /// a criterion tested against many cells is folded once.
+///
+/// One left-to-right Knuth–Morris–Pratt pass, so the work is `O(haystack + needle)` whatever
+/// the text. Restarting [`str::find`] after each rejected occurrence would be quadratic on text a
+/// workbook can hold: for a needle of combining marks inside a longer run of the same mark, every
+/// occurrence is followed by a mark and so rejected, and each restart pays for the needle again
+/// (~537 million byte comparisons for one cell at Excel's 32,767-character limit — a filter over a
+/// column of them stops responding). Matching bytes is matching characters here, because a UTF-8
+/// sequence occurs in another only at a character boundary.
 pub fn contains_prefolded(haystack: &str, folded_needle: &str) -> bool {
-    let needle = folded_needle;
+    let needle = folded_needle.as_bytes();
     if needle.is_empty() {
         return true;
     }
     let hay = fold_key(haystack);
-    let mut start = 0;
-    while let Some(rest) = hay.get(start..) {
-        let Some(at) = rest.find(needle) else { return false };
-        let at = start.saturating_add(at);
-        if !mark_at(&hay, at.saturating_add(needle.len())) {
-            return true;
+    let f = kmp_failure(needle);
+    let mut len = 0usize;
+    for (i, b) in hay.as_bytes().iter().enumerate() {
+        #[cfg(test)]
+        SEARCH_STEPS.with(|n| n.set(n.get().saturating_add(1)));
+        while len > 0 && needle.get(len) != Some(b) {
+            #[cfg(test)]
+            SEARCH_STEPS.with(|n| n.set(n.get().saturating_add(1)));
+            len = len.checked_sub(1).and_then(|j| f.get(j).copied()).unwrap_or(0);
         }
-        // Resume one character after this occurrence's start.
-        start = at.saturating_add(hay.get(at..).and_then(|t| t.chars().next()).map_or(1, char::len_utf8));
+        if needle.get(len) == Some(b) {
+            len = len.saturating_add(1);
+        }
+        if len == needle.len() {
+            // An occurrence ending just past `i`: a match unless a combining mark follows it.
+            if !mark_at(&hay, i.saturating_add(1)) {
+                return true;
+            }
+            // Keep going from the longest proper prefix, so overlapping occurrences are tried too
+            // and a rejected one never hides a later match.
+            len = len.checked_sub(1).and_then(|j| f.get(j).copied()).unwrap_or(0);
+        }
     }
     false
 }
@@ -1619,6 +1663,35 @@ mod tests {
 
     fn folds() -> usize {
         FOLDS.with(std::cell::Cell::get)
+    }
+
+    fn search_steps() -> usize {
+        SEARCH_STEPS.with(std::cell::Cell::get)
+    }
+
+    /// The search must stay linear on text a workbook can hold. Restarting [`str::find`] after
+    /// each rejected occurrence was quadratic for one shape: a needle of combining marks inside a
+    /// longer run of the same mark, where every occurrence is followed by a mark and so rejected,
+    /// and each restart pays for the needle again. Measured on the shape below, the old loop grew
+    /// ×4 per doubling (0.3 M byte comparisons at 1,000 marks, 1.0 M at 2,000, 4.0 M at 4,000,
+    /// 16.0 M at 8,000); at Excel's 32,767-character limit that is ~537 M for a single cell, so a
+    /// filter over a column of them stops responding.
+    ///
+    /// The budget is in **steps, not seconds**: a time limit would go red on a slow machine and
+    /// green on a fast one for the same algorithm. Linear means the whole search costs a small
+    /// multiple of the text it read; the old loop misses this budget by four orders of magnitude.
+    #[test]
+    fn contains_is_linear_on_a_run_of_combining_marks() {
+        const N: usize = 20_000;
+        let hay = "\u{301}".repeat(N);
+        let needle = "\u{301}".repeat(N / 2);
+        let folded = fold_key(&needle);
+        let before = search_steps();
+        // The last occurrence ends at the end of the text, where no mark follows it.
+        assert!(contains_prefolded(&hay, &folded), "the needle is in the haystack");
+        let used = search_steps().saturating_sub(before);
+        let budget = 4 * (hay.len() + folded.len());
+        assert!(used <= budget, "search took {used} steps, budget {budget}");
     }
 
     #[test]

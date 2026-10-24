@@ -395,12 +395,16 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 // SheetApp dialogs take over from the ribbon. Child font/size/colour
                 // popups (including More Colors) are owned by these controls instead,
                 // so they keep the parent mounted while their interaction continues.
-                if popup_open && app.dialog.is_some() {
+                let dialog_was_open_id = egui::Id::new("ribbon_overflow_dialog_was_open");
+                let dialog_is_open = app.dialog.is_some();
+                let dialog_was_open = ui.data(|data| data.get_temp::<bool>(dialog_was_open_id)).unwrap_or(dialog_is_open);
+                if popup_open && dialog_is_open && !dialog_was_open {
                     popup_open = false;
                     egui::Popup::close_all(ui.ctx());
                     ui.ctx().request_repaint();
                 }
                 ui.data_mut(|data| {
+                    data.insert_temp(dialog_was_open_id, dialog_is_open);
                     if popup_open {
                         data.insert_temp(open_id, app.ui.ribbon_tab.clone());
                     } else {

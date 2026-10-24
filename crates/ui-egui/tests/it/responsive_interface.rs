@@ -157,6 +157,18 @@ fn overflow_data_analysis_closes_the_parent_and_the_dialog_receives_clicks() {
 }
 
 #[test]
+fn overflow_stays_open_when_a_dialog_was_already_open() {
+    let mut h = harness(640.0, 700.0);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool":""}));
+    h.run_steps(6);
+
+    open_overflow(&mut h);
+
+    assert_eq!(h.state().dialog.as_ref().map(|dialog| dialog.name()), Some("analysisToolPak"));
+    assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::new("ribbon_overflow_open"))).as_deref(), Some("Home"));
+}
+
+#[test]
 fn overflow_closes_on_escape_and_translates_its_anchors() {
     let mut h = harness(640.0, 480.0);
     open_overflow(&mut h);

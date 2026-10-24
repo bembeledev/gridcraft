@@ -5,7 +5,10 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    AxisScale, Chart, ChartFormat, ChartKind, Color, DefinedName, LegendPos, LineDash, MarkerSymbol, Series, SeriesFormat, Trendline, TrendlineKind,
+    Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -130,7 +133,14 @@ fn read_series(s: &El) -> Series {
         .and_then(dml_color)
         .or_else(|| sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color))
         .or_else(|| s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color));
+    let marker_fill = s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color).filter(|m| Some(*m) != color);
+    let format = SeriesFormat {
+        no_line: sp.and_then(|p| p.child("ln")).is_some_and(|l| l.child("noFill").is_some()),
+        marker: s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")).and_then(MarkerSymbol::parse).unwrap_or_default(),
+        marker_fill,
+    };
     Series {
+        format,
         name,
         categories: data_ref(s.child("cat")).or_else(|| data_ref(s.child("xVal"))),
         values: data_ref(s.child("val")).or_else(|| data_ref(s.child("yVal"))).unwrap_or_default(),
@@ -236,18 +246,50 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             series.push(ser);
         }
     }
-    let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
+    let is_scatter = |k: &ChartKind| matches!(k, ChartKind::Scatter | ChartKind::ScatterLines);
+    // Scatter groups on two axes are still a scatter chart (each series keeps its own kind).
+    let kind = if groups.len() > 1 && !groups.iter().all(|(_, k)| is_scatter(k)) { ChartKind::Combo } else { first_kind };
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
     let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
     let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+    let shown = |a: &&&El| a.child("delete").is_none_or(|d| !d.flag("val", true));
     let (x_ax, y_ax) = if scatter {
-        let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
+        let horizontal = |a: &&&El| matches!(a.child_val("axPos"), Some("b") | Some("t"));
+        let x = val_axes.iter().filter(shown).find(horizontal).or_else(|| val_axes.iter().find(horizontal)).copied();
         let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
         (x, y)
     } else {
         (cat_ax, val_axes.first().copied())
+    };
+    // The secondary value axis: another vertical one, on the right.
+    let y2_ax = val_axes.iter().copied().find(|a| a.child_val("axPos") == Some("r") && y_ax.is_none_or(|y| !std::ptr::eq(*a, y)));
+    let scale = |a: Option<&El>| -> AxisScale {
+        let Some(a) = a else { return AxisScale::default() };
+        let sc = a.child("scaling");
+        AxisScale { min: sc.and_then(|s| f64_val(s, "min")), max: sc.and_then(|s| f64_val(s, "max")), major: f64_val(a, "majorUnit") }.sanitized()
+    };
+    let fill_of = |sp: Option<&El>| sp.and_then(|p| p.child("solidFill")).and_then(dml_color);
+    let line_of = |sp: Option<&El>| sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color);
+    let legend_el = chart.child("legend");
+    let legend_layout = legend_el.and_then(|l| l.path(&["layout", "manualLayout"])).and_then(|m| {
+        let v = |k: &str| f64_val(m, k).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0) as f32);
+        Some([v("x")?, v("y")?, v("w").unwrap_or(0.0), v("h").unwrap_or(0.0)])
+    });
+    let format = ChartFormat {
+        x_axis: scale(x_ax),
+        y_axis: scale(y_ax),
+        y2_axis: scale(y2_ax),
+        x_gridlines: x_ax.is_some_and(|a| a.child("majorGridlines").is_some()),
+        legend_deleted: legend_el
+            .map(|l| l.kids("legendEntry").filter(|e| bool_val(e, "delete")).filter_map(|e| e.child("idx").and_then(|i| i.attr_u32("val"))).collect())
+            .unwrap_or_default(),
+        legend_layout,
+        chart_fill: fill_of(root.child("spPr")),
+        chart_border: line_of(root.child("spPr")),
+        plot_fill: fill_of(plot.child("spPr")),
+        plot_border: line_of(plot.child("spPr")),
     };
     let legend = match chart.child("legend") {
         None => LegendPos::None,
@@ -259,6 +301,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         },
     };
     Some(Chart {
+        format,
         id: 0,
         kind,
         anchor: Default::default(),
@@ -266,7 +309,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
-        gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
+        gridlines: y_ax.or(val_axes.first().copied()).is_some_and(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -531,27 +574,37 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
-    match (&color, line_like) {
-        (Some(c), true) => {
+    let f = &s.format;
+    let markered = matches!(g, G::Line { .. } | G::Radar | G::Scatter { .. });
+    if markered && (f.no_line || f.marker != MarkerSymbol::Auto || f.marker_fill.is_some()) {
+        // Formatted lines and markers: the line (or none), then the marker symbol and its fill.
+        // A markers-only scatter group has no line, whatever the series says.
+        if f.no_line || g == (G::Scatter { lines: false }) {
+            x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>");
+        } else if let Some(c) = &color {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
         }
-        (Some(c), false) if g == (G::Scatter { lines: false }) => {
-            let _ = write!(
-                x,
-                "<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/><c:spPr><a:solidFill>{c}</a:solidFill></c:spPr></c:marker>"
-            );
+        // The marker: as set, else what the chart type shows (none on a line chart without
+        // markers, a circle where the line is hidden so the points stay visible).
+        let symbol = match f.marker {
+            MarkerSymbol::Auto if g == (G::Scatter { lines: false }) && f.marker_fill.is_none() => None,
+            MarkerSymbol::Auto if matches!(g, G::Line { markers: false, .. } | G::Scatter { lines: true }) && !f.no_line => Some(MarkerSymbol::None),
+            MarkerSymbol::Auto if f.no_line || f.marker_fill.is_some() || g == (G::Scatter { lines: false }) => Some(MarkerSymbol::Circle),
+            MarkerSymbol::Auto => None,
+            m => Some(m),
+        };
+        if let Some(symbol) = symbol {
+            let _ = write!(x, "<c:marker><c:symbol val=\"{}\"/>", symbol.as_str());
+            if symbol != MarkerSymbol::None {
+                x.push_str("<c:size val=\"5\"/>");
+                if let Some(c) = f.marker_fill.as_ref().and_then(|c| srgb(c, &wb.theme)).or(color.clone()) {
+                    let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
+                }
+            }
+            x.push_str("</c:marker>");
         }
-        (Some(c), false) => {
-            let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
-        }
-        (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
-        _ => {}
-    }
-    match g {
-        G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
-        G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        _ => {}
+    } else {
+        series_default_format(&mut x, &color, line_like, g);
     }
     // Trendlines sit between dLbls and the data in CT_LineSer, CT_BarSer, CT_AreaSer,
     // CT_ScatterSer and CT_BubbleSer; pie and radar series have none.
@@ -585,6 +638,32 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     x.push_str("</c:ser>");
     x
+}
+
+/// A series' line, fill and marker as its chart type draws it by default, in its colour.
+fn series_default_format(x: &mut String, color: &Option<String>, line_like: bool, g: G) {
+    match (color, line_like) {
+        (Some(c), true) => {
+            let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
+        }
+        (Some(c), false) if g == (G::Scatter { lines: false }) => {
+            let _ = write!(
+                x,
+                "<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/><c:spPr><a:solidFill>{c}</a:solidFill></c:spPr></c:marker>"
+            );
+        }
+        (Some(c), false) => {
+            let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
+        }
+        (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
+        _ => {}
+    }
+    match g {
+        G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
+        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
+        G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
+        _ => {}
+    }
 }
 
 /// `<c:trendline>` with children in schema order: name, spPr, trendlineType, order, period,
@@ -702,15 +781,43 @@ struct Ax<'a> {
     grid: bool,
     title: Option<&'a str>,
     crosses_max: bool,
+    scale: AxisScale,
+}
+
+/// `c:spPr` of the chart or plot area: its fill and border. Nothing when both are automatic; a
+/// plot area with only a border has no fill.
+fn area_sppr(fill: Option<&Color>, border: Option<&Color>, wb: &Workbook, plot: bool) -> String {
+    let fill = fill.and_then(|c| srgb(c, &wb.theme));
+    let border = border.and_then(|c| srgb(c, &wb.theme));
+    if fill.is_none() && border.is_none() {
+        return String::new();
+    }
+    let mut s = String::from("<c:spPr>");
+    match fill {
+        Some(f) => {
+            let _ = write!(s, "<a:solidFill>{f}</a:solidFill>");
+        }
+        None if plot => s.push_str("<a:noFill/>"),
+        None => {}
+    }
+    if let Some(b) = border {
+        let _ = write!(s, "<a:ln w=\"9525\"><a:solidFill>{b}</a:solidFill></a:ln>");
+    }
+    s.push_str("</c:spPr>");
+    s
 }
 
 fn axis_xml(a: &Ax<'_>) -> String {
     let mut s = format!(
-        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
+        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/>{4}</c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
         if a.cat { "catAx" } else { "valAx" },
         a.id,
         a.delete as u8,
-        a.pos
+        a.pos,
+        [("max", a.scale.max), ("min", a.scale.min)]
+            .iter()
+            .filter_map(|(k, v)| v.map(|v| format!("<c:{k} val=\"{}\"/>", num(v))))
+            .collect::<String>()
     );
     if a.grid {
         s.push_str("<c:majorGridlines/>");
@@ -727,7 +834,11 @@ fn axis_xml(a: &Ax<'_>) -> String {
     if a.cat {
         s.push_str("<c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx>");
     } else {
-        s.push_str("<c:crossBetween val=\"between\"/></c:valAx>");
+        s.push_str("<c:crossBetween val=\"between\"/>");
+        if let Some(u) = a.scale.major {
+            let _ = write!(s, "<c:majorUnit val=\"{}\"/>", num(u));
+        }
+        s.push_str("</c:valAx>");
     }
     s
 }
@@ -791,7 +902,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             G::Stock if !(3..=4).contains(&ch.series.len()) => G::Line { stacked: false, markers: false },
             g => g,
         };
-        s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
+        let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
+        if matches!(primary_g, G::Scatter { .. }) && !sec.is_empty() && sec.len() < all.len() {
+            // A scatter chart on two value axes: a second scatter group on the secondary axes.
+            let first: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| !x.secondary).copied().collect();
+            s.push_str(&group_xml(primary_g, &first, ch, (1, 2), wb, si));
+            s.push_str(&group_xml(primary_g, &sec, ch, (3, 4), wb, si));
+            secondary = Some(primary_g);
+        } else {
+            s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
+        }
     }
     match primary_g {
         G::Pie | G::Doughnut => {}
@@ -802,9 +922,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 cross: 2,
                 pos: "b",
                 delete: false,
-                grid: false,
+                grid: ch.format.x_gridlines,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.x_axis,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -815,6 +936,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.y_axis,
             }));
         }
         G::Bar { bar: true, .. } => {
@@ -824,9 +946,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 cross: 2,
                 pos: "l",
                 delete: false,
-                grid: false,
+                grid: ch.format.x_gridlines,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.x_axis,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -837,6 +960,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.y_axis,
             }));
         }
         _ => {
@@ -846,9 +970,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 cross: 2,
                 pos: "b",
                 delete: false,
-                grid: false,
+                grid: ch.format.x_gridlines,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.x_axis,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -859,13 +984,19 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                scale: ch.format.y_axis,
             }));
         }
     }
     if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+        // A scatter chart's secondary axes are both value axes.
+        let cat = !matches!(primary_g, G::Scatter { .. } | G::Bubble);
+        let none = AxisScale::default();
+        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false, scale: none }));
+        let y2 = ch.format.y2_axis;
+        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true, scale: y2 }));
     }
+    s.push_str(&area_sppr(ch.format.plot_fill.as_ref(), ch.format.plot_border.as_ref(), wb, true));
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
         LegendPos::None => None,
@@ -875,8 +1006,31 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         LegendPos::Right => Some("r"),
     };
     if let Some(p) = pos {
-        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
+        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/>");
+        for i in &ch.format.legend_deleted {
+            let _ = write!(s, "<c:legendEntry><c:idx val=\"{i}\"/><c:delete val=\"1\"/></c:legendEntry>");
+        }
+        if let Some([x, y, w, h]) = ch.format.legend_layout {
+            // The fractions are f32: written to 6 places, not as f64 noise (0.1 → 0.10000000149…).
+            let num = |v: f32| num((f64::from(v) * 1e6).round() / 1e6);
+            let _ = write!(
+                s,
+                "<c:layout><c:manualLayout><c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:x val=\"{}\"/><c:y val=\"{}\"/>",
+                num(x),
+                num(y)
+            );
+            // A size of 0 is automatic: left out, as files without one have it.
+            for (k, v) in [("w", w), ("h", h)] {
+                if v > 0.0 {
+                    let _ = write!(s, "<c:{k} val=\"{}\"/>", num(v));
+                }
+            }
+            s.push_str("</c:manualLayout></c:layout>");
+        }
+        s.push_str("<c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart>");
+    s.push_str(&area_sppr(ch.format.chart_fill.as_ref(), ch.format.chart_border.as_ref(), wb, false));
+    s.push_str("</c:chartSpace>");
     s
 }

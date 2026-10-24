@@ -24,10 +24,12 @@ impl Scale {
         let n = ((span / self.step).round() as i64).clamp(1, 50);
         (0..=n)
             .map(|i| {
+                // Counted from `min` (a fixed minimum needn't be a multiple of the step); only float
+                // error is snapped away.
                 let v = self.min + i as f64 * self.step;
-                // Snap away accumulated float error.
-                let snapped = (v / self.step).round() * self.step;
-                if snapped.abs() < self.step * 1e-9 { 0.0 } else { snapped }
+                let q = v / self.step;
+                let v = if (q - q.round()).abs() < 1e-6 { q.round() * self.step } else { v };
+                if v.abs() < self.step * 1e-9 { 0.0 } else { v }
             })
             .collect()
     }
@@ -39,6 +41,16 @@ impl Scale {
         }
         (((v - self.min) / span).clamp(-0.5, 1.5)) as f32
     }
+}
+
+#[cfg(test)]
+#[test]
+fn ticks_count_from_a_fixed_minimum() {
+    assert_eq!(Scale { min: 5.0, max: 25.0, step: 10.0 }.ticks(), vec![5.0, 15.0, 25.0]);
+    assert_eq!(Scale { min: 5.0, max: 45.0, step: 20.0 }.ticks(), vec![5.0, 25.0, 45.0]);
+    // Float noise on multiples is still snapped away.
+    assert!(Scale { min: -10.0, max: -8.0, step: 0.1 }.ticks().get(3).is_some_and(|t| (t + 9.7).abs() < 1e-9));
+    assert_eq!(Scale { min: -1.0, max: 1.0, step: 0.5 }.ticks(), vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
 }
 
 pub(crate) fn clean(v: f64) -> f64 {

@@ -269,10 +269,21 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             smooth: s.smooth,
             trendlines,
             number_format: ref_format(wb, sheet, &s.values),
+            no_line: s.format.no_line,
+            marker: s.format.marker,
+            marker_fill: s.format.marker_fill.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]),
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    let rgba = |c: &Option<gridcraft_model::Color>| c.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]);
+    let f = &chart.format;
+    let areas = crate::AreaColors {
+        chart_fill: rgba(&f.chart_fill),
+        chart_border: rgba(&f.chart_border),
+        plot_fill: rgba(&f.plot_fill),
+        plot_border: rgba(&f.plot_border),
+    };
+    ChartData { categories, category_levels, series, palette, areas }
 }

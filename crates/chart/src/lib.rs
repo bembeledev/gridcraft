@@ -20,7 +20,7 @@ mod trend;
 #[cfg(test)]
 mod tests;
 
-pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline, TrendlineKind};
+pub use gridcraft_model::{Chart, ChartKind, LegendPos, MarkerSymbol, SparklineKind, Trendline, TrendlineKind};
 use serde::{Deserialize, Serialize};
 
 pub use axis::{Scale, format_number, nice_scale};
@@ -132,6 +132,19 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// Chart and plot area colours, resolved against the theme.
+    #[serde(default)]
+    pub areas: AreaColors,
+}
+
+/// The chart area's and plot area's fill and border; `None` draws the default (a white chart
+/// with a light border, a plot area without either).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AreaColors {
+    pub chart_fill: Option<Rgba>,
+    pub chart_border: Option<Rgba>,
+    pub plot_fill: Option<Rgba>,
+    pub plot_border: Option<Rgba>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -153,6 +166,15 @@ pub struct SeriesData {
     pub trendlines: Vec<TrendlineData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
+    /// Markers only: the series line is hidden.
+    #[serde(default)]
+    pub no_line: bool,
+    /// Marker symbol (`Auto`: the chart type's default).
+    #[serde(default)]
+    pub marker: MarkerSymbol,
+    /// Marker fill, when it isn't the series colour.
+    #[serde(default)]
+    pub marker_fill: Option<Rgba>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -175,6 +197,9 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            no_line: false,
+            marker: MarkerSymbol::Auto,
+            marker_fill: None,
         }
     }
 }

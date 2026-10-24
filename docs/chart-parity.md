@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-22 · **Change:** minor (scatter series line/marker formatting, axis bounds and units, legend entries and placement, chart and plot area colours; stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -39,17 +39,17 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 |---|---|---|
 | Move and resize the chart object | yes | yes (corner handle, Format Chart Area Size fields) |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
-| Legend | position, overlay, formatting, per-entry delete | position only |
+| Legend | position, overlay, formatting, per-entry delete | position, per-entry delete, manual placement (drawn over the plot); no legend formatting |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
 | Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | min, max and major unit (scatter X/Y, value axes, secondary axis); vertical gridlines; **missing**: log scale, reverse order, crossing point, display units, date axis, number format |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
 | Secondary axis | any series | line series in combo charts |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | **missing** |
-| Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
+| Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour; scatter line on/off, marker symbol and fill; chart and plot area fill and border. Format Chart pane covers chart-level options. **Missing**: per-point formats, marker size, line width and dash, effects |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
 | Chart templates (`.crtx`) | yes | **missing** |
@@ -64,8 +64,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
+survive: anything else (log and reversed axes, label options, error bars, per-point formats, marker
+size, line width, chartex extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
@@ -90,6 +90,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Chart formatting Excel saves is read, drawn and written back: markers-only and line-only scatter series, marker symbols (circle, square, diamond, triangle, x, star, dash, dot, plus) and fills, preset and system colours (`prstClr`, `sysClr` without a cached value), fixed axis min/max and major unit (scatter X/Y, column/bar/line value axes, the secondary axis), vertical gridlines, deleted legend entries, a legend placed by hand (drawn over the plot), chart and plot area fill and border; scatter groups on two value axes stay a scatter chart with the secondary axis drawn on the right |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

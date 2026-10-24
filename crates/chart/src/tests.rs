@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
+use gridcraft_model::{Anchor, AxisScale, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
 
 use crate::*;
 
@@ -35,6 +35,7 @@ const ALL_KINDS: [ChartKind; 25] = [
 
 fn chart(kind: ChartKind) -> Chart {
     Chart {
+        format: Default::default(),
         id: 1,
         kind,
         anchor: Anchor::default(),
@@ -54,6 +55,9 @@ fn chart(kind: ChartKind) -> Chart {
 
 fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesData {
     SeriesData {
+        no_line: false,
+        marker: Default::default(),
+        marker_fill: None,
         name: name.into(),
         values: values.iter().map(|v| Some(*v)).collect(),
         x: Some(values.iter().enumerate().map(|(i, _)| Some(i as f64 * 1.5 + 2.0)).collect()),
@@ -74,6 +78,7 @@ fn sample(kind: ChartKind) -> ChartData {
     let mut b = series("East", &[38000.0, 30000.0, 45000.0, 61870.0, 52000.0, 41000.0], [200, 80, 40, 255], k2);
     b.secondary = kind == ChartKind::Combo;
     ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: cats.iter().map(|s| s.to_string()).collect(),
@@ -221,6 +226,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::ColumnClustered);
     c.series = vec![
         Series {
+            format: Default::default(),
             name: Some("Sales!$B$1".into()),
             categories: Some("Sales!$A$2:$A$4".into()),
             values: "Sales!$B$2:$B$4".into(),
@@ -233,6 +239,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            format: Default::default(),
             name: None,
             categories: None,
             values: "=Sales!$C$2:$C$4".into(),
@@ -245,6 +252,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            format: Default::default(),
             name: Some("Literal".into()),
             categories: None,
             values: "{1,2,3,4}".into(),
@@ -284,6 +292,7 @@ fn resolve_from_workbook() {
     let mut c = chart(ChartKind::Combo);
     c.series = vec![
         Series {
+            format: Default::default(),
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -296,6 +305,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
         },
         Series {
+            format: Default::default(),
             name: None,
             categories: None,
             values: "Sales!B2:B4".into(),
@@ -313,6 +323,7 @@ fn resolve_from_workbook() {
     assert_eq!(d.series[1].kind, ChartKind::Line);
     let mut c = chart(ChartKind::Bubble);
     c.series = vec![Series {
+        format: Default::default(),
         name: None,
         categories: Some("Sales!B2:B4".into()),
         values: "Sales!B2:B4".into(),
@@ -331,6 +342,7 @@ fn resolve_from_workbook() {
     // Bad formulas never panic.
     let mut c = chart(ChartKind::Line);
     c.series = vec![Series {
+        format: Default::default(),
         name: Some("=Nope!A1".into()),
         categories: Some("((".into()),
         values: "Missing!A1:A3".into(),
@@ -371,8 +383,13 @@ fn scatter_with_text_x_values_numbers_the_points() {
         let d = resolve(&wb, 0, &c);
         assert_eq!(d.series[0].x, None, "{kind:?}");
         let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
-        let empty =
-            render(&c, &ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+        let empty = render(
+            &c,
+            &ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: vec![], series: vec![] },
+            400.0,
+            300.0,
+            &ApproxMeasure,
+        );
         assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
         // Numeric X values are kept.
         c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
@@ -466,6 +483,7 @@ fn pie_starts_at_twelve_clockwise() {
 fn negative_values_put_axis_below_zero() {
     let c = chart(ChartKind::ColumnClustered);
     let d = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -482,12 +500,14 @@ fn edge_cases_never_panic() {
     let m = ApproxMeasure;
     let empty = ChartData::default();
     let zeros = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into()],
         series: vec![series("z", &[0.0, 0.0], [0, 0, 0, 255], ChartKind::Line)],
     };
     let weird = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![String::new(); 3],
@@ -521,6 +541,7 @@ fn thousands_of_points_are_decimated() {
     let mut c = chart(ChartKind::Line);
     c.data_labels = true;
     let d = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -550,7 +571,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     let line_pts = |smooth: bool, m: &ApproxMeasure| -> usize {
         let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
         s.smooth = smooth;
-        let d = ChartData { category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
+        let d = ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
         render(&chart(ChartKind::Line), &d, 600.0, 400.0, m)
             .iter()
             .filter_map(|p| match p {
@@ -567,7 +588,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     // Rendering either way must stay finite and inside the canvas.
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
+    let d = ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
     assert_sane(&render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m), 600.0, 400.0);
 }
 
@@ -577,7 +598,13 @@ fn smooth_line_splits_at_gaps() {
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
     s.values[1] = None; // gap between two data points
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s] };
+    let d = ChartData {
+        areas: Default::default(),
+        category_levels: vec![],
+        palette: vec![],
+        categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        series: vec![s],
+    };
     let prims = render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m);
     // Two separate runs (before/after the gap) → at least two line primitives.
     let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
@@ -620,6 +647,9 @@ fn fuzz_random_data_and_sizes() {
         };
         let series: Vec<SeriesData> = (0..nser)
             .map(|i| SeriesData {
+                no_line: false,
+                marker: Default::default(),
+                marker_fill: None,
                 name: format!("S{i}"),
                 values: (0..npts).map(|_| val(&mut r)).collect(),
                 x: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
@@ -655,6 +685,7 @@ fn fuzz_random_data_and_sizes() {
             .collect();
         let ncat = (r.next() % 50) as usize;
         let d = ChartData {
+            areas: Default::default(),
             category_levels: vec![],
             palette: vec![],
             categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(),
@@ -834,8 +865,13 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     let mut s = series("Sales", &[9.0, 7.0, 5.0, 3.0], [10, 20, 30, 255], ChartKind::Line);
     s.trendlines =
         vec![TrendlineData { spec: Trendline { forward: 1.0, display_equation: true, display_r_squared: true, ..Trendline::default() }, color: tc }];
-    let d =
-        ChartData { category_levels: vec![], palette: vec![], categories: ["a", "b", "c", "d"].map(String::from).to_vec(), series: vec![s.clone()] };
+    let d = ChartData {
+        areas: Default::default(),
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["a", "b", "c", "d"].map(String::from).to_vec(),
+        series: vec![s.clone()],
+    };
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None; // keeps legend swatches out of the line counts
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -859,7 +895,7 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     assert!(lines_of(&pie, tc).is_empty());
     // One point: nothing to fit, nothing drawn.
     s.values.truncate(1);
-    let one = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
+    let one = ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
     assert!(lines_of(&render(&c, &one, 600.0, 400.0, &m), tc).is_empty());
 }
 
@@ -879,7 +915,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
         TrendlineData { spec: Trendline { kind: TrendlineKind::Exponential, forward: 30.0, ..Trendline::default() }, color: colors[1] },
         TrendlineData { spec: Trendline { kind: TrendlineKind::MovingAverage(2), ..Trendline::default() }, color: colors[2] },
     ];
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
+    let d = ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
     let mut c = chart(ChartKind::Scatter);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -894,6 +930,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
 #[test]
 fn treemap_and_histogram_shapes() {
     let d = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
@@ -917,6 +954,7 @@ fn treemap_and_histogram_shapes() {
 
     let vals: Vec<f64> = (0..100).map(|i| i as f64).collect();
     let d = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec![],
@@ -931,6 +969,7 @@ fn treemap_and_histogram_shapes() {
 fn histogram_boundary_values_match_interval_labels() {
     let heights = |vals: &[f64]| -> Vec<f32> {
         let d = ChartData {
+            areas: Default::default(),
             category_levels: vec![],
             palette: vec![],
             categories: vec![],
@@ -1004,6 +1043,7 @@ fn box_and_stock_charts_honour_the_gridlines_flag() {
 #[test]
 fn funnel_value_labels_follow_the_data_labels_flag() {
     let data = ChartData {
+        areas: Default::default(),
         category_levels: vec![],
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into()],
@@ -1032,6 +1072,7 @@ fn pie_points_follow_workbook_theme() {
     wb.theme.colors[5] = 0x8AA1B8;
     let mut c = chart(ChartKind::Pie);
     c.series = vec![Series {
+        format: Default::default(),
         name: None,
         categories: None,
         values: "{5,3}".into(),
@@ -1178,7 +1219,13 @@ fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let col: Rgba = [10, 20, 30, 255];
     let mut s = series("Sales", &[1.0, 3.0, 2.0, 5.0, 4.0], col, ChartKind::ColumnClustered);
     s.trendlines = vec![TrendlineData { spec: Trendline { forward: 1e6, backward: 1e6, ..Trendline::default() }, color: tc }];
-    let d = ChartData { palette: vec![], category_levels: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s] };
+    let d = ChartData {
+        areas: Default::default(),
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
+        series: vec![s],
+    };
     let mut c = chart(ChartKind::ColumnClustered);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1214,4 +1261,216 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+// ---------------------------------------------------------------- formatting Excel saves
+
+fn scatter_data(series: Vec<SeriesData>) -> ChartData {
+    ChartData { areas: Default::default(), category_levels: vec![], palette: vec![], categories: vec![], series }
+}
+
+fn xy(name: &str, xs: &[f64], ys: &[f64], color: Rgba) -> SeriesData {
+    SeriesData {
+        name: name.into(),
+        values: ys.iter().map(|v| Some(*v)).collect(),
+        x: Some(xs.iter().map(|v| Some(*v)).collect()),
+        sizes: None,
+        color,
+        kind: ChartKind::ScatterLines,
+        number_format: "General".into(),
+        ..SeriesData::default()
+    }
+}
+
+const RED: Rgba = [200, 0, 0, 255];
+const BLUE: Rgba = [0, 0, 200, 255];
+
+fn series_lines(prims: &[Prim], color: Rgba) -> usize {
+    prims.iter().filter(|p| matches!(p, Prim::Line { color: c, width, .. } if *c == color && *width >= 2.0)).count()
+}
+
+fn circles_of(prims: &[Prim], color: Rgba) -> usize {
+    prims.iter().filter(|p| matches!(p, Prim::Circle { fill: Some(c), .. } if *c == color)).count()
+}
+
+#[test]
+fn scatter_series_draw_markers_only_or_lines_only() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.title = None;
+    let mut dots = xy("Data", &[1.0, 2.0, 3.0, 4.0], &[1.0, 3.0, 2.0, 4.0], RED);
+    dots.no_line = true;
+    let mut fit = xy("Fit", &[1.0, 4.0], &[1.0, 4.0], BLUE);
+    fit.marker = MarkerSymbol::None;
+    let prims = render(&c, &scatter_data(vec![dots, fit]), 400.0, 300.0, &ApproxMeasure);
+    assert_eq!(series_lines(&prims, RED), 0, "no line through the markers-only series");
+    assert!(circles_of(&prims, RED) >= 4, "its markers");
+    assert!(series_lines(&prims, BLUE) >= 1, "the fit line");
+    assert_eq!(circles_of(&prims, BLUE), 0, "no markers on it");
+}
+
+#[test]
+fn marker_symbols_and_fills() {
+    let c = chart(ChartKind::ScatterLines);
+    let mut sq = xy("Squares", &[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0], RED);
+    sq.no_line = true;
+    sq.marker = MarkerSymbol::Square;
+    sq.marker_fill = Some(BLUE);
+    let mut tri = xy("Triangles", &[1.0, 2.0, 3.0], &[3.0, 2.0, 1.0], RED);
+    tri.no_line = true;
+    tri.marker = MarkerSymbol::Triangle;
+    let prims = render(&c, &scatter_data(vec![sq, tri]), 400.0, 300.0, &ApproxMeasure);
+    let squares = prims.iter().filter(|p| matches!(p, Prim::Rect { fill: Some(f), w, .. } if *f == BLUE && *w < 12.0)).count();
+    assert_eq!(squares, 3, "blue squares, the marker fill");
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Polygon { fill, .. } if *fill == RED)).count(), 3);
+    for m in MarkerSymbol::ALL.map(|(m, _)| m) {
+        let mut s = xy("M", &[1.0, 2.0], &[1.0, 2.0], RED);
+        s.marker = m;
+        assert_sane(&render(&c, &scatter_data(vec![s]), 300.0, 200.0, &ApproxMeasure), 300.0, 200.0);
+    }
+}
+
+#[test]
+fn fixed_axis_bounds_and_major_unit() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.x_axis = AxisScale { min: Some(0.0), max: Some(240.0), major: Some(20.0) };
+    c.format.y_axis = AxisScale { min: Some(-10.0), max: Some(-8.0), major: Some(0.5) };
+    let d = scatter_data(vec![xy("A", &[10.0, 100.0, 230.0], &[-9.8, -9.0, -8.3], RED)]);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let t = texts(&prims);
+    for label in ["0", "20", "120", "240", "-10.0", "-9.5", "-8.0"] {
+        assert!(t.contains(&label), "label {label} in {t:?}");
+    }
+    assert!(!t.contains(&"250") && !t.contains(&"300"), "{t:?}");
+    // A major unit giving thousands of gridlines is ignored; bounds the wrong way round are too.
+    c.format.x_axis = AxisScale { min: Some(0.0), max: Some(240.0), major: Some(1e-9) };
+    c.format.y_axis = AxisScale { min: Some(5.0), max: Some(1.0), major: None };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert_sane(&prims, 640.0, 400.0);
+    assert!(texts(&prims).len() < 60);
+}
+
+#[test]
+fn column_chart_value_axis_takes_its_major_unit() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.format.y_axis = AxisScale { min: None, max: Some(50000.0), major: Some(5000.0) };
+    let prims = render(&c, &sample(ChartKind::ColumnClustered), 640.0, 400.0, &ApproxMeasure);
+    let t = texts(&prims);
+    assert!(t.contains(&"$45,000") && t.contains(&"$50,000"), "{t:?}");
+}
+
+#[test]
+fn deleted_legend_entries_and_a_legend_placed_by_hand() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.legend = LegendPos::Right;
+    c.format.legend_deleted = vec![1];
+    let d = scatter_data(vec![xy("Data", &[1.0, 2.0], &[1.0, 2.0], RED), xy("Hidden", &[1.0, 2.0], &[2.0, 1.0], BLUE)]);
+    let names: Vec<String> = legend_entries(&c, &d).into_iter().map(|e| e.0).collect();
+    assert_eq!(names, vec!["Data".to_string()]);
+    c.format.legend_layout = Some([0.1, 0.1, 0.2, 0.2]);
+    let prims = render(&c, &d, 500.0, 400.0, &ApproxMeasure);
+    let x = prims.iter().find_map(|p| match p {
+        Prim::Text { text, x, .. } if text == "Data" => Some(*x),
+        _ => None,
+    });
+    assert!(x.is_some_and(|x| x < 150.0), "drawn top-left where it was placed: {x:?}");
+}
+
+#[test]
+fn chart_and_plot_area_colours() {
+    let c = chart(ChartKind::ScatterLines);
+    let mut d = scatter_data(vec![xy("A", &[1.0, 2.0], &[1.0, 2.0], RED)]);
+    let yellow = [0xFF, 0xFF, 0x99, 0xFF];
+    d.areas = AreaColors { chart_fill: Some(yellow), chart_border: Some(BLUE), plot_fill: None, plot_border: Some(RED) };
+    let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+    assert!(matches!(prims.first(), Some(Prim::Rect { fill: Some(f), stroke: Some((s, _)), .. }) if *f == yellow && *s == BLUE));
+    assert!(prims.iter().any(|p| matches!(p, Prim::Rect { fill: None, stroke: Some((s, _)), .. } if *s == RED)), "plot area border");
+}
+
+#[test]
+fn scatter_secondary_axis_and_vertical_gridlines() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.y2_axis = AxisScale { min: None, max: Some(1000.0), major: None };
+    let mut sun = xy("Sun", &[1.0, 2.0, 3.0], &[100.0, 900.0, 400.0], BLUE);
+    sun.secondary = true;
+    let d = scatter_data(vec![xy("Air", &[1.0, 2.0, 3.0], &[10.0, 25.0, 18.0], RED), sun]);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert!(texts(&prims).contains(&"1000"), "secondary axis labels");
+    assert!(!texts(&prims).iter().any(|t| t.parse::<f64>().is_ok_and(|v| v > 30.0 && v < 1000.0 && (v as i64) % 100 == 50)));
+    let vlines = |p: &[Prim]| p.iter().filter(|p| matches!(p, Prim::Line { pts, .. } if pts.len() == 2 && pts[0][0] == pts[1][0])).count();
+    let before = vlines(&prims);
+    c.format.x_gridlines = true;
+    assert!(vlines(&render(&c, &d, 640.0, 400.0, &ApproxMeasure)) > before);
+}
+
+#[test]
+fn review_hand_placed_legend_is_drawn_over_the_plot() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.legend = LegendPos::Right;
+    c.format.legend_layout = Some([0.2, 0.2, 0.3, 0.3]);
+    let d = scatter_data(vec![xy("Data", &[1.0, 2.0, 3.0], &[1.0, 3.0, 2.0], RED)]);
+    let prims = render(&c, &d, 500.0, 400.0, &ApproxMeasure);
+    let legend = prims.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "Data")).expect("legend text");
+    let line = prims.iter().rposition(|p| matches!(p, Prim::Line { color, width, .. } if *color == RED && *width >= 2.0)).expect("series line");
+    assert!(legend > line, "the legend comes after the series");
+}
+
+#[test]
+fn review_columns_stay_in_the_plot_and_get_its_colours() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.format.y_axis = AxisScale { min: Some(20000.0), max: None, major: None };
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.areas.plot_border = Some(BLUE);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let plot = prims.iter().find_map(|p| match p {
+        Prim::Rect { x, y, w, h, fill: None, stroke: Some((s, _)), .. } if *s == BLUE => Some((*x, *y, x + w, y + h)),
+        _ => None,
+    });
+    let (_, top, _, bottom) = plot.expect("the plot-area border on a column chart");
+    for p in &prims {
+        // Columns start inside the plot (the legend's swatches sit below it).
+        if let Prim::Rect { y, h, fill: Some(f), .. } = p
+            && (*f == [20, 96, 130, 255] || *f == [25, 107, 36, 255])
+            && *y < bottom
+        {
+            assert!(*y >= top - 0.5 && y + h <= bottom + 0.5, "column {y}..{} inside {top}..{bottom}", y + h);
+        }
+    }
+}
+
+#[test]
+fn review_secondary_series_trendline_follows_its_points() {
+    let mut c = chart(ChartKind::ScatterLines);
+    c.format.y2_axis = AxisScale { min: None, max: Some(1000.0), major: None };
+    let mut sun = xy("Sun", &[1.0, 2.0, 3.0], &[100.0, 500.0, 900.0], BLUE);
+    sun.secondary = true;
+    sun.no_line = true;
+    sun.trendlines = vec![TrendlineData { spec: Trendline::default(), color: [0, 150, 0, 255] }];
+    let d = scatter_data(vec![xy("Air", &[1.0, 2.0, 3.0], &[10.0, 25.0, 18.0], RED), sun]);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let ys = |pred: &dyn Fn(&Prim) -> Option<Vec<f32>>| {
+        prims.iter().filter_map(pred).flatten().fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)))
+    };
+    let (mlo, mhi) = ys(&|p| match p {
+        Prim::Circle { cy, fill: Some(f), .. } if *f == BLUE => Some(vec![*cy]),
+        _ => None,
+    });
+    let (tlo, thi) = ys(&|p| match p {
+        Prim::Line { pts, color, .. } if *color == [0, 150, 0, 255] => Some(pts.iter().map(|q| q[1]).collect()),
+        _ => None,
+    });
+    assert!((tlo - mlo).abs() < 3.0 && (thi - mhi).abs() < 3.0, "trendline {tlo}..{thi} through markers {mlo}..{mhi}");
+}
+
+#[test]
+fn review_hand_placed_row_legend_uses_its_whole_box() {
+    // A top legend placed by hand in a narrow box: one entry per row, all ten drawn (30% of the
+    // box would hold five).
+    let mut c = chart(ChartKind::ScatterLines);
+    c.legend = LegendPos::Top;
+    c.format.legend_layout = Some([0.05, 0.05, 0.12, 0.4]);
+    let names: Vec<String> = (1..=10).map(|i| format!("Series number {i}")).collect();
+    let d = scatter_data(names.iter().map(|n| xy(n, &[1.0, 2.0], &[1.0, 2.0], RED)).collect());
+    let prims = render(&c, &d, 800.0, 600.0, &ApproxMeasure);
+    let drawn = prims.iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.starts_with("Series") || text.starts_with("Se"))).count();
+    assert!(drawn >= 10, "every entry of the hand-placed legend is drawn: {drawn}");
 }

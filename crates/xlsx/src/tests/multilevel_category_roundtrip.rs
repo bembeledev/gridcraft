@@ -23,11 +23,13 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         s.set_value(CellRef::new(r, 2), Value::Number(i as f64 + 1.0));
     }
     s.charts.push(Chart {
+        format: Default::default(),
         id: 1,
         kind: ChartKind::Line,
         anchor: Anchor { cell: CellRef::new(0, 4), width: 480.0, height: 300.0, ..Anchor::default() },
         title: None,
         series: vec![Series {
+            format: Default::default(),
             name: None,
             categories: Some(categories.into()),
             values: values.into(),

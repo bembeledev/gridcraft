@@ -404,6 +404,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let col_ref = |c: u32| format!("{q}!${0}$2:${0}${end_row}", col_letters(c));
         let series = (1..width)
             .map(|c| Series {
+                format: Default::default(),
                 name: Some(format!("{q}!${}$1", col_letters(c))),
                 categories: Some(col_ref(0)),
                 values: col_ref(c),
@@ -417,6 +418,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             })
             .collect();
         sheet.charts.push(Chart {
+            format: Default::default(),
             id: chart_id,
             kind: if opts.column_chart { ChartKind::ColumnClustered } else { ChartKind::Line },
             anchor: Anchor { cell: CellRef::new(1, chart_col), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, mode: Default::default() },

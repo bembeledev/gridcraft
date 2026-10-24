@@ -389,11 +389,13 @@ fn sample() -> Workbook {
         },
     });
     let base_chart = Chart {
+        format: Default::default(),
         id: 20,
         kind: ChartKind::ColumnClustered,
         anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, ..Default::default() },
         title: Some("Sales".into()),
         series: vec![Series {
+            format: Default::default(),
             name: Some("'Data & Stuff'!$B$1".into()),
             categories: Some("'Data & Stuff'!$A$2:$A$3".into()),
             values: "'Data & Stuff'!$B$2:$B$3".into(),

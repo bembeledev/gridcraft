@@ -123,6 +123,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
     };
     let axis_title = |id: &str| plot.kids("axis").find(|a| a.attr("id") == Some(id)).and_then(|a| a.path(&["title", "tx"])).and_then(text);
     Some(Chart {
+        format: Default::default(),
         id: 0,
         kind: kind?,
         anchor: Default::default(),

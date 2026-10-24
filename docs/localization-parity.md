@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (ふりがな表示: the Japanese phonetic runs XLSX keeps are now drawn above the cell text — View › Show › Furigana, off by default, on screen and in PDF export for the readings the WinAnsi writer can encode; they were previously preserved through open + save but never displayed; previously minor (2026-10-21): the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; ふりがな表示: the Japanese phonetic runs XLSX keeps are now drawn above the cell text — View › Show › Furigana, off by default, on screen and in PDF export for the readings the WinAnsi writer can encode; they were previously preserved through open + save but never displayed; previously minor (2026-10-21): the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -96,8 +96,9 @@ language (none so far) and of localized function names.
 ## Infrastructure (do first)
 
 1. Extend the catalog from the ribbon to every user-visible string (dialogs, menus, task panes,
-   status and error messages, command labels, function descriptions), with a missing-key check
-   in `cargo xtask ci`. Language switching and the system-language default already exist (#31).
+   status and error messages, command labels, function descriptions). A string a catalog lacks
+   shows in English and never fails a check: `cargo xtask i18n-report` lists the missing strings
+   per language, and `cargo xtask ci` runs it first. Language switching and the system-language default already exist (#31).
 2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
    boundary only (files keep en-US invariant names), locale number and date formats, list
    separators in CSV.
@@ -109,6 +110,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-22 | minor | Japanese: ふりがな表示 (View › Show › Furigana, `view.furigana`, off by default) draws the phonetic readings XLSX keeps above the cell text — about half the cell font, shrunk and clipped to the cell, row height unchanged — on screen and in PDF export, where only WinAnsi text can be written (#141); the option is saved in `prefs.json` |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

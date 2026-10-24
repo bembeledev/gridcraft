@@ -75,10 +75,6 @@ sync_github_name = true
 [people.pourie-he]
 sync_github_name = true
 
-[people.bryanmenezes-qmc]
-display_name = "Bryan Brummelhaus de Menezes"
-sync_github_name = false
-
 [people.Stefanfra]
 real_name = "Stefan Fransen"
 sync_github_name = true

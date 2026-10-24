@@ -617,36 +617,52 @@ impl<'h> Evaluator<'h> {
     }
 
     fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
+        // A recursive LAMBDA ends through IF, so every call it makes goes through IF's frame: IF
+        // stays out of `call_named`, whose frame holds every other function's locals.
+        if name == "IF" {
+            return self.if_(args);
+        }
+        self.call_named(name, args)
+    }
+
+    fn if_(&mut self, args: &[Expr]) -> Ev {
+        if args.is_empty() || args.len() > 3 {
+            return err(CellError::Value);
+        }
+        let c = self.arg_val(args, 0).unwrap_or_default();
+        if let Value::Array(arr) = &c {
+            return self.if_array(arr, args);
+        }
+        match c.to_bool() {
+            Ok(true) => match args.get(1) {
+                Some(Expr::Missing) => Ev::V(Value::Number(0.0)),
+                Some(e) => self.eval(e),
+                None => Ev::V(Value::Bool(true)),
+            },
+            Ok(false) => match args.get(2) {
+                Some(Expr::Missing) => Ev::V(Value::Number(0.0)),
+                Some(e) => self.eval(e),
+                None => Ev::V(Value::Bool(false)),
+            },
+            Err(e) => err(e),
+        }
+    }
+
+    /// Array condition: element-wise.
+    #[inline(never)]
+    fn if_array(&mut self, arr: &Array, args: &[Expr]) -> Ev {
+        let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
+        let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
+        Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
+            Ok(true) => t.clone(),
+            Ok(false) => f.clone(),
+            Err(e) => Value::Error(e),
+        }))
+    }
+
+    #[inline(never)]
+    fn call_named(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
-            "IF" => {
-                if args.is_empty() || args.len() > 3 {
-                    return err(CellError::Value);
-                }
-                let c = self.arg_val(args, 0).unwrap_or_default();
-                if let Value::Array(arr) = &c {
-                    // Array condition: element-wise.
-                    let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
-                    let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
-                    return Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
-                        Ok(true) => t.clone(),
-                        Ok(false) => f.clone(),
-                        Err(e) => Value::Error(e),
-                    }));
-                }
-                match c.to_bool() {
-                    Ok(true) => match args.get(1) {
-                        Some(Expr::Missing) => Ev::V(Value::Number(0.0)),
-                        Some(e) => self.eval(e),
-                        None => Ev::V(Value::Bool(true)),
-                    },
-                    Ok(false) => match args.get(2) {
-                        Some(Expr::Missing) => Ev::V(Value::Number(0.0)),
-                        Some(e) => self.eval(e),
-                        None => Ev::V(Value::Bool(false)),
-                    },
-                    Err(e) => err(e),
-                }
-            }
             "IFS" => {
                 if args.len() < 2 || !args.len().is_multiple_of(2) {
                     return err(CellError::Value);

@@ -310,15 +310,17 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         *seen = true;
         let options = if x { &mut format.x_axis } else { &mut format.y_axis };
         if let Some(scale) = a.child("scaling") {
-            options.minimum = scale.child_val("min").and_then(|v| v.parse().ok());
-            options.maximum = scale.child_val("max").and_then(|v| v.parse().ok());
+            options.minimum = scale.child_val("min").and_then(|v| v.parse().ok()).or(options.minimum);
+            options.maximum = scale.child_val("max").and_then(|v| v.parse().ok()).or(options.maximum);
             options.reversed = scale.child_val("orientation") == Some("maxMin");
-            options.logarithmic = scale.child("logBase").is_some();
+            if scale.child("logBase").is_some() {
+                options.logarithmic = true;
+            }
         }
-        options.major_unit = a.child_val("majorUnit").and_then(|v| v.parse().ok());
+        options.major_unit = a.child_val("majorUnit").and_then(|v| v.parse().ok()).or(options.major_unit);
         options.major_tick = a.child_val("majorTickMark").filter(|v| matches!(*v, "in" | "out" | "cross")).map(str::to_string);
         options.minor_tick = a.child_val("minorTickMark").filter(|v| matches!(*v, "in" | "out" | "cross")).map(str::to_string);
-        options.minor_unit = a.child_val("minorUnit").and_then(|v| v.parse().ok());
+        options.minor_unit = a.child_val("minorUnit").and_then(|v| v.parse().ok()).or(options.minor_unit);
         let surface = read_surface(a.child("spPr"));
         options.line.color = surface.border.filter(|color| *color != [217, 217, 217, 255]);
         options.line.width = surface.border_width;
@@ -469,8 +471,8 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
     let bar_chart = plot.children.iter().find(|g| g.name == "barChart");
     format.gap_width = bar_chart.and_then(|group| group.child_val("gapWidth")).and_then(|s| s.parse::<f32>().ok()).filter(|v| *v != 150.0);
     format.overlap = bar_chart.and_then(|group| group.child_val("overlap")).and_then(|s| s.parse().ok());
-    format.plot_area = read_surface(plot.child("spPr"));
-    format.chart_area = read_surface(root.child("spPr"));
+    merge_native_surface(&mut format.plot_area, plot.child("spPr"));
+    merge_native_surface(&mut format.chart_area, root.child("spPr"));
     format
 }
 
@@ -497,6 +499,23 @@ pub(crate) fn read_surface(sp: Option<&El>) -> gridcraft_model::ChartSurface {
     surface
 }
 
+/// Merges explicitly present native shape properties over a chart-format extension.
+pub(crate) fn merge_native_surface(target: &mut gridcraft_model::ChartSurface, sp: Option<&El>) {
+    let Some(sp) = sp else { return };
+    let native = read_surface(Some(sp));
+    if native.fill.is_some() || sp.child("noFill").is_some() {
+        target.fill = native.fill;
+    }
+    if let Some(line) = sp.child("ln") {
+        if native.border.is_some() || line.child("noFill").is_some() {
+            target.border = native.border;
+        }
+        if native.border_width.is_some() {
+            target.border_width = native.border_width;
+        }
+    }
+}
+
 fn rgba_xml(c: [u8; 4]) -> String {
     format!("<a:srgbClr val=\"{:02X}{:02X}{:02X}\"><a:alpha val=\"{}\"/></a:srgbClr>", c[0], c[1], c[2], (c[3] as u32 * 100000 + 127) / 255)
 }
@@ -521,6 +540,46 @@ pub(crate) fn surface_xml(style: &gridcraft_model::ChartSurface, prefix: &str) -
     }
     let _ = write!(s, "</{prefix}:spPr>");
     s
+}
+
+#[cfg(test)]
+mod native_merge_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_native_axis_scale_values_preserve_extension_values() {
+        let custom = gridcraft_model::ChartFormat {
+            x_axis: gridcraft_model::ChartAxis {
+                minimum: Some(2.0),
+                maximum: Some(8.0),
+                major_unit: Some(2.0),
+                minor_unit: Some(0.5),
+                logarithmic: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root_xml = format!("<chartSpace>{}</chartSpace>", format_extension(&custom, "c"));
+        let root = crate::xml::parse(root_xml.as_bytes()).unwrap();
+        let plot =
+            crate::xml::parse(b"<plotArea><catAx><axPos val=\"b\"/><scaling><orientation val=\"minMax\"/></scaling></catAx></plotArea>").unwrap();
+
+        let loaded = read_format(&root, &plot, &[]);
+
+        assert_eq!(loaded.x_axis, custom.x_axis);
+    }
+
+    #[test]
+    fn native_surface_merges_only_components_present_in_xml() {
+        let mut surface = gridcraft_model::ChartSurface { fill: Some([10, 20, 30, 255]), border: Some([40, 50, 60, 255]), border_width: Some(3.0) };
+        let native = crate::xml::parse(b"<spPr><ln w=\"25400\"/></spPr>").unwrap();
+
+        merge_native_surface(&mut surface, Some(&native));
+
+        assert_eq!(surface.fill, Some([10, 20, 30, 255]));
+        assert_eq!(surface.border, Some([40, 50, 60, 255]));
+        assert_eq!(surface.border_width, Some(2.0));
+    }
 }
 
 pub(crate) fn read_custom_format(root: &El) -> Option<gridcraft_model::ChartFormat> {

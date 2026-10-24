@@ -1458,7 +1458,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw }
     };
     let vpos = |v: f64, sc: &Scale| {
-        let v = if sc.logarithmic && v <= 0.0 { sc.min } else { v };
+        let v = if sc.logarithmic && v <= 0.0 { f64::NAN } else { v };
         let f = sc.frac(v).clamp(0.0, 1.0);
         if horizontal { plot.x + f * plot.w } else { plot.bottom() - f * plot.h }
     };

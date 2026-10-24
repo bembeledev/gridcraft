@@ -75,13 +75,13 @@ pub fn export_svg(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale:
         w * scale,
         h * scale
     );
-    for (index, mut primitive) in render(chart, data, w, h, measure).into_iter().enumerate() {
-        if index == 0
-            && transparent
-            && let Prim::Rect { fill, .. } = &mut primitive
-        {
-            *fill = None;
-        }
+    let mut export_chart = chart.clone();
+    if transparent {
+        let transparent_fill = Some([0, 0, 0, 0]);
+        export_chart.format.chart_area.fill = transparent_fill;
+        export_chart.format.plot_area.fill = transparent_fill;
+    }
+    for primitive in render(&export_chart, data, w, h, measure) {
         match primitive {
             Prim::Rect { x, y, w, h, fill: f, stroke: s, radius } => {
                 let _ = write!(svg, "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" rx=\"{radius}\" {} {}/>", fill(f), stroke(s));

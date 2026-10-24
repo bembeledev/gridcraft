@@ -106,6 +106,10 @@ fn chart_png_export_quality_transparency_and_size_limits() {
     let mut c = chart(ChartKind::ScatterLines);
     c.anchor.width = 320.0;
     c.anchor.height = 200.0;
+    let chart_fill = [210, 211, 212, 255];
+    let plot_fill = [220, 221, 222, 255];
+    c.format.chart_area.fill = Some(chart_fill);
+    c.format.plot_area.fill = Some(plot_fill);
     let data = sample(c.kind);
     let png = export_png(&c, &data, &ApproxMeasure, 2.0, true).unwrap();
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -113,9 +117,34 @@ fn chart_png_export_quality_transparency_and_size_limits() {
     assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 400);
     let svg = export_svg(&c, &data, &ApproxMeasure, 1.0, true).unwrap();
     assert!(svg.contains("fill=\"none\" stroke="));
+    assert!(svg.matches("fill-opacity=\"0\"").count() >= 2, "chart and plot areas are both transparent");
+    assert_eq!(c.format.chart_area.fill, Some(chart_fill), "export must not mutate the chart");
+    assert_eq!(c.format.plot_area.fill, Some(plot_fill), "export must not mutate the chart");
     c.anchor.width = 10000.0;
     assert!(export_png(&c, &data, &ApproxMeasure, 4.0, false).is_err());
     assert!(export_svg(&c, &data, &ApproxMeasure, f32::NAN, false).is_err());
+}
+
+#[test]
+fn logarithmic_area_chart_omits_non_positive_values() {
+    let mut c = chart(ChartKind::Area);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.x_title = None;
+    c.y_title = None;
+    c.format.y_axis.minimum = Some(0.1);
+    c.format.y_axis.maximum = Some(10.0);
+    c.format.y_axis.logarithmic = true;
+    let color = [12, 34, 56, 255];
+    let data = ChartData {
+        categories: vec!["Invalid 1".into(), "Invalid 2".into()],
+        series: vec![series("Values", &[-2.0, -4.0], color, c.kind)],
+        ..Default::default()
+    };
+
+    let prims = render(&c, &data, 480.0, 320.0, &ApproxMeasure);
+
+    assert!(!prims.iter().any(|primitive| matches!(primitive, Prim::Polygon { fill, .. } if *fill == color)));
 }
 
 #[test]

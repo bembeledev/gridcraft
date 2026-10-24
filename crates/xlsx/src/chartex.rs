@@ -124,8 +124,8 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
     let axis_title = |id: &str| plot.kids("axis").find(|a| a.attr("id") == Some(id)).and_then(|a| a.path(&["title", "tx"])).and_then(text);
     let mut format = crate::chart::read_custom_format(root).unwrap_or_default();
     format.legend_overlay = chart.child("legend").is_some_and(|legend| legend.flag("overlay", false));
-    merge_native_surface(&mut format.chart_area, root.child("spPr"));
-    merge_native_surface(&mut format.plot_area, plot.child("spPr"));
+    crate::chart::merge_native_surface(&mut format.chart_area, root.child("spPr"));
+    crate::chart::merge_native_surface(&mut format.plot_area, plot.child("spPr"));
     format.vertical_gridlines =
         plot.kids("axis").find(|axis| axis.attr("id") == Some("0")).is_some_and(|axis| axis.child("majorGridlines").is_some());
     format.horizontal_gridline = plot
@@ -448,18 +448,6 @@ fn gridline_xml(stroke: &gridcraft_model::ChartStroke) -> String {
         ..Default::default()
     };
     format!("<cx:majorGridlines>{}</cx:majorGridlines>", crate::chart::surface_xml(&surface, "cx"))
-}
-
-fn merge_native_surface(target: &mut gridcraft_model::ChartSurface, sp: Option<&El>) {
-    let Some(sp) = sp else { return };
-    let native = crate::chart::read_surface(Some(sp));
-    if sp.path(&["solidFill", "srgbClr"]).is_some() || sp.child("noFill").is_some() {
-        target.fill = native.fill;
-    }
-    if sp.path(&["ln", "solidFill", "srgbClr"]).is_some() || sp.path(&["ln", "noFill"]).is_some() {
-        target.border = native.border;
-        target.border_width = native.border_width;
-    }
 }
 
 #[cfg(test)]

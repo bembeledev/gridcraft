@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (UI building blocks: theme tokens, ribbon widgets, code editor) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (UI building blocks: theme tokens, ribbon widgets, code editor) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -98,8 +98,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | UI building blocks: theme tokens and the contrast test; ribbon widgets and overflow; code editor; growing formula bar |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
-| 2026-10-11 | minor | UI building blocks: code editor, growing formula bar |
-| 2026-10-11 | minor | UI building blocks: ribbon widgets and overflow |
-| 2026-10-11 | minor | UI building blocks: theme tokens and the contrast test |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

@@ -59,6 +59,48 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Sheet geometry is in pixels at 96 dpi; PDF units are points.
 pub(crate) const PX_TO_PT: f32 = 0.75;
+
+/// How much wider columns and taller rows print than they show, for a workbook's Normal font.
+/// Excel lays the printed grid out with that font's metrics at 600 dpi, so even at 100 % an
+/// Arial 10 workbook prints its columns 5 % wider and its rows 3 % lower (observed on synthetic
+/// workbooks, Normal font varied). A column prints `round(digit × round(size × 600/72))` printer
+/// pixels per character of width, where the grid's 7 px per character are 5.25 pt; rows follow the
+/// font's line height at 600 dpi, and their factors are the measured ones: pages break as if every
+/// row scaled by one factor, which is also how a row of a set height prints, while an automatic
+/// row (its height follows the content) is measured again at 600 dpi and prints lower still,
+/// leaving room at the page's foot. Text, borders and pictures keep their size. Other fonts, or
+/// other sizes for rows, print as they show. Returns (columns, rows, automatic rows as drawn).
+pub(crate) fn grid_print_scale(font: &gridcraft_model::Font) -> (f32, f32, f32) {
+    let name = font.name.to_ascii_lowercase();
+    // Advance of a digit, in em. Aptos Narrow's is inferred from its 11 pt print.
+    const DIGIT: [(&str, f32); 6] =
+        [("arial", 0.5562), ("calibri", 0.5068), ("aptos narrow", 0.511), ("times new roman", 0.5), ("courier new", 0.6001), ("verdana", 0.6357)];
+    const ROW: [(&str, f32, f32); 13] = [
+        ("arial", 8.0, 0.902),
+        ("arial", 9.0, 0.929),
+        ("arial", 10.0, 0.9695),
+        ("arial", 11.0, 0.9604),
+        ("arial", 12.0, 0.9824),
+        ("arial", 14.0, 0.9514),
+        ("calibri", 10.0, 1.0224),
+        ("calibri", 11.0, 0.9643),
+        ("calibri", 12.0, 0.9894),
+        ("aptos narrow", 11.0, 1.0133),
+        ("times new roman", 12.0, 0.9604),
+        ("verdana", 10.0, 1.0133),
+        ("courier new", 10.0, 0.851),
+    ];
+    // Automatic rows at the default height (Letter pages of 1..300).
+    const AUTO_ROW: [(&str, f32, f32); 3] = [("arial", 10.0, 0.9224), ("calibri", 11.0, 0.92), ("aptos narrow", 11.0, 0.968)];
+    if !font.size.is_finite() {
+        return (1.0, 1.0, 1.0);
+    }
+    let size = font.size.clamp(1.0, 409.0);
+    let col = DIGIT.iter().find(|(n, _)| *n == name).map_or(1.0, |(_, digit)| (digit * (size * 600.0 / 72.0).round()).round() * 72.0 / 600.0 / 5.25);
+    let find = |table: &[(&str, f32, f32)]| table.iter().find(|(n, s, _)| *n == name && (*s - size).abs() < 0.01).map(|(_, _, f)| *f);
+    let row = find(&ROW).unwrap_or(1.0);
+    (col, row, find(&AUTO_ROW).unwrap_or(row))
+}
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 /// Cells in a page block above which only stored cells are visited (not every grid position).
@@ -129,11 +171,31 @@ pub struct SheetLayout {
     pub heading_h: f32,
     /// Manual page breaks apply (they don't when the sheet is fitted to pages).
     pub manual_breaks: bool,
+    /// Printed column width, set row height and automatic row height per shown one (see
+    /// [`grid_print_scale`]).
+    pub col_k: f32,
+    pub row_k: f32,
+    pub auto_row_k: f32,
 }
 
 impl SheetLayout {
     fn k(&self) -> f32 {
         PX_TO_PT * self.scale
+    }
+    /// Points per sheet pixel of column width on the page.
+    fn kx(&self) -> f32 {
+        self.k() * self.col_k
+    }
+    /// A column's width / a row's height as pages break, in sheet pixels before scaling.
+    fn col_w(&self, sh: &Sheet, c: u32) -> f32 {
+        sh.col_width(c) * self.col_k
+    }
+    fn row_h(&self, sh: &Sheet, r: u32) -> f32 {
+        sh.row_height(r) * self.row_k
+    }
+    /// A row's height as drawn: an automatic row comes out lower than pages broke for.
+    fn drawn_row_h(&self, sh: &Sheet, r: u32) -> f32 {
+        sh.row_height(r) * if sh.rows.get(&r).is_some_and(|i| i.custom) { self.row_k } else { self.auto_row_k }
     }
     pub(crate) fn avail(&self) -> (f32, f32) {
         let [l, r, t, b, ..] = self.margins;
@@ -275,6 +337,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
         Some(false) => None,
         None => st.fit_to.filter(|(w, h)| *w > 0 || *h > 0),
     };
+    let (col_k, row_k, auto_row_k) = grid_print_scale(&wb.styles.get(StyleId::DEFAULT).font);
     let mut lay = SheetLayout {
         sheet: si,
         settings: st.clone(),
@@ -291,6 +354,9 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
         heading_w,
         heading_h,
         manual_breaks: fit.is_none(),
+        col_k,
+        row_k,
+        auto_row_k,
     };
     let paginate = |lay: &mut SheetLayout, manual: bool| {
         lay.manual_breaks = manual;
@@ -307,11 +373,11 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     };
     match fit {
         Some((fw, fh)) => {
-            let total_w: f32 = (area.start.col..=area.end.col).map(|c| sh.col_width(c)).sum::<f32>() + heading_w;
+            let total_w: f32 = (area.start.col..=area.end.col).map(|c| lay.col_w(sh, c)).sum::<f32>() + heading_w;
             let total_h: f32 = if area.height() > 200_000 {
                 f32::INFINITY
             } else {
-                (area.start.row..=area.end.row).map(|r| sh.row_height(r)).sum::<f32>() + heading_h
+                (area.start.row..=area.end.row).map(|r| lay.row_h(sh, r)).sum::<f32>() + heading_h
             };
             let (aw, ah) = lay.avail();
             let sw = if fw > 0 { aw * fw as f32 / (total_w * PX_TO_PT).max(1.0) } else { f32::INFINITY };
@@ -347,19 +413,19 @@ pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Vec<(u3
     let (title_rows, title_cols) = (lay.title_rows, lay.title_cols);
     let title_h = |start: u32| -> f32 {
         match title_rows {
-            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|r| sh.row_height(r)).sum(),
+            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|r| lay.row_h(sh, r)).sum(),
             _ => 0.0,
         }
     };
     let title_w = |start: u32| -> f32 {
         match title_cols {
-            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|c| sh.col_width(c)).sum(),
+            Some((a, b)) if a < start => (a..=b.min(start - 1)).map(|c| lay.col_w(sh, c)).sum(),
             _ => 0.0,
         }
     };
     let area = lay.area;
-    let rows = bands(area.start.row, area.end.row, |r| sh.row_height(r), |start| (ah - lay.heading_h - title_h(start)).max(1.0), &rb, cap);
-    let cols = bands(area.start.col, area.end.col, |c| sh.col_width(c), |start| (aw - lay.heading_w - title_w(start)).max(1.0), &cb, cap);
+    let rows = bands(area.start.row, area.end.row, |r| lay.row_h(sh, r), |start| (ah - lay.heading_h - title_h(start)).max(1.0), &rb, cap);
+    let cols = bands(area.start.col, area.end.col, |c| lay.col_w(sh, c), |start| (aw - lay.heading_w - title_w(start)).max(1.0), &cb, cap);
     (rows, cols)
 }
 
@@ -826,8 +892,16 @@ struct Block<'a> {
     xs: Vec<f32>,
     ys: Vec<f32>,
     k: f32,
+    /// Points per sheet pixel of column width (see [`SheetLayout::kx`]).
+    kx: f32,
+    /// Printed per shown height of set and automatic rows (see [`grid_print_scale`]).
+    row_k: f32,
+    auto_row_k: f32,
     scale: f32,
 }
+
+/// Rows a position outside its block is summed over, at most; farther ones use the set-row factor.
+const MAX_SUMMED_ROWS: u32 = 100_000;
 
 impl Block<'_> {
     fn x(&self, col: u32) -> f32 {
@@ -835,14 +909,32 @@ impl Block<'_> {
             return self.xs.get((col - self.cols.0) as usize).copied().unwrap_or(0.0);
         }
         let x0 = self.xs.first().copied().unwrap_or(0.0);
-        x0 + ((self.sh.col_left(col) - self.sh.col_left(self.cols.0)) as f32) * self.k
+        x0 + ((self.sh.col_left(col) - self.sh.col_left(self.cols.0)) as f32) * self.kx
     }
+    /// Points per sheet pixel of row `r`'s height on the page.
+    fn ky_of(&self, r: u32) -> f32 {
+        self.k * if self.sh.rows.get(&r).is_some_and(|i| i.custom) { self.row_k } else { self.auto_row_k }
+    }
+    /// Page y of a row's top edge: exact inside the block, the printed heights summed outside it.
     fn y(&self, row: u32) -> f32 {
         if row >= self.rows.0 && row <= self.rows.1 + 1 {
             return self.ys.get((row - self.rows.0) as usize).copied().unwrap_or(0.0);
         }
-        let y0 = self.ys.first().copied().unwrap_or(0.0);
-        y0 + ((self.sh.row_top(row) - self.sh.row_top(self.rows.0)) as f32) * self.k
+        let (top, bottom) = (self.ys.first().copied().unwrap_or(0.0), self.ys.last().copied().unwrap_or(0.0));
+        let (from, to) = if row < self.rows.0 { (row, self.rows.0) } else { (self.rows.1.saturating_add(1), row) };
+        let span = if to - from <= MAX_SUMMED_ROWS {
+            (from..to).map(|r| self.sh.row_height(r) * self.ky_of(r)).sum::<f32>()
+        } else {
+            (self.sh.row_top(to) - self.sh.row_top(from)) as f32 * self.k * self.row_k
+        };
+        if row < self.rows.0 { top - span } else { bottom + span }
+    }
+    /// Page rectangle of an object anchored at a cell: it moves with the printed grid and keeps
+    /// its size.
+    fn place(&self, a: &Anchor) -> (f32, f32, f32, f32) {
+        let x = self.x(a.cell.col) + a.dx * self.kx;
+        let y = self.y(a.cell.row) + a.dy * self.ky_of(a.cell.row);
+        (x, y, a.width.max(0.0) * self.k, a.height.max(0.0) * self.k)
     }
     fn rect(&self, r: RangeRef) -> (f32, f32, f32, f32) {
         let (x0, y0) = (self.x(r.start.col), self.y(r.start.row));
@@ -1022,7 +1114,9 @@ struct PrintedBlock {
     cols: (u32, u32),
     x: f32,
     y: f32,
-    k: f32,
+    kx: f32,
+    /// Page y of each row's top edge in the block (rows print by different factors).
+    ys: Vec<f32>,
 }
 
 /// PDF annotations are not affected by graphics clipping, so intersect each cell with its page
@@ -1059,8 +1153,8 @@ fn printed_target(wb: &Workbook, blocks: &[PrintedBlock], source_sheet: usize, t
     let cell = RangeRef::parse(&range.replace('$', ""))?.start;
     let sh = wb.sheet(sheet)?;
     let block = blocks.iter().find(|b| b.sheet == sheet && (b.rows.0..=b.rows.1).contains(&cell.row) && (b.cols.0..=b.cols.1).contains(&cell.col))?;
-    let x = block.x + (sh.col_left(cell.col) - sh.col_left(block.cols.0)) as f32 * block.k;
-    let y = block.y + (sh.row_top(cell.row) - sh.row_top(block.rows.0)) as f32 * block.k;
+    let x = block.x + (sh.col_left(cell.col) - sh.col_left(block.cols.0)) as f32 * block.kx;
+    let y = block.ys.get((cell.row - block.rows.0) as usize).copied().unwrap_or(block.y);
     Some((block.page, x, y))
 }
 
@@ -1196,7 +1290,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;
-    let across = if spans { center_across_width(&wb.styles, sh, c, merges) * b.k } else { 0.0 };
+    let across = if spans { center_across_width(&wb.styles, sh, c, merges) * b.kx } else { 0.0 };
     let (mut clip_l, mut clip_r) = (x, x + w + across);
     if !wrap && !merged && !is_num && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
@@ -1208,7 +1302,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
                 if !empty_for_overflow(sh, nc, merges) {
                     break;
                 }
-                let cw = sh.col_width(nc.col) * b.k;
+                let cw = sh.col_width(nc.col) * b.kx;
                 ext += cw;
                 need -= cw;
                 col += dir;
@@ -1327,7 +1421,6 @@ fn draw_objects(
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
@@ -1336,7 +1429,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, w, h) = place(r);
+        let (x, y, w, h) = b.place(&im.anchor);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
@@ -1349,7 +1442,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, w, h) = place(r);
+        let (x, y, w, h) = b.place(&shp.anchor);
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for ch in &sh.charts {
@@ -1357,7 +1450,7 @@ fn draw_objects(
         if !visible(r) {
             continue;
         }
-        let (x, y, _, _) = place(r);
+        let (x, y, _, _) = b.place(&ch.anchor);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
@@ -1508,22 +1601,22 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
 
 /// Builds a block for rows × cols positioned at (x, y) on the page.
 fn make_block<'a>(wb: &'a Workbook, si: usize, sh: &'a Sheet, rows: (u32, u32), cols: (u32, u32), x: f32, y: f32, lay: &SheetLayout) -> Block<'a> {
-    let k = lay.k();
+    let (k, kx) = (lay.k(), lay.kx());
     let mut xs = Vec::with_capacity((cols.1 - cols.0 + 2) as usize);
     let mut acc = x;
     xs.push(acc);
     for c in cols.0..=cols.1 {
-        acc += sh.col_width(c) * k;
+        acc += sh.col_width(c) * kx;
         xs.push(acc);
     }
     let mut ys = Vec::with_capacity((rows.1 - rows.0 + 2) as usize);
     let mut acc = y;
     ys.push(acc);
     for r in rows.0..=rows.1 {
-        acc += sh.row_height(r) * k;
+        acc += lay.drawn_row_h(sh, r) * k;
         ys.push(acc);
     }
-    Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale }
+    Block { wb, si, sh, rows, cols, xs, ys, k, kx, row_k: lay.row_k, auto_row_k: lay.auto_row_k, scale: lay.scale }
 }
 
 /// Segments of a page along one axis: repeated titles (before the band) then the band.
@@ -1538,8 +1631,13 @@ fn segments(titles: Option<(u32, u32)>, band: (u32, u32)) -> Vec<(u32, u32)> {
     v
 }
 
-fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
-    if rows { (seg.0..=seg.1).map(|r| sh.row_height(r)).sum() } else { (seg.0..=seg.1).map(|c| sh.col_width(c)).sum() }
+/// Printed size of a segment in points.
+fn seg_size(sh: &Sheet, lay: &SheetLayout, seg: (u32, u32), rows: bool) -> f32 {
+    if rows {
+        (seg.0..=seg.1).map(|r| lay.drawn_row_h(sh, r)).sum::<f32>() * lay.k()
+    } else {
+        (seg.0..=seg.1).map(|c| sh.col_width(c)).sum::<f32>() * lay.kx()
+    }
 }
 
 /// Renders laid-out sheets to a PDF.
@@ -1565,8 +1663,8 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
-            let content_w = (lay.heading_w + csegs.iter().map(|s| seg_size(sh, *s, false)).sum::<f32>()) * k;
-            let content_h = (lay.heading_h + rsegs.iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
+            let content_w = lay.heading_w * k + csegs.iter().map(|s| seg_size(sh, lay, *s, false)).sum::<f32>();
+            let content_h = lay.heading_h * k + rsegs.iter().map(|s| seg_size(sh, lay, *s, true)).sum::<f32>();
             let ox = lay.margins[0] + if lay.settings.center_h { ((aw - content_w) / 2.0).max(0.0) } else { 0.0 };
             let oy = lay.margins[2] + if lay.settings.center_v { ((ah - content_h) / 2.0).max(0.0) } else { 0.0 };
             let page_index = doc.page_count();
@@ -1579,16 +1677,16 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
+                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, kx: b.kx, ys: b.ys.clone() });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
-                    x += seg_size(sh, *cs, false) * k;
+                    x += seg_size(sh, lay, *cs, false);
                     if rsi + 1 == rsegs.len() && csi + 1 == csegs.len() {
                         body = Some(b);
                     }
                 }
-                y += seg_size(sh, *rs, true) * k;
+                y += seg_size(sh, lay, *rs, true);
             }
             if let Some(b) = &body {
                 draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
@@ -1956,20 +2054,21 @@ mod tests {
         let mut s = s();
         let rows: Vec<Vec<Json>> = (1..=300).map(|i| vec![json!(i)]).collect();
         s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
-        // 684pt of printable height / 15pt rows = 45 rows per page → 7 pages.
+        // 684pt of printable height; pages break as if Calibri 11's 15pt rows were 14.46pt
+        // (grid_print_scale) = 47 rows per page → 7 pages, as Excel prints the same sheet.
         let (pdf, pages) = pdf_of(&mut s, json!({}));
         assert_eq!(pages, 7);
         assert!(pdf.starts_with(b"%PDF-1.7"));
         assert!(contains(&pdf, "/Count 7"));
         let pv = s.execute("file.printPreview", json!({})).unwrap();
         assert_eq!(pv["pages"], 7);
-        assert_eq!(pv["pageList"][0]["rows"], "1:45");
-        assert_eq!(pv["pageList"][1]["rows"], "46:90");
-        assert_eq!(s.execute("file.printPreview", json!({"page": 7})).unwrap()["page"]["rows"], "271:300");
+        assert_eq!(pv["pageList"][0]["rows"], "1:47");
+        assert_eq!(pv["pageList"][1]["rows"], "48:94");
+        assert_eq!(s.execute("file.printPreview", json!({"page": 7})).unwrap()["page"]["rows"], "283:300");
         assert!(s.execute("file.printPreview", json!({"page": 8})).is_err());
-        // Landscape: 504pt / 15 = 33 rows per page → 10 pages.
+        // Landscape: 504pt / 14.46 = 34 rows per page → 9 pages.
         s.execute("pageLayout.pageSetup", json!({"orientation": "landscape"})).unwrap();
-        assert_eq!(pdf_of(&mut s, json!({})).1, 10);
+        assert_eq!(pdf_of(&mut s, json!({})).1, 9);
         // Fit to one page.
         assert_eq!(pdf_of(&mut s, json!({"fitToPage": true})).1, 1);
         s.execute("pageLayout.pageSetup", json!({"fitWidth": 1, "fitHeight": 2, "orientation": "portrait"})).unwrap();
@@ -1978,8 +2077,8 @@ mod tests {
         s.execute("pageLayout.pageSetup", json!({"scale": 100, "rowBreaks": [11], "titleRows": "1:1"})).unwrap();
         let pv = s.execute("file.printPreview", json!({})).unwrap();
         assert_eq!(pv["pageList"][0]["rows"], "1:10");
-        // Title row takes one line on later pages: 44 body rows.
-        assert_eq!(pv["pageList"][1]["rows"], "11:54");
+        // Title row takes one line on later pages: 46 body rows.
+        assert_eq!(pv["pageList"][1]["rows"], "11:56");
     }
 
     #[test]
@@ -1988,11 +2087,35 @@ mod tests {
         let rows: Vec<Vec<Json>> = (0..60).map(|r| (0..15).map(|c| json!(r * 100 + c)).collect()).collect();
         s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
         let pv = s.execute("file.printPreview", json!({})).unwrap();
-        // 511.2pt / 48pt = 10 columns per page; 45 rows per page.
+        // Calibri 11's 8.43-character columns print 51.6pt wide (observed): 511.2pt holds 9 of
+        // them; 47 rows per page.
         assert_eq!(pv["pages"], 4);
-        assert_eq!(pv["pageList"][0]["range"], "A1:J45");
-        assert_eq!(pv["pageList"][1]["range"], "A46:J60");
-        assert_eq!(pv["pageList"][2]["range"], "K1:O45");
+        assert_eq!(pv["pageList"][0]["range"], "A1:I47");
+        assert_eq!(pv["pageList"][1]["range"], "A48:I60");
+        assert_eq!(pv["pageList"][2]["range"], "J1:O47");
+    }
+
+    /// The factors against Excel's prints of synthetic workbooks at 100 %: columns of a set width
+    /// or the standard width, 40 rows of 12pt and 5 of 30pt, Letter pages of default rows.
+    #[test]
+    fn grid_prints_with_the_normal_fonts_metrics_at_600_dpi() {
+        let font = |name: &str, size: f32| gridcraft_model::Font { name: name.into(), size, ..Default::default() };
+        let near = |a: f32, b: f32| (a - b).abs() < 0.002;
+        // Arial 10: 46 printer pixels per character (5.52pt, shown 5.25pt).
+        let (col, row, auto) = grid_print_scale(&font("Arial", 10.0));
+        assert!(near(col, 1.0514) && near(row, 0.9695) && near(auto, 0.9224), "{col} {row} {auto}");
+        // Printed points per character of width: Calibri 11 5.64, Arial 8 4.44, Arial 14 7.80,
+        // Verdana 10 6.36 (observed: a 10-character Arial 8 column, 65/6 characters in the file,
+        // prints 48.1pt).
+        let per_char = |name: &str, size: f32| grid_print_scale(&font(name, size)).0 * 5.25;
+        assert!(near(per_char("Calibri", 11.0), 5.64));
+        assert!(near(per_char("arial", 8.0), 4.44));
+        assert!(near(per_char("Arial", 14.0), 7.80));
+        assert!(near(per_char("Verdana", 10.0), 6.36));
+        // A size with no row measurement scales its columns only; an unknown font prints as shown.
+        assert_eq!(grid_print_scale(&font("Arial", 10.5)).1, 1.0);
+        assert_eq!(grid_print_scale(&font("Some Font", 10.0)), (1.0, 1.0, 1.0));
+        assert_eq!(grid_print_scale(&font("Arial", f32::NAN)), (1.0, 1.0, 1.0));
     }
 
     #[test]
@@ -2173,6 +2296,35 @@ mod tests {
         if charts > 0 {
             assert!(contains(&pdf, "(Apples) Tj") || contains(&pdf, "(Qty) Tj"));
         }
+    }
+
+    /// Set and automatic rows print by different factors; a picture anchored at a row still sits on
+    /// that row's printed edge (not where an average factor would put it).
+    #[test]
+    fn a_picture_sits_on_its_rows_printed_edge_among_set_and_automatic_rows() {
+        let mut s = s();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "points": 40})).unwrap();
+        s.execute("home.borders", json!({"range": "A8", "preset": "top", "style": "thick"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C12", "input": "x"})).unwrap();
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255])))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let id = wb.next_object_id();
+        let anchor = Anchor { cell: CellRef::new(7, 0), dx: 0.0, dy: 0.0, width: 40.0, height: 20.0, mode: gridcraft_model::AnchorMode::MoveAndSize };
+        wb.sheet_mut(0).unwrap().images.push(Image { id, anchor, data: png.into(), mime: "image/png".into(), alt: String::new() });
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let text = String::from_utf8_lossy(&pdf);
+        // The picture: `q w 0 0 h x y cm /Im1 Do Q`, its top at y + h (PDF y grows up).
+        let cm: Vec<f32> = text.split(" cm /Im1").next().unwrap().rsplit("q ").next().unwrap().split(' ').map(|v| v.parse().unwrap()).collect();
+        let top = cm[5] + cm[3];
+        // The thick border on A8's top edge: `x0 y m x1 y l S` at that same height.
+        let border = text
+            .lines()
+            .any(|l| l.ends_with(" l S") && l.split(' ').nth(1).and_then(|y| y.parse::<f32>().ok()).is_some_and(|y| (y - top).abs() < 0.05));
+        assert!(border, "picture top {top} has no border line at its height");
     }
 
     #[test]

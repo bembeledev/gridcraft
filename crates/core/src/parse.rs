@@ -54,23 +54,25 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
 /// fractions kept as text are not flagged, as in Excel.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
     let t = s.trim();
-    match t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        Some(inner) => parse_plain(inner.trim()).map(|(n, _)| -n),
+    // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
+    match parenthesized(t) {
+        Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
+        Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
         None => parse_plain(t).map(|(n, _)| n),
     }
 }
 
 fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
-    // Parenthesised negatives: (100) = -100. Each level negates, so ((100)) = 100. Stripped in a
-    // loop, not by recursion: runtime text (e.g. from REPT) can nest thousands deep (#2180).
-    let mut t = t;
-    let mut neg = false;
-    while let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        t = inner.trim();
-        neg = !neg;
+    // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
+    if let Some(inner) = parenthesized(t) {
+        // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
+        if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
+            return None;
+        }
+        let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
+        return r.map(|(n, f)| (-n, f));
     }
-    let (n, f) = parse_unparenthesised(t, sys)?;
-    Some((if neg { -n } else { n }, f))
+    parse_unparenthesised(t, sys)
 }
 
 fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
@@ -87,6 +89,22 @@ fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'stat
         return Some(r);
     }
     None
+}
+
+/// The number inside accounting parentheses, as plain text: `(5)` gives `5`. A dollar sign may
+/// stand before them (`$(5)` reads as `($5)`) and a percent sign after them (`(5)%` reads as
+/// `(5%)`), with spaces around either. The caller reads only a plain number or a fraction from it.
+fn parenthesized(t: &str) -> Option<String> {
+    let (currency, rest) = match t.strip_prefix('$') {
+        Some(r) => ("$", r.trim_start()),
+        None => ("", t),
+    };
+    let rest = rest.strip_prefix('(')?;
+    let (body, percent) = match rest.strip_suffix(')') {
+        Some(b) => (b, ""),
+        None => (rest.strip_suffix('%')?.trim_end().strip_suffix(')')?, "%"),
+    };
+    Some(format!("{currency}{}{percent}", body.trim()))
 }
 
 /// Signs, currency, thousands separators, percent, exponent.
@@ -113,7 +131,8 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
         percent = true;
         s = r.trim_end();
     }
-    if s.is_empty() {
+    // Excel reads `$5` and `5%` but not `$5%`.
+    if s.is_empty() || currency && percent {
         return None;
     }
     let has_sep = s.contains(',');
@@ -167,7 +186,8 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
 }
 
 /// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
-/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept.
+/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept, and digits too many for a
+/// finite number (#2163).
 fn plain_number(s: &str, frac: bool) -> Option<f64> {
     let (int, dec) = match s.split_once('.') {
         Some((i, d)) if frac => (i, Some(d)),
@@ -177,7 +197,7 @@ fn plain_number(s: &str, frac: bool) -> Option<f64> {
     if !digits(int) || dec.is_some_and(|d| !digits(d)) {
         return None;
     }
-    s.parse().ok()
+    s.parse().ok().filter(|x: &f64| x.is_finite())
 }
 
 /// `1/2` (only with a whole part, else it's a date), `1 1/2`, `0 3/4`.
@@ -192,6 +212,9 @@ fn parse_fraction(t: &str) -> Option<f64> {
         return None;
     }
     let v = w + a / b;
+    if !v.is_finite() {
+        return None;
+    }
     Some(if neg { -v } else { v })
 }
 
@@ -366,6 +389,17 @@ mod tests {
         parse_input(s, DateSystem::D1900)
     }
 
+    /// #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
+    #[test]
+    fn overlong_digits_stay_text() {
+        let big = "9".repeat(400);
+        for s in [format!("1 {big}/{big}"), format!("1 {big}/2"), format!("1 1/{big}0"), format!("{big}:00"), format!("1:00:{big}.5")] {
+            assert_eq!(p(&s).value, Value::text(s.as_str()), "{s}");
+            assert_eq!(parse_number_text(&s), None, "{s}");
+        }
+        assert_eq!(parse_number_text("1 1/2"), Some(1.5));
+    }
+
     #[test]
     fn non_digit_time_and_fraction_parts_stay_text() {
         for s in ["1:nan", "nan:30", "1:30:NaN", "1 nan/2", "1 1/nan", "inf:00", "1e1:00", "+5:00"] {
@@ -407,20 +441,107 @@ mod tests {
         assert_eq!(p(".5").value, Value::Number(0.5));
     }
 
+    /// Observed in Excel 365 (en-US): typed entry, VALUE and `--"text"` agree.
+    #[test]
+    fn accounting_parentheses() {
+        let accepted: [(&str, f64, Option<&str>); 22] = [
+            ("$(5)", -5.0, Some("\"$\"#,##0")),
+            ("$ (5)", -5.0, Some("\"$\"#,##0")),
+            ("$( 5 )", -5.0, Some("\"$\"#,##0")),
+            ("$ ( 1,234 )", -1234.0, Some("\"$\"#,##0")),
+            ("$(1,234)", -1234.0, Some("\"$\"#,##0")),
+            ("$(1,000.50)", -1000.5, Some("\"$\"#,##0.00")),
+            ("$(1,234.)", -1234.0, Some("\"$\"#,##0.00")),
+            ("$(.5)", -0.5, Some("\"$\"#,##0.00")),
+            ("$(0)", 0.0, Some("\"$\"#,##0")),
+            (" $(5) ", -5.0, Some("\"$\"#,##0")),
+            ("($5)", -5.0, Some("\"$\"#,##0")),
+            ("( $ 1,234 )", -1234.0, Some("\"$\"#,##0")),
+            ("(5)", -5.0, None),
+            ("( 5 )", -5.0, None),
+            ("(1,234.5)", -1234.5, Some("#,##0.00")),
+            ("(1e-3)", -0.001, Some("0.00E+00")),
+            ("(5)%", -0.05, Some("0%")),
+            ("( 5 ) %", -0.05, Some("0%")),
+            ("(5%)", -0.05, Some("0%")),
+            ("(5.)%", -0.05, Some("0.00%")),
+            ("(1,234)%", -12.34, Some("0%")),
+            ("(1 1/2)", -1.5, Some("# ?/?")),
+        ];
+        for (s, n, f) in accepted {
+            assert_eq!(p(s), Parsed { value: Value::Number(n), format: f }, "{s}");
+            assert_eq!(parse_number_text(s), Some(n), "{s}");
+        }
+        for s in [
+            "$5%",
+            "$(5%)",
+            "$(5)%",
+            "($5%)",
+            "($5)%",
+            "$ ( 5 ) %",
+            "(5)%%",
+            "(5%)%",
+            "((5))",
+            "(-5)",
+            "(+5)",
+            "($-5)",
+            "($ -5)",
+            "($+5)",
+            "(-$5)",
+            "$(-5)",
+            "$ (-5)",
+            "$(+5)",
+            "-(5)",
+            "-$(5)",
+            "+$(5)",
+            "$+(5)",
+            "$$(5)",
+            "$ $(5)",
+            "$((5))",
+            "($(5))",
+            "(-1 1/2)",
+            "()",
+            "$()",
+            "(5)$",
+            "$(5)$",
+            "(5)(5)",
+            "$(5)0",
+            "(5)e3",
+            "(5)-",
+            "(5-)",
+            "$(5-)",
+            "$(5",
+            "$5)",
+            "(5",
+            "$(1,23)",
+            "$(,5)",
+            "(5e)",
+            "(1/2)",
+            "$(1/2)",
+            "(3/4/2026)",
+            "$(3/4/2026)",
+            "(10:30)",
+            "$(10:30)",
+        ] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+            assert_eq!(parse_number_text(s), None, "{s}");
+        }
+    }
+
     #[test]
     fn deeply_nested_parentheses_do_not_overflow() {
-        // #2180: coercion used to recurse once per parenthesis and overflow the stack.
+        // #2180: coercion used to recurse once per parenthesis and overflow the stack. Excel reads
+        // one pair only, so nesting is text now, and it is rejected without recursing.
         let depth = 100_000;
         let s = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
-        assert_eq!(parse_number_text(&s), Some(1.0));
+        assert_eq!(parse_number_text(&s), None);
+        assert_eq!(p(&s).value, Value::text(s.as_str()));
         let odd = format!("{}1{}", "(".repeat(depth + 1), ")".repeat(depth + 1));
-        assert_eq!(parse_number_text(&odd), Some(-1.0));
+        assert_eq!(parse_number_text(&odd), None);
         let unbalanced = format!("{}1{}", "(".repeat(depth), ")".repeat(depth - 1));
         assert_eq!(parse_number_text(&unbalanced), None);
-        assert_eq!(p(&s).value, Value::Number(1.0));
-        // Existing results are unchanged.
+        // A single pair still reads.
         assert_eq!(parse_number_text("(100)"), Some(-100.0));
-        assert_eq!(parse_number_text("((100))"), Some(100.0));
         assert_eq!(parse_number_text("( $1,200.50 )"), Some(-1200.5));
         assert_eq!(parse_number_text("()"), None);
     }
@@ -474,11 +595,21 @@ mod tests {
 
     #[test]
     fn numbers_stored_as_text() {
-        for (text, n) in [("123", 123.0), (" 42 ", 42.0), ("-1,000.5", -1000.5), ("$3", 3.0), ("50%", 0.5), ("1E3", 1000.0), ("(100)", -100.0)] {
+        for (text, n) in [
+            ("123", 123.0),
+            (" 42 ", 42.0),
+            ("-1,000.5", -1000.5),
+            ("$3", 3.0),
+            ("50%", 0.5),
+            ("1E3", 1000.0),
+            ("(100)", -100.0),
+            ("$(5)", -5.0),
+            ("(5)%", -0.05),
+        ] {
             assert_eq!(number_stored_as_text(text), Some(n), "{text}");
         }
         // Dates, times, fractions, words and blanks are not flagged.
-        for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))"] {
+        for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
         }
     }

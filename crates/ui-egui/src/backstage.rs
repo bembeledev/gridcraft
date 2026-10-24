@@ -116,6 +116,8 @@ pub struct Backstage {
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
     preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the previewed page as it prints, for (preview key, page number).
+    preview_ops: Option<(((u64, u64, bool, bool), usize), Option<Arc<crate::print_preview::PreviewPage>>)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -136,6 +138,7 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            preview_ops: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }
@@ -754,18 +757,32 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             let last = pages.len().saturating_sub(1);
             bs.preview_page = bs.preview_page.min(last);
             let Some(page) = pages.get(bs.preview_page) else { return };
-            // Paper proportions from the preview (points); hostile sizes fall back to Letter.
-            let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
-            let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
-            let scale = (520.0 / h).min(440.0 / w);
+            // The page as it prints, drawn once per page and revision.
+            let number = page.get("page").and_then(Json::as_u64).map_or(bs.preview_page + 1, |n| n as usize);
+            if bs.preview_ops.as_ref().is_none_or(|(k, _)| *k != (key, number)) {
+                let drawn = gridcraft_engine::cmd::print::preview_page(&app.session, &params, number).ok().flatten();
+                let drawn = drawn.map(|(width, height, ops)| Arc::new(crate::print_preview::PreviewPage { width, height, ops }));
+                bs.preview_ops = Some(((key, number), drawn));
+            }
+            // Paper proportions from the drawn page, else the preview (points); hostile sizes fall
+            // back to Letter.
+            let drawn = bs.preview_ops.as_ref().and_then(|(_, d)| d.as_ref()).map(|d| (d.width as f64, d.height as f64));
+            let size = |key: &str, from: Option<f64>, letter: f64| {
+                from.or_else(|| page.get(key).and_then(Json::as_f64)).filter(|v| v.is_finite() && *v > 1.0).unwrap_or(letter) as f32
+            };
+            let (w, h) = (size("width", drawn.map(|d| d.0), 612.0), size("height", drawn.map(|d| d.1), 792.0));
+            // As large as the pane allows, room left for the page line and buttons below.
+            let room = ui.available_size();
+            let scale = ((room.y - 70.0).max(360.0) / h).min(room.x.max(300.0) / w);
             let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
             let p = ui.painter();
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
-            p.rect_filled(rect, 2.0, t.grid_bg);
-            p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
+            // Paper is white, as printed, in either theme.
+            p.rect_filled(rect, 2.0, Color32::WHITE);
+            if let Some((_, Some(drawn))) = &bs.preview_ops {
+                crate::print_preview::paint(p, rect, drawn, ui.ctx());
             }
+            p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
             ui.add_space(4.0);
@@ -786,74 +803,6 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             });
         });
     });
-}
-
-/// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
-const PREVIEW_ROWS: u32 = 200;
-const PREVIEW_COLS: u32 = 60;
-
-/// Draws one printed page in miniature: the cells' displayed text at the page's print scale,
-/// inside the sheet's margins. `paper_w` is the page width in points.
-fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
-    let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
-    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
-    // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
-    let per_pt = rect.width() / paper_w;
-    let print_scale =
-        page.get("scale").and_then(Json::as_f64).filter(|s| s.is_finite() && *s > 0.0).map_or(1.0, |s| (s / 100.0) as f32).clamp(0.1, 4.0);
-    let per_px = per_pt * 0.75 * print_scale;
-    let margin =
-        |i: usize, default: f32| sh.print.margins.get(i).copied().filter(|m| m.is_finite()).unwrap_or(default).clamp(0.0, 3.0) * 72.0 * per_pt;
-    let body = Rect::from_min_max(
-        pos2(rect.left() + margin(0, 0.7), rect.top() + margin(2, 0.75)),
-        pos2(rect.right() - margin(1, 0.7), rect.bottom() - margin(3, 0.75)),
-    );
-    if !body.is_positive() {
-        return;
-    }
-    let font = theme::ui_font((11.0 * per_pt * print_scale).clamp(3.0, 14.0));
-    let last_row = range.end.row.min(range.start.row.saturating_add(PREVIEW_ROWS));
-    let last_col = range.end.col.min(range.start.col.saturating_add(PREVIEW_COLS));
-    let mut y = body.top();
-    for row in range.start.row..=last_row {
-        let h = sh.row_height(row) * per_px;
-        if h <= 0.0 {
-            continue;
-        }
-        if y >= body.bottom() {
-            break;
-        }
-        let mut x = body.left();
-        for col in range.start.col..=last_col {
-            let w = sh.col_width(col) * per_px;
-            if w <= 0.0 {
-                continue;
-            }
-            if x >= body.right() {
-                break;
-            }
-            let cell = gridcraft_engine::core::CellRef::new(row, col);
-            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
-            if !text.is_empty() {
-                let numeric = sh.value(cell).as_f64().is_some();
-                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
-                let mut span = w;
-                if !numeric {
-                    let mut next = col.saturating_add(1);
-                    while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
-                        span += sh.col_width(next) * per_px;
-                        next = next.saturating_add(1);
-                    }
-                }
-                let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
-                let (anchor, at) =
-                    if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
-                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
-            }
-            x += w;
-        }
-        y += h;
-    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {

@@ -318,3 +318,69 @@ fn cjk_text_is_not_replaced_by_question_marks() {
     // Measured as full-width glyphs, matching the CID font's default width.
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
 }
+
+#[test]
+fn a_recording_document_keeps_what_each_page_draws() {
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    p.save();
+    p.clip_rect(10.0, 10.0, 100.0, 50.0);
+    p.fill_rect(10.0, 10.0, 20.0, 20.0, [255, 0, 0]);
+    p.text(12.0, 30.0, 10.0, Font::HelveticaBold, [0, 0, 0], "Total");
+    p.text_rotated(12.0, 45.0, 9.0, Font::TimesItalic, [0, 0, 0], "Note", 0.5);
+    p.image_rgba(0.0, 0.0, 2.0, 1.0, &[1, 2, 3, 255, 4, 5, 6, 255], 2, 1);
+    p.fill_rect(0.0, 0.0, f32::NAN, 1.0, [0, 0, 0]);
+    p.restore();
+    let ops = doc.page(0).unwrap().ops();
+    assert!(matches!(ops[0], Op::Save) && matches!(ops[1], Op::Clip { w: 100.0, .. }) && matches!(ops[2], Op::FillRect { .. }));
+    let Op::Text(t) = &ops[3] else { panic!("{:?}", ops[3]) };
+    assert_eq!((t.family.as_str(), t.bold, t.italic, t.text.as_str()), ("Helvetica", true, false, "Total"));
+    let Op::Text(t) = &ops[4] else { panic!("{:?}", ops[4]) };
+    assert_eq!((t.family.as_str(), t.italic, t.angle, t.y), ("Times", true, 0.5, 45.0));
+    assert!(matches!(&ops[5], Op::Image { pw: 2, ph: 1, rgba, .. } if rgba.len() == 8));
+    assert!(matches!(ops[6], Op::Restore) && ops.len() == 7, "what isn't drawn isn't recorded");
+    // An ordinary document keeps nothing.
+    let mut doc = PdfDoc::new();
+    doc.add_page(595.0, 842.0).fill_rect(0.0, 0.0, 1.0, 1.0, [0, 0, 0]);
+    assert!(doc.page(0).unwrap().ops().is_empty());
+}
+
+#[test]
+fn a_full_page_records_no_more_than_its_pdf_draws() {
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    // Past the page's content limit (64 MiB), as a huge cell can take it.
+    let big = "x".repeat(8 * 1024 * 1024);
+    for _ in 0..9 {
+        p.text(0.0, 10.0, 10.0, Font::Helvetica, [0, 0, 0], &big);
+    }
+    let before = p.ops().len();
+    p.save();
+    p.clip_rect(0.0, 0.0, 10.0, 10.0);
+    p.fill_rect(0.0, 0.0, 1.0, 1.0, [0, 0, 0]);
+    p.image_rgba(0.0, 0.0, 1.0, 1.0, &[0, 0, 0, 255], 1, 1);
+    p.restore();
+    assert_eq!(p.ops().len(), before, "what the PDF leaves out, the preview doesn't show");
+}
+
+#[test]
+fn a_recording_page_keeps_pictures_up_to_a_budget() {
+    let mut doc = PdfDoc::recording();
+    let p = doc.add_page(595.0, 842.0);
+    // 300 × 300 pixels are 360 kB of RGBA: two fit the test budget of 1 MiB, the third is outlined.
+    let pic = vec![255u8; 300 * 300 * 4];
+    for _ in 0..3 {
+        p.image_rgba(0.0, 0.0, 10.0, 10.0, &pic, 300, 300);
+    }
+    let images = p.ops().iter().filter(|o| matches!(o, Op::Image { .. })).count();
+    assert_eq!(images, 2);
+    assert!(matches!(p.ops().last(), Some(Op::StrokeRect { .. })), "the third shows where it is");
+    // An ordinary document has no such budget.
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(595.0, 842.0);
+    for _ in 0..3 {
+        p.image_rgba(0.0, 0.0, 10.0, 10.0, &pic, 300, 300);
+    }
+    let pdf = doc.finish();
+    assert!(pdf.windows(4).any(|w| w == b"/Im3"), "all three pictures are in the PDF");
+}

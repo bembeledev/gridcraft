@@ -148,6 +148,40 @@ fn logarithmic_area_chart_omits_non_positive_values() {
 }
 
 #[test]
+fn logarithmic_area_and_column_charts_use_positive_baselines() {
+    let color = [12, 34, 56, 255];
+    for (kind, is_area) in [(ChartKind::Area, true), (ChartKind::ColumnClustered, false)] {
+        let mut c = chart(kind);
+        c.title = None;
+        c.legend = LegendPos::None;
+        c.x_title = None;
+        c.y_title = None;
+        c.format.y_axis.minimum = Some(0.1);
+        c.format.y_axis.maximum = Some(10.0);
+        c.format.y_axis.logarithmic = true;
+        let data = ChartData {
+            categories: vec!["A".into(), "B".into(), "C".into()],
+            series: vec![series("Values", &[1.0, 4.0, 9.0], color, kind)],
+            ..Default::default()
+        };
+
+        let prims = render(&c, &data, 480.0, 320.0, &ApproxMeasure);
+
+        if is_area {
+            assert!(
+                prims.iter().any(|primitive| matches!(primitive, Prim::Polygon { pts, fill, .. } if *fill == color && pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()))),
+                "positive area values should render against the positive logarithmic minimum"
+            );
+        } else {
+            assert!(
+                prims.iter().any(|primitive| matches!(primitive, Prim::Rect { w, h, fill: Some(fill), .. } if *fill == color && w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0)),
+                "positive columns should render against the positive logarithmic minimum"
+            );
+        }
+    }
+}
+
+#[test]
 fn chart_overlay_and_equation_positions_move_only_the_annotation() {
     let mut c = chart(ChartKind::ScatterLines);
     let mut data = sample(c.kind);

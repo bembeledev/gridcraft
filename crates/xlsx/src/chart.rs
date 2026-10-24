@@ -506,8 +506,8 @@ pub(crate) fn merge_native_surface(target: &mut gridcraft_model::ChartSurface, s
     if native.fill.is_some() || sp.child("noFill").is_some() {
         target.fill = native.fill;
     }
-    if let Some(line) = sp.child("ln") {
-        if native.border.is_some() || line.child("noFill").is_some() {
+    if sp.child("ln").is_some() {
+        if native.border.is_some() {
             target.border = native.border;
         }
         if native.border_width.is_some() {
@@ -579,6 +579,18 @@ mod native_merge_tests {
         assert_eq!(surface.fill, Some([10, 20, 30, 255]));
         assert_eq!(surface.border, Some([40, 50, 60, 255]));
         assert_eq!(surface.border_width, Some(2.0));
+    }
+
+    #[test]
+    fn native_no_fill_border_keeps_extension_color_and_hides_width() {
+        let color = [40, 50, 60, 255];
+        let mut surface = gridcraft_model::ChartSurface { border: Some(color), border_width: Some(3.0), ..Default::default() };
+        let native = crate::xml::parse(b"<spPr><ln w=\"0\"><noFill/></ln></spPr>").unwrap();
+
+        merge_native_surface(&mut surface, Some(&native));
+
+        assert_eq!(surface.border, Some(color));
+        assert_eq!(surface.border_width, Some(0.0));
     }
 }
 

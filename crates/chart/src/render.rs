@@ -1520,7 +1520,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         let (b, t) = sp.unwrap_or((0.0, 0.0));
                         let c = center(j);
                         top.push([c, vpos(t, &sc)]);
-                        base.push([c, vpos(b, &sc)]);
+                        let baseline = if sc.logarithmic && b <= 0.0 { sc.min } else { b };
+                        base.push([c, vpos(baseline, &sc)]);
                         // Source values (not stack totals), just above the top edge like the line labels.
                         if labels_on
                             && sp.is_some()
@@ -1548,7 +1549,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
-                        let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
+                        let baseline = if sc.logarithmic && *b <= 0.0 { sc.min } else { *b };
+                        let (pb, pt) = (vpos(baseline, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();

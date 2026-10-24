@@ -272,6 +272,7 @@ impl Sheet {
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
+        self.readings.remove(&c);
         self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
         self.cell_pictures.insert(c, picture);
     }

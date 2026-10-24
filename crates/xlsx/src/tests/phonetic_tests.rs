@@ -156,6 +156,11 @@ fn identical_text_with_different_readings_keeps_both() {
     retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("西"));
     retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("東"));
     assert!(!part(&write_xlsx(&retyped).unwrap(), "xl/sharedStrings.xml").contains("アズマ"));
+    // A picture put in the cell drops it as well.
+    let mut pictured = back.clone();
+    let picture = gridcraft_model::CellPicture { data: Vec::new(), mime: "image/png".into(), alt: String::new() };
+    pictured.sheet_mut(0).unwrap().set_picture(at("B1"), std::sync::Arc::new(picture));
+    assert!(!pictured.sheet(0).unwrap().readings.contains_key(&at("B1")));
     // A cell with a reading of its own written before the text's plain cells: the plain item
     // still comes first, so the workbook's reading for the text survives a save.
     let mut ordered = Workbook::new();

@@ -588,6 +588,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some(sh) = wb.sheet(si) else { return };
     let sel = d.selection.clone();
     let place = (d.uid, si);
+    // A sheet shown for the first time opens at its saved first cell and then, as in Excel,
+    // scrolls just far enough to show its active cell when that is off screen.
+    if app.view_key().is_some_and(|k| !app.views.contains_key(&k)) {
+        app.grid.ensure_visible = true;
+    }
     let mut view = app.view();
     // Page Layout view: pages on a desk, rulers above and left of the headings.
     let paper = sh.view == gridcraft_engine::model::SheetViewMode::PageLayout;

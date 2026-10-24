@@ -359,7 +359,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
         let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
     }
-    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"/></bookViews><sheets>{sheets_xml}</sheets>", kept.file_index(active));
+    // The tab strip's first tab, when it isn't the first: never past the active tab.
+    let first = wb.first_tab.min(active);
+    let first_sheet = if first > 0 { format!(" firstSheet=\"{}\"", kept.file_index(first)) } else { String::new() };
+    let _ = write!(w, "<bookViews><workbookView{first_sheet} activeTab=\"{}\"/></bookViews><sheets>{sheets_xml}</sheets>", kept.file_index(active));
     w.push_str(&kept.elements);
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");

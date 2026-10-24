@@ -333,23 +333,52 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     if let Some(c) = v.attr("topLeftCell").and_then(CellRef::parse) {
         sheet.view_top_left = c;
     }
-    let mut active_pane = None;
+    // A selection without `pane` belongs to the top-left pane, the only one without panes.
+    let mut active_pane = "topLeft";
+    let mut pane_first = None;
     if let Some(p) = v.child("pane") {
+        let pane_top_left = p.attr("topLeftCell").and_then(CellRef::parse);
         if matches!(p.attr("state"), Some("frozen") | Some("frozenSplit")) {
             let cols = p.attr_f64("xSplit").unwrap_or(0.0).clamp(0.0, (MAX_COLS - 1) as f64) as u32;
             let rows = p.attr_f64("ySplit").unwrap_or(0.0).clamp(0.0, (MAX_ROWS - 1) as f64) as u32;
             if rows > 0 || cols > 0 {
                 sheet.freeze = Some((rows, cols));
-                // With frozen panes the scroll position is the scrolling pane's first cell.
-                if let Some(c) = p.attr("topLeftCell").and_then(CellRef::parse) {
-                    sheet.view_top_left = c;
+                // With frozen panes the scroll position is the scrolling pane's first cell, on the
+                // axes that are split: with only rows frozen the columns still scroll from the
+                // sheet view's first cell, and with only columns frozen the rows do.
+                if let Some(c) = pane_top_left {
+                    let row = if rows > 0 { c.row } else { sheet.view_top_left.row };
+                    let col = if cols > 0 { c.col } else { sheet.view_top_left.col };
+                    sheet.view_top_left = CellRef::new(row, col);
                 }
             }
         }
-        active_pane = p.attr("activePane");
+        if let Some(a) = p.attr("activePane") {
+            active_pane = a;
+            // The active pane's first cell is its active cell when the file saved no selection
+            // there: the frozen rows and columns start at row 1 and column A, and an axis that
+            // isn't frozen scrolls from the sheet view's first cell.
+            let top = sheet.view_top_left;
+            pane_first = Some(match (sheet.freeze, pane_top_left) {
+                (Some((rows, cols)), _) => {
+                    let row = if rows > 0 && matches!(a, "topLeft" | "topRight") { 0 } else { top.row };
+                    let col = if cols > 0 && matches!(a, "topLeft" | "bottomLeft") { 0 } else { top.col };
+                    CellRef::new(row, col)
+                }
+                // A split that isn't frozen: the panes below and right of the split start at the
+                // pane's first cell, the others at the sheet view's.
+                (None, Some(second)) => {
+                    let row = if matches!(a, "bottomLeft" | "bottomRight") { second.row } else { top.row };
+                    let col = if matches!(a, "topRight" | "bottomRight") { second.col } else { top.col };
+                    CellRef::new(row, col)
+                }
+                (None, None) => top,
+            });
+        }
     }
-    let sel = v.kids("selection").find(|s| s.attr("pane") == active_pane).or_else(|| v.kids("selection").last());
-    if let Some(c) = sel.and_then(|s| s.attr("activeCell")).and_then(CellRef::parse) {
+    let cell = |s: &El| s.attr("activeCell").and_then(CellRef::parse);
+    let sel = v.kids("selection").find(|s| s.attr("pane").unwrap_or("topLeft") == active_pane);
+    if let Some(c) = sel.and_then(cell).or(pane_first).or_else(|| v.kids("selection").last().and_then(cell)) {
         sheet.view_active = c;
     }
 }

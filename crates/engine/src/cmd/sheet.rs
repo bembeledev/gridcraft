@@ -695,6 +695,7 @@ fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         // Excel inserts before the active sheet; the "+" button appends after it.
         let at = before.unwrap_or(cx.wb.active_sheet + 1).min(cx.wb.sheets.len());
         cx.wb.sheets.insert(at, Arc::new(Sheet::new(name.clone())));
+        cx.wb.first_tab = 0; // the saved tab scroll no longer points at the same sheet
         // Names scoped to later sheets shift.
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
@@ -763,6 +764,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     edit_doc(d, |cx| {
         cx.wb.sheets.remove(i);
+        cx.wb.first_tab = 0; // the saved tab scroll no longer points at the same sheet
         for si in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
                 cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
@@ -906,11 +908,13 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
             cx.wb.names.extend(copies);
             cx.wb.sheets.insert(at, Arc::new(sh));
+            cx.wb.first_tab = 0; // the saved tab scroll no longer points at the same sheet
             cx.wb.active_sheet = at;
         } else {
             let sh = cx.wb.sheets.remove(i);
             let at = to.min(n - 1);
             cx.wb.sheets.insert(at, sh);
+            cx.wb.first_tab = 0; // the saved tab scroll no longer points at the same sheet
             cx.wb.active_sheet = at;
             // Sheet-level names follow their sheet.
             for nm in cx.wb.names.iter_mut() {

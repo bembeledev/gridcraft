@@ -148,6 +148,10 @@ pub struct Workbook {
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
     pub active_sheet: usize,
+    /// The first sheet tab shown at the left of the tab strip (XLSX `firstSheet`): the tabs
+    /// before it are scrolled out of view until one of their sheets is active.
+    #[serde(default)]
+    pub first_tab: usize,
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
@@ -217,6 +221,7 @@ impl Workbook {
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
             active_sheet: 0,
+            first_tab: 0,
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,

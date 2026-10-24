@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use egui::text::{CCursor, CCursorRange};
-use egui::{FontFamily, FontId, Key, Modifiers, Response, TextEdit, Ui};
+use egui::{FontFamily, FontId, Key, Response, TextEdit, Ui};
 
 use crate::theme::{self, Syntax, Tokens};
 
@@ -256,6 +256,83 @@ pub fn newline(text: &mut String, sel: (usize, usize), lang: Lang) -> Edit {
     Edit { anchor: caret, caret }
 }
 
+/// Typed text (or a paste) replacing the selection.
+pub fn insert(text: &mut String, sel: (usize, usize), s: &str) -> Edit {
+    let count = text.chars().count();
+    let (a, b) = (sel.0.min(sel.1).min(count), sel.0.max(sel.1).min(count));
+    let (ba, bb) = (byte_of(text, a), byte_of(text, b));
+    text.replace_range(ba..bb, s);
+    let caret = a + s.chars().count();
+    Edit { anchor: caret, caret }
+}
+
+/// Backspace (`back`) or Delete: the selection goes, or the character before or after the caret.
+pub fn delete(text: &mut String, sel: (usize, usize), back: bool) -> Edit {
+    let count = text.chars().count();
+    let (mut a, mut b) = (sel.0.min(sel.1).min(count), sel.0.max(sel.1).min(count));
+    if a == b {
+        if back {
+            a = a.saturating_sub(1);
+        } else {
+            b = (b + 1).min(count);
+        }
+    }
+    let (ba, bb) = (byte_of(text, a), byte_of(text, b));
+    text.replace_range(ba..bb, "");
+    Edit { anchor: a, caret: a }
+}
+
+/// Applies the frame's input to `text` in the order it came, as far as the editor can: typed
+/// text, pastes, Enter, Tab, Shift+Tab, Backspace and Delete. Those events are taken from the
+/// queue; the first event the editor does not handle itself (an arrow, a shortcut, a click, IME)
+/// and everything after it stay for the text field, which runs after this and so keeps the
+/// order. A frame can carry several events (typing between repaints, key repeat); an Enter
+/// applied before the text typed ahead of it would land in the wrong place. Returns whether
+/// anything was applied; `sel` is the selection as char indices (anchor, caret), updated.
+pub fn apply_in_order(events: &mut Vec<egui::Event>, text: &mut String, sel: &mut (usize, usize), lang: Lang) -> bool {
+    use egui::Event;
+    let mut applied = false;
+    let mut stopped = false;
+    let mut keep = Vec::with_capacity(events.len());
+    for ev in std::mem::take(events) {
+        if stopped {
+            keep.push(ev);
+            continue;
+        }
+        let edit = match &ev {
+            // The text field treats a lone newline as the Enter key's business.
+            Event::Text(t) if t != "\n" && t != "\r" => Some(insert(text, *sel, t)),
+            Event::Text(_) => {
+                keep.push(ev);
+                continue;
+            }
+            Event::Paste(t) => Some(insert(text, *sel, t)),
+            Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none() => Some(newline(text, *sel, lang)),
+            Event::Key { key: Key::Tab, pressed: true, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+                Some(indent(text, *sel, modifiers.shift))
+            }
+            Event::Key { key: key @ (Key::Backspace | Key::Delete), pressed: true, modifiers, .. } if modifiers.is_none() => {
+                Some(delete(text, *sel, *key == Key::Backspace))
+            }
+            Event::Key { pressed: true, .. } | Event::PointerButton { pressed: true, .. } | Event::Ime(_) | Event::Cut | Event::Copy => {
+                stopped = true;
+                keep.push(ev);
+                continue;
+            }
+            _ => {
+                keep.push(ev);
+                continue;
+            }
+        };
+        if let Some(e) = edit {
+            *sel = (e.anchor, e.caret);
+            applied = true;
+        }
+    }
+    *events = keep;
+    applied
+}
+
 /// Tab (indent) or Shift+Tab (dedent). A selection over several lines indents or dedents each
 /// line; otherwise Tab inserts four spaces at the caret.
 pub fn indent(text: &mut String, sel: (usize, usize), dedent: bool) -> Edit {
@@ -310,23 +387,18 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
     let font = font();
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let max_lines = max_lines.clamp(1, 200);
-    // Keys the editor handles itself, before the TextEdit sees them.
+    // The input the editor handles itself (Enter with indentation, Tab, Shift+Tab), applied in
+    // input order with the typing around it, before the text field sees the rest.
     let focused = ui.memory(|m| m.has_focus(id));
     let mut edited = None;
     if focused {
-        // Shift+Tab first: a plain Tab pattern matches a shifted Tab too.
-        let (tab, shift_tab, enter) = ui.input_mut(|i| {
-            let shift_tab = i.consume_key(Modifiers::SHIFT, Key::Tab);
-            (i.consume_key(Modifiers::NONE, Key::Tab), shift_tab, i.consume_key(Modifiers::NONE, Key::Enter))
-        });
-        if tab || shift_tab || enter {
-            let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-            let count = text.chars().count();
-            let sel = state.cursor.char_range().map(|r| (r.secondary.index.into(), r.primary.index.into())).unwrap_or((count, count));
-            let e = if enter { newline(text, sel, lang) } else { indent(text, sel, shift_tab) };
-            state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(e.anchor), CCursor::new(e.caret))));
+        let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let count = text.chars().count();
+        let mut sel = state.cursor.char_range().map(|r| (r.secondary.index.into(), r.primary.index.into())).unwrap_or((count, count));
+        if ui.input_mut(|i| apply_in_order(&mut i.events, text, &mut sel, lang)) {
+            state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(sel.0), CCursor::new(sel.1))));
             state.store(ui.ctx(), id);
-            edited = Some(e);
+            edited = Some(Edit { anchor: sel.0, caret: sel.1 });
         }
     }
     let syntax = t.syntax;
@@ -366,6 +438,7 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Modifiers;
 
     fn spans(text: &str, lang: Lang) -> Vec<(&str, Token)> {
         highlight(text, lang).into_iter().map(|(r, k)| (text.get(r).unwrap_or("?"), k)).collect()
@@ -495,6 +568,54 @@ mod tests {
         assert_eq!(h.state(), "    x    ");
     }
 
+    fn editor_harness(text: &str) -> egui_kittest::Harness<'static, String> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui_state(
+            |ui, text: &mut String| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    let mut fonts = egui::FontDefinitions::default();
+                    let mono = fonts.families.get(&egui::FontFamily::Monospace).cloned().unwrap_or_default();
+                    fonts.families.insert(egui::FontFamily::Name(theme::MONO.into()), mono);
+                    ui.ctx().set_fonts(fonts);
+                    return;
+                }
+                let id = egui::Id::new("code");
+                ui.memory_mut(|m| m.request_focus(id));
+                code_editor(ui, id, text, Lang::Python, 5);
+            },
+            text.to_string(),
+        );
+        h.run_steps(2);
+        h
+    }
+
+    fn key(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    fn batched_input_applies_in_order_and_keeps_every_key() {
+        // Events gather between repaints (typing, key repeat). The text typed before an Enter
+        // comes first, and two Enters make two lines.
+        let mut h = editor_harness("");
+        h.input_mut().events.extend([egui::Event::Text("if x:".into()), key(Key::Enter, Modifiers::NONE), key(Key::Enter, Modifiers::NONE)]);
+        h.run_steps(1);
+        assert_eq!(h.state(), "if x:\n    \n    ");
+        // Backspace and Tab in the same frame as the typing around them.
+        h.input_mut().events.extend([
+            egui::Event::Text("y = 1".into()),
+            key(Key::Backspace, Modifiers::NONE),
+            egui::Event::Text("2".into()),
+            key(Key::Tab, Modifiers::NONE),
+        ]);
+        h.run_steps(1);
+        assert_eq!(h.state(), "if x:\n    \n    y = 2    ");
+        // An event the editor leaves to the field (an arrow) keeps the order too: the text typed
+        // before it is applied first, and the field runs the arrow and the Enter after it.
+        h.input_mut().events.extend([egui::Event::Text("a".into()), key(Key::ArrowLeft, Modifiers::NONE), key(Key::Enter, Modifiers::NONE)]);
+        h.run_steps(1);
+        assert_eq!(h.state(), "if x:\n    \n    y = 2    \na");
+    }
+
     #[test]
     fn a_selection_ending_at_a_line_start_leaves_that_line_alone() {
         // Selecting "a\n" in "a\nb" ends at the start of the second line, which is not selected.
@@ -508,6 +629,37 @@ mod tests {
         let mut s = "a\nb".to_string();
         indent(&mut s, (0, 3), false);
         assert_eq!(s, "    a\n    b");
+    }
+
+    #[test]
+    fn typed_text_and_deletions_replace_the_selection() {
+        let mut s = "abcd".to_string();
+        assert_eq!(insert(&mut s, (3, 1), "X"), Edit { anchor: 2, caret: 2 });
+        assert_eq!(s, "aXd");
+        assert_eq!(delete(&mut s, (2, 2), true), Edit { anchor: 1, caret: 1 });
+        assert_eq!(s, "ad");
+        assert_eq!(delete(&mut s, (1, 1), false), Edit { anchor: 1, caret: 1 });
+        assert_eq!(s, "a");
+        assert_eq!(delete(&mut s, (0, 0), true), Edit { anchor: 0, caret: 0 });
+        assert_eq!(delete(&mut s, (9, 9), false), Edit { anchor: 1, caret: 1 });
+        assert_eq!(s, "a");
+        let mut s = "éa".to_string();
+        delete(&mut s, (2, 0), true);
+        assert_eq!(s, "");
+        // The queue keeps what the editor does not handle, and everything after it.
+        let mut events = vec![
+            egui::Event::Text("x".into()),
+            egui::Event::Text("\n".into()),
+            key(Key::ArrowLeft, Modifiers::NONE),
+            key(Key::Enter, Modifiers::NONE),
+        ];
+        let (mut s, mut sel) = (String::new(), (0, 0));
+        assert!(apply_in_order(&mut events, &mut s, &mut sel, Lang::Python));
+        assert_eq!((s.as_str(), sel), ("x", (1, 1)));
+        assert_eq!(events.len(), 3, "the lone newline, the arrow and the Enter after it stay: {events:?}");
+        let mut events = vec![egui::Event::Key { key: Key::Enter, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }];
+        assert!(!apply_in_order(&mut events, &mut s, &mut sel, Lang::Python), "a key release is nothing to apply");
+        assert_eq!(events.len(), 1);
     }
 
     #[test]

@@ -70,7 +70,8 @@ drawing its own:
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
   comments). Tab indents (every selected line, Shift+Tab dedents), Enter keeps the line's
-  indentation (one level more after a Python colon), and it scrolls past `max_lines` with the
+  indentation (one level more after a Python colon), both applied in input order with the typing
+  around them (a frame can carry several events), and it scrolls past `max_lines` with the
   caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then

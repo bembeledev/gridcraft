@@ -121,8 +121,8 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
     let enabled = ui.is_enabled();
     main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
     arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{name} options")));
-    let tip = tr(ui, tip);
-    (main.on_hover_text(tip), arrow.on_hover_text(tip))
+    let tip = tip_text(ui, tip);
+    (main.on_hover_text(tip.clone()), arrow.on_hover_text(tip))
 }
 
 /// Size of the dropdown arrow beside a big button's last label line.

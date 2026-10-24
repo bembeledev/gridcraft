@@ -128,6 +128,11 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
     h.get_by_label("Auto Sum options").click();
     h.run_steps(2);
     assert_eq!((h.state().main, h.state().arrow), (1, 2));
+    // The tooltip carries the shortcut hint, as every ribbon button's does.
+    h.get_by_label("Auto Sum").hover();
+    h.run_steps(3);
+    let hint = if cfg!(target_os = "macos") { "AutoSum (\u{2318}" } else { "AutoSum (Alt+=" };
+    assert!(h.query(egui_kittest::kittest::By::new().label_contains(hint)).is_some(), "tooltip with the shortcut");
     // The icon part sits above the label part, across the full width.
     let main = h.get_by_label("Auto Sum").rect();
     let arrow = h.get_by_label("Auto Sum options").rect();

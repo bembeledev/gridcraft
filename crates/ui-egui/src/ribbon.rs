@@ -1167,15 +1167,27 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Excel's font box: Enter applies the name typed, in the list's spelling when it names or begins one
+/// of the fonts (`arial` and `Ari` give Arial), otherwise as typed, since a workbook may carry a font
+/// this machine lacks. Escape or clicking away reverts; the arrow opens the fonts.
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
-    control_keytip(app, ui, &resp, "home.fontName");
-    let forced = invoke(app, "home.fontName");
+    let (arrow, frame, entered) = typed_box(app, ui, "gridcraft.font_name_box", "home.fontName", "Font", &name, 150.0);
+    if let Some(typed) = entered.filter(|t| !t.is_empty()) {
+        act(app, "home.fontName", json!({"name": font_for(&typed)}));
+    }
     let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
-    if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
+    if let ComboResult::Picked(value) = list_combo(ui, &arrow, frame, "font", &name, &items) {
         act(app, "home.fontName", json!({"name": value}));
     }
+}
+
+/// The font Enter applies for `typed`: the first one it begins, never a font that merely contains it
+/// (#932: `Aptos` gave Aptos Narrow). `FONTS` is sorted, so a name typed in full comes before the
+/// longer names it begins.
+fn font_for(typed: &str) -> String {
+    let lower = typed.to_lowercase();
+    FONTS.iter().find(|f| f.to_lowercase().starts_with(&lower)).map_or_else(|| typed.to_string(), |f| f.to_string())
 }
 
 pub const FONTS: &[&str] = &[
@@ -1201,15 +1213,40 @@ pub const FONTS: &[&str] = &[
 /// Excel's size box: type a size and press Enter to apply exactly that number (the command refuses
 /// sizes outside 1 to 409), Escape or clicking away reverts; the arrow opens the standard sizes.
 fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
-    let t = Tokens::get(ui.ctx());
     let size = st.font.size;
     let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
-    let field = egui::Id::new("gridcraft.font_size_box");
+    let (arrow, frame, entered) = typed_box(app, ui, "gridcraft.font_size_box", "home.fontSize", "Font Size", &current, 52.0);
+    if let Some(v) = entered.and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite()) {
+        act(app, "home.fontSize", json!({"size": v}));
+    }
+    let sizes = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
+    let labels: Vec<String> = sizes.iter().map(|s| format!("{}", *s as i32)).collect();
+    let items: Vec<(&str, String)> = labels.iter().map(|s| (s.as_str(), s.clone())).collect();
+    if let ComboResult::Picked(value) = list_combo(ui, &arrow, frame, "size", &current, &items)
+        && let Ok(v) = value.parse::<f32>()
+    {
+        act(app, "home.fontSize", json!({"size": v}));
+    }
+}
+
+/// The box shared by Font and Font Size: one frame holding a text field and the dropdown arrow, as in
+/// Excel. Clicking the field or its keytip selects the text so typing replaces it; Enter returns the
+/// trimmed text, and Escape or clicking away reverts to `current`. Returns the arrow (labelled `label`),
+/// the frame the list drops under, and the text entered this frame.
+fn typed_box(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    id: &str,
+    command: &str,
+    label: &str,
+    current: &str,
+    width: f32,
+) -> (egui::Response, Rect, Option<String>) {
+    let t = Tokens::get(ui.ctx());
+    let field = egui::Id::new(id);
     let draft = field.with("draft");
-    let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.clone());
-    // One frame like the Font name box beside it (same fill, border, height and corners), with the
-    // text field and the dropdown arrow inside it, as in Excel.
-    let (frame, _) = ui.allocate_exact_size(vec2(52.0, 24.0), egui::Sense::hover());
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
+    let (frame, _) = ui.allocate_exact_size(vec2(width, 24.0), egui::Sense::hover());
     // Painted once the field's focus and hover are known, but beneath the field and the arrow.
     let bg = ui.painter().add(egui::Shape::Noop);
     let text_rect = Rect::from_min_max(frame.min, egui::pos2(frame.right() - 16.0, frame.bottom()));
@@ -1223,23 +1260,22 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         .desired_width(text_rect.width() - 12.0)
         .show(&mut field_ui);
     let resp = out.response;
-    control_keytip(app, ui, &resp, "home.fontSize");
-    if invoke(app, "home.fontSize") {
+    control_keytip(app, ui, &resp, command);
+    if invoke(app, command) {
         ui.memory_mut(|m| m.request_focus(field));
     }
     if resp.gained_focus() {
-        // Typing replaces the size, as in Excel, whether the box was clicked or reached by keytip.
+        // Typing replaces the value, as in Excel, whether the box was clicked or reached by keytip.
         let mut state = out.state;
         state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()))));
         state.store(ui.ctx(), field);
     }
+    let mut entered = None;
     if resp.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(draft));
         // Consume the Enter so the grid behind does not also move the active cell down.
-        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
-            && let Some(v) = text.trim().parse::<f64>().ok().filter(|v| v.is_finite())
-        {
-            act(app, "home.fontSize", json!({"size": v}));
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            entered = Some(text.trim().to_string());
         }
     } else if resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(draft, text));
@@ -1247,20 +1283,13 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         ui.data_mut(|d| d.remove::<String>(draft));
     }
     let mut arrow_ui = ui.new_child(egui::UiBuilder::new().max_rect(arrow_rect));
-    let arrow = icon_button(&mut arrow_ui, Icon::Chevron, t.text_dim, "Font Size", arrow_rect.size());
+    let arrow = icon_button(&mut arrow_ui, Icon::Chevron, t.text_dim, label, arrow_rect.size());
     let visuals = ui.style().visuals.clone();
     let looks = if resp.has_focus() || ui.rect_contains_pointer(frame) { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
     let stroke = if resp.has_focus() { visuals.selection.stroke } else { looks.bg_stroke };
     ui.painter().set(bg, egui::epaint::RectShape::new(frame, looks.corner_radius, looks.weak_bg_fill, stroke, egui::StrokeKind::Inside));
-    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Font Size"));
-    let sizes = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
-    let labels: Vec<String> = sizes.iter().map(|s| format!("{}", *s as i32)).collect();
-    let items: Vec<(&str, String)> = labels.iter().map(|s| (s.as_str(), s.clone())).collect();
-    if let ComboResult::Picked(value) = list_combo(ui, &arrow, frame, "size", &current, &items)
-        && let Ok(v) = value.parse::<f32>()
-    {
-        act(app, "home.fontSize", json!({"size": v}));
-    }
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    (arrow, frame, entered)
 }
 
 fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {

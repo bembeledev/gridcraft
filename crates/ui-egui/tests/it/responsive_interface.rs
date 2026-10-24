@@ -272,3 +272,14 @@ fn scaled_portuguese_toolpak_keeps_its_actions_in_the_viewport() {
     in_view(&h, h.get_by_role_and_label(Role::Button, " Cancelar ").rect());
     in_view(&h, toolpak_rect(&h, "regression"));
 }
+
+#[test]
+fn toolpak_overwrite_actions_stay_visible_in_a_short_viewport() {
+    let mut h = harness(360.0, 170.0);
+    h.state_mut().open_dialog("analysisToolPak", json!({}));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("askOverwrite".into(), json!(true));
+    h.run_steps(6);
+
+    in_view(&h, h.get_by_role_and_label(Role::Button, "Replace").rect());
+    in_view(&h, h.get_by_role_and_label(Role::Button, "Cancel").rect());
+}

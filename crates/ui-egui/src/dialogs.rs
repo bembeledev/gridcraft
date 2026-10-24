@@ -2835,7 +2835,13 @@ fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
-        ui.label("The output range already holds data. Replace it with the report?");
+        let footer = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        let body_height = (ui.available_height() - footer).max(0.0);
+        egui::ScrollArea::vertical()
+            .id_salt("analysis_toolpak_overwrite_body")
+            .min_scrolled_height(0.0)
+            .max_height(body_height)
+            .show(ui, |ui| ui.label("The output range already holds data. Replace it with the report?"));
         ui.horizontal(|ui| {
             if ui.button("Replace").clicked() {
                 d.values.remove("askOverwrite");

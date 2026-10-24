@@ -1110,6 +1110,22 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+/// A number `tw` wide in a cell with `room` across and `pad` on each side, accepted by the hinted
+/// digit count: the scale it's drawn at (below 1 only when it's wider than the whole cell) and the
+/// padding left on each side.
+fn fit_hinted(tw: f32, room: f32, pad: f32) -> (f32, f32) {
+    if !(tw.is_finite() && room.is_finite()) || tw <= 0.0 || room <= 0.0 {
+        return (1.0, pad.max(0.0));
+    }
+    if tw + 2.0 * pad <= room {
+        (1.0, pad)
+    } else if tw <= room {
+        (1.0, ((room - tw) / 2.0).max(0.0))
+    } else {
+        (room / tw, 0.0)
+    }
+}
+
 fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
     let (x, y, w, h) = rect;
     let sh = b.sh;
@@ -1134,14 +1150,19 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
     let is_num = matches!(v, Value::Number(_));
+    // Excel counts digits in the font's hinted maximum digit width (7 px for Calibri 11), which
+    // the PDF font's glyphs can exceed: numbers fit by that count.
+    let digit_px = max_digit_width_at(&st.font.name, st.font.size, 96.0) as f32;
+    let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
+    let hinted = (digit_px * b.k).min(digit) / digit;
     let wrap = st.align.wrap;
     let mut text = if sh.show_formulas {
         crate::display::cell_text(wb, sh, c)
     } else if code == "General"
         && let Value::Number(n) = v
     {
-        let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
-        let max_chars = (avail / digit).floor().max(1.0) as usize;
+        // An n-character column (n digits + 5 px of padding) fits an n-digit number.
+        let max_chars = (((w - indent) / b.k.max(0.001) - 5.0) / digit_px.max(1.0) + 0.01).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
         // The look's code, which a conditional format can override (#1163).
@@ -1158,11 +1179,23 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         size = (size * avail / tw).max(1.0);
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
-    if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
+    if is_num && !wrap && tw * hinted > avail + b.k && !sh.show_formulas {
         let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
+    // A number that fits only in hinted digits uses the cell padding, and is drawn a little smaller
+    // when even that isn't enough, so no glyph falls outside the cell.
+    let hpad = if is_num && !wrap && tw > avail && !sh.show_formulas {
+        let (scale, hpad) = fit_hinted(tw, w - indent, pad);
+        if scale < 1.0 {
+            size = (size * scale).max(1.0);
+            tw = gridcraft_pdf::text_width(font, size, &text);
+        }
+        hpad
+    } else {
+        pad
+    };
     let h_align = match st.align.h {
         HAlign::General => {
             if is_num {
@@ -1269,9 +1302,9 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     for (i, line) in lines.iter().enumerate() {
         let lw = gridcraft_pdf::text_width(font, size, line);
         let lx = match h_align {
-            HAlign::Right => x + w - pad - lw - indent,
+            HAlign::Right => x + w - hpad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
-            _ => x + pad + indent,
+            _ => x + hpad + indent,
         };
         let ly = first_baseline + i as f32 * line_h;
         if ly - size > y + h || ly < y - line_h {
@@ -2358,6 +2391,30 @@ mod tests {
         assert_eq!(center_across_width(&styles, &sh, a1, &[]), sh.col_width(1));
         let merged = [RangeRef::new(CellRef::new(0, 1), CellRef::new(1, 1))];
         assert_eq!(center_across_width(&styles, &sh, a1, &merged), 0.0);
+    }
+
+    #[test]
+    fn hinted_numbers_stay_inside_their_cell() {
+        // Fits with its padding; fits only without it; wider than the cell: drawn smaller, no padding.
+        assert_eq!(fit_hinted(40.0, 50.0, 2.0), (1.0, 2.0));
+        assert_eq!(fit_hinted(48.0, 50.0, 2.0), (1.0, 1.0));
+        let (scale, pad) = fit_hinted(55.0, 54.0, 2.0);
+        assert!((55.0 * scale - 54.0).abs() < 1e-3 && pad == 0.0);
+        assert_eq!(fit_hinted(f32::NAN, 54.0, 2.0), (1.0, 2.0));
+        assert_eq!(fit_hinted(10.0, 0.0, 2.0), (1.0, 2.0));
+    }
+
+    #[test]
+    fn general_numbers_print_as_many_digits_as_the_column_has_characters() {
+        // Excel counts digits in Calibri's 7 px hinted digit; Helvetica's are wider.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:C1", "values": [[24959397, 100105891, 1234567890]]})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "B:B", "chars": 9})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "(24959397) Tj"), "8 digits in a default column");
+        assert!(contains(&pdf, "(100105891) Tj"), "9 digits in a 9-character column");
+        assert!(contains(&pdf, "(1.23E+09) Tj"), "10 digits narrow in a default column");
+        assert!(!contains(&pdf, "(#"), "no ####");
     }
 
     #[test]

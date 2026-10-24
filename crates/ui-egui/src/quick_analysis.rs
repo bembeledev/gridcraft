@@ -203,7 +203,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     // While the mouse is down (selecting, filling) the button stays out of the way.
     let busy = app.grid.drag != Drag::None || ctx.input(|i| i.pointer.any_down());
     let lang = crate::i18n::current(&ctx);
-    if corner_visible && (open || !busy) {
+    // Right after a fill-handle drag the Auto Fill Options button sits at the same corner; it wins
+    // until that fill is no longer current (Ctrl+Q still opens the popup).
+    let fill_tag = app.grid.fill_tag.is_some();
+    if corner_visible && (open || (!busy && !fill_tag)) {
         let mut clicked = false;
         egui::Area::new(Id::new("quick_analysis_button")).fixed_pos(button.min).order(Order::Foreground).show(&ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(button.size(), Sense::click());

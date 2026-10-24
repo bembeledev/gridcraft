@@ -1142,7 +1142,6 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ("Treemap", "ツリーマップ"),
     ("Sunburst", "サンバースト"),
     ("Stock", "株価"),
-    ("Bar", "横棒"),
     (
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",

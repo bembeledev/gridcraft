@@ -2641,7 +2641,7 @@ fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
             ("Move but don't size with cells", "moveOnly"),
             ("Don't move or size with cells", "absolute"),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(app.ui.language.tr(label)).clicked() {
                 act(app, "object.setAnchorMode", json!({"kind": "image", "id": id, "mode": mode}));
                 ui.close();
             }

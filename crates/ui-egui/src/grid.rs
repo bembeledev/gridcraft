@@ -3109,8 +3109,9 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    // Grows with the text up to five lines, then scrolls (like the formula bar).
-    let shown = lines.min(crate::formula_bar::MAX_LINES as f32);
+    // Grows with the text: the in-cell editor shows every line and never scrolls (the formula bar
+    // is the one that stops at five lines).
+    let shown = lines;
     // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
     // Otherwise it widens to the text's one-line width.
     let wrap = st.align.wrap;

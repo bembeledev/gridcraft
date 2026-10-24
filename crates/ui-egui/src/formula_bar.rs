@@ -246,6 +246,26 @@ fn entry_shrank(chars_before: usize, text: &str) -> bool {
 }
 
 /// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
+/// The editor's text field, the same in the cell and in the formula bar.
+fn show_edit<'t>(
+    edit: TextEdit<'t>,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    font: FontId,
+    width: f32,
+    layouter: &'t mut dyn FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
+) -> egui::text_edit::TextEditOutput {
+    edit.id(id)
+        .frame(egui::Frame::NONE)
+        .font(font)
+        .desired_width(width)
+        .desired_rows(1)
+        .layouter(layouter)
+        .lock_focus(true)
+        .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+        .show(ui)
+}
+
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
@@ -393,27 +413,28 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let synced = mine && (ed.request_focus || ed.sync_caret);
     let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
     let caret_index = ed.caret;
-    let scrolled =
-        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
-            let output = edit
-                .id(id)
-                .frame(egui::Frame::NONE)
-                .font(font)
-                .desired_width(width)
-                .desired_rows(1)
-                .layouter(&mut layouter)
-                .lock_focus(true)
-                .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-                .show(ui);
-            // A caret moved by our own keys (Alt+Enter, F4, point mode) isn't the TextEdit's doing,
-            // so it doesn't scroll to it itself.
-            if synced {
-                let caret = output.galley.pos_from_cursor(egui::text::CCursor::new(caret_index)).translate(output.galley_pos.to_vec2());
-                ui.scroll_to_rect(caret.expand(2.0), None);
-            }
-            output
-        });
-    let mut output = scrolled.inner;
+    // The in-cell editor grows with its text and never scrolls, so the field keeps its whole width
+    // for the text (a scroll area would take the bar's width off it and wrap the text narrower
+    // than the cell does). The formula bar shows its lines and scrolls past them.
+    let mut output = if on_sheet {
+        show_edit(edit, ui, id, font, width, &mut layouter)
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt(id.with("scroll"))
+            .max_height(max_height.max(1.0))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let output = show_edit(edit, ui, id, font, width, &mut layouter);
+                // A caret moved by our own keys (Alt+Enter, F4, point mode) isn't the TextEdit's
+                // doing, so it doesn't scroll to it itself.
+                if synced {
+                    let caret = output.galley.pos_from_cursor(egui::text::CCursor::new(caret_index)).translate(output.galley_pos.to_vec2());
+                    ui.scroll_to_rect(caret.expand(2.0), None);
+                }
+                output
+            })
+            .inner
+    };
     let resp = output.response.clone();
     if synced {
         if ed.request_focus {

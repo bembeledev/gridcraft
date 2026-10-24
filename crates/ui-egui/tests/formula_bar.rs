@@ -140,10 +140,12 @@ fn in_cell_height(lines: usize) -> f32 {
 }
 
 #[test]
-fn in_cell_editor_stops_growing_at_five_lines() {
+fn in_cell_editor_grows_with_every_line() {
+    // The formula bar stops at five lines and scrolls; the in-cell editor shows every line, as
+    // the grid's own tests ask (`an_unwrapped_multiline_edit_shows_every_line`).
     let (four, five, nine) = (in_cell_height(4), in_cell_height(5), in_cell_height(9));
-    assert!(five > four + 1.0, "grows up to five lines ({four} then {five})");
-    assert!((nine - five).abs() < 0.5, "nine lines are as tall as five ({five} vs {nine})");
+    assert!(five > four + 1.0, "grows with the lines ({four} then {five})");
+    assert!(nine > five + 1.0, "and past five ({five} then {nine})");
 }
 
 #[test]

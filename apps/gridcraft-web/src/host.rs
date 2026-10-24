@@ -30,6 +30,9 @@ use wasm_bindgen::closure::Closure;
 /// counts as saved under that name, as it would after Save on the desktop.
 const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
+/// The longest user name taken from `?author=`.
+const MAX_AUTHOR_CHARS: usize = 200;
+
 /// Largest `id`/`requestId` accepted from the host.
 const MAX_ID_BYTES: usize = 1024;
 
@@ -173,7 +176,9 @@ impl Bridge {
         if let Some(name) = host_name
             && !app.session.documents().iter().any(|d| {
                 d.title == name
-                    || d.path.as_deref().is_some_and(|p| std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()) == Some(name.clone()))
+                    || d.path
+                        .as_deref()
+                        .is_some_and(|p| std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()) == Some(name.clone()))
             })
         {
             *self.host_doc.borrow_mut() = None;
@@ -206,6 +211,7 @@ impl Bridge {
         let bridge = self.clone();
         let commands = self.commands.clone();
         let queued_bytes = self.queued_bytes.clone();
+        let queued_id_bytes = self.queued_id_bytes.clone();
         let host_doc = self.host_doc.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
@@ -225,14 +231,14 @@ impl Bridge {
                     // Bad and oversized commands are refused at once, like the WordCraft and
                     // DeckCraft bridges; a malformed `params` never runs as `{}` again.
                     let request_id_raw = string(&data, "requestId");
-                    if request_id_raw.as_ref().map(str::len).unwrap_or(0) > MAX_ID_BYTES {
+                    if request_id_raw.as_ref().map(|s| s.len()).unwrap_or(0) > MAX_ID_BYTES {
                         bridge.post_response("", request_id_raw.as_deref(), false, Some(&format!("requestId is larger than {MAX_ID_BYTES} bytes")));
                         ctx.request_repaint();
                         return;
                     }
                     let request_id = request_id_raw.filter(|r| !r.is_empty());
                     let id_raw = string(&data, "id");
-                    if id_raw.as_ref().map(str::len).unwrap_or(0) > MAX_ID_BYTES {
+                    if id_raw.as_ref().map(|s| s.len()).unwrap_or(0) > MAX_ID_BYTES {
                         bridge.post_response("", request_id.as_deref(), false, Some(&format!("id is larger than {MAX_ID_BYTES} bytes")));
                         ctx.request_repaint();
                         return;

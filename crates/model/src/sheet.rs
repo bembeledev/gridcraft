@@ -90,6 +90,11 @@ pub struct Sheet {
     pub comments: BTreeMap<CellRef, Comment>,
     #[serde(with = "crate::cellmap")]
     pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
+    /// Phonetic (furigana) readings of text cells whose shared string read differently from the
+    /// workbook's reading for that text ([`crate::Workbook::phonetics`]); one without runs stands for
+    /// no reading. Valid only while the cell holds their text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::cellmap")]
+    pub readings: BTreeMap<CellRef, Arc<crate::PhoneticString>>,
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
@@ -160,6 +165,7 @@ impl Sheet {
             autofilter: None,
             comments: BTreeMap::new(),
             hyperlinks: BTreeMap::new(),
+            readings: BTreeMap::new(),
             charts: vec![],
             images: vec![],
             shapes: vec![],

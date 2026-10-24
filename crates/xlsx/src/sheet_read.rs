@@ -200,8 +200,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     ("firstHeader", &mut pr.first_header),
                     ("firstFooter", &mut pr.first_footer),
                 ] {
-                    // Excel caps each at 255 characters; a hostile file can't make them huge.
-                    *slot = e.child(tag).map(|h| h.text.chars().take(255).collect()).unwrap_or_default();
+                    // Excel caps each at 255 characters; a hostile file can't make them huge. Line
+                    // breaks other than LF come escaped (`_x000D_`).
+                    *slot = e.child(tag).map(|h| xml::decode_xstring(&h.text).chars().take(255).collect()).unwrap_or_default();
                 }
                 pr.different_first = e.flag("differentFirst", false);
                 pr.different_odd_even = e.flag("differentOddEven", false);

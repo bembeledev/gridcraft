@@ -432,6 +432,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
                 sh.cell_pictures.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, picture)| (*cell, picture.clone())).collect();
+            let readings: Vec<_> = sh.readings.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, r)| (*cell, r.clone())).collect();
             let cells = sh.take_cells(source);
             let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
             let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
@@ -455,6 +456,9 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             for (cell, picture) in pictures {
                 let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
                 sh.cell_pictures.insert(dest, picture);
+            }
+            for (cell, reading) in readings {
+                sh.readings.insert(CellRef::new(cell.row, destination + (cell.col - moved_from)), reading);
             }
             for (offset, info) in moved_lines {
                 sh.cols.insert(destination + offset, info);

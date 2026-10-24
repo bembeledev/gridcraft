@@ -263,7 +263,8 @@ impl Sheet {
         self.cells.remove(c)
     }
     /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
-    /// The cells' own phonetic readings go too: moved text takes the workbook's reading for it.
+    /// The cells' own phonetic readings go too; a caller that moves the cells carries them along,
+    /// as it does the pictures.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
         self.readings.retain(|c, _| !range.contains(*c));

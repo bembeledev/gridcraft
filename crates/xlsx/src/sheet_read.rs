@@ -359,10 +359,21 @@ fn read_views(e: &El, sheet: &mut Sheet) {
             // there: the frozen rows and columns start at row 1 and column A, and an axis that
             // isn't frozen scrolls from the sheet view's first cell.
             let top = sheet.view_top_left;
-            let (rows, cols) = sheet.freeze.unwrap_or((0, 0));
-            let row = if rows > 0 && matches!(a, "topLeft" | "topRight") { 0 } else { top.row };
-            let col = if cols > 0 && matches!(a, "topLeft" | "bottomLeft") { 0 } else { top.col };
-            pane_first = Some(CellRef::new(row, col));
+            pane_first = Some(match (sheet.freeze, pane_top_left) {
+                (Some((rows, cols)), _) => {
+                    let row = if rows > 0 && matches!(a, "topLeft" | "topRight") { 0 } else { top.row };
+                    let col = if cols > 0 && matches!(a, "topLeft" | "bottomLeft") { 0 } else { top.col };
+                    CellRef::new(row, col)
+                }
+                // A split that isn't frozen: the panes below and right of the split start at the
+                // pane's first cell, the others at the sheet view's.
+                (None, Some(second)) => {
+                    let row = if matches!(a, "bottomLeft" | "bottomRight") { second.row } else { top.row };
+                    let col = if matches!(a, "topRight" | "bottomRight") { second.col } else { top.col };
+                    CellRef::new(row, col)
+                }
+                (None, None) => top,
+            });
         }
     }
     let cell = |s: &El| s.attr("activeCell").and_then(CellRef::parse);

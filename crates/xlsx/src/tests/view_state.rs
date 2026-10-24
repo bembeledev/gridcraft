@@ -44,6 +44,21 @@ fn each_active_pane_starts_at_its_own_first_cell() {
 }
 
 #[test]
+fn a_split_pane_without_a_selection_starts_at_its_first_cell() {
+    // Split (not frozen) after column B and row 3, the sheet view at A1, the second panes at F20.
+    let pane = |active: &str| {
+        sheet(&format!(
+            r#"<sheetView workbookViewId="0"><pane xSplit="2400" ySplit="900" topLeftCell="F20" activePane="{active}"/><selection activeCell="A1" sqref="A1"/></sheetView>"#
+        ))
+        .view_active
+    };
+    assert_eq!(pane("bottomRight"), c("F20"));
+    assert_eq!(pane("topRight"), c("F1"));
+    assert_eq!(pane("bottomLeft"), c("A20"));
+    assert_eq!(pane("topLeft"), c("A1"));
+}
+
+#[test]
 fn a_pane_without_a_selection_keeps_the_axis_that_isnt_frozen() {
     // Rows 1:7 frozen, the sheet scrolled to column D: the panes below and above the split both
     // start at column D.

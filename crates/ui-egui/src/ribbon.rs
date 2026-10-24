@@ -211,6 +211,8 @@ fn paint_title(ui: &Ui, center: egui::Pos2, title: &str, dirty: bool, max_w: f32
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
+    let open_id = egui::Id::new("ribbon_overflow_open");
+    let dialog_was_open_id = egui::Id::new("ribbon_overflow_dialog_was_open");
     let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
     // A contextual tab exists only while its object is selected (Excel hides Table Design once the
     // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
@@ -320,6 +322,20 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
             });
             if collapsed {
+                let dialog_is_open = app.dialog.is_some();
+                let dialog_was_open = ui.data(|data| data.get_temp::<bool>(dialog_was_open_id)).unwrap_or(dialog_is_open);
+                let overflow_open = ui.data(|data| data.get_temp::<String>(open_id)).as_deref() == Some(app.ui.ribbon_tab.as_str());
+                let dismiss_overflow = overflow_open && dialog_is_open && !dialog_was_open;
+                if dismiss_overflow {
+                    egui::Popup::close_all(ui.ctx());
+                    ui.ctx().request_repaint();
+                }
+                ui.data_mut(|data| {
+                    data.insert_temp(dialog_was_open_id, dialog_is_open);
+                    if dismiss_overflow {
+                        data.remove::<String>(open_id);
+                    }
+                });
                 return;
             }
             // Ribbon card.
@@ -334,7 +350,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let width_id = popup_id.with("content_width");
                 // Egui's memory tracks one popup. Keep this parent separately so opening
                 // a font/colour picker cannot replace it and unmount the picker next frame.
-                let open_id = egui::Id::new("ribbon_overflow_open");
                 let mut popup_open = ui.data(|data| data.get_temp::<String>(open_id)).as_deref() == Some(app.ui.ribbon_tab.as_str());
                 let content_width = if popup_open {
                     ui.data(|data| data.get_temp::<f32>(width_id)).unwrap_or(inner.width())
@@ -395,7 +410,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 // SheetApp dialogs take over from the ribbon. Child font/size/colour
                 // popups (including More Colors) are owned by these controls instead,
                 // so they keep the parent mounted while their interaction continues.
-                let dialog_was_open_id = egui::Id::new("ribbon_overflow_dialog_was_open");
                 let dialog_is_open = app.dialog.is_some();
                 let dialog_was_open = ui.data(|data| data.get_temp::<bool>(dialog_was_open_id)).unwrap_or(dialog_is_open);
                 if popup_open && dialog_is_open && !dialog_was_open {

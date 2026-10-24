@@ -169,6 +169,19 @@ fn overflow_stays_open_when_a_dialog_was_already_open() {
 }
 
 #[test]
+fn collapsed_ribbon_tracks_dialog_opening_and_dismisses_overflow() {
+    let mut h = harness(640.0, 700.0);
+    open_overflow(&mut h);
+    assert_eq!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::new("ribbon_overflow_open"))).as_deref(), Some("Home"));
+
+    h.state_mut().ui.ribbon_collapsed = true;
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool":""}));
+    h.run_steps(4);
+
+    assert!(h.ctx.data(|data| data.get_temp::<String>(egui::Id::new("ribbon_overflow_open"))).is_none());
+}
+
+#[test]
 fn overflow_closes_on_escape_and_translates_its_anchors() {
     let mut h = harness(640.0, 480.0);
     open_overflow(&mut h);

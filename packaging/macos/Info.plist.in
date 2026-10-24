@@ -6,6 +6,17 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- The interface languages GridCraft has: macOS shows what it adds to the menus (Window's
+       Move & Resize, Edit's Start Dictation) in the one of them the user prefers. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string><string>de</string><string>es</string><string>fr</string><string>it</string>
+    <string>nl</string><string>pt-BR</string><string>pl</string><string>cs</string><string>ro</string>
+    <string>el</string><string>tr</string><string>ru</string><string>uk</string><string>sr</string>
+    <string>vi</string><string>ja</string><string>ko</string><string>zh-Hans</string>
+  </array>
+  <key>CFBundleAllowMixedLocalizations</key>
+  <true/>
   <key>CFBundleDisplayName</key>
   <string>GridCraft</string>
   <key>CFBundleName</key>

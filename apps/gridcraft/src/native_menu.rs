@@ -1,10 +1,13 @@
 //! macOS: the native menu bar (File, Edit, View, Insert, Format, Tools, Data, Window, Help), as
-//! a desktop spreadsheet has on the Mac. Items run the same commands as the ribbon.
+//! a desktop spreadsheet has on the Mac. Items run the same commands as the ribbon. Titles are in
+//! the interface language and follow it when it changes.
 
+use std::cell::Cell;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
 use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::i18n::Language;
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
@@ -129,7 +132,8 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             ],
         ),
         (
-            "Tools",
+            // Excel for Mac's name for it differs from the ribbon's Tools in some languages.
+            "menu|Tools",
             vec![
                 ("Spelling…", "dialog:spelling", None),
                 ("Workbook Statistics", "dialog:statistics", None),
@@ -185,6 +189,29 @@ pub struct NativeMenu {
     _menu: Menu,
     events: Receiver<MenuEvent>,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
+    /// Every entry with a title, and its English text (the catalog key).
+    titled: Vec<(Titled, &'static str)>,
+    /// The language the titles are in.
+    language: Cell<Language>,
+}
+
+/// A menu entry whose title follows the interface language.
+enum Titled {
+    Item(MenuItem),
+    Check(CheckMenuItem),
+    Sub(Submenu),
+    Predefined(PredefinedMenuItem),
+}
+
+impl Titled {
+    fn set_text(&self, text: &str) {
+        match self {
+            Titled::Item(i) => i.set_text(text),
+            Titled::Check(i) => i.set_text(text),
+            Titled::Sub(i) => i.set_text(text),
+            Titled::Predefined(i) => i.set_text(text),
+        }
+    }
 }
 
 fn select_theme(app: &mut SheetApp, id: &str) -> bool {
@@ -199,49 +226,66 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
 }
 
 impl NativeMenu {
-    pub fn install(ctx: &egui::Context) -> NativeMenu {
+    pub fn install(ctx: &egui::Context, language: Language) -> NativeMenu {
+        let tr = |key: &str| language.tr(key).to_owned();
+        let mut titled: Vec<(Titled, &'static str)> = Vec::new();
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let about = MenuItem::with_id("dialog:about", tr("About GridCraft"), true, None);
+        let services = PredefinedMenuItem::services(Some(&tr("Services")));
+        let hide = PredefinedMenuItem::hide(Some(&tr("Hide GridCraft")));
+        let hide_others = PredefinedMenuItem::hide_others(Some(&tr("Hide Others")));
+        let show_all = PredefinedMenuItem::show_all(Some(&tr("Show All")));
+        let quit = PredefinedMenuItem::quit(Some(&tr("Quit GridCraft")));
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
+            &services,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
+            &hide,
+            &hide_others,
+            &show_all,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &quit,
         ]);
+        titled.push((Titled::Item(about), "About GridCraft"));
+        for (item, key) in
+            [(services, "Services"), (hide, "Hide GridCraft"), (hide_others, "Hide Others"), (show_all, "Show All"), (quit, "Quit GridCraft")]
+        {
+            titled.push((Titled::Predefined(item), key));
+        }
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
         let mut window_menu = None;
         for (title, entries) in tree() {
-            let sub = Submenu::new(title, true);
+            let sub = Submenu::new(tr(title), true);
             for (label, id, acc) in entries {
                 if label == "-" {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                     continue;
                 }
                 if id == "view.theme" {
-                    let themes = Submenu::new(label, true);
+                    let themes = Submenu::new(tr(label), true);
                     for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
+                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), tr(label), true, false, None);
                         let _ = themes.append(&item);
-                        theme_items.push((mode, item));
+                        theme_items.push((mode, item.clone()));
+                        titled.push((Titled::Check(item), label));
                     }
                     let _ = sub.append(&themes);
+                    titled.push((Titled::Sub(themes), label));
                     continue;
                 }
                 let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
-                let item = MenuItem::with_id(id, label, true, accel);
+                let item = MenuItem::with_id(id, tr(label), true, accel);
                 let _ = sub.append(&item);
+                titled.push((Titled::Item(item), label));
             }
             let _ = menu.append(&sub);
             if title == "Window" {
-                window_menu = Some(sub);
+                window_menu = Some(sub.clone());
             }
+            titled.push((Titled::Sub(sub), title));
         }
         menu.init_for_nsapp();
         // NSApp's windowsMenu is where macOS adds Move & Resize, Fill and Center, the targets of the
@@ -256,10 +300,18 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items }
+        NativeMenu { _menu: menu, events: rx, theme_items, titled, language: Cell::new(language) }
     }
 
     pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
+        // The interface language changed (View › Interface Language): retitle the menus.
+        let language = app.ui.language;
+        if language != self.language.get() {
+            self.language.set(language);
+            for (entry, key) in &self.titled {
+                entry.set_text(language.tr(key));
+            }
+        }
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.

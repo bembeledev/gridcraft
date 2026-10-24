@@ -71,8 +71,10 @@ drawing its own:
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
   comments). Tab indents (every selected line, Shift+Tab dedents), Enter keeps the line's
   indentation (one level more after a Python colon), both applied in input order with the typing
-  around them (a frame can carry several events), and it scrolls past `max_lines` with the
-  caret in view. The tokenizer and the key edits are pure functions with tests, including
+  around them: a pass can carry several events, and the editor's keys that follow an event the
+  text field acts on (select all, an arrow) wait for the editor's next pass, which puts them
+  ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
+  scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
   scrolls; `formula_bar::BarLayout` records where its parts went each frame, for tests.

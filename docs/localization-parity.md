@@ -39,8 +39,9 @@ right-to-left sheets and full complex-script support. Part of
   Japanese and Portuguese **~43%** (measured count / estimated total).
 - **en-US formulas and input; regional display.** Function names, the `,` argument separator,
   typed numbers and dates, the cell editor, files, commands, CSV and `TEXT()` are en-US. The
-  grid shows numbers and dates in the system's region (`numfmt::Locale`, from the region of the
-  system locale: CH/LI, DE/AT/LU, FR, GB/IE, IT/ES/BR, NL, JP, CN): its decimal and digit-group
+  grid shows numbers and dates in the system's region (`numfmt::Locale`, from the Region setting
+  on macOS, `LC_NUMERIC` / `LC_ALL` / `LANG` on Linux and the user locale on Windows, not the
+  interface language: CH/LI, DE/AT/LU, FR, GB/IE, IT/ES/BR, NL, JP, CN): its decimal and digit-group
   separators for a format's `.` and `,`, and its short date for the built-in short date format
   (`m/d/yyyy`, number format 14, and 22 with time). Users ask for localized function names and
   `;` separators (#45); German with localized numbers and formulas was PR #163 (closed).
@@ -113,7 +114,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-24 | minor | The grid shows numbers and dates in the system's region: decimal and digit-group separators (de-CH `1'169.50`, de-DE `1.169,50`, fr-FR narrow no-break space) and the region's short date for the built-in short date format (de-CH `01.01.2024`). Region first, so macOS `en-CH` gets Swiss formats. Input, the editor, files, commands, CSV and `TEXT()` stay en-US |
+| 2026-10-24 | minor | The grid shows numbers and dates in the system's region: decimal and digit-group separators (de-CH `1'169.50`, de-DE `1.169,50`, fr-FR narrow no-break space) and the region's short date for the built-in short date format (de-CH `01.01.2024`). The region comes from macOS's Region setting, Linux's `LC_NUMERIC` (or `LC_ALL`, `LANG`) or Windows's user locale, not the interface language, so English (US) with the Region set to Switzerland gets Swiss formats. Input, the editor, files, commands, CSV and `TEXT()` stay en-US |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

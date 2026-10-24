@@ -538,12 +538,41 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
 pub fn system_number_locale() -> gridcraft_engine::numfmt::Locale {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        sys_locale::get_locale().map(|tag| gridcraft_engine::numfmt::Locale::from_tag(&tag)).unwrap_or_default()
+        system_region_tag().map(|tag| gridcraft_engine::numfmt::Locale::from_tag(&tag)).unwrap_or_default()
     }
     #[cfg(target_arch = "wasm32")]
     {
         gridcraft_engine::numfmt::Locale::default()
     }
+}
+
+/// The locale tag whose region the system formats numbers and dates for. Not the interface
+/// language, which can name another region (English (US) with the Region set to Switzerland):
+/// macOS's current locale follows the Region setting, Linux has `LC_NUMERIC` (or `LC_ALL`, `LANG`),
+/// and Windows's user locale is its format locale.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_region_tag() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(objc2_foundation::NSLocale::currentLocale().localeIdentifier().to_string())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        region_tag_from_env(|k| std::env::var(k).ok())
+    }
+    #[cfg(not(unix))]
+    {
+        sys_locale::get_locale()
+    }
+}
+
+/// The POSIX locale numbers are formatted in: the first of `LC_ALL`, `LC_NUMERIC` and `LANG` that is
+/// set, as the C library picks it; none for the C locale.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn region_tag_from_env(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let tag = ["LC_ALL", "LC_NUMERIC", "LANG"].into_iter().filter_map(var).find(|v| !v.is_empty())?;
+    let name = tag.split(['.', '@']).next().unwrap_or("");
+    (name != "C" && name != "POSIX").then_some(tag)
 }
 
 /// Text for a value with General narrowing to the available width, in the region `loc`.
@@ -4066,6 +4095,25 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn numbers_take_the_posix_numeric_locale_not_the_message_language() {
+        use super::region_tag_from_env;
+        let env = |vars: &[(&'static str, &'static str)]| {
+            let vars = vars.to_vec();
+            region_tag_from_env(move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()))
+        };
+        // English messages, Swiss numbers: LANGUAGE and LC_MESSAGES don't count.
+        assert_eq!(
+            env(&[("LANGUAGE", "en_US"), ("LC_MESSAGES", "en_US.UTF-8"), ("LC_NUMERIC", "de_CH.UTF-8"), ("LANG", "en_US.UTF-8")]).as_deref(),
+            Some("de_CH.UTF-8")
+        );
+        assert_eq!(env(&[("LC_ALL", "fr_FR.UTF-8"), ("LC_NUMERIC", "de_CH.UTF-8")]).as_deref(), Some("fr_FR.UTF-8"));
+        assert_eq!(env(&[("LC_NUMERIC", ""), ("LANG", "en_GB.UTF-8")]).as_deref(), Some("en_GB.UTF-8"));
+        assert_eq!(env(&[("LANG", "C.UTF-8")]), None);
+        assert_eq!(env(&[("LC_ALL", "POSIX")]), None);
+        assert_eq!(env(&[]), None);
+    }
 
     #[test]
     fn editor_matches_the_cell_while_the_text_fits() {

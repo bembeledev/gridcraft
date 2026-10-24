@@ -3420,6 +3420,14 @@ fn phonetic_readings_travel_with_their_text() {
     assert!(has(&s, "B5"), "it moves with its column");
     s.execute("cell.set", json!({"cell": "B5", "input": "=1+1"})).unwrap();
     assert!(!has(&s, "B5"), "a formula has no reading");
+    // Adding a number to text leaves the text, and so its reading.
+    s.execute("cell.set", json!({"cell": "H1", "input": "東"})).unwrap();
+    let own = std::sync::Arc::new(gridcraft_model::PhoneticString { text: "東".into(), runs: Vec::new(), props: None });
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().readings.insert(CellRef::parse("H1").unwrap(), own);
+    s.execute("cell.set", json!({"cell": "H3", "input": "3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "H3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "H1", "operation": "add"})).unwrap();
+    assert!(has(&s, "H1"), "the text stays, its reading too");
 }
 
 #[test]

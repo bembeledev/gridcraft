@@ -107,7 +107,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     let color = if read_only { t.text_disabled } else { t.text };
                     let galley = child.painter().layout(text, font.clone(), color, inner.width());
                     let lines = galley.rows.len();
-                    egui::ScrollArea::vertical().id_salt(id.with("view")).max_height(inner.height()).auto_shrink([false, true]).show(
+                    // Each cell's view starts at its top: the offset is kept per cell, not per bar.
+                    let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet, d.selection.active.row, d.selection.active.col));
+                    egui::ScrollArea::vertical().id_salt(id.with(("view", shown))).max_height(inner.height()).auto_shrink([false, true]).show(
                         &mut child,
                         |ui| {
                             if ui.add(egui::Label::new(galley).sense(Sense::click())).clicked() && !read_only {

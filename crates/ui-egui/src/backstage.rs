@@ -983,6 +983,12 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
+    section(ui, lang, "Display options for this worksheet");
+    let mut page_breaks = app.session.active().and_then(|d| d.wb.active().map(|s| s.show_page_breaks)).unwrap_or(false);
+    if ui.checkbox(&mut page_breaks, lang.tr("Show page breaks")).changed() {
+        app.run_or_alert("view.showPageBreaks", json!({"on": page_breaks}));
+    }
+    ui.add_space(18.0);
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
     use gridcraft_engine::model::CalcMode;

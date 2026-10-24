@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A0|A1|A2|A3|A4|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -83,6 +83,9 @@ fn known_paper(name: &str) -> Option<(f32, f32)> {
         "legal" | "uslegal" => (612.0, 1008.0),
         "a4" => (595.28, 841.89),
         "a3" => (841.89, 1190.55),
+        "a2" => (1190.55, 1683.78),
+        "a1" => (1683.78, 2383.94),
+        "a0" => (2383.94, 3370.39),
         "a5" => (419.53, 595.28),
         "a6" => (297.64, 419.53),
         "tabloid" | "11x17" => (792.0, 1224.0),
@@ -2209,6 +2212,9 @@ mod tests {
     fn japanese_paper_sizes_are_jis() {
         for (name, w, h) in [
             ("A4", 595.28, 841.89), // unchanged
+            ("A2", 1190.55, 1683.78),
+            ("a1", 1683.78, 2383.94),
+            ("A0", 2383.94, 3370.39),
             ("B4", 728.50, 1031.81),
             ("B5", 515.91, 728.50),
             ("B6", 362.83, 515.91),

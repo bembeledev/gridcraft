@@ -104,6 +104,24 @@ fn bar_grows_to_five_lines_then_scrolls_with_name_box_pinned() {
 }
 
 #[test]
+fn enter_that_closes_a_message_box_adds_no_line_to_the_entry() {
+    // A message box over the editor (a data validation alert) takes Enter to close. The bar's
+    // field is multi-line, and a field of its own would add a line on that Enter; the editor
+    // handles Enter itself, so the field does nothing with it.
+    let mut h = harness(blank());
+    h.state_mut().begin_edit(None, true);
+    h.run_steps(2);
+    type_text(&mut h, "abc");
+    h.state_mut().message = Some(("Stop".into(), "Whole numbers only.".into()));
+    h.run_steps(2);
+    h.input_mut().events.extend(key(Key::Enter, Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().message.is_none(), "Enter closed the message box");
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("abc"), "and added nothing to the entry");
+    assert_eq!(layout(&h).lines, 1);
+}
+
+#[test]
 fn chevron_pins_the_bar_at_five_lines() {
     let mut h = harness(blank());
     h.state_mut().ui.formula_bar_expanded = true;

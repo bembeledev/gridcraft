@@ -247,8 +247,9 @@ fn entry_shrank(chars_before: usize, text: &str) -> bool {
     text.chars().count() < chars_before
 }
 
-/// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
-/// The editor's text field, the same in the cell and in the formula bar.
+/// The editor's text field, the same in the cell and in the formula bar. Enter is the editor's
+/// own key (it commits, and Alt+Enter breaks the line), so the field itself does nothing with it:
+/// a message box over the editor takes Enter to close, and the field must not add a line then.
 fn show_edit<'t>(
     edit: TextEdit<'t>,
     ui: &mut egui::Ui,
@@ -264,10 +265,12 @@ fn show_edit<'t>(
         .desired_rows(1)
         .layouter(layouter)
         .lock_focus(true)
+        .return_key(None)
         .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         .show(ui)
 }
 
+/// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };

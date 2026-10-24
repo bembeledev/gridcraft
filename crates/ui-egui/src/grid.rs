@@ -453,7 +453,8 @@ struct Look {
 
 /// A cell's rich-text runs laid out, each in its own font, size and colour (the cell's for a run
 /// without one) at the cell text's scale; on one line (breaks dropped) or wrapped at `wrap_w`.
-/// `None` when the runs don't describe `text`.
+/// `None` when the runs don't describe `text`. With the job, which of its sections are double
+/// underlined: egui draws one underline, [`second_underlines`] the other.
 #[allow(clippy::too_many_arguments)]
 fn rich_job(
     rich: &gridcraft_engine::model::RichText,
@@ -465,10 +466,11 @@ fn rich_job(
     z: f32,
     one_line: bool,
     wrap_w: f32,
-) -> Option<egui::text::LayoutJob> {
+) -> Option<(egui::text::LayoutJob, Vec<bool>)> {
     use gridcraft_engine::model::VertAlign;
     let spans = rich.spans(text)?;
     let mut job = egui::text::LayoutJob::default();
+    let mut doubled = Vec::new();
     job.wrap.max_width = wrap_w;
     for (t, f) in spans {
         let t: String = if one_line { t.chars().filter(|&ch| ch != '\n' && ch != '\r').collect() } else { t.to_string() };
@@ -500,9 +502,49 @@ fn rich_job(
                 fmt.strikethrough = Stroke::new(1.0, fmt.color);
             }
         }
+        let underline = f.map_or(base_font.underline, |f| f.underline);
+        doubled.push(matches!(underline, Underline::Double | Underline::DoubleAccounting));
         job.append(&t, 0.0, fmt);
     }
-    Some(job)
+    Some((job, doubled))
+}
+
+/// The second line of the double-underlined sections of a rich-text galley drawn at `pos`, 2 px
+/// below the line egui draws (at each glyph's bottom), as the plain path draws a double underline.
+fn second_underlines(p: &egui::Painter, galley: &egui::Galley, pos: Pos2, doubled: &[bool]) {
+    if galley.job.sections.len() != doubled.len() || !doubled.contains(&true) {
+        return;
+    }
+    // Glyphs come in the text's order, but not one per character (line breaks have none): each is
+    // matched to the next character it draws, whose byte decides the section.
+    let job = &galley.job;
+    let mut chars = job.text.char_indices();
+    for row in &galley.rows {
+        let mut run: Option<(f32, f32, f32, Color32)> = None;
+        let flush = |run: &mut Option<(f32, f32, f32, Color32)>| {
+            if let Some((x0, x1, y, color)) = run.take() {
+                p.line_segment([pos + vec2(x0, y + 2.0), pos + vec2(x1, y + 2.0)], Stroke::new(1.0, color));
+            }
+        };
+        for g in &row.glyphs {
+            let Some((at, _)) = chars.by_ref().find(|&(_, ch)| ch == g.chr) else { return };
+            let i = job.sections.iter().position(|s| s.byte_range.contains(&egui::text::ByteIndex(at))).unwrap_or(usize::MAX);
+            let Some(section) = job.sections.get(i).filter(|_| doubled.get(i) == Some(&true)) else {
+                flush(&mut run);
+                continue;
+            };
+            let r = g.logical_rect().translate(row.pos.to_vec2());
+            let color = section.format.underline.color;
+            match &mut run {
+                Some((_, x1, y, c)) if *y == r.bottom() && *c == color => *x1 = r.right(),
+                _ => {
+                    flush(&mut run);
+                    run = Some((r.left(), r.right(), r.bottom(), color));
+                }
+            }
+        }
+        flush(&mut run);
+    }
 }
 
 fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
@@ -1329,10 +1371,10 @@ pub(crate) fn paint_quadrant(
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-            let mut job = rich
+            let (mut job, doubled) = rich
                 .as_deref()
                 .and_then(|r| rich_job(r, &text, &font, &st.font, color, wb, z, false, wrap_w))
-                .unwrap_or_else(|| egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w));
+                .unwrap_or_else(|| (egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w), Vec::new()));
             job.halign = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
                 HAlign::Right => egui::Align::RIGHT,
@@ -1345,7 +1387,9 @@ pub(crate) fn paint_quadrant(
                 _ => text_left + pad + indent,
             };
             let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
-            p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
+            let clipped = p.with_clip_rect(rect.intersect(p.clip_rect()));
+            clipped.galley(pos2(x, y), galley.clone(), color);
+            second_underlines(&clipped, &galley, pos2(x, y) + galley.rect.min.to_vec2(), &doubled);
             continue;
         }
         // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -1362,9 +1406,9 @@ pub(crate) fn paint_quadrant(
         let rich_layout = rich.as_deref().and_then(|r| rich_job(r, &text, &font, &st.font, color, wb, z, true, f32::INFINITY));
         // Run by run, each run carries its own underline and strikeout.
         let decorated = rich_layout.is_some();
-        let mut galley = match rich_layout {
-            Some(job) => p.layout_job(job),
-            None => p.layout_no_wrap(first_line.clone(), font.clone(), color),
+        let (mut galley, doubled) = match rich_layout {
+            Some((job, doubled)) => (p.layout_job(job), doubled),
+            None => (p.layout_no_wrap(first_line.clone(), font.clone(), color), Vec::new()),
         };
         let mut w = galley.size().x;
         // Numbers and dates never overflow: they show #### when too narrow.
@@ -1462,6 +1506,7 @@ pub(crate) fn paint_quadrant(
             cp.add(shape);
         } else {
             cp.galley(pos2(x, y), galley.clone(), color);
+            second_underlines(&cp, &galley, pos2(x, y) + galley.rect.min.to_vec2(), &doubled);
         }
         let baseline = y + gh * 0.82;
         match st.font.underline {

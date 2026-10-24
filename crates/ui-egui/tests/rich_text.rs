@@ -125,3 +125,40 @@ fn show_formulas_keeps_the_runs_of_constants() {
     h.run_steps(3);
     assert_eq!(sections(&h, "Grade 5.5").map(|s| s.len()), Some(2));
 }
+
+#[test]
+fn a_double_underline_stays_double_in_its_runs() {
+    let lines = |underline: &str| {
+        let mut h = harness(&format!("underline-{underline}"));
+        h.state_mut().session.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"underline": underline}}})).unwrap();
+        h.run_steps(3);
+        let text = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                Shape::Text(t) if t.galley.job.text == "Grade 5.5" => Some((t.pos.x, t.galley.size().x)),
+                _ => None,
+            })
+            .expect("A1 is painted as one text");
+        let segments: Vec<(f32, f32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, .. } => Some((points[0].x, points[1].x)),
+                _ => None,
+            })
+            .collect();
+        (text, segments)
+    };
+    let (_, single) = lines("Single");
+    let ((left, width), double) = lines("Double");
+    // egui draws the first line with each run; the second is one more segment, under "Grade " only
+    // (the run that takes the cell's font), not across "5.5".
+    assert_eq!(double.len(), single.len() + 1, "{double:?} vs {single:?}");
+    let extra: Vec<_> = double.iter().filter(|s| !single.contains(s)).collect();
+    assert_eq!(extra.len(), 1, "{extra:?}");
+    let (x0, x1) = *extra[0];
+    assert!((x0 - left).abs() < 1.0 && x1 < left + width - 5.0, "the second line spans \"Grade \": {x0}..{x1} in {left}+{width}");
+}

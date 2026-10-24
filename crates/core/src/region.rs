@@ -13,7 +13,8 @@
 //! month and year are the Unicode CLDR conventions (`unicode-org/cldr-json`:
 //! `cldr-numbers-full/main/<locale>/numbers.json` and `cldr-dates-full/main/<locale>/ca-gregorian.json`),
 //! which is also what macOS, Android and ICU ship. They were read from those files for en-GB,
-//! en-IN, cs and ru, and written from the same conventions for the other regions.
+//! en-IN, cs and ru, read from ICU's CLDR 48 data for the Swiss regions and nl-NL, and written
+//! from the same conventions for the other regions.
 //! Deliberate choices where operating systems differ from CLDR:
 //! - Short dates use a four-digit year (`dd/mm/yyyy`, where CLDR has `dd/MM/y` or `dd/MM/yy`):
 //!   Excel's short date is the system's, Windows writes four digits, and a two-digit year would
@@ -27,10 +28,14 @@
 //!   Portuguese, which drops CLDR's period (`jan`, not `jan.`) as Excel in Brazil shows it.
 //! - French and Portuguese (Portugal) group digits with U+00A0 (Windows), not CLDR's U+202F.
 //!   Parsing accepts every space-like grouping character in those regions.
+//! - The Swiss regions (en-CH, de-CH, fr-CH, it-CH; Liechtenstein uses de-CH) group digits with
+//!   CLDR's ASCII apostrophe (`1'234.50`); parsing also accepts the typographic `’` that glibc
+//!   uses. French (Switzerland) writes a decimal point like the other Swiss regions and glibc's
+//!   `fr_CH`, where CLDR has a comma.
 //!
-//! Regions this module doesn't list (`de-CH`, `es-MX`, `en-CA`…) resolve to the main region of
-//! their language through [`lookup`]; their own conventions (a Swiss apostrophe, a Mexican
-//! decimal point) are not modelled.
+//! Regions this module doesn't list (`de-AT`, `es-MX`, `en-CA`…) resolve to the main region of
+//! their language through [`lookup`]; their own conventions (a Mexican decimal point) are not
+//! modelled.
 
 /// How digits are grouped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +182,33 @@ static EN_IN: Region = Region {
     currency_format_int: "\"₹\"#,##0",
 };
 
+static EN_CH: Region = Region {
+    tag: "en-CH",
+    name: "English (Switzerland)",
+    // English (Switzerland) has no LCID of its own: Windows reports LOCALE_CUSTOM_UNSPECIFIED.
+    lcid: 0x1000,
+    decimal: '.',
+    group: '\'',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '.',
+    time_sep: ':',
+    short_date: "dd.mm.yyyy",
+    long_date: "dddd, d mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd.mm.yyyy hh:mm",
+    months: EN_MONTHS,
+    months_abbr: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"],
+    months_genitive: None,
+    weekdays: EN_DAYS,
+    weekdays_abbr: EN_DAYS_ABBR,
+    am_pm: AM_PM,
+    currency: "CHF",
+    currency_format: "\"CHF\" #,##0.00",
+    currency_format_int: "\"CHF\" #,##0",
+};
+
 static ES_ES: Region = Region {
     tag: "es-ES",
     name: "Español (España)",
@@ -229,6 +261,32 @@ static DE_DE: Region = Region {
     currency_format_int: "#,##0 \"€\"",
 };
 
+static DE_CH: Region = Region {
+    tag: "de-CH",
+    name: "Deutsch (Schweiz)",
+    lcid: 0x0807,
+    decimal: '.',
+    group: '\'',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '.',
+    time_sep: ':',
+    short_date: "dd.mm.yyyy",
+    long_date: "dddd, d. mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd.mm.yyyy hh:mm",
+    months: ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"],
+    months_abbr: ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+    months_genitive: None,
+    weekdays: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+    weekdays_abbr: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+    am_pm: AM_PM,
+    currency: "CHF",
+    currency_format: "\"CHF\" #,##0.00",
+    currency_format_int: "\"CHF\" #,##0",
+};
+
 static FR_FR: Region = Region {
     tag: "fr-FR",
     name: "Français (France)",
@@ -255,6 +313,32 @@ static FR_FR: Region = Region {
     currency_format_int: "#,##0 \"€\"",
 };
 
+static FR_CH: Region = Region {
+    tag: "fr-CH",
+    name: "Français (Suisse)",
+    lcid: 0x100C,
+    decimal: '.',
+    group: '\'',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '.',
+    time_sep: ':',
+    short_date: "dd.mm.yyyy",
+    long_date: "dddd, d mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd.mm.yyyy hh:mm",
+    months: ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"],
+    months_abbr: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+    months_genitive: None,
+    weekdays: ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+    weekdays_abbr: ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
+    am_pm: AM_PM,
+    currency: "CHF",
+    currency_format: "#,##0.00 \"CHF\"",
+    currency_format_int: "#,##0 \"CHF\"",
+};
+
 static IT_IT: Region = Region {
     tag: "it-IT",
     name: "Italiano (Italia)",
@@ -279,6 +363,58 @@ static IT_IT: Region = Region {
     currency: "€",
     currency_format: "#,##0.00 \"€\"",
     currency_format_int: "#,##0 \"€\"",
+};
+
+static IT_CH: Region = Region {
+    tag: "it-CH",
+    name: "Italiano (Svizzera)",
+    lcid: 0x0810,
+    decimal: '.',
+    group: '\'',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '.',
+    time_sep: ':',
+    short_date: "dd.mm.yyyy",
+    long_date: "dddd, d mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd.mm.yyyy hh:mm",
+    months: ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"],
+    months_abbr: ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"],
+    months_genitive: None,
+    weekdays: ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"],
+    weekdays_abbr: ["dom", "lun", "mar", "mer", "gio", "ven", "sab"],
+    am_pm: AM_PM,
+    currency: "CHF",
+    currency_format: "\"CHF\" #,##0.00",
+    currency_format_int: "\"CHF\" #,##0",
+};
+
+static NL_NL: Region = Region {
+    tag: "nl-NL",
+    name: "Nederlands (Nederland)",
+    lcid: 0x0413,
+    decimal: ',',
+    group: '.',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '-',
+    time_sep: ':',
+    short_date: "dd-mm-yyyy",
+    long_date: "dddd d mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd-mm-yyyy hh:mm",
+    months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+    months_abbr: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+    months_genitive: None,
+    weekdays: ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
+    weekdays_abbr: ["zo", "ma", "di", "wo", "do", "vr", "za"],
+    am_pm: AM_PM,
+    currency: "€",
+    currency_format: "\"€\" #,##0.00",
+    currency_format_int: "\"€\" #,##0",
 };
 
 static PT_BR: Region = Region {
@@ -489,7 +625,10 @@ static ZH_TW: Region = Region {
     currency_format_int: "\"NT$\"#,##0",
 };
 
-static ALL: [&Region; 15] = [&EN_US, &EN_GB, &EN_IN, &ES_ES, &DE_DE, &FR_FR, &IT_IT, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &JA_JP, &KO_KR, &ZH_CN, &ZH_TW];
+static ALL: [&Region; 20] = [
+    &EN_US, &EN_GB, &EN_IN, &EN_CH, &ES_ES, &DE_DE, &DE_CH, &FR_FR, &FR_CH, &IT_IT, &IT_CH, &NL_NL, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &JA_JP, &KO_KR,
+    &ZH_CN, &ZH_TW,
+];
 
 /// Every region, English (United States) first.
 pub fn all() -> &'static [&'static Region] {
@@ -539,6 +678,7 @@ pub fn lookup(tag: &str) -> &'static Region {
         "en" => match country.as_str() {
             "GB" | "AU" | "NZ" | "IE" => "en-GB",
             "IN" => "en-IN",
+            "CH" | "LI" => "en-CH",
             _ => "en-US",
         },
         "pt" => match country.as_str() {
@@ -553,9 +693,19 @@ pub fn lookup(tag: &str) -> &'static Region {
             _ => "zh-CN",
         },
         "es" => "es-ES",
-        "de" => "de-DE",
-        "fr" => "fr-FR",
-        "it" => "it-IT",
+        "de" => match country.as_str() {
+            "CH" | "LI" => "de-CH",
+            _ => "de-DE",
+        },
+        "fr" => match country.as_str() {
+            "CH" => "fr-CH",
+            _ => "fr-FR",
+        },
+        "it" => match country.as_str() {
+            "CH" => "it-CH",
+            _ => "it-IT",
+        },
+        "nl" => "nl-NL",
         "ru" => "ru-RU",
         "cs" => "cs-CZ",
         "ja" => "ja-JP",
@@ -568,9 +718,10 @@ pub fn lookup(tag: &str) -> &'static Region {
 impl Region {
     /// True for the characters that separate groups of digits in this region. A region that
     /// groups with a space also accepts the other space-like characters (NBSP, narrow NBSP, thin
-    /// space), as people type and paste any of them.
+    /// space), as people type and paste any of them; one that groups with an apostrophe accepts
+    /// both `'` and `’`.
     pub fn is_group(&self, c: char) -> bool {
-        c == self.group || (is_space_like(self.group) && is_space_like(c))
+        c == self.group || (is_space_like(self.group) && is_space_like(c)) || (is_apostrophe_like(self.group) && is_apostrophe_like(c))
     }
 
     /// True when the currency symbol comes before the number.
@@ -629,6 +780,10 @@ fn is_space_like(c: char) -> bool {
     matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}')
 }
 
+fn is_apostrophe_like(c: char) -> bool {
+    matches!(c, '\'' | '\u{2019}')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,6 +797,14 @@ mod tests {
         assert_eq!(lookup("pt-AO").tag, "pt-PT");
         assert_eq!(lookup("de").tag, "de-DE");
         assert_eq!(lookup("de-AT").tag, "de-DE");
+        assert_eq!(lookup("de_CH.UTF-8").tag, "de-CH");
+        assert_eq!(lookup("de-LI").tag, "de-CH");
+        assert_eq!(lookup("fr-CH").tag, "fr-CH");
+        assert_eq!(lookup("fr-BE").tag, "fr-FR");
+        assert_eq!(lookup("it_CH.UTF-8").tag, "it-CH");
+        assert_eq!(lookup("en-CH").tag, "en-CH");
+        assert_eq!(lookup("nl_NL.UTF-8").tag, "nl-NL");
+        assert_eq!(lookup("nl").tag, "nl-NL");
         assert_eq!(lookup("en-AU").tag, "en-GB");
         assert_eq!(lookup("en_GB.UTF-8").tag, "en-GB");
         assert_eq!(lookup("en-IN").tag, "en-IN");
@@ -699,9 +862,12 @@ mod tests {
     }
 
     #[test]
-    fn space_like_groups_are_interchangeable() {
+    fn space_like_and_apostrophe_groups_are_interchangeable() {
         let fr = find("fr-FR").unwrap();
         assert!(fr.is_group('\u{a0}') && fr.is_group(' ') && fr.is_group('\u{202f}'));
         assert!(!find("de-DE").unwrap().is_group(' '));
+        let ch = find("de-CH").unwrap();
+        assert!(ch.is_group('\'') && ch.is_group('\u{2019}'));
+        assert!(!ch.is_group(' ') && !find("de-DE").unwrap().is_group('\''));
     }
 }

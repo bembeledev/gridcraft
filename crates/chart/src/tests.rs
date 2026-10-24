@@ -148,6 +148,35 @@ fn logarithmic_area_chart_omits_non_positive_values() {
 }
 
 #[test]
+fn logarithmic_area_chart_keeps_positive_runs_around_invalid_values() {
+    let mut c = chart(ChartKind::Area);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.x_title = None;
+    c.y_title = None;
+    c.format.y_axis.minimum = Some(0.1);
+    c.format.y_axis.maximum = Some(10.0);
+    c.format.y_axis.logarithmic = true;
+    let color = [12, 34, 56, 255];
+    let data = ChartData {
+        categories: vec!["Valid 1".into(), "Negative".into(), "Missing".into(), "Valid 2".into()],
+        series: vec![SeriesData { values: vec![Some(1.0), Some(-2.0), None, Some(4.0)], color, kind: c.kind, ..Default::default() }],
+        ..Default::default()
+    };
+
+    let prims = render(&c, &data, 480.0, 320.0, &ApproxMeasure);
+    let areas: Vec<_> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Polygon { pts, fill, .. } if *fill == color => Some(pts),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(areas.len(), 2, "positive runs should be rendered separately");
+    assert!(areas.iter().all(|pts| pts.iter().all(|p| p[0].is_finite() && p[1].is_finite())));
+}
+
+#[test]
 fn logarithmic_area_and_column_charts_use_positive_baselines() {
     let color = [12, 34, 56, 255];
     for (kind, is_area) in [(ChartKind::Area, true), (ChartKind::ColumnClustered, false)] {

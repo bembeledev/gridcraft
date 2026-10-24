@@ -1019,6 +1019,23 @@ fn style_series(ctx: &mut Ctx, start: usize, spec: Option<&gridcraft_model::Char
     }
 }
 
+fn draw_area_run(ctx: &mut Ctx, mut top: Vec<[f32; 2]>, mut base: Vec<[f32; 2]>, cw: f32, color: Rgba) {
+    if top.len() == 1 {
+        // A single point: give it some width.
+        if let (Some(t), Some(b)) = (top.first().copied(), base.first().copied()) {
+            top = vec![[t[0] - cw * 0.3, t[1]], [t[0] + cw * 0.3, t[1]]];
+            base = vec![[b[0] - cw * 0.3, b[1]], [b[0] + cw * 0.3, b[1]]];
+        }
+    }
+    let top = decimate(top, MAX_LINE_PTS * 2);
+    let base = decimate(base, MAX_LINE_PTS * 2);
+    let mut poly = top;
+    poly.extend(base.into_iter().rev());
+    if poly.len() >= 3 {
+        ctx.out.push(Prim::Polygon { pts: poly, fill: color, stroke: None });
+    }
+}
+
 fn value_range(it: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
     it.fold(None, |acc, v| match acc {
         None => Some((v, v)),
@@ -1518,6 +1535,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let mut base = Vec::with_capacity(ncat);
                     for (j, sp) in row.iter().enumerate() {
                         let (b, t) = sp.unwrap_or((0.0, 0.0));
+                        if sc.logarithmic && !(t.is_finite() && t > 0.0) {
+                            draw_area_run(ctx, std::mem::take(&mut top), std::mem::take(&mut base), cw, s.color);
+                            continue;
+                        }
                         let c = center(j);
                         top.push([c, vpos(t, &sc)]);
                         let baseline = if sc.logarithmic && b <= 0.0 { sc.min } else { b };
@@ -1530,20 +1551,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
                         }
                     }
-                    if top.len() == 1 {
-                        // A single point: give it some width.
-                        if let (Some(t), Some(b)) = (top.first().copied(), base.first().copied()) {
-                            top = vec![[t[0] - cw * 0.3, t[1]], [t[0] + cw * 0.3, t[1]]];
-                            base = vec![[b[0] - cw * 0.3, b[1]], [b[0] + cw * 0.3, b[1]]];
-                        }
-                    }
-                    let top = decimate(top, MAX_LINE_PTS * 2);
-                    let base = decimate(base, MAX_LINE_PTS * 2);
-                    let mut poly = top;
-                    poly.extend(base.into_iter().rev());
-                    if poly.len() >= 3 {
-                        ctx.out.push(Prim::Polygon { pts: poly, fill: s.color, stroke: None });
-                    }
+                    draw_area_run(ctx, top, base, cw, s.color);
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;

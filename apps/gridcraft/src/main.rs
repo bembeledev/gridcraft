@@ -27,15 +27,16 @@ use serde_json::json;
 
 const WORKBOOK_SAVE_TYPES: [(&str, &str); 4] =
     [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-const CHART_IMAGE_SAVE_TYPES: [(&str, &str); 2] = [("PNG image (.png)", "png"), ("SVG vector (.svg)", "svg")];
+const CHART_PNG_SAVE_TYPES: [(&str, &str); 1] = [("PNG image (.png)", "png")];
+const CHART_SVG_SAVE_TYPES: [(&str, &str); 1] = [("SVG vector (.svg)", "svg")];
 
 fn save_picker_options(suggested: &str) -> (&'static [(&'static str, &'static str)], String) {
     let path = std::path::Path::new(suggested);
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let types = if ext.as_deref().is_some_and(|ext| CHART_IMAGE_SAVE_TYPES.iter().any(|(_, supported)| *supported == ext)) {
-        &CHART_IMAGE_SAVE_TYPES[..]
-    } else {
-        &WORKBOOK_SAVE_TYPES[..]
+    let types = match ext.as_deref() {
+        Some("png") => &CHART_PNG_SAVE_TYPES[..],
+        Some("svg") => &CHART_SVG_SAVE_TYPES[..],
+        _ => &WORKBOOK_SAVE_TYPES[..],
     };
     let ext = ext.filter(|ext| types.iter().any(|(_, supported)| *supported == ext)).unwrap_or_else(|| "xlsx".to_string());
     (types, ext)
@@ -408,7 +409,7 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
-    use super::{CHART_IMAGE_SAVE_TYPES, WORKBOOK_SAVE_TYPES, save_picker_options};
+    use super::{CHART_PNG_SAVE_TYPES, CHART_SVG_SAVE_TYPES, WORKBOOK_SAVE_TYPES, save_picker_options};
     use gridcraft_engine::io::FileKind;
 
     #[test]
@@ -420,10 +421,10 @@ mod packaging_tests {
 
         let (png_types, png_ext) = save_picker_options("Chart.PNG");
         assert_eq!(png_ext, "png");
-        assert_eq!(png_types, &CHART_IMAGE_SAVE_TYPES);
+        assert_eq!(png_types, &CHART_PNG_SAVE_TYPES);
         let (svg_types, svg_ext) = save_picker_options("Chart.svg");
         assert_eq!(svg_ext, "svg");
-        assert_eq!(svg_types, &CHART_IMAGE_SAVE_TYPES);
+        assert_eq!(svg_types, &CHART_SVG_SAVE_TYPES);
     }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the

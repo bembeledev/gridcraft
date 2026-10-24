@@ -12,6 +12,16 @@ use crate::theme::{self, Tokens};
 pub const MAX_LINES: usize = 5;
 /// The bar's height at one line.
 const ONE_LINE: f32 = 30.0;
+/// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
+/// and two pixels for the rounding to the pixel grid.
+const PAD: f32 = 14.0;
+
+/// The bar's height for one line of a font whose rows are `row_h` tall: Excel's 30 px, unless
+/// the rows need more (the Windows UI font's row is 17.28 px). Every line counted must fit in
+/// the field, whatever the font; `n` lines take `one_line(row_h) + (n - 1) * row_h`.
+pub fn one_line(row_h: f32) -> f32 {
+    ONE_LINE.max(row_h + PAD)
+}
 /// How long the bar takes to grow or shrink to a new line count.
 const EASE_SECONDS: f32 = 0.12;
 
@@ -62,7 +72,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Height follows the content's line count (last frame's), 1 to MAX_LINES; the chevron pins it
     // at MAX_LINES. It eases only when that target changes.
     let lines = if app.ui.formula_bar_expanded { MAX_LINES } else { last.lines.clamp(1, MAX_LINES) };
-    let target = ONE_LINE + (lines - 1) as f32 * row_h;
+    let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::new("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
     egui::Panel::top("formula_bar")
@@ -796,5 +806,22 @@ mod tests {
         // Backspacing "Some" to "Som" must not bring "SomeText" back.
         assert!(entry_shrank(4, "Som"));
         assert!(!entry_shrank(4, "Same"));
+    }
+
+    #[test]
+    fn one_line_fits_a_row_of_any_font() {
+        // macOS and Linux UI fonts: rows of 15 to 16 px keep Excel's 30 px bar.
+        assert_eq!(one_line(15.6), 30.0);
+        assert_eq!(one_line(16.0), 30.0);
+        // The Windows UI font's 17.28 px rows need more: the panel's and the field's margins take
+        // 12 px, and rounding to the pixel grid up to another one, so 30 px held only four rows
+        // of five (a tester's finding). Every counted line must fit in what is left.
+        for row_h in [17.0_f32, 17.28, 18.0, 20.0] {
+            for lines in 1..=MAX_LINES {
+                let bar = one_line(row_h) + (lines - 1) as f32 * row_h;
+                let inner = bar - 13.0;
+                assert!((inner / row_h).floor() as usize >= lines, "{lines} lines of {row_h} px in a {bar} px bar");
+            }
+        }
     }
 }

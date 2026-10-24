@@ -77,7 +77,9 @@ drawing its own:
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
-  scrolls; `formula_bar::BarLayout` records where its parts went each frame, for tests.
+  scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
+  the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
+  `formula_bar::BarLayout` records where its parts went each frame, for tests.
 
 
 ## Engine building blocks for multi-command actions

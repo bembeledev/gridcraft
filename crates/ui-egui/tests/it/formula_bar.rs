@@ -3,7 +3,7 @@
 use egui::{Event, Key, Modifiers, Rect, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES};
+use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES, one_line};
 use gridcraft_ui_egui::widgets::{Lang, code_editor};
 use gridcraft_ui_egui::{SheetApp, theme};
 use serde_json::json;
@@ -65,20 +65,22 @@ fn same(a: Rect, b: Rect) -> bool {
 #[test]
 fn bar_grows_to_five_lines_then_scrolls_with_name_box_pinned() {
     let mut h = harness(blank());
+    // The one-line height is 30 px unless the font's rows need more (Windows' do).
+    let rh = row_height(&h);
+    let base = one_line(rh);
     let one = layout(&h);
-    assert!((one.height - 30.0).abs() < 0.5, "one line is 30 px, got {}", one.height);
+    assert!((one.height - base).abs() < 0.5, "one line is {base} px, got {}", one.height);
     assert_eq!(one.lines, 1);
     h.state_mut().begin_edit(None, true);
     h.run_steps(2);
     type_text(&mut h, "line 1");
-    let rh = row_height(&h);
     for n in 2..=8 {
         alt_enter(&mut h);
         type_text(&mut h, &format!("line {n}"));
         settle(&mut h);
         let l = layout(&h);
         assert_eq!(l.lines, n, "the editor holds {n} lines");
-        let expect = 30.0 + (n.min(MAX_LINES) - 1) as f32 * rh;
+        let expect = base + (n.min(MAX_LINES) - 1) as f32 * rh;
         assert!((l.height - expect).abs() < 0.5, "{n} lines: height {} expected {expect}", l.height);
         assert!(same(l.name_box, one.name_box), "the Name Box stays on the first line ({n} lines)");
         assert!(same(l.buttons, one.buttons), "the buttons stay on the first line ({n} lines)");
@@ -96,11 +98,11 @@ fn bar_grows_to_five_lines_then_scrolls_with_name_box_pinned() {
     settle(&mut h);
     let viewing = layout(&h);
     assert_eq!(viewing.lines, 8);
-    assert!((viewing.height - (30.0 + 4.0 * rh)).abs() < 0.5);
+    assert!((viewing.height - (base + 4.0 * rh)).abs() < 0.5);
     // An empty cell shrinks it back to one line.
     h.state_mut().session.execute("selection.set", json!({"cell": "B1"})).unwrap();
     settle(&mut h);
-    assert!((layout(&h).height - 30.0).abs() < 0.5);
+    assert!((layout(&h).height - base).abs() < 0.5);
 }
 
 #[test]
@@ -127,10 +129,11 @@ fn chevron_pins_the_bar_at_five_lines() {
     h.state_mut().ui.formula_bar_expanded = true;
     settle(&mut h);
     let rh = row_height(&h);
-    assert!((layout(&h).height - (30.0 + 4.0 * rh)).abs() < 0.5);
+    let base = one_line(rh);
+    assert!((layout(&h).height - (base + 4.0 * rh)).abs() < 0.5);
     h.state_mut().ui.formula_bar_expanded = false;
     settle(&mut h);
-    assert!((layout(&h).height - 30.0).abs() < 0.5);
+    assert!((layout(&h).height - base).abs() < 0.5);
 }
 
 #[test]
@@ -140,9 +143,10 @@ fn height_eases_instead_of_jumping() {
     h.run_steps(2);
     let mid = layout(&h).height;
     let rh = row_height(&h);
-    assert!(mid > 30.0 + 0.5 && mid < 30.0 + 4.0 * rh - 0.5, "mid-ease height {mid}");
+    let base = one_line(rh);
+    assert!(mid > base + 0.5 && mid < base + 4.0 * rh - 0.5, "mid-ease height {mid}");
     settle(&mut h);
-    assert!((layout(&h).height - (30.0 + 4.0 * rh)).abs() < 0.5);
+    assert!((layout(&h).height - (base + 4.0 * rh)).abs() < 0.5);
 }
 
 fn in_cell_height(lines: usize) -> f32 {

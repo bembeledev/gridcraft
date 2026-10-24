@@ -277,7 +277,11 @@ fn scaled_portuguese_toolpak_keeps_its_actions_in_the_viewport() {
 fn toolpak_overwrite_actions_stay_visible_in_a_short_viewport() {
     let mut h = harness(360.0, 170.0);
     h.state_mut().open_dialog("analysisToolPak", json!({}));
-    h.state_mut().dialog.as_mut().unwrap().values.insert("askOverwrite".into(), json!(true));
+    let dialog = h.state_mut().dialog.as_mut();
+    assert!(dialog.is_some(), "Analysis ToolPak dialog did not open");
+    if let Some(dialog) = dialog {
+        dialog.values.insert("askOverwrite".into(), json!(true));
+    }
     h.run_steps(6);
 
     in_view(&h, h.get_by_role_and_label(Role::Button, "Replace").rect());

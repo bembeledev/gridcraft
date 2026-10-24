@@ -967,6 +967,21 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
             pg.fill_rect(x + pad, y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
         }
     }
+    // Where text runs on into empty neighbours: (row, left, right). Excel draws no vertical border
+    // inside such a run (observed), only at its ends.
+    let mut runs: Vec<(u32, f32, f32)> = Vec::new();
+    for (c, l) in &looks {
+        let (x, y, w, h, merged) = rect_of(*c);
+        if w > 0.0
+            && h > 0.0
+            && !sh.cell_pictures.contains_key(c)
+            && let Some((left, right)) = draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw), true)
+            && right - left > w + 0.01
+        {
+            runs.push((c.row, left, right));
+        }
+    }
+    let inside_run = |row: u32, edge_x: f32| runs.iter().any(|(r, l, rr)| *r == row && edge_x > l + 0.01 && edge_x < rr - 0.01);
     // Borders.
     for (c, l) in &looks {
         let (x, y, w, h, merged) = rect_of(*c);
@@ -983,8 +998,12 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         };
         draw_border(pg, &bd.top, b.wb, x, y, x + w, y, b.k);
         draw_border(pg, &bottom, b.wb, x, y + h, x + w, y + h, b.k);
-        draw_border(pg, &bd.left, b.wb, x, y, x, y + h, b.k);
-        draw_border(pg, &right, b.wb, x + w, y, x + w, y + h, b.k);
+        if !inside_run(c.row, x) {
+            draw_border(pg, &bd.left, b.wb, x, y, x, y + h, b.k);
+        }
+        if !inside_run(c.row, x + w) {
+            draw_border(pg, &right, b.wb, x + w, y, x + w, y + h, b.k);
+        }
         draw_border(pg, &bd.diag_down, b.wb, x, y, x + w, y + h, b.k);
         draw_border(pg, &bd.diag_up, b.wb, x, y + h, x + w, y, b.k);
     }
@@ -997,7 +1016,7 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else {
-            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw), false);
         }
     }
     pg.restore();
@@ -1105,16 +1124,30 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
-fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
+/// Draws a cell's text. With `dry`, draws nothing and returns the left and right edges the text
+/// spans (wider than the cell when it overflows into empty neighbours), so borders under
+/// overflowing text can be left out, as Excel does.
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    pg: &mut Page,
+    b: &Block,
+    c: CellRef,
+    l: &Look,
+    rect: (f32, f32, f32, f32),
+    merged: bool,
+    merges: &[RangeRef],
+    limits: (f32, f32),
+    dry: bool,
+) -> Option<(f32, f32)> {
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
     let v = sh.value(c);
     if v.is_empty() || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
-        return;
+        return None;
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
-        return;
+        return None;
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
@@ -1146,9 +1179,28 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         text = text.replace(['\n', '\r'], " ");
     }
     if text.is_empty() {
-        return;
+        return None;
     }
     let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    // A repeat fill (`* ` in the format, as accounting formats use) stretches the text across
+    // the cell, as the grid shows it: `Hours` at the left, `20` at the right.
+    let mut filled = false;
+    // The text came from the same code as `formatted` (General numbers have no fill), whose fill
+    // position it refers to; `value_text_as` put one fill character there already.
+    let from_format = !sh.show_formulas && !(code == "General" && is_num);
+    if let Some((ch, at)) = formatted.fill.filter(|_| !wrap && from_format) {
+        let cw = gridcraft_pdf::text_width(font, size, &ch.to_string());
+        let base = gridcraft_pdf::text_width(font, size, &formatted.text);
+        if cw > 0.0
+            && base < avail
+            && let (Some(head), Some(tail)) = (formatted.text.get(..at), formatted.text.get(at..))
+        {
+            let n = (((avail - base) / cw).floor() as usize).min(2000);
+            text = format!("{head}{}{tail}", ch.to_string().repeat(n));
+            tw = gridcraft_pdf::text_width(font, size, &text);
+            filled = true;
+        }
+    }
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
         tw = gridcraft_pdf::text_width(font, size, &text);
@@ -1159,6 +1211,8 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
     let h_align = match st.align.h {
+        // Filled text is as wide as the cell: it starts at the left padding.
+        _ if filled => HAlign::Left,
         HAlign::General => {
             if is_num {
                 HAlign::Right
@@ -1224,6 +1278,9 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     }
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
+    if dry {
+        return Some((clip_l, clip_r));
+    }
     pg.save();
     pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
     if rotated {
@@ -1243,7 +1300,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
             pg.text_rotated(ox, oy, size, font, color, t, angle);
         }
         pg.restore();
-        return;
+        return None;
     }
     if rot == 255 {
         // Vertical stacked text.
@@ -1259,7 +1316,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
             }
         }
         pg.restore();
-        return;
+        return None;
     }
     for (i, line) in lines.iter().enumerate() {
         let lw = gridcraft_pdf::text_width(font, size, line);
@@ -1285,6 +1342,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         }
     }
     pg.restore();
+    None
 }
 
 /// Sheet pixel rectangle of an anchor.
@@ -1834,6 +1892,36 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    /// Excel prints no vertical border under text that runs on into empty neighbours (observed),
+    /// only where the text ends; a short text keeps its neighbour's border.
+    #[test]
+    fn borders_under_overflowing_text_are_left_out() {
+        let lines = |text: &str| {
+            let mut s = s();
+            s.execute("home.borders", json!({"range": "C1", "preset": "right", "style": "thick"})).unwrap();
+            s.execute("cell.set", json!({"cell": "B1", "input": text})).unwrap();
+            // A cell further right, so the text's run (and the print area) goes past C1.
+            s.execute("cell.set", json!({"cell": "F1", "input": "x"})).unwrap();
+            let (pdf, _) = pdf_of(&mut s, json!({}));
+            pdf.windows(4).filter(|w| *w == b" l S").count()
+        };
+        let short = lines("short");
+        assert!(short >= 1, "the border is drawn");
+        assert_eq!(lines("A long text that runs on over several cells and further still"), short - 1);
+    }
+
+    /// A repeat fill (`* `) stretches the text across the cell, as on screen.
+    #[test]
+    fn repeat_fill_stretches_printed_text_across_the_cell() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B1", "input": "20"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B1", "code": "\"Hours\"* 0"})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "B:B", "chars": 30})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "(Hours          "), "the gap is filled with spaces");
+        assert!(!contains(&pdf, "(Hours 20)"));
     }
 
     #[test]

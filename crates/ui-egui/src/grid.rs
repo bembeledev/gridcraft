@@ -1175,6 +1175,9 @@ pub(crate) fn paint_quadrant(
             }
         }
     }
+    // Where text runs on into empty neighbours: (row, left, right). Excel draws no vertical border
+    // inside such a run (observed), only at its ends.
+    let mut overflow_runs: Vec<(u32, f32, f32)> = Vec::new();
     // Text and per-cell decorations.
     for (c, rect, lk, cfl) in looks.iter().chain(&outside) {
         let c = *c;
@@ -1355,6 +1358,9 @@ pub(crate) fn paint_quadrant(
                 }
             }
             clip = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
+            if clip.width() > rect.width() + 0.5 {
+                overflow_runs.push((c.row, clip.left(), clip.right()));
+            }
             // Paint over the gridlines the text passes through.
             if lk.fill.is_none() {
                 let inner = Rect::from_min_max(pos2(clip.left() + 1.0, clip.top() + 0.5), pos2(clip.right() - 1.0, clip.bottom() - 1.0));
@@ -1426,6 +1432,11 @@ pub(crate) fn paint_quadrant(
         };
         for (line, pts) in edges {
             if line.is_none() {
+                continue;
+            }
+            // A vertical edge under overflowing text is hidden; the run's own ends are drawn.
+            let vertical = (pts[0].x - pts[1].x).abs() < 0.5;
+            if vertical && overflow_runs.iter().any(|(row, l, r)| *row == c.row && pts[0].x > l + 0.5 && pts[0].x < r - 0.5) {
                 continue;
             }
             let col = col32(line.color, wb, Color32::BLACK);

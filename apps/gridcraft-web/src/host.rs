@@ -30,8 +30,8 @@ use wasm_bindgen::closure::Closure;
 /// counts as saved under that name, as it would after Save on the desktop.
 const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
-/// The longest user name taken from `?author=`.
-const MAX_AUTHOR_CHARS: usize = 200;
+/// Largest `id`/`requestId` accepted from the host.
+const MAX_ID_BYTES: usize = 1024;
 
 /// Largest `params` string accepted from the host; a command's parameters are small, and the
 /// string is parsed into memory.
@@ -58,6 +58,8 @@ pub struct Bridge {
     commands: Rc<RefCell<Vec<(String, String, Option<String>)>>>,
     /// Total length of the `params` text of the commands that haven't run yet.
     queued_bytes: Rc<Cell<usize>>,
+    /// Total length of the command identifiers that haven't run yet.
+    queued_id_bytes: Rc<Cell<usize>>,
     /// The workbook the host opened, by the exact name it was opened as
     /// (the app titles documents with the full file name): docClosed fires once no document
     /// carries it (the app itself always keeps a blank Book around otherwise).
@@ -81,6 +83,7 @@ impl Bridge {
             reported: Rc::default(),
             commands: Rc::default(),
             queued_bytes: Rc::default(),
+            queued_id_bytes: Rc::default(),
             host_doc: Rc::default(),
         })
     }
@@ -181,6 +184,7 @@ impl Bridge {
     /// Commands the parent sent since the last frame, oldest first: (id, params JSON, request id).
     pub fn take_commands(&self) -> Vec<(String, String, Option<String>)> {
         self.queued_bytes.set(0);
+        self.queued_id_bytes.set(0);
         std::mem::take(&mut *self.commands.borrow_mut())
     }
 
@@ -219,9 +223,21 @@ impl Bridge {
                 }
                 Some("gridcraft:cmd") => {
                     // Bad and oversized commands are refused at once, like the WordCraft and
-                    // DeckCraft bridges. A malformed `params` never runs as `{}` again.
-                    let id = string(&data, "id").filter(|i| !i.trim().is_empty());
-                    let request_id = string(&data, "requestId").filter(|r| !r.is_empty());
+                    // DeckCraft bridges; a malformed `params` never runs as `{}` again.
+                    let request_id_raw = string(&data, "requestId");
+                    if request_id_raw.as_ref().map(str::len).unwrap_or(0) > MAX_ID_BYTES {
+                        bridge.post_response("", request_id_raw.as_deref(), false, Some(&format!("requestId is larger than {MAX_ID_BYTES} bytes")));
+                        ctx.request_repaint();
+                        return;
+                    }
+                    let request_id = request_id_raw.filter(|r| !r.is_empty());
+                    let id_raw = string(&data, "id");
+                    if id_raw.as_ref().map(str::len).unwrap_or(0) > MAX_ID_BYTES {
+                        bridge.post_response("", request_id.as_deref(), false, Some(&format!("id is larger than {MAX_ID_BYTES} bytes")));
+                        ctx.request_repaint();
+                        return;
+                    }
+                    let id = id_raw.filter(|i| !i.trim().is_empty());
                     let Some(id) = id else {
                         bridge.post_response("", request_id.as_deref(), false, Some("a command needs an id"));
                         ctx.request_repaint();
@@ -231,21 +247,30 @@ impl Bridge {
                         bridge.post_response(id, request_id, false, Some(why));
                         ctx.request_repaint();
                     };
+                    // Check the JavaScript string length before allocating the Rust copy.
                     let params = match js_sys::Reflect::get(&data, &JsValue::from_str("params")) {
-                        Ok(v) if !v.is_undefined() && !v.is_null() => match v.as_string() {
-                            // `params` is a JSON string; parsing happens in the runner.
-                            Some(text) if text.len() <= MAX_PARAMS_BYTES => text,
-                            Some(_) => return refuse(&id, request_id.as_deref(), &format!("params are larger than {MAX_PARAMS_BYTES} bytes")),
-                            None => return refuse(&id, request_id.as_deref(), "params must be a string of valid JSON"),
-                        },
+                        Ok(v) if !v.is_undefined() && !v.is_null() => {
+                            let js_len = v.dyn_ref::<js_sys::JsString>().map(|s| s.length() as usize);
+                            if js_len.unwrap_or(usize::MAX) > MAX_PARAMS_BYTES {
+                                return refuse(&id, request_id.as_deref(), &format!("params are larger than {MAX_PARAMS_BYTES} bytes"));
+                            }
+                            match v.as_string() {
+                                Some(text) if text.len() <= MAX_PARAMS_BYTES => text,
+                                Some(_) => return refuse(&id, request_id.as_deref(), &format!("params are larger than {MAX_PARAMS_BYTES} bytes")),
+                                None => return refuse(&id, request_id.as_deref(), "params must be a string of valid JSON"),
+                            }
+                        }
                         _ => "{}".to_string(), // absent or `null` means `{}`.
                     };
+                    let id_bytes = id.len() + request_id.as_deref().map(str::len).unwrap_or(0);
                     if commands.borrow().len() >= MAX_PENDING_COMMANDS
                         || queued_bytes.get().saturating_add(params.len()) > MAX_PENDING_PARAMS_BYTES
+                        || queued_id_bytes.get().saturating_add(id_bytes) > MAX_PENDING_PARAMS_BYTES
                     {
                         return refuse(&id, request_id.as_deref(), "too many commands are waiting; try again");
                     }
                     queued_bytes.set(queued_bytes.get().saturating_add(params.len()));
+                    queued_id_bytes.set(queued_id_bytes.get().saturating_add(id_bytes));
                     commands.borrow_mut().push((id, params, request_id));
                     ctx.request_repaint();
                 }

@@ -177,6 +177,10 @@ impl eframe::App for WebShell {
                     bridge.post_response(&id, request_id.as_deref(), false, Some("the cell edit doesn't commit; fix or cancel it before closing"));
                     continue;
                 }
+                if id == "file.save" && !self.app.commit_edit(0, 0, false, false) {
+                    bridge.post_response(&id, request_id.as_deref(), false, Some("the cell edit doesn't commit; fix or cancel it before saving"));
+                    continue;
+                }
                 match self.app.run(&id, parsed) {
                     Ok(v) => {
                         // Bind save receipts to the document that was just saved: a queued

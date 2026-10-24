@@ -448,6 +448,11 @@ impl std::fmt::Write for ClipboardHtml {
 /// Most rows Save as Web Page writes. A sheet whose used range is taller fails instead of losing cells.
 const HTML_EXPORT_MAX_ROWS: u32 = 100_001;
 
+/// Rows × columns of one web-page table. Save as Web Page writes every kept row's full used
+/// column span into one growing String, so a sparse sheet with a lone far-right cell (or a
+/// tall, wide one) would otherwise be gigabytes of `<td></td>` before finishing (#2387).
+const HTML_EXPORT_MAX_CELLS: u64 = 4_000_000;
+
 /// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
 /// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
@@ -477,6 +482,17 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             return Err(EngineError::Other(format!(
                 "the sheet is too tall for a web page ({} rows, at most {HTML_EXPORT_MAX_ROWS}). Save as .xlsx or CSV instead.",
                 r.height()
+            )));
+        }
+        // The table is one growing String: every kept row writes a `<td>` for the whole used
+        // column span (unless the sheet has no row that is that wide). A tall, wide sheet
+        // (or a sparse one with a lone far-right cell) would be gigabytes before finishing,
+        // so the rectangle itself is bounded (#2387).
+        if u64::from(r.height()) * u64::from(r.width()) > HTML_EXPORT_MAX_CELLS {
+            return Err(EngineError::Other(format!(
+                "the sheet is too tall × wide for a web page ({} × {} cells, at most {HTML_EXPORT_MAX_CELLS}). Save as .xlsx or CSV instead.",
+                r.height(),
+                r.width()
             )));
         }
         if fixed {
@@ -556,25 +572,98 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     Ok(out)
 }
 
+thread_local! {
+    /// How many [`ScriptSandbox`]es are alive on this thread.
+    static SCRIPT_SANDBOX: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
+/// stored script's steps run inside one (#2178), so no command reaches the file system from a
+/// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
+pub(crate) struct ScriptSandbox(());
+
+impl ScriptSandbox {
+    pub(crate) fn enter() -> Self {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
+        ScriptSandbox(())
+    }
+}
+
+impl Drop for ScriptSandbox {
+    fn drop(&mut self) {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Refuses file access while a [`ScriptSandbox`] is alive (and, failing closed, while the
+/// thread is being torn down).
+fn script_sandbox_check(path: &str) -> Result<()> {
+    if SCRIPT_SANDBOX.try_with(|c| c.get() > 0).unwrap_or(true) {
+        return Err(EngineError::Other(format!("{path}: scripts can't read or write files")));
+    }
+    Ok(())
+}
+
+/// The largest native file the reader still touches: its own cap plus one, used to stop
+/// reads whose bytes arrive faster than metadata can claim (device files, growing files).
+const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta.len() > 2 * 1024 * 1024 * 1024 {
+    use std::io::Read;
+    script_sandbox_check(path)?;
+    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // A symlink to an endless device reports length 0 but streams forever, so metadata
+    // alone never bounds the read: require a real file and cap the bytes actually taken.
+    if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
+    let mut buf = Vec::new();
+    let mut limited = (&f).take(MAX_READ_BYTES + 1);
+    limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    if buf.len() as u64 > MAX_READ_BYTES {
         return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
     }
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    Ok(buf)
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    script_sandbox_check(path)?;
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
+    // The temporary file is created exclusively, so an existing file or symlink at that
+    // path (planted by another local user) makes the save fail instead of truncating the
+    // link's target; and it inherits the destination's access restrictions, so saving a
+    // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
-    std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(p) = &prior {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        opts.mode(p.mode());
+    }
+    let mut f = opts.open(&tmp).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        EngineError::Other(format!("{path}: {e}"))
+    })?;
+    #[cfg(not(unix))]
+    if let Some(p) = &prior {
+        let _ = f.set_permissions(p.clone());
+    }
+    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        EngineError::Other(format!("{path}: {e}"))
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
@@ -584,6 +673,7 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
@@ -673,6 +763,74 @@ mod tests {
     fn copied(wb: &Workbook, range: &str) -> String {
         let r = RangeRef::parse(range).unwrap();
         range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn save_fails_upfront_when_the_temp_name_is_taken() {
+        // Another local user who can write the directory must not be able to point the
+        // save's predictable temporary name at their own file: creation is exclusive.
+        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"original").unwrap();
+        let dest = dir.join("book.xlsx");
+        std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
+        let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+        assert!(!dir.join("book.xlsx").exists(), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_the_destination_access_restrictions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("private.xlsx");
+        std::fs::write(&dest, b"v1").unwrap();
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_file(dest.to_str().unwrap(), b"v2").unwrap();
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // And a brand-new file is created with the restrictive, not permissive, default.
+        let fresh = dir.join("new.xlsx");
+        write_file(fresh.to_str().unwrap(), b"v").unwrap();
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+        assert!(mode & 0o022 == 0, "mode {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn open_refuses_directories_and_unknowable_lengths() {
+        let dir = std::env::temp_dir().join("gridcraft-fs-safety");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");
+        assert!(read_file(dir.join("missing").to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_export_refuses_an_outsized_grid_instead_of_growing_forever() {
+        // #2387: the used rectangle alone bounds the output (every row writes the whole
+        // column span), so a sparse sheet with one cell at A1 and another far right
+        // 300 rows down is 4.9M cells → refused before a byte of `<td>` is written.
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("start".into()));
+        sh.set_value(CellRef::new(300, 16383), gridcraft_core::Value::Text("corner".into()));
+        let err = to_html(&wb, 0).unwrap_err();
+        assert!(err.to_string().contains("too tall × wide"), "{err}");
+        // A normal sheet is fine.
+        let mut ok = Workbook::new();
+        ok.sheet_mut(0).unwrap().set_value(CellRef::new(5, 2), gridcraft_core::Value::Text("t".into()));
+        assert!(to_html(&ok, 0).is_ok());
     }
 
     #[test]
@@ -899,6 +1057,32 @@ mod tests {
         write_file(ok.to_str().unwrap(), b"workbook").unwrap();
         assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
         assert!(!dir.join("Book2.xlsx.sctmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While a script runs (#2178), file reads and writes are refused whatever command or
+    /// parameter asked for them; nesting and dropping the sandbox restore access.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn script_sandbox_refuses_file_access_until_dropped() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("in.csv");
+        std::fs::write(&existing, b"a,b\n").unwrap();
+        let (existing, out) = (existing.to_string_lossy().to_string(), dir.join("out.xlsx").to_string_lossy().to_string());
+        {
+            let _outer = ScriptSandbox::enter();
+            {
+                let _inner = ScriptSandbox::enter();
+                assert!(read_file(&existing).is_err());
+            }
+            assert!(read_file(&existing).is_err(), "the outer sandbox still holds");
+            assert!(write_file(&out, b"leak").is_err());
+            assert!(!std::path::Path::new(&out).exists());
+        }
+        assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
+        write_file(&out, b"ok").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

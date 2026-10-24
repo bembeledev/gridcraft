@@ -1770,9 +1770,11 @@ mod tests {
         // equals no cell text: "=" matches nothing and "<>" everything, blanks included.
         close(sumifs(format!("=a{}", e.repeat(128))), 0.0);
         close(sumifs(format!("<>{}", e.repeat(128))), 10.0);
-        // Comparisons treat it as sorting just above the 126 kept emoji.
-        close(sumifs(format!(">={}", e.repeat(128))), 1.0 + 2.0);
-        close(sumifs(format!("<={}", e.repeat(128))), 3.0);
+        // Comparisons treat it as sorting just above the 126 kept emoji. An emoji is a
+        // nonalphanumeric character, so word sort puts it before every digit and letter: the
+        // cut criterion is below `zzz`, which was above it when the order went by code point.
+        close(sumifs(format!(">={}", e.repeat(128))), 1.0 + 2.0 + 3.0);
+        close(sumifs(format!("<={}", e.repeat(128))), 0.0);
     }
 
     const NFC: &str = "Nguy\u{1ec5}n Th\u{1ecb} Ng\u{1ecd}c \u{c1}nh";

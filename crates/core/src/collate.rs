@@ -909,6 +909,33 @@ impl TextSet {
     }
 }
 
+/// Excel's order is Windows "word sort" (`CompareStringW` without `SORT_STRINGSORT`), where
+/// "all punctuation marks and other nonalphanumeric characters, except for the hyphen and the
+/// apostrophe, come before any alphanumeric character". So a character's class outranks the
+/// character itself: punctuation and symbols, then digits, then letters.
+fn class_of(c: char) -> u32 {
+    if c.is_numeric() {
+        1
+    } else if c.is_alphabetic() {
+        2
+    } else {
+        0
+    }
+}
+
+/// The hyphen and the apostrophe, which word sort leaves out of the first level and uses only to
+/// break ties, "to ensure that words such as `coop` and `co-op` stay together in a sorted list".
+fn is_tie_punct(c: char) -> bool {
+    c == '-' || c == '\''
+}
+
+/// A primary weight carries its character's class in the top two bits, so every nonalphanumeric
+/// sorts before every digit and every digit before every letter. A code point is below 2^21, so
+/// the weight itself never reaches the class bits.
+fn classed(c: char, w: u32) -> u32 {
+    (class_of(c) << 30) | (w & 0x3fff_ffff)
+}
+
 /// The weights `compare_text` compares, in order.
 ///
 /// - `primary`: one entry per element of the folded text: the code point of a base character
@@ -917,11 +944,16 @@ impl TextSet {
 ///   (`32 + (cp - 0x300)`, in canonical order), then a `0` ending the element. A list per
 ///   element, not a sum, so different mark sets never collide (`ấ` is `[34, 33]`, `ä` is `[40]`).
 ///   A mark with no element before it is dropped here and survives in `text`.
+/// - `punct`: where the hyphens and apostrophes stood, counted in elements kept at the first
+///   level. Word sort leaves them out there, so this is what separates `coop` from `co-op`.
 /// - `text`: the whole [`fold_key`], so only equal text compares equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Root {
     primary: Vec<u32>,
     secondary: Vec<u16>,
+    /// It ranks above `text`, which is why `ab` and `AB` — equal text, no punctuation — still
+    /// tie and keep the order they were given in.
+    punct: Vec<u32>,
     text: String,
 }
 
@@ -930,11 +962,17 @@ impl Root {
         let text = fold_key(s);
         let mut primary: Vec<u32> = Vec::new();
         let mut secondary: Vec<u16> = Vec::new();
+        let mut punct: Vec<u32> = Vec::new();
         for c in text.chars() {
             if is_mark(c) {
                 if !primary.is_empty() {
                     secondary.push(mark_code(c));
                 }
+                continue;
+            }
+            if is_tie_punct(c) {
+                // Out of the first level, kept as the position it stood at among the elements.
+                punct.push(u32::try_from(primary.len()).unwrap_or(u32::MAX));
                 continue;
             }
             if primary.len() >= MAX_PRIMARY {
@@ -944,22 +982,26 @@ impl Root {
                 secondary.push(0);
             }
             if c == 'đ' {
-                primary.push('d' as u32);
+                primary.push(classed(c, 'd' as u32));
                 secondary.push(STROKE);
             } else {
-                primary.push(c as u32);
+                primary.push(classed(c, c as u32));
             }
         }
         if !primary.is_empty() {
             secondary.push(0);
         }
-        Root { primary, secondary, text }
+        Root { primary, secondary, punct, text }
     }
 }
 
 impl Ord for Root {
     fn cmp(&self, other: &Root) -> Ordering {
-        self.primary.cmp(&other.primary).then_with(|| self.secondary.cmp(&other.secondary)).then_with(|| self.text.cmp(&other.text))
+        self.primary
+            .cmp(&other.primary)
+            .then_with(|| self.secondary.cmp(&other.secondary))
+            .then_with(|| self.punct.cmp(&other.punct))
+            .then_with(|| self.text.cmp(&other.text))
     }
 }
 
@@ -978,12 +1020,64 @@ impl PartialOrd for Root {
 /// the same after [`fold_key`] (case, NFC versus NFD, marks of different classes in either order)
 /// compares equal. Characters outside the Latin tables keep code point order, including the Latin
 /// letters that have no decomposition (such as `ø`, `ł`, `æ`, `ß`, `ð`, `ħ`, `ı`), which therefore sort
-/// after `z`. Two ASCII strings compare by their lowercase bytes, as before.
+/// after `z`.
+///
+/// The order of characters themselves is Windows **word sort**, which is what Excel compares by
+/// ([`CompareStringW`](https://learn.microsoft.com/en-us/windows/win32/intl/handling-sorting-in-your-applications)
+/// without `SORT_STRINGSORT`), not code point order:
+///
+/// - Every nonalphanumeric character sorts **before** every digit, and every digit before every
+///   letter. Seventeen ASCII characters moved as a result (`: ; < = > ? @ [ \ ] ^ _ `` ` `` { | } ~`),
+///   and so does anything else that is neither a letter nor a digit, emoji and symbols included.
+/// - The hyphen and the apostrophe are the exception: they are left out of the first level and
+///   only break ties, so `coop` and `co-op` sort next to each other (`coop` first) rather than
+///   a word apart. They never make two strings **equal**: `coop` and `co-op` are different text,
+///   and [`text_eq`] still decides equality.
+///
+/// Words of letters and digits alone keep the order this crate had before, character for
+/// character. Two ASCII strings still take a fast path that builds no keys.
 pub fn compare_text(a: &str, b: &str) -> Ordering {
     if a.is_ascii() && b.is_ascii() {
-        return a.bytes().map(|x| x.to_ascii_lowercase()).cmp(b.bytes().map(|x| x.to_ascii_lowercase()));
+        return ascii_word_sort(a, b);
     }
     Root::new(a).cmp(&Root::new(b))
+}
+
+/// An ASCII byte's first-level weight: its class in the high bits, then the byte lowercased, so
+/// this orders exactly as [`Root`]'s primary weights do for the same text.
+fn ascii_rank(c: u8) -> u32 {
+    let class: u32 = if c.is_ascii_digit() {
+        1
+    } else if c.is_ascii_alphabetic() {
+        2
+    } else {
+        0
+    };
+    (class << 8) | u32::from(c.to_ascii_lowercase())
+}
+
+/// The position, counted in the bytes kept at the first level, of each hyphen and apostrophe.
+fn ascii_puncts(s: &str) -> impl Iterator<Item = u32> + '_ {
+    let mut kept = 0u32;
+    s.bytes().filter_map(move |c| {
+        if matches!(c, b'-' | b'\'') {
+            return Some(kept);
+        }
+        kept = kept.saturating_add(1);
+        None
+    })
+}
+
+/// [`compare_text`] for two ASCII strings, without building keys: the three levels of
+/// [`Root`] — classed characters, then the hyphens and apostrophes left out of the first level,
+/// then the folded text — read straight off the bytes. ASCII has no combining marks, so the
+/// secondary level of [`Root`] is empty for both sides and drops out.
+fn ascii_word_sort(a: &str, b: &str) -> Ordering {
+    let first = |s: &str| s.bytes().filter(|c| !matches!(c, b'-' | b'\'')).map(ascii_rank).collect::<Vec<u32>>();
+    first(a)
+        .cmp(&first(b))
+        .then_with(|| ascii_puncts(a).cmp(ascii_puncts(b)))
+        .then_with(|| a.bytes().map(|x| x.to_ascii_lowercase()).cmp(b.bytes().map(|x| x.to_ascii_lowercase())))
 }
 
 /// A precomputed sort key for text: `text_key(a).cmp(&text_key(b)) == compare_text(a, b)` for
@@ -1348,10 +1442,14 @@ mod tests {
         }
     }
 
+    /// The word-sort rules change ASCII order **only** where punctuation is involved. For words
+    /// of letters and digits alone the order is the one this crate had before, character for
+    /// character — that is the claim worth pinning, and it is not circular: it compares against
+    /// `old_compare_text`, a separate implementation of the old rule.
     #[test]
-    fn ascii_order_is_unchanged() {
+    fn ascii_order_is_unchanged_without_punctuation() {
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
-        let alphabet: Vec<char> = " -_.,'0123456789abcXYZ~[]ABCdefgzZ".chars().collect();
+        let alphabet: Vec<char> = "0123456789abcXYZABCdefgzZ".chars().collect();
         let mut words: Vec<String> = Vec::new();
         for _ in 0..200 {
             let len = rng.below(8);
@@ -1365,8 +1463,39 @@ mod tests {
         for a in &words {
             for b in words.iter().take(40) {
                 assert_eq!(compare_text(a, b), old_compare_text(a, b), "{a:?} {b:?}");
-                assert_eq!(text_eq(a, b), old_compare_text(a, b) == Ordering::Equal, "{a:?} {b:?}");
             }
+        }
+    }
+
+    /// With punctuation in play the order changes, but **equality never does**: two strings are
+    /// equal under the word-sort rules exactly when they were equal before, and exactly when
+    /// [`text_eq`] holds. Skipping the hyphen at the first level must make `coop` and `co-op`
+    /// neighbours, not the same text.
+    #[test]
+    fn punctuation_changes_order_but_never_equality() {
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let alphabet: Vec<char> = " -_.,'0123456789abcXYZ~[]ABCdefgzZ".chars().collect();
+        let mut words: Vec<String> = Vec::new();
+        for _ in 0..200 {
+            let len = rng.below(8);
+            words.push((0..len).map(|_| alphabet[rng.below(alphabet.len())]).collect());
+        }
+        for a in &words {
+            for b in words.iter().take(40) {
+                let equal = compare_text(a, b) == Ordering::Equal;
+                assert_eq!(equal, old_compare_text(a, b) == Ordering::Equal, "equality moved: {a:?} {b:?}");
+                assert_eq!(equal, text_eq(a, b), "{a:?} {b:?}");
+            }
+        }
+        // The rule the hyphen exists for, and the fact it is still not the same text.
+        for (plain, hyphened) in [("coop", "co-op"), ("cant", "can't"), ("ab", "a-b")] {
+            assert_eq!(compare_text(plain, hyphened), Ordering::Less, "{plain:?} {hyphened:?}");
+            assert!(!text_eq(plain, hyphened));
+            // Nothing sorts between them: they are neighbours.
+            let mut all = vec![plain, hyphened, "zzzz", "aaaa", "0000"];
+            all.sort_by(|a, b| compare_text(a, b));
+            let at = all.iter().position(|x| *x == plain).unwrap_or(usize::MAX);
+            assert_eq!(all.get(at.saturating_add(1)).copied(), Some(hyphened), "{all:?}");
         }
     }
 
@@ -1764,5 +1893,110 @@ mod tests {
         assert!(text_eq_prefolded("NGUYỄN VĂN ÁNH", &k));
         assert!(!text_eq_prefolded("Nguyễn Văn Anh", &k));
         assert_eq!(folds(), before);
+    }
+}
+
+#[cfg(test)]
+mod word_sort_tests {
+    use super::*;
+
+    /// Excel's order is Windows "word sort". Two rules an order by code point does not have:
+    /// every nonalphanumeric sorts before every alphanumeric, and the hyphen and the apostrophe
+    /// are the exception — out of the first level, used only to break ties, so `coop` and `co-op`
+    /// stay together.
+    ///
+    /// The anchor is the "Word Sort" column of Microsoft's own documentation, which is a source
+    /// Microsoft controls:
+    /// <https://learn.microsoft.com/en-us/windows/win32/intl/handling-sorting-in-your-applications>
+    #[test]
+    fn root_order_matches_the_microsoft_word_sort_example() {
+        let mut got = ["bills", "bill's", "billet", "cant", "can't", "cannot", "coop", "co-op", "con"];
+        got.sort_by(|a, b| compare_text(a, b));
+        assert_eq!(got, ["billet", "bills", "bill's", "cannot", "cant", "can't", "con", "coop", "co-op"]);
+    }
+
+    /// The same rules on the fixture of the upstream report, whose expected order is Excel 365's
+    /// (reported for both `de-DE` and `en-US`). A second check, not the anchor: it comes from a
+    /// bug report rather than from Microsoft.
+    #[test]
+    fn root_order_matches_excel_on_the_reported_fixture() {
+        let mut got = [
+            "x-1",
+            "x01",
+            "JO30-WE-1-",
+            "JO30-WE01-EGH",
+            "a-b",
+            "ab",
+            "AB",
+            "a c",
+            "a-c",
+            "ac",
+            "Ärger",
+            "Zebra",
+            "apfel",
+            "Apfel",
+            "_x",
+            "x_",
+            "1",
+            "10",
+            "2",
+        ];
+        got.sort_by(|a, b| compare_text(a, b));
+        assert_eq!(
+            got,
+            [
+                "_x",
+                "1",
+                "10",
+                "2",
+                "a c",
+                "ab",
+                "AB",
+                "a-b",
+                "ac",
+                "a-c",
+                "apfel",
+                "Apfel",
+                "Ärger",
+                "JO30-WE01-EGH",
+                "JO30-WE-1-",
+                "x_",
+                "x01",
+                "x-1",
+                "Zebra"
+            ]
+        );
+    }
+
+    /// What the class rule changes, stated exactly: seventeen ASCII characters used to sort after
+    /// the digits and now sort before them. Nothing else changes relative order.
+    ///
+    /// Measured by flipped **pairs**, not by moved indices: when punctuation moves ahead of the
+    /// digits every later character's index shifts, so counting indices would report the whole
+    /// alphabet as "changed" and say nothing. The first version of this test did exactly that.
+    #[test]
+    fn seventeen_ascii_characters_now_sort_before_the_digits() {
+        let chars: Vec<char> = (0x20u32..0x7f).filter_map(char::from_u32).collect();
+        let moved: Vec<char> =
+            chars.iter().copied().filter(|c| !c.is_ascii_alphanumeric() && !is_tie_punct(*c)).filter(|c| c.to_ascii_lowercase() > '9').collect();
+        assert_eq!(moved, [':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~']);
+        // Each of them sorted after a digit before and sorts before one now.
+        for c in moved {
+            let one = c.to_string();
+            assert_eq!(compare_text(&one, "5"), Ordering::Less, "{c:?} must sort before a digit now");
+            assert!(one.as_bytes() > b"5", "{c:?} sorted after a digit by code point before");
+        }
+    }
+
+    /// Equality still never depends on punctuation being skipped: `coop` and `co-op` are not the
+    /// same text, so they must not compare equal, only sort next to each other.
+    #[test]
+    fn skipping_punctuation_at_the_first_level_never_makes_text_equal() {
+        for (a, b) in [("coop", "co-op"), ("ab", "a-b"), ("cant", "can't"), ("-", ""), ("a", "a-")] {
+            assert_ne!(compare_text(a, b), Ordering::Equal, "{a:?} {b:?}");
+            assert!(!text_eq(a, b), "{a:?} {b:?}");
+        }
+        // And text that only differs by case is still equal, as before.
+        assert_eq!(compare_text("ab", "AB"), Ordering::Equal);
     }
 }

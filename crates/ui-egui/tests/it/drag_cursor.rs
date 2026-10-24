@@ -78,7 +78,7 @@ fn selecting_keeps_cell_cursor_over_borders_handles_frozen_panes_and_outside() {
         let start = cell(&h, "C3").center();
         press(&mut h, start);
         assert_eq!(h.state().grid.drag, Drag::None, "a press below the threshold is not a drag");
-        move_with_cursor(&mut h, start + vec2(1.0, 1.0), CursorIcon::Cell);
+        move_with_cursor(&mut h, start + vec2(1.0, 1.0), CursorIcon::None);
         assert_eq!(h.state().grid.drag, Drag::None);
         let inside = cell(&h, "D4").center();
         move_with_cursor(&mut h, inside, CursorIcon::Cell);
@@ -110,7 +110,7 @@ fn selecting_keeps_cell_cursor_over_borders_handles_frozen_panes_and_outside() {
         let border = geo(&h).mirror_pos(pos2(r.right() - 1.0, r.bottom() - 8.0));
         move_with_cursor(&mut h, border, CursorIcon::Move);
         let inside = cell(&h, "D4").center();
-        move_with_cursor(&mut h, inside, CursorIcon::Cell);
+        move_with_cursor(&mut h, inside, CursorIcon::None);
         let d = h.state().session.active().unwrap();
         assert_eq!(d.selection.current().a1(), "C3:D4");
         assert_eq!(d.wb.active().unwrap().value(CellRef::parse("B2").unwrap()), Value::Number(2.0));
@@ -146,7 +146,7 @@ fn fill_keeps_crosshair_and_still_extends_a_series() {
     move_with_cursor(&mut h, target + vec2(1.0, 0.0), CursorIcon::Crosshair);
     button(&mut h, target, false);
     assert_eq!(h.state().grid.drag, Drag::None);
-    assert_cursor(&h, CursorIcon::Cell);
+    assert_cursor(&h, CursorIcon::None);
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
     assert_eq!((0..5).map(|c| sh.value(CellRef::new(1, c))).collect::<Vec<_>>(), (1..=5).map(|n| Value::Number(n as f64)).collect::<Vec<_>>());
 }
@@ -188,7 +188,7 @@ fn resizing_headers_keeps_the_axis_cursor_when_leaving_the_header() {
         move_with_cursor(&mut h, target, cursor);
         button(&mut h, target, false);
         assert_eq!(h.state().grid.drag, Drag::None);
-        assert_cursor(&h, CursorIcon::Cell);
+        assert_cursor(&h, CursorIcon::None);
         let sh = h.state().session.active().unwrap().wb.active().unwrap();
         assert!(if cols { sh.col_width(2) > sh.default_col_width } else { sh.row_height(2) > sh.default_row_height });
     }
@@ -210,7 +210,7 @@ fn freezing_keeps_the_axis_cursor_away_from_the_handle() {
         move_with_cursor(&mut h, target + vec2(1.0, 1.0), cursor);
         button(&mut h, target, false);
         assert_eq!(h.state().grid.drag, Drag::None);
-        assert_cursor(&h, CursorIcon::Cell);
+        assert_cursor(&h, CursorIcon::None);
         assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().freeze, Some(if cols { (0, 2) } else { (3, 0) }));
     }
 }

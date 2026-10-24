@@ -2057,12 +2057,22 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
         }
     } else if in_cells && app.editor.is_none() && on_cur_border {
         ctx.set_cursor_icon(CursorIcon::Move);
-    } else if in_cells {
-        ctx.set_cursor_icon(CursorIcon::Cell);
+    } else if in_cells && app.editor.is_none() {
+        if let Some(at) = pointer.hover_pos() {
+            paint_cell_cursor(ctx, at);
+        } else {
+            ctx.set_cursor_icon(CursorIcon::Cell);
+        }
     } else if in_col_header {
         let col = geo.col_at(sh, p.x);
         let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
-        ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+        if selected {
+            ctx.set_cursor_icon(CursorIcon::Move);
+        } else if let Some(at) = pointer.hover_pos() {
+            paint_header_cursor(ctx, at, true);
+        }
+    } else if in_row_header && let Some(at) = pointer.hover_pos() {
+        paint_header_cursor(ctx, at, false);
     }
 }
 
@@ -2889,6 +2899,33 @@ fn paint_split_cursor(ctx: &egui::Context, at: Pos2, cols: bool) {
             p.add(egui::Shape::convex_polygon(arrow(dir), color, Stroke::new(width - 1.0, color)));
         }
     }
+}
+
+/// Excel's grid cursor is a white cross with a dark outline. egui's platform `Cell` cursor is a
+/// thin black cross on some desktop themes, so draw a consistent, high-contrast version instead.
+fn paint_cell_cursor(ctx: &egui::Context, at: Pos2) {
+    ctx.set_cursor_icon(CursorIcon::None);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("gridcraft.cell_cursor")));
+    for (width, color) in [(4.0, Color32::BLACK), (2.0, Color32::WHITE)] {
+        let stroke = Stroke::new(width, color);
+        p.line_segment([pos2(at.x - 9.0, at.y), pos2(at.x + 9.0, at.y)], stroke);
+        p.line_segment([pos2(at.x, at.y - 9.0), pos2(at.x, at.y + 9.0)], stroke);
+    }
+}
+
+/// Excel uses a downward arrow to select a column and a rightward arrow to select a row. Draw
+/// the shapes in GridCraft rather than depending on platform-specific cursor artwork.
+fn paint_header_cursor(ctx: &egui::Context, at: Pos2, columns: bool) {
+    ctx.set_cursor_icon(CursorIcon::None);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("gridcraft.header_cursor")));
+    let down = [(-5.0, -8.0), (5.0, -8.0), (5.0, -2.0), (9.0, -2.0), (0.0, 8.0), (-9.0, -2.0), (-5.0, -2.0)];
+    let points = down
+        .map(|(x, y)| {
+            let (x, y) = if columns { (x, y) } else { (-y, x) };
+            pos2(at.x + x, at.y + y)
+        })
+        .to_vec();
+    p.add(egui::Shape::convex_polygon(points, Color32::BLACK, Stroke::new(1.5, Color32::WHITE)));
 }
 
 fn is_filter_button(sh: &Sheet, geo: &Geo, p: Pos2) -> bool {

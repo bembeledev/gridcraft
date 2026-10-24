@@ -38,13 +38,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
-        cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
-        cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
+        // Zoom changes only a view setting on the sheet, and like Excel it stays out of the
+        // undo history (the runner keeps a clean workbook clean, as zoom's `saved` write needs).
+        cmd!(noundo "view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
+        cmd!(noundo "view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
-        cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
+        cmd!(noundo "view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
         cmd!(
             "pageLayout.size",
@@ -466,6 +468,20 @@ mod tests {
         s.execute("view.zoom", json!({"percent": 150})).unwrap();
         assert_eq!(s.execute("view.zoom100", json!({})).unwrap()["zoom"], 100);
         assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+    }
+
+    #[test]
+    fn zooming_is_not_undoable_and_keeps_a_clean_workbook_clean() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("view.zoom", json!({"percent": 150})).unwrap();
+        s.execute("view.zoom", json!({"percent": 90})).unwrap();
+        s.execute("view.zoomToSelection", json!({})).unwrap();
+        // The undo history keeps out of view zooming (#2313), and a workbook with no edits
+        // does not turn dirty.
+        assert!(s.active().unwrap().undo.is_empty(), "zooming pushed undo steps");
+        assert!(crate::cmd::can_undo(&s).is_err());
+        assert!(!s.doc().unwrap().is_dirty());
     }
 
     #[test]

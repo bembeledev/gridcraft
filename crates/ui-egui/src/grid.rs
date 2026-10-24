@@ -1242,6 +1242,11 @@ pub(crate) fn paint_quadrant(
         let size = st.font.size * 96.0 / 72.0 * z;
         let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
         let font = FontId::new(size, fam);
+        let slant = st.font.italic && crate::fonts::is_slanted(&st.font.name, st.font.bold);
+        let embolden = st.font.bold && crate::fonts::is_emboldened(&st.font.name, st.font.italic);
+        // How far the second impression of imitated bold sits from the first, by the size painted.
+        let ppp = p.ctx().pixels_per_point();
+        let bold_dx = |size: f32| if embolden { (size / 36.0).max(1.0 / ppp) } else { 0.0 };
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
@@ -1268,7 +1273,7 @@ pub(crate) fn paint_quadrant(
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
+            let mut job = cell_job(text.clone(), font.clone(), color, wrap_w, slant);
             job.halign = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
                 HAlign::Right => egui::Align::RIGHT,
@@ -1281,7 +1286,7 @@ pub(crate) fn paint_quadrant(
                 _ => text_left + pad + indent,
             };
             let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
-            p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
+            paint_cell_galley(&p.with_clip_rect(rect.intersect(p.clip_rect())), pos2(x, y), galley, color, bold_dx(size));
             continue;
         }
         // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -1295,7 +1300,7 @@ pub(crate) fn paint_quadrant(
             .flatten();
         let shrunk = small.is_some();
         let font = small.unwrap_or(font);
-        let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+        let mut galley = p.layout_job(cell_job(first_line.clone(), font.clone(), color, f32::INFINITY, slant));
         let mut w = galley.size().x;
         // Numbers and dates never overflow: they show #### when too narrow.
         let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
@@ -1303,7 +1308,7 @@ pub(crate) fn paint_quadrant(
             // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
             let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
             let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
-            galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
+            galley = p.layout_job(cell_job("#".repeat(n), font.clone(), color, f32::INFINITY, slant));
             w = galley.size().x;
         }
         // Repeat fill (`*` in number formats) / Fill alignment. A number already shown as #### keeps
@@ -1319,7 +1324,7 @@ pub(crate) fn paint_quadrant(
             if first_line.is_char_boundary(pos) {
                 s.insert_str(pos, &ch.to_string().repeat(n));
             }
-            galley = p.layout_no_wrap(s, font.clone(), color);
+            galley = p.layout_job(cell_job(s, font.clone(), color, f32::INFINITY, slant));
             w = galley.size().x;
         }
         // Center Across Selection: the text is centred over this cell and the empty cells to its right that also use it.
@@ -1381,17 +1386,23 @@ pub(crate) fn paint_quadrant(
             let angle = -(st.align.rotation as f32).to_radians();
             // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
             let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-                let job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
-                p.layout_job(job)
+                p.layout_job(cell_job(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0), slant))
             } else {
                 galley.clone()
             };
             let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
+            // Imitated bold: the second impression along the text's own direction.
+            let d = bold_dx(font.size);
+            if d > 0.0 {
+                let mut thick = egui::epaint::TextShape::new(pos + d * egui::vec2(angle.cos(), angle.sin()), galley.clone(), color);
+                thick.angle = angle;
+                cp.add(thick);
+            }
             let mut shape = egui::epaint::TextShape::new(pos, galley, color);
             shape.angle = angle;
             cp.add(shape);
         } else {
-            cp.galley(pos2(x, y), galley.clone(), color);
+            paint_cell_galley(&cp, pos2(x, y), galley.clone(), color, bold_dx(font.size));
         }
         let baseline = y + gh * 0.82;
         match st.font.underline {
@@ -1602,6 +1613,25 @@ fn merged_edges(
         out.push((right, [pos2(rect.right(), y0), pos2(rect.right(), y1)]));
     }
     out
+}
+
+/// One cell's text as a layout job, wrapped at `wrap` (`f32::INFINITY`: one line). `slant` draws it
+/// oblique, for an italic cell whose font has no italic face (see [`crate::fonts::is_slanted`]).
+fn cell_job(text: String, font: FontId, color: Color32, wrap: f32, slant: bool) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple(text, font, color, wrap);
+    for section in &mut job.sections {
+        section.format.italics = slant;
+    }
+    job
+}
+
+/// Paints one cell's text; `bold_dx` > 0 paints it again that far right, to thicken a bold cell
+/// whose font has no bold face (see [`crate::fonts::is_emboldened`]).
+fn paint_cell_galley(p: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32, bold_dx: f32) {
+    if bold_dx > 0.0 {
+        p.galley(pos + egui::vec2(bold_dx, 0.0), galley.clone(), color);
+    }
+    p.galley(pos, galley, color);
 }
 
 /// The smaller font that makes `text` fit in `room` points of width (Shrink to fit), or `None`

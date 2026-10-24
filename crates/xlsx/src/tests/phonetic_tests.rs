@@ -151,6 +151,21 @@ fn identical_text_with_different_readings_keeps_both() {
     let mut changed = back.clone();
     text_cell(changed.sheet_mut(0).unwrap(), "B1", "西");
     assert!(!part(&write_xlsx(&changed).unwrap(), "xl/sharedStrings.xml").contains("アズマ"));
+    // Nor does it come back when the cell gets its old text again: new content drops it.
+    let mut retyped = back.clone();
+    retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("西"));
+    retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("東"));
+    assert!(!part(&write_xlsx(&retyped).unwrap(), "xl/sharedStrings.xml").contains("アズマ"));
+    // A cell with a reading of its own written before the text's plain cells: the plain item
+    // still comes first, so the workbook's reading for the text survives a save.
+    let mut ordered = Workbook::new();
+    text_cell(ordered.sheet_mut(0).unwrap(), "A1", "東");
+    text_cell(ordered.sheet_mut(0).unwrap(), "B1", "東");
+    ordered.phonetics = wb.phonetics.clone();
+    let own_reading = wb.sheet(0).unwrap().readings.get(&at("B1")).unwrap().clone();
+    ordered.sheet_mut(0).unwrap().readings.insert(at("A1"), own_reading);
+    let (again, _) = read_xlsx(&write_xlsx(&ordered).unwrap()).unwrap();
+    assert_eq!((first(&again), own(&again, "A1"), own(&again, "B1")), (vec!["ヒガシ".to_string()], Some("アズマ".into()), None));
 
     // The same text twice with the same reading is one item.
     let same = sst.replace("アズマ", "ヒガシ");

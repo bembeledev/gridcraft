@@ -114,6 +114,12 @@ impl Sst {
         if let Some(&i) = self.reading_map.get(s).and_then(|ids| ids.iter().find(|i| same(i))) {
             return i;
         }
+        // The text's plain item comes first, even unused (`count` counts cell references only): a
+        // reader takes the first item of a text for the workbook's reading.
+        if !self.map.contains_key(s) {
+            self.map.insert(s.to_string(), self.list.len() as u32);
+            self.list.push((s.to_string(), None));
+        }
         let i = self.list.len() as u32;
         self.list.push((s.to_string(), Some(reading.clone())));
         self.reading_map.entry(s.to_string()).or_default().push(i);

@@ -253,15 +253,20 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
+        // A phonetic reading belongs to the content it was read with.
+        self.readings.remove(&c);
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
+        self.readings.remove(&c);
         self.cells.remove(c)
     }
     /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
+    /// The cells' own phonetic readings go too: moved text takes the workbook's reading for it.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.readings.retain(|c, _| !range.contains(*c));
         self.cells.take_range(range)
     }
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.

@@ -197,7 +197,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "კომენტარებად გარდაქმნა",
         "Protect\nWorkbook" => "სამუშაო\nწიგნის დაცვა",
         "Allow Edit\nRanges" => "დიაპაზონების\nრედაქტირების ნებართვა",
-        "Allow Edit Ranges" => "დიაპაზონების რედაქტირების ნებართვა",
+        "Allow Edit Ranges" => "დიაპაზონების რედაქტირება",
         "Unprotect\nSheet" => "ფურცლის\nდაცვის მოხსნა",
         "Protect Sheet…" => "ფურცლის დაცვა…",
         "Comments" => "კომენტარები",

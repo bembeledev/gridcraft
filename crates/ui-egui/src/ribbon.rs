@@ -2886,10 +2886,11 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
         (_, _, false, true) => Some(egui::viewport::ResizeDirection::South),
         _ => None,
     };
-    if let Some(dir) = dir {
-        if ctx.input(|i| i.pointer.primary_pressed()) && !controls.contains(pos) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-        }
+    if let Some(dir) = dir
+        && ctx.input(|i| i.pointer.primary_pressed())
+        && !controls.contains(pos)
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
     }
 }
 

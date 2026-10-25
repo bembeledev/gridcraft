@@ -28,6 +28,10 @@ fn apply_impl() {
     }
     let xrdb = run_query("xrdb", &["-query"]);
     let xdpy = run_query("xdpyinfo", &[]);
+    let xsettings = run_query("xprop", &["-root", "_XSETTINGS_SETTINGS"]);
+    if parse_xft_dpi(&xrdb).is_none() && xsettings_manager_present(&xsettings) {
+        return;
+    }
     if xrdb.is_empty() && xdpy.is_empty() {
         return;
     }
@@ -92,6 +96,15 @@ fn run_query(program: &str, args: &[&str]) -> String {
             }
         }
     }
+}
+
+fn xsettings_manager_present(output: &str) -> bool {
+    output.lines().map(str::trim).any(|line| {
+        line.contains("_XSETTINGS_SETTINGS")
+            && (line.contains(" = ") || line.contains(": "))
+            && !line.contains("no such atom")
+            && !line.contains("not found")
+    })
 }
 
 fn valid_scale_factor(factor: f64) -> bool {
@@ -237,6 +250,12 @@ mod tests {
         assert_eq!(scale_factor_from_outputs("", ""), 1.0);
         assert_eq!(scale_factor_from_outputs_opt("", ""), None);
         assert_eq!(scale_factor_from_outputs("", "screen #0:\n"), 1.0);
+    }
+
+    #[test]
+    fn xsettings_diagnostic_is_not_a_manager() {
+        assert!(!xsettings_manager_present("_XSETTINGS_SETTINGS: no such atom on any window."));
+        assert!(xsettings_manager_present("_XSETTINGS_SETTINGS(CARDINAL) = 0x1, 0x2"));
     }
 
     #[test]

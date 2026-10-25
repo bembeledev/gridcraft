@@ -142,9 +142,11 @@ pub enum DecimalBasis {
 pub struct Numbers {
     pub decimal: Decimal,
     pub basis: DecimalBasis,
-    /// Columns (0-based) whose own values decided against `decimal` (a file holding both kinds).
+    /// Columns (0-based, ascending) whose own values decided against `decimal` (a file holding
+    /// both kinds).
     pub columns: Vec<(usize, Decimal)>,
-    /// Columns holding values of both kinds: there, values that depend on the separator stay text.
+    /// Columns (ascending) holding values of both kinds: there, values that depend on the
+    /// separator stay text.
     pub mixed: Vec<usize>,
     /// Values that read differently with either separator (`1.234`), at most a few.
     pub ambiguous: Vec<String>,
@@ -155,12 +157,13 @@ impl Numbers {
         Numbers { decimal, basis: DecimalBasis::Given, columns: vec![], mixed: vec![], ambiguous: vec![] }
     }
 
-    /// The separator column `col` is read with; `None` for a mixed column.
+    /// The separator column `col` is read with; `None` for a mixed column. Asked for every
+    /// cell, so it searches the sorted lists.
     pub fn column(&self, col: usize) -> Option<Decimal> {
-        if self.mixed.contains(&col) {
+        if self.mixed.binary_search(&col).is_ok() {
             return None;
         }
-        Some(self.columns.iter().find(|(c, _)| *c == col).map_or(self.decimal, |(_, d)| *d))
+        Some(self.columns.binary_search_by_key(&col, |(c, _)| *c).ok().and_then(|i| self.columns.get(i)).map_or(self.decimal, |(_, d)| *d))
     }
 }
 
@@ -914,16 +917,14 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
                 .flatten()
                 .any(|f| from_first.iter().any(|o| *o != own && !own.contains(o.as_str()) && f.contains(o.as_str())));
             let body = rows.get(shape.skip..).unwrap_or_default();
-            let empty_cols: Vec<usize> = if shape.k > 1 {
-                (0..shape.k).filter(|i| body.iter().all(|r| r.get(*i).is_none_or(|f| f.trim().is_empty()))).collect()
-            } else {
-                vec![]
-            };
+            // Whether each column is empty in every row, looked up by index for every cell.
+            let empty_cols: Vec<bool> =
+                if shape.k > 1 { (0..shape.k).map(|i| body.iter().all(|r| r.get(i).is_none_or(|f| f.trim().is_empty()))).collect() } else { vec![] };
             let (mut sum, mut n) = (0.0, 0usize);
             for r in body {
                 for (i, f) in r.iter().enumerate() {
                     n += 1;
-                    if !empty_cols.contains(&i) {
+                    if !empty_cols.get(i).copied().unwrap_or(false) {
                         sum += quality(f, &others);
                     }
                 }
@@ -933,7 +934,7 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
             // Only empty fields (`;;;` lines): a table of empty cells.
             let t = if n == 0 {
                 0.0
-            } else if standard && shape.k > 1 && empty_cols.len() == shape.k {
+            } else if standard && shape.k > 1 && empty_cols.iter().all(|e| *e) {
                 1.0
             } else {
                 sum / n as f64

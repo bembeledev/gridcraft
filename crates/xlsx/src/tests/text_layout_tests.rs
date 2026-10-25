@@ -327,6 +327,15 @@ fn hostile_text_stays_bounded() {
     let (wb, report) = read_text(fields.as_bytes(), &CsvOptions { delimiter: b';', ..Default::default() }).unwrap();
     assert!(wb.sheet(0).unwrap().cells.is_empty(), "fields past column XFD are dropped");
     assert_eq!(report.fields, gridcraft_core::MAX_COLS as usize);
+    // A megabyte of rows as wide as the sheet, empty or with both kinds of numbers in every
+    // column: every cell is looked up by index or binary search, not by a scan.
+    let empty = format!("{}\n", ";".repeat(16_383)).repeat(64);
+    let (_, report) = read_text(empty.as_bytes(), &auto(TextKind::Csv)).unwrap();
+    assert_eq!(report.split, Split::delimiter(";"));
+    let mixed = [vec!["1,5"; 16_384].join(";"), vec!["0.5"; 16_384].join(";")].join("\n") + "\n";
+    let (wb, report) = read_text(mixed.repeat(8).as_bytes(), &auto(TextKind::Csv)).unwrap();
+    assert_eq!(report.numbers.mixed.len(), 16_384);
+    assert_eq!(v(&wb, 1, 16_383), Value::text("0.5"));
     let mut n = 0;
     split_records(&"a||b\n".repeat(10), &Split::delimiter("||"), None, |r| {
         n += r.len();

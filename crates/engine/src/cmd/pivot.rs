@@ -2690,4 +2690,24 @@ mod tests {
         let pt = &d.wb.active().unwrap().pivots[0];
         assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet).unwrap_err().contains("out of date"));
     }
+
+    #[test]
+    fn sheet_filter_is_refused_over_a_report() {
+        // #2045: Data > Filter over the report listed "Grand Total" as a value and hid report rows.
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+        let r = pt(&s).last_range.unwrap();
+        let inside = CellRef::new(r.start.row + 1, r.start.col).a1();
+        s.execute("selection.set", json!({"cell": inside})).unwrap();
+        assert!(matches!(s.execute("data.filter", json!({})), Err(crate::EngineError::Disabled(..))));
+        assert!(matches!(s.execute("data.filter", json!({"range": r.a1()})), Err(crate::EngineError::Disabled(..))));
+        assert!(s.execute("data.filterBy", json!({"column": 0, "values": ["East"]})).is_err());
+        assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
+        assert_eq!(val(&s, &CellRef::new(r.end.row, r.start.col + 1).a1()), Value::Number(TOTAL));
+        // Cells beside the report still filter.
+        s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["a"], ["b"]]})).unwrap();
+        assert!(s.execute("data.filter", json!({"range": "H1:H3"})).is_ok());
+    }
 }

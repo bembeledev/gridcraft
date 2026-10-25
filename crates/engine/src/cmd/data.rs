@@ -556,6 +556,11 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
             r = RangeRef::new(r.start, CellRef::new(below, r.end.col));
         }
     }
+    // As in Excel, a PivotTable report filters through its own fields: a sheet AutoFilter over it
+    // would list "Grand Total" as a value and hide report rows behind the PivotTable's back (#2045).
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|pr| pr.intersects(&r)))) {
+        return Err(EngineError::Disabled("data.filter".into(), "Filter isn't available in a PivotTable report.".into()));
+    }
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![] });
         Ok(json!({"filter": true, "range": r.a1()}))

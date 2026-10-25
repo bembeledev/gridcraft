@@ -42,7 +42,7 @@ fn pictures(per_sheet: &[usize]) -> Vec<u8> {
                 id,
                 anchor: Anchor { cell: CellRef::new(picture as u32 * 3, 1), width: 24.0, height: 24.0, ..Default::default() },
                 // Package-level fixture: image bytes are opaque to the XLSX reader/checker.
-                data: b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec(),
+                data: b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec().into(),
                 mime: "image/png".into(),
                 alt: format!("Picture {id}"),
             });

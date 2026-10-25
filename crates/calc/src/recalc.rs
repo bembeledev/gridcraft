@@ -44,7 +44,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Area, Evaluator, Host, precedents, stack_position};
+use crate::eval::{Area, Evaluator, Host, NameCache, precedents_with, stack_position};
 
 pub type Key = (usize, CellRef);
 
@@ -306,6 +306,11 @@ impl Graph {
         }
     }
 
+    /// Whether the formula at `k` is evaluated on every recalc (its references aren't known
+    /// statically: INDIRECT, OFFSET, tables, unresolvable names).
+    pub fn is_dynamic(&self, k: Key) -> bool {
+        self.dynamic.contains(&k)
+    }
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
@@ -436,6 +441,10 @@ struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Parsed defined names, by (lower-cased name, scope sheet asked from): the workbook doesn't
+    /// change during a pass, and a column of cells calling one LAMBDA name would otherwise parse
+    /// that name's formula (and every name it calls) once per cell.
+    names: HashMap<(String, usize), Option<(Option<std::sync::Arc<Expr>>, Option<usize>)>>,
 }
 
 impl<'a> PassHost<'a> {
@@ -468,6 +477,7 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            names: HashMap::default(),
         }
     }
 }
@@ -774,6 +784,16 @@ impl Host for PassHost<'_> {
     fn stack_exhausted(&mut self) {
         self.out_of_stack = true;
     }
+    /// The parsed definition, cached for the pass: the workbook's names don't change while it runs.
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<(Option<std::sync::Arc<Expr>>, Option<usize>)> {
+        let key = (name.to_ascii_lowercase(), scope_sheet);
+        if let Some(hit) = self.names.get(&key) {
+            return hit.clone();
+        }
+        let found = self.wb.name(name, scope_sheet).map(|def| (gridcraft_formula::parse_name(&def.formula).ok().map(std::sync::Arc::new), def.scope));
+        self.names.insert(key, found.clone());
+        found
+    }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
         if !(self.pending.contains(&k) || self.results.contains_key(&k)) {
@@ -943,12 +963,13 @@ impl Calc {
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
         let mut circ = Vec::new();
+        let mut names = NameCache::default();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if let Some(f) = &cell.formula
                     && let Some(e) = f.expr()
                 {
-                    let (areas, dynamic) = precedents(wb, si, &e);
+                    let (areas, dynamic) = precedents_with(wb, si, &e, &mut names);
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
@@ -1072,11 +1093,12 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        let mut names = NameCache::default();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
-                    let (areas, dynamic) = precedents(wb, k.0, &e);
+                    let (areas, dynamic) = precedents_with(wb, k.0, &e, &mut names);
                     self.graph.insert(k, Node { areas, dynamic });
                 }
                 None => {

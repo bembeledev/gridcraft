@@ -548,3 +548,22 @@ fn invalid_sort_keys_are_invalid_params() {
     }
     ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
 }
+
+#[test]
+fn execute_command_exports_with_per_request_pdf_fonts() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-mcp-pdf-fonts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let font = dir.join("custom.ttf");
+    std::fs::write(&font, gridcraft_pdf::test_support::tiny_ttf(&['A'], 500, 0)).unwrap();
+    let mut s = server();
+    ok(&mut s, "execute_command", json!({"command": "cell.set", "params": {"cell": "A1", "input": "A"}}));
+    let r = ok(&mut s, "execute_command", json!({"command": "file.exportPdf", "params": {"fonts": {"regular": font}}}));
+    let bytes = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert!(bytes.windows(10).any(|w| w == b"/FontFile2"));
+    let r = ok(&mut s, "execute_command", json!({"command": "file.exportPdf"}));
+    let bytes = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"/FontFile2"));
+    let r = call(&mut s, "execute_command", json!({"command": "file.exportPdf", "params": {"fonts": {"regular": dir.join("missing.ttf")}}}));
+    assert_eq!(r["isError"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}

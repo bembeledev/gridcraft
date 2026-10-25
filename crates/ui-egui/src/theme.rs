@@ -497,6 +497,30 @@ fn in_dirs(dirs: &[&str], files: &[&str]) -> Vec<String> {
     dirs.iter().flat_map(|d| files.iter().map(move |f| format!("{d}/{f}"))).collect()
 }
 
+/// Regular and bold system fonts for printed and exported text the standard PDF fonts can't
+/// show (Greek, Cyrillic, …): the first sheet-font candidate that parses as an embeddable
+/// TrueType file and has Greek or Cyrillic letters (`pdf_font_covers_greek_or_cyrillic`).
+/// Pass to `gridcraft_engine::pdf::set_unicode_font_loader` (the desktop app and the CLI do).
+pub fn pdf_unicode_fonts() -> [Option<Vec<u8>>; 2] {
+    ["cell", "cell-bold"].map(|role| {
+        candidates(role)
+            .into_iter()
+            .filter(|(path, index)| *index == 0 && path.to_ascii_lowercase().ends_with(".ttf"))
+            .filter_map(|(path, _)| std::fs::read(path).ok())
+            .find(|bytes| gridcraft_engine::pdf::UnicodeFont::parse(bytes.clone()).is_some_and(|f| pdf_font_covers_greek_or_cyrillic(&f)))
+    })
+}
+
+/// Whether a PDF fallback font has real Greek or Cyrillic letters, not just Latin: a capital and
+/// a lowercase letter of each script. Greek: `Ω` (U+03A9) and `ω` (U+03C9), the last of each
+/// case. Cyrillic: `Ж` (U+0416, a capital with no Latin look-alike, unlike `А`) and `џ`
+/// (U+045F, the end of the U+0400–U+045F block), so a font with only the 33 Russian letters (the
+/// JIS Gothic faces) doesn't qualify and Serbian, Macedonian, Ukrainian and Belarusian text gets
+/// real glyphs too.
+pub(crate) fn pdf_font_covers_greek_or_cyrillic(f: &gridcraft_engine::pdf::UnicodeFont) -> bool {
+    (f.has('Ω') && f.has('ω')) || (f.has('Ж') && f.has('џ'))
+}
+
 /// Candidate font files per role, in preference order.
 fn candidates(role: &str) -> Vec<(String, u32)> {
     let mac_sys = "/System/Library/Fonts";
@@ -1443,6 +1467,30 @@ mod tests {
             for (i, a) in present.iter().enumerate() {
                 for b in present.iter().skip(i + 1) {
                     assert!(!std::sync::Arc::ptr_eq(&a.font, &b.font), "the same font file is loaded for two fallback scripts");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pdf_unicode_fonts_set_cyrillic_in_real_glyphs() {
+        // Real-font check, like `fallback_covers_its_script`: skips on a machine with no cell font
+        // that has Cyrillic, fails if one is installed but printing would still lose the text.
+        use gridcraft_engine::pdf::UnicodeFont;
+        let samples = ["Добар дан, Ђорђе! Љубав, њива, џеп, ћуп", "Съешь же ещё этих мягких булок"];
+        let has_cyrillic = |role: &str| {
+            candidates(role).iter().filter_map(|(p, _)| std::fs::read(p).ok()).filter_map(UnicodeFont::parse).any(|f| f.has('Ж') && f.has('џ'))
+        };
+        for (i, role) in ["cell", "cell-bold"].into_iter().enumerate() {
+            if !has_cyrillic(role) {
+                continue; // no Cyrillic face for this role here; nothing to assert
+            }
+            let font = pdf_unicode_fonts()[i].clone().and_then(UnicodeFont::parse);
+            let font = font.unwrap_or_else(|| panic!("a {role} candidate has Cyrillic but none was picked for PDF"));
+            assert!(pdf_font_covers_greek_or_cyrillic(&font));
+            for text in samples {
+                for c in text.chars().filter(|c| c.is_alphabetic()) {
+                    assert!(font.has(c), "the {role} PDF font lacks {c:?} (U+{:04X}) from {text:?}", c as u32);
                 }
             }
         }

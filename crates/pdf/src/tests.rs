@@ -318,3 +318,164 @@ fn cjk_text_is_not_replaced_by_question_marks() {
     // Measured as full-width glyphs, matching the CID font's default width.
     assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
 }
+
+use crate::test_support::tiny_ttf;
+
+#[test]
+fn truetype_parse_maps_characters_and_widths() {
+    let f = UnicodeFont::parse(tiny_ttf(&['Α', 'β', 'Ж'], 640, 0)).unwrap();
+    assert_eq!(f.glyph('Α'), 1);
+    assert_eq!(f.glyph('β'), 2);
+    assert_eq!(f.glyph('Ж'), 3);
+    assert_eq!(f.glyph('Ω'), 0, "missing characters map to .notdef");
+    assert_eq!(f.char_width('β'), 640);
+    assert!(f.has('Α') && !f.has('Ω'));
+}
+
+#[test]
+fn truetype_rejects_restricted_and_malformed_fonts() {
+    assert!(UnicodeFont::parse(tiny_ttf(&['Α'], 500, 0x0002)).is_none(), "restricted licence");
+    assert!(UnicodeFont::parse(b"OTTO\x00\x01".to_vec()).is_none());
+    assert!(UnicodeFont::parse(Vec::new()).is_none());
+    let good = tiny_ttf(&['Α', 'β'], 500, 0);
+    // Every truncation is rejected or parsed safely; none panics.
+    for len in 0..good.len() {
+        let _ = UnicodeFont::parse(good[..len].to_vec()).map(|f| f.glyph('β'));
+    }
+    let mut flipped = good.clone();
+    for i in 0..flipped.len() {
+        flipped[i] ^= 0xFF;
+        let _ = UnicodeFont::parse(flipped.clone()).map(|f| (f.glyph('Α'), f.char_width('β')));
+        flipped[i] ^= 0xFF;
+    }
+}
+
+#[test]
+fn greek_text_embeds_a_unicode_font_instead_of_question_marks() {
+    let font = Arc::new(UnicodeFont::parse(tiny_ttf(&['Α', 'β', ' ', 'Q'], 600, 0)).unwrap());
+    let mut doc = PdfDoc::default();
+    doc.set_unicode_fonts([Some(font), None]);
+    let pg = doc.add_page(612.0, 792.0);
+    pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Αβ Q");
+    pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], "Αβ");
+    pg.text(72.0, 108.0, 12.0, Font::Helvetica, [0, 0, 0], "plain");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"/U1 12 Tf").is_some(), "Greek uses the embedded font");
+    assert!(find(&pdf, b"<0001000200030004> Tj").is_some(), "glyph ids, not `?`");
+    assert!(find(&pdf, b"(\x3f\x3f").is_none(), "no question marks");
+    assert!(find(&pdf, b"/F1 12 Tf").is_some(), "Latin text keeps the standard font");
+    assert!(find(&pdf, b"/Subtype /CIDFontType2").is_some());
+    assert!(find(&pdf, b"/Encoding /Identity-H").is_some());
+    assert!(find(&pdf, b"/FontFile2").is_some());
+    assert!(find(&pdf, b"<0001> <0391>").is_some(), "ToUnicode keeps the text copyable");
+    assert!(find(&pdf, b"<0002> <03B2>").is_some());
+    assert!(find(&pdf, b"/U2").is_none(), "bold falls back to the regular face");
+}
+
+#[test]
+fn without_a_unicode_font_greek_uses_the_existing_cid_fallback() {
+    let mut doc = PdfDoc::default();
+    doc.add_page(612.0, 792.0).text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Αβ");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"<039103B2> Tj").is_some());
+    assert!(find(&pdf, b"FontFile2").is_none());
+}
+
+/// The distinct characters of `texts` in first-seen order: the character list for [`tiny_ttf`].
+fn distinct_chars(texts: &[&str]) -> Vec<char> {
+    let mut chars = Vec::new();
+    for c in texts.iter().flat_map(|t| t.chars()) {
+        if !chars.contains(&c) {
+            chars.push(c);
+        }
+    }
+    chars
+}
+
+/// The `Tj` operand for `text` in a [`tiny_ttf`] font built from `chars` (glyph `i + 1` per char).
+fn glyph_operand(chars: &[char], text: &str) -> String {
+    let ids: String = text.chars().map(|c| format!("{:04X}", chars.iter().position(|x| *x == c).unwrap() + 1)).collect();
+    format!("<{ids}> Tj")
+}
+
+#[test]
+fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() {
+    // Real Serbian (with the letters only Serbian Cyrillic has: Ђ ђ Љ љ Њ њ Џ џ Ћ ћ ј) and
+    // Russian (a pangram, with ё), next to a Latin-only cell.
+    let serbian = "Добар дан, Ђорђе! Љубав, њива, џеп, ћуп и ја.";
+    let russian = "Съешь же ещё этих мягких французских булок";
+    let chars = distinct_chars(&[serbian, russian]);
+    let regular = Arc::new(UnicodeFont::parse(tiny_ttf(&chars, 600, 0)).unwrap());
+    let bold = Arc::new(UnicodeFont::parse(tiny_ttf(&chars, 650, 0)).unwrap());
+    let mut doc = PdfDoc::default();
+    doc.set_unicode_fonts([Some(regular), Some(bold)]);
+    let pg = doc.add_page(612.0, 792.0);
+    pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], serbian);
+    pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], russian);
+    pg.text(72.0, 108.0, 12.0, Font::Helvetica, [0, 0, 0], "Total 2026");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"/U1 12 Tf").is_some(), "regular Cyrillic uses the embedded regular face");
+    assert!(find(&pdf, b"/U2 12 Tf").is_some(), "bold Cyrillic uses the embedded bold face");
+    assert!(find(&pdf, glyph_operand(&chars, serbian).as_bytes()).is_some(), "Serbian goes out as glyph ids");
+    assert!(find(&pdf, glyph_operand(&chars, russian).as_bytes()).is_some(), "Russian goes out as glyph ids");
+    assert!(find(&pdf, b"(\x3f\x3f").is_none(), "no question marks");
+    assert!(find(&pdf, b"/F1 12 Tf\n").is_some() && find(&pdf, b"(Total 2026) Tj").is_some(), "Latin keeps the standard font");
+    assert_eq!(pdf.windows(10).filter(|w| w == b"/FontFile2").count(), 2, "regular and bold are both embedded");
+    assert!(find(&pdf, b"[600]").is_some() && find(&pdf, b"[650]").is_some(), "each face carries its own widths");
+    // ToUnicode keeps the text searchable and copyable: Ђ U+0402, ј U+0458, џ U+045F, я U+044F,
+    // ё U+0451 map back from their glyphs.
+    for c in ['Ђ', 'ј', 'џ', 'я', 'ё'] {
+        let entry = format!("<{:04X}> <{:04X}>", chars.iter().position(|x| *x == c).unwrap() + 1, c as u32);
+        assert!(find(&pdf, entry.as_bytes()).is_some(), "ToUnicode entry for {c}: {entry}");
+    }
+}
+
+#[test]
+fn without_a_unicode_font_cyrillic_uses_the_existing_cid_fallback() {
+    let mut doc = PdfDoc::default();
+    doc.add_page(612.0, 792.0).text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Здраво");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"<04170434044004300432043E> Tj").is_some());
+    assert!(find(&pdf, b"FontFile2").is_none());
+}
+
+#[test]
+fn custom_faces_replace_latin_and_measure_all_four_styles() {
+    let faces: Vec<_> = [400, 600, 800, 1000].into_iter().map(|w| Arc::new(UnicodeFont::parse(tiny_ttf(&['A', 'Ω'], w, 0)).unwrap())).collect();
+    let fonts = TextFonts::custom(faces[0].clone(), Some(faces[1].clone()), Some(faces[2].clone()), Some(faces[3].clone()));
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(fonts);
+    let pg = doc.add_page(300.0, 300.0);
+    for (i, font) in [Font::TimesRoman, Font::CourierBold, Font::HelveticaOblique, Font::TimesBoldItalic].into_iter().enumerate() {
+        assert_eq!(pg.text_width(font, 10.0, "AA"), [8.0, 12.0, 16.0, 20.0][i]);
+        pg.text(10.0, 20.0 + i as f32 * 20.0, 10.0, font, [0, 0, 0], "AΩ");
+    }
+    assert_eq!(doc.missing_glyph(), None);
+    let bytes = doc.finish();
+    check_xref(&bytes);
+    for slot in 1..=4 {
+        assert!(find(&bytes, format!("/U{slot} 10 Tf").as_bytes()).is_some());
+    }
+    assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 4);
+    assert!(find(&bytes, b"/Subtype /Type1").is_none());
+    assert!(find(&bytes, b"<0001> <0041>").is_some());
+}
+
+#[test]
+fn custom_missing_styles_use_regular_and_missing_glyphs_are_reported() {
+    let regular = Arc::new(UnicodeFont::parse(tiny_ttf(&['A'], 500, 0)).unwrap());
+    let fonts = TextFonts::custom(regular, None, None, None);
+    assert_eq!(fonts.text_width(Font::TimesBoldItalic, 10.0, "AA"), 10.0);
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(fonts);
+    let pg = doc.add_page(100.0, 100.0);
+    pg.text(10.0, 20.0, 10.0, Font::TimesBoldItalic, [0, 0, 0], "A");
+    assert!(pg.content.contains("/U1 10 Tf"));
+    pg.text(10.0, 40.0, 10.0, Font::Helvetica, [0, 0, 0], "Ω");
+    assert_eq!(doc.missing_glyph(), Some('Ω'));
+    assert!(UnicodeFont::parse(tiny_ttf(&['A'], 500, 0x0200)).is_none(), "bitmap-only embedding is forbidden");
+}

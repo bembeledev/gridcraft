@@ -8,4 +8,7 @@ description = "GridCraft's tiny self-contained PDF 1.7 writer (standard 14 fonts
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]

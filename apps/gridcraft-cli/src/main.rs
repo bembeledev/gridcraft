@@ -37,6 +37,8 @@ use serde_json::{Value, json};
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
+                     [--pdf-font FONT.ttf] [--pdf-font-bold FONT.ttf]
+                     [--pdf-font-italic FONT.ttf] [--pdf-font-bold-italic FONT.ttf]
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
@@ -62,6 +64,9 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    // Headless PDF export and printing set Greek, Cyrillic and other non-Latin text in a system
+    // font, like the desktop app, ahead of the viewer-dependent CID fallback.
+    gridcraft_engine::pdf::set_unicode_font_loader(gridcraft_ui_egui::theme::pdf_unicode_fonts);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
@@ -280,7 +285,7 @@ fn info(args: &[String]) -> Result<(), String> {
 }
 
 fn convert(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["sheet"], &[])?;
+    let a = Args::parse(args, &["sheet", "pdf-font", "pdf-font-bold", "pdf-font-italic", "pdf-font-bold-italic"], &[])?;
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -288,10 +293,23 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
+    let font_options = [("pdf-font", "regular"), ("pdf-font-bold", "bold"), ("pdf-font-italic", "italic"), ("pdf-font-bold-italic", "boldItalic")];
+    let fonts: serde_json::Map<String, Value> =
+        font_options.into_iter().filter_map(|(option, key)| a.opt(option).map(|p| (key.into(), json!(p)))).collect();
+    if !fonts.is_empty() && !pdf {
+        return Err("--pdf-font options require a .pdf output path".into());
+    }
+    if !fonts.is_empty() && !fonts.contains_key("regular") {
+        return Err("--pdf-font is required when specifying PDF font styles".into());
+    }
     let mut s = open(input)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
-        let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
+        let mut params = json!({"path": out});
+        if !fonts.is_empty() {
+            params["fonts"] = Value::Object(fonts);
+        }
+        let result = exec(&mut s, "file.exportPdf", params)?;
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
         return Ok(());
     }

@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (per-export TrueType fonts through CLI/MCP; test command) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -109,10 +109,13 @@ to check our files, and Windows machines with the reported GPU drivers.
   it a CI number (1–2 h).
 - No `cargo xtask scorecard` or `bench` yet.
 
+PDF font selection is available per export through CLI/MCP for embeddable TrueType faces, with regular, bold, italic and bold-italic styles. Font subsetting, complex shaping and bidi remain follow-up work; see [usage and limits](cli.md#pdf-fonts).
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | PDF exports accept per-request regular, bold, italic and bold-italic TrueType faces through CLI/MCP, with matching text measurement and validation; adapted embedding from #1555 while retaining the CID fallback |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |

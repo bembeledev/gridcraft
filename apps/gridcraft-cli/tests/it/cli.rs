@@ -242,3 +242,27 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn convert_pdf_accepts_explicit_font_faces_and_rejects_other_outputs() {
+    let dir = tmpdir("pdf-custom-font");
+    let csv = dir.join("in.csv");
+    let pdf = dir.join("out.pdf");
+    let font = dir.join("custom.ttf");
+    std::fs::write(&csv, "A\n").unwrap();
+    std::fs::write(&font, gridcraft_pdf::test_support::tiny_ttf(&['A'], 500, 0)).unwrap();
+    ok(&["convert", csv.to_str().unwrap(), pdf.to_str().unwrap(), "--pdf-font", font.to_str().unwrap()]);
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(bytes.windows(10).any(|w| w == b"/FontFile2"));
+    assert!(bytes.windows(4).any(|w| w == b"/U1 "));
+    for extra in ["--pdf-font-bold", "--pdf-font-italic", "--pdf-font-bold-italic"] {
+        let result = run(&["convert", csv.to_str().unwrap(), pdf.to_str().unwrap(), extra, font.to_str().unwrap()]);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("--pdf-font is required"));
+    }
+    let result = run(&["convert", csv.to_str().unwrap(), dir.join("out.xlsx").to_str().unwrap(), "--pdf-font", font.to_str().unwrap()]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("require a .pdf"));
+    assert!(!dir.join("out.xlsx").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}

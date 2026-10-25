@@ -79,6 +79,20 @@ methods `-32601`.
 ← {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\n  \"range\": \"B4\", ... \"values\": [[1600.0]]\n}"}],"isError":false}}
 ```
 
+## PDF export with custom fonts
+
+Use `execute_command` with `file.exportPdf` (or `file.print`) and per-request font paths:
+
+```json
+{"name":"execute_command","arguments":{"command":"file.exportPdf","params":{"path":"/path/to/report.pdf","fonts":{"regular":"/path/to/Regular.ttf","bold":"/path/to/Bold.ttf","italic":"/path/to/Italic.ttf","boldItalic":"/path/to/BoldItalic.ttf"}}}}
+```
+
+Only `regular` is required; omitted styles use regular. Paths belong to the host running the
+engine, including a desktop reached through `mcp --connect`. Omit `path` to receive PDF bytes as
+base64. Fonts apply only to that export and replace all text families, including Latin. Invalid
+or unsupported fonts and missing glyphs are tool errors; no dialog opens and no output is
+written. See [CLI PDF fonts](cli.md#pdf-fonts) for formats, size limits and shaping restrictions.
+
 ## Embedding
 
 `gridcraft-mcp` is a library: `Server::new(Box::new(Headless::new()))` or

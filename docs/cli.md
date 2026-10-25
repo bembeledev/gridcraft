@@ -23,7 +23,7 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | Subcommand | Example |
 |---|---|
 | `info <file> [--json]` | `gridcraft-cli info book.xlsx` — sheets, used ranges, cell counts, tables, charts, names. |
-| `convert <in> <out> [--sheet NAME]` | `gridcraft-cli convert book.xlsx data.csv --sheet Sales` — output format from the extension: `.xlsx`, `.csv`, `.tsv`, `.json`, `.html`. |
+| `convert <in> <out> [--sheet NAME] [--pdf-font FONT.ttf]` | `gridcraft-cli convert book.xlsx data.csv --sheet Sales` — output format from the extension: `.xlsx`, `.csv`, `.tsv`, `.json`, `.html`, `.pdf`. |
 | `eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]` | `gridcraft-cli eval '=PMT(5%/12,360,-300000)'`; `gridcraft-cli eval '=SUM(B2:B9)' --in book.xlsx` — formulas in English with `,` between arguments. A formula that couldn't be entered in a cell (it doesn't parse, or a function gets the wrong number of arguments) is an error saying why; an unknown function is `#NAME?`, as in Excel. |
 | `cat <file> [--range R] [--sheet S] [--formulas] [--csv]` | `gridcraft-cli cat book.xlsx --range A1:F20` — aligned table of displayed values. |
 | `check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]` | `gridcraft-cli check corpus/` — calc oracle and XLSX round-trip fidelity, see below. |
@@ -33,6 +33,44 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
 | `version` | Prints `gridcraft-cli <version>`. |
+
+## PDF fonts
+
+Choose any local, embeddable TrueType outline font for a PDF export, including Latin text:
+
+```sh
+gridcraft-cli convert book.xlsx report.pdf \
+    --pdf-font /path/to/Regular.ttf \
+    --pdf-font-bold /path/to/Bold.ttf \
+    --pdf-font-italic /path/to/Italic.ttf \
+    --pdf-font-bold-italic /path/to/BoldItalic.ttf
+```
+
+`--pdf-font` is required when supplying any style option. Omitted styles use the regular face.
+The choice replaces all workbook font families for this export, including cells, charts, shapes,
+headings, headers and footers. It does not change the workbook or later exports. Text alignment,
+wrapping and shrink-to-fit use the chosen face's advance widths; row and column sizes remain
+those of the workbook. These options require `.pdf` output.
+
+The same options are available to scripts through the engine command:
+
+```sh
+gridcraft-cli run --in book.xlsx \
+    --cmd 'file.exportPdf={"path":"report.pdf","fonts":{"regular":"/path/to/Regular.ttf","bold":"/path/to/Bold.ttf"}}'
+```
+
+`file.print` accepts the same `fonts` object. Font paths are read on the host performing the
+export, including when called over MCP or the control channel. Files are bounded to 64 MiB per
+face. Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only embedding,
+and characters absent from the chosen face return an error before the output file is written.
+TrueType outlines in an OpenType container are accepted; the extension is not used to validate
+font bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures,
+bidi or variable-font axis selection; use static faces and scripts that need no complex shaping.
+No font files are bundled or added to the repository.
+
+Without explicit fonts, Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
+registered system TrueType fallback from #1555. Text that fallback cannot cover retains the
+existing non-embedded CID path, whose rendering depends on the PDF viewer's fonts.
 
 ## `run`
 

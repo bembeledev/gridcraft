@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 
-use crate::ast::*;
+use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp, book_prefix};
 
 use gridcraft_core::sheet_needs_quotes as core_sheet_needs_quotes;
 /// Whether a sheet name needs quotes, preserving the unquoted `[n]` workbook prefix form.
@@ -98,6 +98,28 @@ pub fn struct_ref_file(s: &StructRef) -> String {
     write_struct_ref(s, false)
 }
 
+/// Splits a sheet-qualified name at its last `!` outside brackets. A `!` inside brackets
+/// belongs to a structured reference's column (`Table1[Done!]`, `Table1[#REF!]`).
+fn sheet_split(n: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    let mut at = None;
+    for (i, c) in n.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\'' if depth > 0 => escaped = true,
+            '[' => depth = depth.saturating_add(1),
+            ']' => depth = depth.saturating_sub(1),
+            '!' if depth == 0 => at = Some(i),
+            _ => {}
+        }
+    }
+    at.and_then(|i| Some((n.get(..i)?, n.get(i + 1..)?)))
+}
+
 fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
     let esc = |c: &str| c.replace('\'', "''").replace('[', "'[").replace(']', "']").replace('#', "'#");
     let item = |i: &StructItem| match i {
@@ -145,7 +167,16 @@ fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
 }
 
 fn number(n: f64) -> String {
-    number_to_text(n)
+    let text = number_to_text(n);
+    // 15 significant digits can round past f64::MAX, which no longer parses.
+    if text.parse::<f64>().is_ok_and(f64::is_finite) {
+        return text;
+    }
+    let exact = format!("{:E}", n);
+    match exact.split_once('E') {
+        Some((m, e)) if !e.starts_with('-') => format!("{m}E+{e}"),
+        _ => exact,
+    }
 }
 
 /// Prints an expression in A1 notation.
@@ -195,7 +226,7 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             s.push_str(&sheet_prefix(sheet));
             s.push_str("#REF!");
         }
-        Expr::Name(n) => match n.rsplit_once('!') {
+        Expr::Name(n) => match sheet_split(n) {
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
             // A linked workbook's own name (`[1]!Rate`, `[Source.xlsx]!Rate`) has no sheet to quote.
             Some((sheet, name)) => {

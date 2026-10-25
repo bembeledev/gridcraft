@@ -31,9 +31,16 @@ pub fn fetch(req: &gridcraft_engine::webquery::WebRequest) -> Result<Vec<WebTabl
     }
 }
 
-/// The URL without its query string, for logs and messages.
+/// The URL's origin (scheme and host), for logs and messages: userinfo and the path — which
+/// can hold a secret segment — never reach the log.
 pub fn redact(url: &str) -> String {
-    url.split_once('?').map_or_else(|| url.to_string(), |(base, _)| format!("{base}?…"))
+    let url = url.trim_start();
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return "…".into();
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    format!("{scheme}://{authority}")
 }
 
 /// One bounded GET: https only, no redirects, no cookies; size- and time-capped.

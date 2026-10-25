@@ -2936,6 +2936,7 @@ fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut
         if ui.button("Go").clicked() && !url.trim().is_empty() {
             d.values.insert("url".into(), json!(url.trim()));
             d.values.insert("tables".into(), Json::Null);
+            d.values.insert("pick".into(), json!(0));
             let r = app.run("data.webPreview", json!({"url": url.trim()}));
             match r {
                 Ok(res) => d.values.insert("tables".into(), res["tables"].clone()),
@@ -3000,7 +3001,10 @@ fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut
         };
         match app.run("data.fromWeb", params) {
             Ok(r) => app.toast = Some((format!("Imported {} rows into {}", r["rows"], r["sheet"]), crate::now_ms())),
-            Err(e) => app.message = Some(("From Web".into(), crate::clean_error(&e))),
+            Err(e) => {
+                app.message = Some(("From Web".into(), crate::clean_error(&e)));
+                *confirm = false;
+            }
         }
     }
     if !load {

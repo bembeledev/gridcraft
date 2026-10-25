@@ -80,12 +80,29 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     let tables = source(&req).map_err(EngineError::Other)?;
     let want = str_param(p, "table").map(str::trim).filter(|t| !t.is_empty());
     let table = pick_table(&tables, want).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
-    let name = str_param(p, "sheet").map(|n| n.chars().take(31).collect::<String>()).unwrap_or_else(|| {
-        let host = req.url.trim_start_matches("https://").split('/').next().unwrap_or("Web").to_string();
-        let base = host.rsplit('.').find(|p| !p.is_empty() && *p != "www").unwrap_or("Web").to_string();
-        if base.is_empty() { "Web".into() } else { base.chars().take(31).collect() }
-    });
+    let name = str_param(p, "sheet").map(|n| n.chars().take(31).collect::<String>()).unwrap_or_else(|| default_sheet_name(&req.url));
     load_table(s, &req, table, &name, true)
+}
+
+/// The site's own name (`https://www.example.com/x` → `example`), capped at 31 characters.
+/// Country suffixes that register under a second level (`.co.uk`, `.com.au`) are skipped, so
+/// `https://sub.example.co.uk` is `example` too.
+fn default_sheet_name(url: &str) -> String {
+    const SECOND_LEVEL_CCTLDS: [&str; 12] = ["uk", "au", "jp", "br", "cn", "in", "kr", "nz", "za", "sg", "hk", "tw"];
+    const SECOND_LEVEL_PREFIXES: [&str; 9] = ["co", "com", "org", "net", "gov", "ac", "edu", "or", "ne"];
+    let authority = url.trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default().split(':').next().unwrap_or_default();
+    let labels: Vec<&str> = host.split('.').filter(|p| !p.is_empty() && *p != "www").collect();
+    let base = match labels.len() {
+        0 => "Web",
+        1 => labels[0],
+        n => {
+            let last = labels[n - 1];
+            let second = labels[n - 2];
+            if SECOND_LEVEL_CCTLDS.contains(&last) && SECOND_LEVEL_PREFIXES.contains(&second) && n > 2 { labels[n - 3] } else { second }
+        }
+    };
+    base.chars().take(31).collect()
 }
 
 /// The table `want` names (page name or 1-based index), else the first one.
@@ -108,6 +125,12 @@ fn no_table_message(tables: &[WebTable]) -> String {
 
 /// Writes `table` to a new sheet as a table and (when `save`) records the connection.
 pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool) -> Result<Json> {
+    s.grouped("From Web", |s| load_table_steps(s, req, table, sheet_name, save))
+}
+
+/// The import as one undo step: a failure after the sheet was inserted rolls the whole
+/// workbook back, so no empty sheet or half-written table is left behind.
+fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool) -> Result<Json> {
     let rows = json_rows(table);
     if rows.is_empty() {
         return Err(EngineError::Other("The table is empty.".into()));
@@ -119,9 +142,26 @@ pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sh
     s.execute("range.setValues", json!({"range": "A1", "sheet": sheet, "values": rows}))?;
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
     let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(table.rows.len() as u32 - 1, w as u32 - 1));
-    // The table takes the page table's name when it's a valid, free one.
-    let tname = table.name.chars().take(255).collect::<String>();
-    let created = s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": tname})).is_ok();
+    // The table takes the page table's name (spaces and other characters a table name cannot
+    // hold become `_`); a taken name gets a generated one, and the connection saves the name
+    // that was actually created.
+    let sanitize = |n: &str| n.chars().take(255).map(|c| if c.is_alphanumeric() || c == '_' || c == '.' { c } else { '_' }).collect::<String>();
+    let mut tname = sanitize(&table.name);
+    if !tname.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '\\') {
+        tname = format!("Web_{tname}");
+    }
+    s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": tname})).or_else(|e| {
+        // The name is taken or still not valid: a generated one keeps the import working.
+        let taken = e.to_string().contains("already exists");
+        let generated = s
+            .doc()
+            .map(|d| (1..).map(|n| format!("Web_Table{n}")).find(|n| d.wb.table(n).is_none()).unwrap_or_else(|| "Web_Table".into()))
+            .unwrap_or_else(|_| "Web_Table".into());
+        if !taken && !e.to_string().contains("not valid") {
+            return Err(e);
+        }
+        s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": generated}))
+    })?;
     let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, w as u32 - 1).a1()}));
     if save {
         let synced = now_ms();
@@ -132,13 +172,12 @@ pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sh
         let q =
             gridcraft_model::WebQuery { name, url: req.url.clone(), table: table.name.clone(), sheet: sheet_name.clone(), last_synced: Some(synced) };
         edit(s, |cx| {
-            cx.wb.web_queries.retain(|x| !(x.url.eq_ignore_ascii_case(&q.url) && x.table.eq_ignore_ascii_case(&q.table)));
+            cx.wb.web_queries.retain(|x| !(x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)));
             cx.wb.web_queries.push(q.clone());
             cx.structural = true;
             Ok(())
         })?;
     }
-    let _ = created;
     Ok(json!({"sheet": sheet_name, "table": tname, "rows": table.rows.len(), "cols": w, "tables_found": table_count(s)}))
 }
 
@@ -229,29 +268,33 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         return Err(EngineError::Other("The table is empty.".into()));
     }
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
-    // Clear the old range, then drop the table so a new one can take the new shape.
-    s.execute("edit.clearContents", json!({"range": old.a1(), "sheet": sheet}))?;
-    let remove = |s: &mut Session| {
+    // The rewrite is one undo step over the table's own place: a failure mid-way rolls the
+    // old table and its data back instead of leaving the sheet empty.
+    s.grouped("Refresh Web Table", |s| {
+        // Clear the old range, then drop the table so a new one can take the new shape.
+        s.execute("edit.clearContents", json!({"range": old.a1(), "sheet": sheet}))?;
+        let remove = |s: &mut Session| {
+            edit(s, |cx| {
+                if let Some(sh) = cx.wb.sheet_mut(sheet) {
+                    sh.tables.retain(|t| !t.name.eq_ignore_ascii_case(&tname));
+                }
+                cx.structural = true;
+                Ok(())
+            })
+        };
+        remove(s)?;
+        // Write at the table's own origin, not A1: a moved table refreshes where it is.
+        s.execute("range.setValues", json!({"range": old.start.a1(), "sheet": sheet, "values": rows}))?;
+        let range = RangeRef::new(old.start, CellRef::new(old.start.row + table.rows.len() as u32 - 1, old.start.col + w as u32 - 1));
+        s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": tname}))?;
+        let synced = now_ms();
         edit(s, |cx| {
-            if let Some(sh) = cx.wb.sheet_mut(sheet) {
-                sh.tables.retain(|t| !t.name.eq_ignore_ascii_case(&tname));
+            if let Some(qq) = cx.wb.web_queries.iter_mut().find(|x| x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)) {
+                qq.last_synced = Some(synced);
             }
             cx.structural = true;
             Ok(())
-        })
-    };
-    remove(s)?;
-    s.execute("range.setValues", json!({"range": "A1", "sheet": sheet, "values": rows}))?;
-    let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(table.rows.len() as u32 - 1, w as u32 - 1));
-    let _ = s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": tname}));
-    let synced = now_ms();
-    edit(s, |cx| {
-        if let Some(qq) = cx.wb.web_queries.iter_mut().find(|x| x.url.eq_ignore_ascii_case(&q.url) && x.table.eq_ignore_ascii_case(&q.table)) {
-            qq.last_synced = Some(synced);
-            qq.name = tname.clone();
-            qq.sheet = q.sheet.clone();
-        }
-        cx.structural = true;
+        })?;
         Ok(())
     })?;
     Ok((table.rows.len(), w))
@@ -307,7 +350,11 @@ mod tests {
         assert_eq!(a1(&s, "A1"), "x");
         let d = s.active().unwrap();
         let sh = d.wb.active().unwrap();
-        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::number(1.0));
+        // The page name "Table 2" cannot be a table name (the space); the import still makes
+        // the table, with a name the page table's was sanitized into.
+        assert!(sh.tables.iter().any(|t| t.name == "Table_2"));
+        // A one-row import is the table's header row, which is text.
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::text("1"));
     }
 
     #[test]
@@ -344,6 +391,50 @@ mod tests {
         assert_eq!(sh.tables[0].range.height(), 3);
         // The old range's leftovers are gone: nothing beyond the new table.
         assert!(sh.value(CellRef::parse("C1").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn default_sheet_name_is_the_site_not_the_tld() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://www.example.com/markets"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(d.wb.active().unwrap().name, "example");
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://sub.example.co.uk/x?a=1"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(d.wb.active().unwrap().name, "example");
+    }
+
+    #[test]
+    fn a_second_import_keeps_the_first_connection() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "One"})).unwrap();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Two"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(d.wb.web_queries.len(), 2);
+        assert_eq!(d.wb.web_queries[0].sheet, "One");
+        assert_eq!(d.wb.web_queries[1].sheet, "Two");
+    }
+
+    #[test]
+    fn refresh_writes_at_the_moved_table_s_own_place() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // Move the sheet's contents down two rows (values plus the table range).
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+        // The header sits where the moved table is, and A1 stayed empty.
+        assert_eq!(a1(&s, "A3"), "Sym");
+        assert_eq!(a1(&s, "A1"), "");
     }
 
     #[test]

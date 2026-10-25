@@ -102,8 +102,19 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                     // Inside a nested table the markup stays part of the enclosing cell's text.
                     Some(t) if depth > 0 => t.push_text(&format!("<{tag}>")),
                     Some(t) if name == "tr" => t.start_row(),
-                    Some(t) => t.start_cell(),
+                    Some(t) => {
+                        let colspan = attr(body, "colspan").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, max_cols);
+                        let raw_row = attr(body, "rowspan").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1);
+                        let rowspan = if raw_row == 0 { None } else { Some(raw_row.clamp(1, max_rows)) };
+                        t.start_cell(colspan, rowspan);
+                    }
                     None => {}
+                }
+            }
+            // A `rowspan="0"` cell covers the rest of its row group; the group ends here.
+            ("thead" | "tbody" | "tfoot", true) => {
+                if let Some(t) = current.as_mut() {
+                    t.end_row_group();
                 }
             }
             _ => {}
@@ -121,11 +132,25 @@ struct TableState {
     row: Vec<String>,
     cell: String,
     cell_open: bool,
+    /// The open cell's `colspan` (>= 1) and `rowspan` (`None` for `rowspan="0"`: to this row group's end).
+    cell_span: (usize, Option<usize>),
+    /// Per column: the row index (exclusive) down to which a `rowspan` from above covers it.
+    covered_until: Vec<usize>,
 }
 
 impl TableState {
     fn new(name: String, max_rows: usize, max_cols: usize) -> Self {
-        Self { name, max_rows, max_cols, rows: Vec::new(), row: Vec::new(), cell: String::new(), cell_open: false }
+        Self {
+            name,
+            max_rows,
+            max_cols,
+            rows: Vec::new(),
+            row: Vec::new(),
+            cell: String::new(),
+            cell_open: false,
+            cell_span: (1, Some(1)),
+            covered_until: Vec::new(),
+        }
     }
 
     fn push_text(&mut self, text: &str) {
@@ -134,9 +159,10 @@ impl TableState {
         }
     }
 
-    fn start_cell(&mut self) {
+    fn start_cell(&mut self, colspan: usize, rowspan: Option<usize>) {
         self.close_cell();
         self.cell_open = true;
+        self.cell_span = (colspan, rowspan);
     }
 
     fn start_row(&mut self) {
@@ -144,15 +170,60 @@ impl TableState {
         self.flush_row();
     }
 
-    /// Close the current cell (collapsing whitespace) into the current row.
+    /// `</thead>`/`</tbody>`/`</tfoot>`: a `rowspan="0"` cell covers no further rows.
+    fn end_row_group(&mut self) {
+        // The row being built belongs to the group too (its last cell may still be open).
+        let until = self.rows.len() + usize::from(!self.row.is_empty() || self.cell_open);
+        for u in &mut self.covered_until {
+            if *u == usize::MAX {
+                *u = until;
+            }
+        }
+    }
+
+    /// Close the current cell into the current row: past the columns a `rowspan` above covers,
+    /// then the cell, then an empty placeholder per extra `colspan` column.
     fn close_cell(&mut self) {
         if !self.cell_open {
             return;
         }
         self.cell_open = false;
-        let text = collapse_ws(&std::mem::take(&mut self.cell));
+        let (colspan, rowspan) = self.cell_span;
+        let text = collapse_ws(&std::mem::take(&mut self.cell)).chars().take(MAX_TEXT).collect::<String>();
+        // The row being built is the next one to flush: index rows.len().
+        let r = self.rows.len();
+        while self.covered_until.get(self.row.len()).is_some_and(|&until| until > r) {
+            if self.row.len() >= self.max_cols {
+                return;
+            }
+            self.row.push(String::new());
+        }
+        let start = self.row.len();
         if self.row.len() < self.max_cols {
-            self.row.push(text.chars().take(MAX_TEXT).collect());
+            self.row.push(text);
+        }
+        for _ in 1..colspan {
+            if self.row.len() >= self.max_cols {
+                break;
+            }
+            self.row.push(String::new());
+        }
+        if let Some(span) = rowspan.filter(|s| *s > 1) {
+            let until = r.saturating_add(span).min(self.max_rows);
+            if self.covered_until.len() < self.row.len() {
+                self.covered_until.resize(self.row.len(), 0);
+            }
+            for u in self.covered_until.get_mut(start..self.row.len()).into_iter().flatten() {
+                *u = (*u).max(until);
+            }
+        } else if rowspan.is_none() {
+            // rowspan="0": covers the rest of its row group (thead/tbody/tfoot), capped by the table.
+            if self.covered_until.len() < self.row.len() {
+                self.covered_until.resize(self.row.len(), 0);
+            }
+            for u in self.covered_until.get_mut(start..self.row.len()).into_iter().flatten() {
+                *u = usize::MAX;
+            }
         }
     }
 
@@ -284,7 +355,7 @@ fn tag_end(rest: &str) -> Option<usize> {
 fn attr<'a>(body: &'a str, attr: &str) -> Option<&'a str> {
     let lower = body.to_ascii_lowercase();
     let needle = format!("{attr}=");
-    let i = lower.find(&needle)?;
+    let i = lower.match_indices(&needle).map(|(i, _)| i).find(|&i| i == 0 || lower.as_bytes()[i - 1].is_ascii_whitespace())?;
     let rest = body.get(i + needle.len()..)?;
     let rest = rest.trim_start();
     let q = rest.as_bytes().first()?;
@@ -352,6 +423,31 @@ mod tests {
         assert!(extract_tables("<table><tr><td>no end", 10, 10).is_empty());
         assert!(extract_tables("<table><tr><td a=\"b>c\">x</td></tr></table>", 10, 10)[0].rows[0][0].contains("x"));
         assert!(extract_tables("<table><!--<tr>--><tr><td>1</td></tr></table>", 10, 10)[0].rows == vec![vec!["1"]]);
+    }
+
+    #[test]
+    fn colspan_and_rowspan_place_their_cells() {
+        let html = "<table><tr><th colspan=\"2\">H</th><th>C</th></tr>\
+                    <tr><td rowspan=\"2\">R</td><td>1</td><td>2</td></tr>\
+                    <tr><td>3</td><td>4</td></tr></table>";
+        let t = extract_tables(html, 100, 100);
+        assert_eq!(t[0].rows, vec![vec!["H", "", "C"], vec!["R", "1", "2"], vec!["", "3", "4"],]);
+    }
+
+    #[test]
+    fn rowspan_zero_spans_its_own_row_group() {
+        let html = "<table><thead><tr><th rowspan=\"0\">A</th><th>B</th></tr>\
+                    <tr><th>C</th></tr></thead>\
+                    <tbody><tr><td>x</td><td>y</td></tr></tbody></table>";
+        let t = extract_tables(html, 100, 100);
+        assert_eq!(t[0].rows, vec![vec!["A", "B"], vec!["", "C"], vec!["x", "y"],]);
+    }
+
+    #[test]
+    fn attr_matches_whole_names_not_suffixes() {
+        let html = "<table data-id=\"x\" id=\"prices\"><tr><td>1</td></tr></table>";
+        let t = extract_tables(html, 100, 100);
+        assert_eq!(t[0].name, "prices");
     }
 
     #[test]

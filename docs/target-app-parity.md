@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; gradient cell fills render and round-trip; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **274 / 290 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **275 / 291 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -294,8 +294,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   text+number), Fill Series, Flash Fill, find/replace with wildcards, Go To / Go To Special,
   undo/redo with history, format painter. Quick selection drags retain their final endpoint;
   the fill handle explains how to fill versus select cells.
-- Formatting: fonts, fills, all border styles, alignment (wrap, indent, rotation, merge), number
-  formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
+- Formatting: fonts, solid/pattern/gradient cell fills, all border styles, alignment (wrap,
+  indent, rotation, merge), number formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
   duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
   Border presets include visual diagrams; Format Cells previews draft borders before applying.

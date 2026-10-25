@@ -649,6 +649,7 @@ fn blend(fg: [u8; 4]) -> Rgb {
 struct Look {
     style: Style,
     fill: Option<Rgb>,
+    gradient: Option<GradientFill>,
     cf: Option<crate::cf::CfLook>,
 }
 
@@ -659,8 +660,8 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
+        if st.fill.is_set() {
+            style.fill = st.fill.clone();
         }
         if st.font.color != Color::Auto {
             style.font.color = st.font.color;
@@ -686,19 +687,25 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
             }
         }
     }
-    let mut fill = match style.fill.pattern {
-        PatternType::None => None,
-        PatternType::Solid => rgb_of(style.fill.fg, wb),
-        _ => {
-            let fg = rgb_of(style.fill.fg, wb).unwrap_or([0, 0, 0]);
-            let bg = rgb_of(style.fill.bg, wb).unwrap_or([255, 255, 255]);
-            Some([0, 1, 2].map(|i| ((fg[i] as u16 + bg[i] as u16 * 3) / 4) as u8))
+    let mut gradient = style.fill.gradient.clone();
+    let mut fill = if gradient.is_some() {
+        None
+    } else {
+        match style.fill.pattern {
+            PatternType::None => None,
+            PatternType::Solid => rgb_of(style.fill.fg, wb),
+            _ => {
+                let fg = rgb_of(style.fill.fg, wb).unwrap_or([0, 0, 0]);
+                let bg = rgb_of(style.fill.bg, wb).unwrap_or([255, 255, 255]);
+                Some([0, 1, 2].map(|i| ((fg[i] as u16 + bg[i] as u16 * 3) / 4) as u8))
+            }
         }
     };
     if let Some(rgb) = cfl.as_ref().and_then(|l| l.scale_fill) {
+        gradient = None;
         fill = Some(rgb);
     }
-    Look { style, fill, cf: cfl }
+    Look { style, fill, gradient, cf: cfl }
 }
 
 /// PDF measurement for chart layout.
@@ -904,6 +911,37 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
+/// Tiles across one axis of a gradient cell: one per 8 pt, at least 2 and at most 16, as the grid
+/// renderer sizes its mesh. A fixed 16×16 forced every cell, however small, to pay 256 solid fills;
+/// scaling them bounds the page even when a whole large range is gradient-filled.
+fn gradient_tiles(len: f32) -> usize {
+    ((len / 8.0).ceil() as usize).clamp(2, 16)
+}
+
+/// Paints a gradient as a small grid of solid rectangles. PDF has real shading objects, but the
+/// writer's page model is deliberately simple, so the cell is tessellated at the grid renderer's
+/// resolution: a bounded number of tiles per axis, from the cell's size.
+fn fill_gradient(pg: &mut Page, x: f32, y: f32, w: f32, h: f32, g: &GradientFill, theme: &Theme) {
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    let (cols, rows) = (gradient_tiles(w), gradient_tiles(h));
+    let cw = w / cols as f32;
+    let ch = h / rows as f32;
+    // Resolve theme colours once per cell, not once per tile (`sample` would allocate per tile).
+    let stops = g.resolved_stops(theme);
+    for iy in 0..rows {
+        for ix in 0..cols {
+            let u = (ix as f32 + 0.5) / cols as f32;
+            let v = (iy as f32 + 0.5) / rows as f32;
+            if let Some(rgb) = g.sample_resolved(&stops, u as f64, v as f64) {
+                // A hair of overlap hides seams between the rectangles.
+                pg.fill_rect(x + ix as f32 * cw, y + iy as f32 * ch, cw + 0.05, ch + 0.05, rgb);
+            }
+        }
+    }
+}
+
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
 fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
@@ -952,6 +990,7 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         .map(|c| (*c, cell_look(b.wb, b.si, sh, *c, cf)))
         .filter(|(c, l)| {
             l.fill.is_some()
+                || l.gradient.is_some()
                 || l.cf.is_some()
                 || merges.iter().any(|m| m.start == *c)
                 || !sh.value(*c).is_empty()
@@ -976,7 +1015,9 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(f) = l.fill {
+        if let Some(g) = &l.gradient {
+            fill_gradient(pg, x, y, w, h, g, &b.wb.theme);
+        } else if let Some(f) = l.fill {
             pg.fill_rect(x, y, w, h, f);
         } else if merged && gridlines {
             pg.fill_rect(x, y, w, h, [255, 255, 255]);
@@ -2412,6 +2453,64 @@ mod tests {
         assert_eq!(center_across_width(&styles, &sh, a1, &[]), sh.col_width(1));
         let merged = [RangeRef::new(CellRef::new(0, 1), CellRef::new(1, 1))];
         assert_eq!(center_across_width(&styles, &sh, a1, &merged), 0.0);
+    }
+
+    #[test]
+    fn gradient_cells_are_tessellated_into_the_pdf() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:B2", "values": [[1, 2], [3, 4]]})).unwrap();
+        let fill = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        s.execute("home.formatCells", json!({"range": "A1:B2", "style": {"fill": fill}})).unwrap();
+        let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+        assert!(pages > 0);
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.starts_with("%PDF"), "not a PDF");
+        // A default cell is 48×15 pt, so six tiles across and two down: four cells.
+        assert_eq!(text.matches(" re f").count(), 4 * 6 * 2, "the gradient was not tessellated");
+    }
+
+    /// Tiles follow the cell's size, as the grid renderer's mesh does: a small cell must not pay
+    /// for a 16×16 grid, and a large one still reaches the cap.
+    #[test]
+    fn gradient_tiles_scale_with_the_cell() {
+        let fill = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        let tiles = |w: f64, h: f64| {
+            let mut s = s();
+            s.execute("home.columnWidth", json!({"cols": "A", "width": w})).unwrap();
+            s.execute("home.rowHeight", json!({"rows": "1", "height": h})).unwrap();
+            s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": fill.clone()}})).unwrap();
+            let (pdf, _) = pdf_of(&mut s, json!({"range": "A1"}));
+            String::from_utf8_lossy(&pdf).matches(" re f").count()
+        };
+        // 12 px is 9 pt a side: the 2×2 floor, far below the 16 tiles each axis used to emit.
+        assert_eq!(tiles(12.0, 12.0), 4);
+        // 400 px is 300 pt a side, well past the 8 pt step, so both axes reach the 16-tile cap.
+        assert_eq!(tiles(400.0, 400.0), 16 * 16);
+    }
+
+    /// Gradient formatting alone draws: a blank, formatted cell must not be skipped as empty.
+    #[test]
+    fn blank_gradient_cells_are_drawn_in_the_pdf() {
+        let mut s = s();
+        // A value elsewhere keeps the print area from collapsing to nothing.
+        s.execute("range.setValues", json!({"range": "C3", "values": [[1]]})).unwrap();
+        let fill = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        s.execute("home.formatCells", json!({"range": "A1:B2", "style": {"fill": fill}})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.value(CellRef::new(0, 0)).is_empty(), "the gradient cells have no values");
+        let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+        assert!(pages > 0);
+        let text = String::from_utf8_lossy(&pdf);
+        assert_eq!(text.matches(" re f").count(), 4 * 6 * 2, "blank gradient cells were skipped");
     }
 
     #[test]

@@ -479,3 +479,49 @@ fn custom_missing_styles_use_regular_and_missing_glyphs_are_reported() {
     assert_eq!(doc.missing_glyph(), Some('Ω'));
     assert!(UnicodeFont::parse(tiny_ttf(&['A'], 500, 0x0200)).is_none(), "bitmap-only embedding is forbidden");
 }
+
+#[test]
+fn named_families_keep_independent_resources_styles_and_metrics_across_pages() {
+    let face = |advance| Arc::new(UnicodeFont::parse(tiny_ttf(&['A', ' '], advance, 0)).unwrap());
+    let mut fonts = TextFonts::custom(face(300), None, None, None);
+    fonts.add_family("Body Sans", face(400), Some(face(500)), None, None).unwrap();
+    fonts.add_family("Heading Sans", face(800), None, Some(face(900)), None).unwrap();
+    let body = fonts.font(" BODY SANS ", true, false);
+    let heading = fonts.font("Heading Sans", false, true);
+    assert_ne!(body, heading, "two sans families must not collapse to Helvetica");
+    assert_eq!(fonts.text_width(body, 10.0, "AA"), 10.0);
+    assert_eq!(fonts.text_width(heading, 10.0, "AA"), 18.0);
+    assert_eq!(fonts.text_width(fonts.font("Heading Sans", true, true), 10.0, "AA"), 16.0, "missing named style uses its own regular face");
+    assert_eq!(fonts.text_width(fonts.font("Unmapped", false, false), 10.0, "AA"), 6.0, "global font is the fallback");
+    assert!(fonts.add_family("body sans", face(700), None, None, None).is_err(), "case-insensitive duplicate");
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(fonts);
+    doc.add_page(300.0, 300.0).text(10.0, 20.0, 10.0, body, [0, 0, 0], "AA");
+    let pg = doc.add_page(300.0, 300.0);
+    pg.text(10.0, 20.0, 10.0, heading, [0, 0, 0], "AA");
+    pg.text(10.0, 40.0, 10.0, body, [0, 0, 0], "AA");
+    let bytes = doc.finish();
+    check_xref(&bytes);
+    assert!(find(&bytes, b"/U6 10 Tf").is_some());
+    assert!(find(&bytes, b"/U11 10 Tf").is_some());
+    assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 2, "only used faces embed, once across pages");
+    assert!(find(&bytes, b"[500]").is_some());
+    assert!(find(&bytes, b"[900]").is_some());
+}
+
+#[test]
+fn named_families_bound_registration_and_detect_missing_glyphs() {
+    let face = Arc::new(UnicodeFont::parse(tiny_ttf(&['A'], 500, 0)).unwrap());
+    let mut fonts = TextFonts::default();
+    for name in ["".to_string(), " ".to_string(), "A".repeat(256)] {
+        assert!(fonts.add_family(&name, face.clone(), None, None, None).is_err());
+    }
+    for i in 0..MAX_FONT_FAMILIES {
+        fonts.add_family(&format!("Family {i}"), face.clone(), None, None, None).unwrap();
+    }
+    assert!(fonts.add_family("too many", face, None, None, None).is_err());
+    let mapped = fonts.font("Family 0", false, false);
+    assert_eq!(fonts.missing_glyph(mapped, "Ω"), Some('Ω'));
+    assert_eq!(fonts.missing_glyph(Font::Helvetica, "Ω"), None);
+    assert_eq!(fonts.text_width(Font::Embedded(usize::MAX), 10.0, "A"), 6.0, "hostile handles cannot panic");
+}

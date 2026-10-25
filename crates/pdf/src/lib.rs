@@ -28,6 +28,11 @@ use std::sync::{Arc, OnceLock};
 
 pub use truetype::{MAX_FONT_BYTES, UnicodeFont};
 
+/// Maximum number of explicitly mapped workbook families in one export.
+pub const MAX_FONT_FAMILIES: usize = 32;
+/// Total bytes of explicit font faces accepted for one export.
+pub const MAX_TOTAL_FONT_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Regular and bold fonts for text outside WinAnsiEncoding.
 pub type UnicodeFonts = [Option<Arc<UnicodeFont>>; 2];
 
@@ -60,10 +65,17 @@ fn needs_unicode(text: &str) -> bool {
 
 /// Per-document text faces and measurement policy. Custom faces replace every standard family
 /// for this export, including Latin text; fallback faces are used only for non-WinAnsi runs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TextFonts {
-    faces: [Option<Arc<UnicodeFont>>; 4],
+    faces: Vec<Option<Arc<UnicodeFont>>>,
     custom: bool,
+    families: BTreeMap<String, usize>,
+}
+
+impl Default for TextFonts {
+    fn default() -> Self {
+        Self { faces: vec![None; 4], custom: false, families: BTreeMap::new() }
+    }
 }
 
 impl TextFonts {
@@ -73,7 +85,7 @@ impl TextFonts {
     }
 
     fn fallback([regular, bold]: UnicodeFonts) -> Self {
-        Self { faces: [regular, bold, None, None], custom: false }
+        Self { faces: vec![regular, bold, None, None], ..Self::default() }
     }
 
     /// Explicit regular, bold, italic and bold-italic faces. Omitted styles use regular.
@@ -83,10 +95,59 @@ impl TextFonts {
         italic: Option<Arc<UnicodeFont>>,
         bold_italic: Option<Arc<UnicodeFont>>,
     ) -> Self {
-        Self { faces: [Some(regular), bold, italic, bold_italic], custom: true }
+        Self { faces: vec![Some(regular), bold, italic, bold_italic], custom: true, ..Self::default() }
+    }
+
+    /// Registers faces for a workbook family, matched case-insensitively after trimming.
+    /// Named mappings take precedence over the global custom face. Missing styles use regular.
+    pub fn add_family(
+        &mut self,
+        name: &str,
+        regular: Arc<UnicodeFont>,
+        bold: Option<Arc<UnicodeFont>>,
+        italic: Option<Arc<UnicodeFont>>,
+        bold_italic: Option<Arc<UnicodeFont>>,
+    ) -> Result<(), &'static str> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().take(256).count() > 255 {
+            return Err("font family names must contain 1 to 255 characters");
+        }
+        if self.families.len() >= MAX_FONT_FAMILIES {
+            return Err("at most 32 PDF font families are supported per export");
+        }
+        let key = name.to_lowercase();
+        if self.families.contains_key(&key) {
+            return Err("duplicate PDF font family name (case-insensitive)");
+        }
+        let faces = [Some(regular), bold, italic, bold_italic];
+        let total: u64 = self.faces.iter().chain(faces.iter()).flatten().map(|f| f.data.len() as u64).sum();
+        if total > MAX_TOTAL_FONT_BYTES {
+            return Err("PDF font faces exceed the 256 MiB export limit");
+        }
+        self.families.insert(key, self.faces.len());
+        self.faces.extend(faces);
+        Ok(())
+    }
+
+    /// Resolves the original workbook family before reducing it to a standard PDF family.
+    /// The returned handle belongs to this font set and the pages created from it.
+    pub fn font(&self, name: &str, bold: bool, italic: bool) -> Font {
+        let name = name.trim();
+        if !self.families.is_empty()
+            && name.len() <= 1024
+            && let Some(base) = self.families.get(&name.to_lowercase())
+        {
+            let want = base + usize::from(bold) + 2 * usize::from(italic);
+            let slot = if self.faces.get(want).is_some_and(Option::is_some) { want } else { *base };
+            return Font::Embedded(slot);
+        }
+        Font::styled(Font::family_for(name), bold, italic)
     }
 
     fn slot(&self, font: Font, text: &str) -> Option<usize> {
+        if let Font::Embedded(slot) = font {
+            return self.faces.get(slot).is_some_and(Option::is_some).then_some(slot);
+        }
         if self.custom {
             let want = usize::from(font.is_bold()) + 2 * usize::from(font.is_italic());
             return Some(if self.faces.get(want).is_some_and(Option::is_some) { want } else { 0 });
@@ -111,7 +172,7 @@ impl TextFonts {
 
     /// A custom export must not silently render missing characters as .notdef.
     pub fn missing_glyph(&self, font: Font, text: &str) -> Option<char> {
-        if !self.custom {
+        if !self.custom && !matches!(font, Font::Embedded(_)) {
             return None;
         }
         let face = self.slot(font, text).and_then(|i| self.faces.get(i)?.as_deref())?;
@@ -138,6 +199,8 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// A face resolved by [`TextFonts::font`], local to that document's font set.
+    Embedded(usize),
 }
 
 /// A font family for [`Font::styled`].
@@ -180,6 +243,7 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Embedded(_) => "Helvetica",
         }
     }
 
@@ -441,7 +505,7 @@ pub struct Page {
     fonts: [bool; FONT_SLOTS],
     /// The fallback fonts and, per slot, the glyphs used with the character each one shows.
     unicode: TextFonts,
-    glyphs: [BTreeMap<u16, char>; 4],
+    glyphs: Vec<BTreeMap<u16, char>>,
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
@@ -868,7 +932,7 @@ impl PdfDoc {
             content: String::new(),
             fonts: [false; FONT_SLOTS],
             unicode: self.unicode.clone(),
-            glyphs: Default::default(),
+            glyphs: vec![BTreeMap::new(); self.unicode.faces.len()],
             images: Vec::new(),
             links: Vec::new(),
             depth: 0,
@@ -951,7 +1015,8 @@ impl PdfDoc {
                 objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
             }
         }
-        for slot in 0..4 {
+        let slots = self.pages.iter().map(|p| p.unicode.faces.len()).max().unwrap_or(0);
+        for slot in 0..slots {
             let mut glyphs: BTreeMap<u16, char> = BTreeMap::new();
             let mut font = None;
             for p in &self.pages {

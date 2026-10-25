@@ -11,7 +11,7 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
-use gridcraft_pdf::{Font, MAX_FONT_BYTES, Page, PdfDoc, Rgb, TextFonts, UnicodeFont};
+use gridcraft_pdf::{Font, MAX_FONT_BYTES, MAX_FONT_FAMILIES, MAX_TOTAL_FONT_BYTES, Page, PdfDoc, Rgb, TextFonts, UnicodeFont};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup. fonts replaces all text with embeddable TrueType faces for this export; omitted styles use regular.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}, fontFamilies?: {workbookFamily: {regular: path, bold?: path, italic?: path, boldItalic?: path}}} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup. fonts replaces all text with embeddable TrueType faces for this export; omitted styles use regular. fontFamilies preserves workbook family names with per-family faces (max 32 families, 256 MiB total).",
             has_doc,
             export_pdf
         ),
@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, fonts?: {regular: path, bold?: path, italic?: path, boldItalic?: path}, fontFamilies?: {workbookFamily: {regular: path, bold?: path, italic?: path, boldItalic?: path}}} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
             has_doc,
             print
         ),
@@ -557,6 +557,7 @@ pub struct HfSection {
     pub bold: bool,
     pub italic: bool,
     pub size: Option<f32>,
+    pub font: Option<String>,
 }
 
 /// Expands a header/footer string into its left, centre and right sections.
@@ -605,9 +606,11 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
             'B' | 'b' => sec.bold = !sec.bold,
             'I' | 'i' => sec.italic = !sec.italic,
             '"' => {
-                // &"Font,Style": skip the font name; honour Bold/Italic in the style.
+                // &"Font,Style": keep the family for per-export font mappings.
                 let rest: String = chars[i..].iter().take_while(|c| **c != '"').collect();
-                let lower = rest.to_ascii_lowercase();
+                let (family, style) = rest.split_once(',').unwrap_or((&rest, ""));
+                sec.font = Some(family.trim().to_string());
+                let lower = style.to_ascii_lowercase();
                 if lower.contains("bold") {
                     sec.bold = true;
                 }
@@ -900,8 +903,8 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
     pg.stroke_line_dashed(x0, y0, x1, y1, lw, color, &border_dash(b.style, k));
 }
 
-fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+fn font_for(pg: &Page, style: &Style) -> Font {
+    pg.text_fonts().font(&style.font.name, style.font.bold, style.font.italic)
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
@@ -1141,7 +1144,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
-    let font = font_for(st);
+    let font = font_for(pg, st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
     let avail = (w - 2.0 * pad - indent).max(0.0);
@@ -1435,7 +1438,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let fm = &shp.format;
     let text_box = shp.kind == ShapeKind::TextBox;
     let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+    let font = pg.text_fonts().font(fm.font.as_deref().unwrap_or(""), fm.bold, fm.italic);
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
@@ -1509,7 +1512,10 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
                 continue;
             }
             let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
-            let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
+            let font = match pg.text_fonts().font(sec.font.as_deref().unwrap_or(""), sec.bold, sec.italic) {
+                mapped @ Font::Embedded(_) => mapped,
+                _ => Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic),
+            };
             let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
             let n = lines.len() as f32;
             for (j, line) in lines.iter().enumerate() {
@@ -1652,25 +1658,60 @@ fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &st
 
 /// Fonts are local to one export: never change the process-wide fallback loader or workbook.
 fn export_fonts(p: &Json, cmd: &str) -> Result<TextFonts> {
-    let Some(value) = p.get("fonts") else {
-        return Ok(TextFonts::system());
+    let families = match p.get("fontFamilies") {
+        None => None,
+        Some(value) => Some(value.as_object().ok_or_else(|| bad(cmd, "fontFamilies must map workbook family names to font faces"))?),
     };
-    let fonts = value.as_object().ok_or_else(|| bad(cmd, "fonts must be an object with a regular font path"))?;
-    if let Some(key) = fonts.keys().find(|k| !["regular", "bold", "italic", "boldItalic"].contains(&k.as_str())) {
-        return Err(bad(cmd, format!("unknown fonts key: {key}")));
+    if families.is_some_and(|f| f.len() > MAX_FONT_FAMILIES) {
+        return Err(bad(cmd, "at most 32 PDF font families are supported per export"));
     }
-    let load = |key: &str| -> Result<Option<std::sync::Arc<UnicodeFont>>> {
-        let Some(value) = fonts.get(key) else {
-            return Ok(None);
+    let mut budget = MAX_TOTAL_FONT_BYTES;
+    let mut fonts = match p.get("fonts") {
+        Some(value) => {
+            let [regular, bold, italic, bold_italic] = export_faces(value, "fonts", cmd, &mut budget)?;
+            let regular = regular.ok_or_else(|| bad(cmd, "fonts.regular is required"))?;
+            TextFonts::custom(regular, bold, italic, bold_italic)
+        }
+        None => TextFonts::system(),
+    };
+    if let Some(families) = families {
+        for (name, value) in families {
+            let name = name.trim();
+            if name.is_empty() || name.chars().take(256).count() > 255 {
+                return Err(bad(cmd, "font family names must contain 1 to 255 characters"));
+            }
+            let label = format!("fontFamilies.{name}");
+            let [regular, bold, italic, bold_italic] = export_faces(value, &label, cmd, &mut budget)?;
+            let regular = regular.ok_or_else(|| bad(cmd, format!("{label}.regular is required")))?;
+            fonts.add_family(name, regular, bold, italic, bold_italic).map_err(|e| bad(cmd, e))?;
+        }
+    }
+    Ok(fonts)
+}
+
+fn export_faces(value: &Json, label: &str, cmd: &str, budget: &mut u64) -> Result<[Option<std::sync::Arc<UnicodeFont>>; 4]> {
+    let faces = value.as_object().ok_or_else(|| bad(cmd, format!("{label} must be an object with a regular font path")))?;
+    if let Some(key) = faces.keys().find(|k| !["regular", "bold", "italic", "boldItalic"].contains(&k.as_str())) {
+        return Err(bad(cmd, format!("unknown {label} key: {key}")));
+    }
+    if !faces.contains_key("regular") {
+        return Err(bad(cmd, format!("{label}.regular is required")));
+    }
+    let mut out = [None, None, None, None];
+    for (slot, key) in ["regular", "bold", "italic", "boldItalic"].into_iter().enumerate() {
+        let Some(value) = faces.get(key) else {
+            continue;
         };
         let path =
-            value.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("fonts.{key} must be a non-empty font file path")))?;
-        let bytes = crate::io::read_file_limited(path, MAX_FONT_BYTES as u64)?;
-        let face = UnicodeFont::parse(bytes).ok_or_else(|| bad(cmd, format!("fonts.{key}: {path}: invalid or unsupported font; use a TrueType outline font permitting outline embedding (no CFF, collections or bitmap-only fonts)")))?;
-        Ok(Some(std::sync::Arc::new(face)))
-    };
-    let regular = load("regular")?.ok_or_else(|| bad(cmd, "fonts.regular is required"))?;
-    Ok(TextFonts::custom(regular, load("bold")?, load("italic")?, load("boldItalic")?))
+            value.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("{label}.{key} must be a non-empty font file path")))?;
+        let bytes = crate::io::read_file_limited(path, (MAX_FONT_BYTES as u64).min(*budget))?;
+        *budget = budget.saturating_sub(bytes.len() as u64);
+        let face = UnicodeFont::parse(bytes).ok_or_else(|| bad(cmd, format!("{label}.{key}: {path}: invalid or unsupported font; use a TrueType outline font permitting outline embedding (no CFF, collections or bitmap-only fonts)")))?;
+        if let Some(entry) = out.get_mut(slot) {
+            *entry = Some(std::sync::Arc::new(face));
+        }
+    }
+    Ok(out)
 }
 
 fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
@@ -2470,6 +2511,70 @@ mod tests {
         assert!(err.contains("scripts can't read"), "{err}");
         drop(sandbox);
         assert!(s.take_ui_requests().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn xlsx_pdf_export_preserves_named_families_and_styles() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-family-fonts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut paths = Vec::new();
+        for width in [400, 500, 800, 900] {
+            let path = dir.join(format!("face-{width}.ttf"));
+            std::fs::write(&path, gridcraft_pdf::test_support::tiny_ttf(&['A'], width, 0)).unwrap();
+            paths.push(path);
+        }
+        let families = json!({"Body Sans": {"regular": paths[0], "bold": paths[1]}, "Heading Sans": {"regular": paths[2], "italic": paths[3]}});
+        let mut source = s();
+        source.execute("range.setValues", json!({"range": "A1:B2", "values": [["A", "A"], ["A", "A"]]})).unwrap();
+        source.execute("home.fontName", json!({"range": "A1:A2", "name": "Body Sans"})).unwrap();
+        source.execute("home.fontName", json!({"range": "B1:B2", "name": "Heading Sans"})).unwrap();
+        source.execute("home.bold", json!({"range": "A2", "on": true})).unwrap();
+        source.execute("home.italic", json!({"range": "B2", "on": true})).unwrap();
+        source.execute("pageLayout.pageSetup", json!({"header": "&C&\"Heading Sans,Italic\"A"})).unwrap();
+        let book = dir.join("mixed.xlsx");
+        std::fs::write(&book, crate::io::save_bytes(&source.doc().unwrap().wb, "mixed.xlsx").unwrap()).unwrap();
+        let mut session = Session::new();
+        session.execute_headless("file.open", json!({"path": book})).unwrap();
+        for cmd in ["file.exportPdf", "file.print"] {
+            let result = session.execute_headless(cmd, json!({"fontFamilies": families})).unwrap();
+            let bytes = crate::io::base64_decode(result["base64"].as_str().unwrap()).unwrap();
+            assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 4);
+            for slot in [5, 6, 9, 11] {
+                assert!(
+                    bytes.windows(format!("/U{slot} ").len()).any(|w| w == format!("/U{slot} ").as_bytes()),
+                    "face {slot} must survive XLSX import"
+                );
+            }
+        }
+        let fonts = export_fonts(&json!({"fontFamilies": families}), "file.exportPdf").unwrap();
+        assert_eq!(wrap_lines(&fonts, "AAAA", fonts.font("Body Sans", false, false), 10.0, 20.0), ["AAAA"]);
+        assert_eq!(wrap_lines(&fonts, "AAAA", fonts.font("Heading Sans", false, false), 10.0, 20.0), ["AA", "AA"]);
+        let (default, _) = pdf_of(&mut session, json!({}));
+        assert!(!default.windows(10).any(|w| w == b"/FontFile2"));
+        let out = dir.join("keep.pdf");
+        std::fs::write(&out, b"existing output").unwrap();
+        session.execute("cell.set", json!({"cell": "A1", "input": "Ω"})).unwrap();
+        let error = session.execute_headless("file.exportPdf", json!({"path": out, "fontFamilies": families})).unwrap_err().to_string();
+        assert!(error.contains("U+03A9"), "{error}");
+        for value in [
+            json!(null),
+            json!([]),
+            json!({"Body": {}}),
+            json!({" ": {"regular": paths[0]}}),
+            json!({"Body": {"regular": paths[0]}, "body": {"regular": paths[0]}}),
+        ] {
+            assert!(session.execute_headless("file.exportPdf", json!({"path": out, "fontFamilies": value})).is_err());
+        }
+        let mut many = serde_json::Map::new();
+        for i in 0..=MAX_FONT_FAMILIES {
+            many.insert(format!("Family {i}"), json!({"regular": paths[0]}));
+        }
+        assert!(export_fonts(&json!({"fontFamilies": many}), "file.exportPdf").unwrap_err().to_string().contains("32"));
+        let mut budget = 1;
+        assert!(export_faces(&json!({"regular": paths[0]}), "fontFamilies.Body", "file.exportPdf", &mut budget).is_err());
+        assert_eq!(std::fs::read(out).unwrap(), b"existing output");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

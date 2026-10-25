@@ -39,6 +39,10 @@ const USAGE: &str = "usage:
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
                      [--pdf-font FONT.ttf] [--pdf-font-bold FONT.ttf]
                      [--pdf-font-italic FONT.ttf] [--pdf-font-bold-italic FONT.ttf]
+                     [--pdf-font-family NAME=FILE.ttf]... (preserve workbook families)
+                     [--pdf-font-family-bold NAME=FILE.ttf]...
+                     [--pdf-font-family-italic NAME=FILE.ttf]...
+                     [--pdf-font-family-bold-italic NAME=FILE.ttf]...
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
@@ -284,8 +288,47 @@ fn info(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+const PDF_FAMILY_OPTIONS: [(&str, &str); 4] = [
+    ("pdf-font-family", "regular"),
+    ("pdf-font-family-bold", "bold"),
+    ("pdf-font-family-italic", "italic"),
+    ("pdf-font-family-bold-italic", "boldItalic"),
+];
+
+fn pdf_font_families(args: &Args) -> Result<serde_json::Map<String, Value>, String> {
+    let mut families: std::collections::BTreeMap<String, (String, serde_json::Map<String, Value>)> = std::collections::BTreeMap::new();
+    for (option, value) in &args.opts {
+        let Some((_, style)) = PDF_FAMILY_OPTIONS.iter().find(|(key, _)| key == option) else {
+            continue;
+        };
+        let (name, path) = value.split_once('=').ok_or_else(|| format!("--{option} needs NAME=FILE.ttf"))?;
+        let name = name.trim();
+        if name.is_empty() || name.chars().take(256).count() > 255 || path.trim().is_empty() {
+            return Err(format!("--{option} needs a family name (1 to 255 characters) and a non-empty font path"));
+        }
+        let key = name.to_lowercase();
+        if !families.contains_key(&key) && families.len() >= gridcraft_engine::pdf::MAX_FONT_FAMILIES {
+            return Err("at most 32 PDF font families are supported per export".into());
+        }
+        let (_, faces) = families.entry(key).or_insert_with(|| (name.into(), serde_json::Map::new()));
+        if faces.insert((*style).into(), json!(path)).is_some() {
+            return Err(format!("duplicate {style} face for PDF family {name}"));
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for (name, faces) in families.into_values() {
+        if !faces.contains_key("regular") {
+            return Err(format!("PDF family {name} requires --pdf-font-family NAME=FILE.ttf"));
+        }
+        out.insert(name, Value::Object(faces));
+    }
+    Ok(out)
+}
+
 fn convert(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["sheet", "pdf-font", "pdf-font-bold", "pdf-font-italic", "pdf-font-bold-italic"], &[])?;
+    let mut options = vec!["sheet", "pdf-font", "pdf-font-bold", "pdf-font-italic", "pdf-font-bold-italic"];
+    options.extend(PDF_FAMILY_OPTIONS.iter().map(|(key, _)| *key));
+    let a = Args::parse(args, &options, &[])?;
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -296,7 +339,8 @@ fn convert(args: &[String]) -> Result<(), String> {
     let font_options = [("pdf-font", "regular"), ("pdf-font-bold", "bold"), ("pdf-font-italic", "italic"), ("pdf-font-bold-italic", "boldItalic")];
     let fonts: serde_json::Map<String, Value> =
         font_options.into_iter().filter_map(|(option, key)| a.opt(option).map(|p| (key.into(), json!(p)))).collect();
-    if !fonts.is_empty() && !pdf {
+    let families = pdf_font_families(&a)?;
+    if (!fonts.is_empty() || !families.is_empty()) && !pdf {
         return Err("--pdf-font options require a .pdf output path".into());
     }
     if !fonts.is_empty() && !fonts.contains_key("regular") {
@@ -308,6 +352,9 @@ fn convert(args: &[String]) -> Result<(), String> {
         let mut params = json!({"path": out});
         if !fonts.is_empty() {
             params["fonts"] = Value::Object(fonts);
+        }
+        if !families.is_empty() {
+            params["fontFamilies"] = Value::Object(families);
         }
         let result = exec(&mut s, "file.exportPdf", params)?;
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);

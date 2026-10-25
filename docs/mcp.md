@@ -81,17 +81,22 @@ methods `-32601`.
 
 ## PDF export with custom fonts
 
-Use `execute_command` with `file.exportPdf` (or `file.print`) and per-request font paths:
+Use `execute_command` with `file.exportPdf` (or `file.print`) and per-request family mappings to
+preserve multiple workbook fonts in one PDF:
 
 ```json
-{"name":"execute_command","arguments":{"command":"file.exportPdf","params":{"path":"/path/to/report.pdf","fonts":{"regular":"/path/to/Regular.ttf","bold":"/path/to/Bold.ttf","italic":"/path/to/Italic.ttf","boldItalic":"/path/to/BoldItalic.ttf"}}}}
+{"name":"execute_command","arguments":{"command":"file.exportPdf","params":{"path":"/path/to/report.pdf","fontFamilies":{"Body Sans":{"regular":"/path/to/Body-Regular.ttf","bold":"/path/to/Body-Bold.ttf"},"Heading Sans":{"regular":"/path/to/Heading-Regular.ttf","italic":"/path/to/Heading-Italic.ttf"}}}}}
 ```
 
-Only `regular` is required; omitted styles use regular. Paths belong to the host running the
-engine, including a desktop reached through `mcp --connect`. Omit `path` to receive PDF bytes as
-base64. Fonts apply only to that export and replace all text families, including Latin. Invalid
-or unsupported fonts and missing glyphs are tool errors; no dialog opens and no output is
-written. See [CLI PDF fonts](cli.md#pdf-fonts) for formats, size limits and shaping restrictions.
+Keys match the family names stored in the workbook, case-insensitively after trimming. Each family
+requires `regular` and can supply `bold`, `italic` and `boldItalic`; omitted styles use that family's
+regular face. Mapped families retain independent faces and text widths. Unmapped families use the
+existing PDF fonts, or the optional global `fonts` object (same four fields) if supplied.
+
+Paths belong to the host running the engine, including a desktop reached through `mcp --connect`.
+Omit `path` to receive PDF bytes as base64. Fonts apply only to that export. Invalid or unsupported
+fonts and missing glyphs are tool errors; no dialog opens and no output is written. See
+[CLI PDF fonts](cli.md#pdf-fonts) for limits, examples and shaping restrictions.
 
 ## Embedding
 

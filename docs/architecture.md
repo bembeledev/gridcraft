@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-25 · **Change:** minor (per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-25 · **Change:** minor (multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -150,6 +150,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
 | 2026-10-25 | minor | Per-document PDF text faces with matching layout metrics; engine validates and reads export font paths within the file sandbox and a 64 MiB cap |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |

@@ -36,7 +36,36 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 
 ## PDF fonts
 
-Choose any local, embeddable TrueType outline font for a PDF export, including Latin text:
+To preserve multiple fonts in a workbook, map each workbook family name to local TrueType files.
+Repeat `--pdf-font-family` for each family; names are matched case-insensitively after trimming:
+
+```sh
+gridcraft-cli convert book.xlsx report.pdf \
+    --pdf-font-family 'Body Sans=/path/to/Body-Regular.ttf' \
+    --pdf-font-family-bold 'Body Sans=/path/to/Body-Bold.ttf' \
+    --pdf-font-family 'Heading Sans=/path/to/Heading-Regular.ttf' \
+    --pdf-font-family-italic 'Heading Sans=/path/to/Heading-Italic.ttf'
+```
+
+Use the family names stored in Excel, which may differ from the font files' names. Each mapped
+family requires a regular face. `--pdf-font-family-bold`, `--pdf-font-family-italic` and
+`--pdf-font-family-bold-italic` supply its optional styles; omitted styles use that family's regular
+face. Duplicate family/style options are errors. These mappings preserve distinct families and
+advance widths in cells, shapes and quoted header/footer font declarations (`&"Family,Style"`).
+Charts and headings without a stored family name keep their existing fonts.
+
+CLI scripts, MCP and the control channel use the same engine parameters:
+
+```sh
+gridcraft-cli run --in book.xlsx \
+    --cmd 'file.exportPdf={"path":"report.pdf","fontFamilies":{"Body Sans":{"regular":"/path/to/Body-Regular.ttf","bold":"/path/to/Body-Bold.ttf"},"Heading Sans":{"regular":"/path/to/Heading-Regular.ttf"}}}'
+```
+
+`file.print` accepts the same `fontFamilies` object. Mappings apply only to that export and do
+not change the workbook or later exports. Text alignment, wrapping and shrink-to-fit use each
+selected face's advance widths; row and column sizes remain those of the workbook.
+
+To replace all otherwise unmapped families with a single family, use the existing global options:
 
 ```sh
 gridcraft-cli convert book.xlsx report.pdf \
@@ -46,27 +75,20 @@ gridcraft-cli convert book.xlsx report.pdf \
     --pdf-font-bold-italic /path/to/BoldItalic.ttf
 ```
 
-`--pdf-font` is required when supplying any style option. Omitted styles use the regular face.
-The choice replaces all workbook font families for this export, including cells, charts, shapes,
-headings, headers and footers. It does not change the workbook or later exports. Text alignment,
-wrapping and shrink-to-fit use the chosen face's advance widths; row and column sizes remain
-those of the workbook. These options require `.pdf` output.
+Their engine parameter is `fonts: {"regular":"/path/to/Regular.ttf", "bold":"/path/to/Bold.ttf"}`.
+`--pdf-font` is required when supplying a global style option. You can combine global fonts with
+named mappings: named families take precedence; the global choice covers every other family,
+including charts and headings. Without a global choice, unmapped families use the existing standard
+PDF fonts and Unicode fallbacks. All these CLI options require `.pdf` output.
 
-The same options are available to scripts through the engine command:
-
-```sh
-gridcraft-cli run --in book.xlsx \
-    --cmd 'file.exportPdf={"path":"report.pdf","fonts":{"regular":"/path/to/Regular.ttf","bold":"/path/to/Bold.ttf"}}'
-```
-
-`file.print` accepts the same `fonts` object. Font paths are read on the host performing the
-export, including when called over MCP or the control channel. Files are bounded to 64 MiB per
-face. Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only embedding,
-and characters absent from the chosen face return an error before the output file is written.
-TrueType outlines in an OpenType container are accepted; the extension is not used to validate
-font bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures,
-bidi or variable-font axis selection; use static faces and scripts that need no complex shaping.
-No font files are bundled or added to the repository.
+Font paths belong to the host performing the export, including when called over MCP or the control
+channel. At most 32 mapped families and 256 MiB of font faces are accepted per export, with a 64 MiB
+limit per face. Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
+embedding, and characters absent from a selected face return an error before the output file is
+written. TrueType outlines in an OpenType container are accepted; extensions do not validate font
+bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures, bidi or
+variable-font axis selection; use static faces and scripts that need no complex shaping. No font
+files are bundled or added to the repository.
 
 Without explicit fonts, Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
 registered system TrueType fallback from #1555. Text that fallback cannot cover retains the

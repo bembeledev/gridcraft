@@ -53,6 +53,7 @@ fn apply_impl() {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[allow(clippy::disallowed_methods)]
 fn run_query(program: &str, args: &[&str]) -> String {
     use std::io::Read as _;
     use std::process::{Command, Stdio};
@@ -112,6 +113,7 @@ fn format_factor(factor: f64) -> String {
 }
 
 /// Combine `xrdb -query` and `xdpyinfo` outputs into a scale factor.
+#[allow(dead_code)]
 pub fn scale_factor_from_outputs(xrdb: &str, xdpyinfo: &str) -> f64 {
     scale_factor_from_outputs_opt(xrdb, xdpyinfo).unwrap_or(1.0)
 }

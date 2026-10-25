@@ -332,9 +332,11 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
 }
 
 /// A row whose cells repeat an address, run backwards or name another row, and a row element
-/// that repeats a row number already read: Excel never writes such shapes and treats them as
-/// damage to repair. The reader keeps the first value read for an address, drops the offending
-/// cells and reports how many it dropped (#2531).
+/// that repeats a row number already read: Excel never writes such shapes, repairs the cells
+/// that break the shape ("Removed Records: Cell information") and merges a repeated row element,
+/// later value winning (observed in Excel 16). The reader follows it: the first value within one
+/// element, the later value across elements, and one import warning counting every cell dropped
+/// or replaced (#2531).
 #[test]
 fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     use gridcraft_core::{CellRef, Value};
@@ -347,26 +349,37 @@ fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.value(at("A1")), Value::Number(1.0));
     assert_eq!(s.value(at("B1")), Value::Number(2.0));
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // A cell out of column order is dropped, and the cells read before it keep their places.
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="B1"><v>2</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();
     assert_eq!((s.value(at("A1")), s.value(at("B1")), s.value(at("C1"))), (Value::Number(1.0), Value::Empty, Value::Number(3.0)));
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // A cell whose address names another row is not moved to that row.
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.value(at("A1")), Value::Number(1.0));
     assert!(s.cell(at("D7")).is_none(), "a cell named another row and must not be placed there");
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
-    // A second row element for a row already read repeats its address and keeps nothing.
+    // A second row element for a row already read joins it, the way Excel opens such a file: the
+    // later value wins, and the replacement is reported rather than silent (#2531).
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1"><c r="A1"><v>999</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();
-    assert_eq!(s.value(at("A1")), Value::Number(1.0));
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(s.value(at("A1")), Value::Number(999.0));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
+
+    // The repeat keeps what the first element did not carry: a new cell and its row height, both
+    // left in place by Excel, which opens such a file without repairing anything.
+    let (wb, rep) = read(
+        r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row><row r="1" ht="40" customHeight="1"><c r="A1"><v>999</v></c><c r="C1"><v>77</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1")), s.value(at("C1"))), (Value::Number(999.0), Value::Number(2.0), Value::Number(77.0)));
+    assert_eq!(s.rows.get(&0).and_then(|line| line.size), Some(crate::tables::pt_to_px(40.0)));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // A row element that goes back to a row number already read is dropped with its cells, and
     // its row formatting does not replace the first row's either.
@@ -377,18 +390,19 @@ fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     assert_eq!((s.value(at("A1")), s.value(at("A2"))), (Value::Number(1.0), Value::Number(2.0)));
     assert!(!s.rows.contains_key(&0), "the row element that went back must not carry formatting either");
     assert!(s.rows.get(&1).is_some_and(|line| line.size.is_some()), "the ordinary row keeps its own height");
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
-    // A row that goes back does not open the door again: rows read 3, 2, 3 must not let the
-    // second 3 replace the first one, nor take its row formatting.
+    // A row that goes back drops its cells and its formatting, and does not move the mark rows are
+    // compared against: the row 3 after it is still read as the repeat of the first row 3, which
+    // Excel merges (later value and its height win) while it removes only the backward row 2.
     let (wb, rep) = read(
         r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3" ht="9" customHeight="1"><c r="A3"><v>999</v></c></row></sheetData>"#,
     );
     let s = wb.sheet(0).unwrap();
-    assert_eq!(s.value(at("A3")), Value::Number(3.0), "the second row 3 must not replace the first");
+    assert_eq!(s.value(at("A3")), Value::Number(999.0), "the repeated row 3 joins the first one, as Excel has it");
     assert!(s.cell(at("A2")).is_none(), "the row that went back drops its cells");
-    assert!(!s.rows.contains_key(&2), "and it does not carry formatting either");
-    assert_eq!(warning(&rep), ["sheet \"Data\": 2 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(s.rows.get(&2).and_then(|line| line.size), Some(crate::tables::pt_to_px(9.0)), "and the repeat's row height applies");
+    assert_eq!(warning(&rep), ["sheet \"Data\": 2 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // Nor does a rejected row move the cursor a row without an address follows: after 3 and 2
     // it lands on row 4, not back on the row 3 that was already read.
@@ -396,14 +410,14 @@ fn misplaced_cell_addresses_are_dropped_with_one_warning() {
         read(r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row><c><v>7</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();
     assert_eq!((s.value(at("A3")), s.value(at("A4"))), (Value::Number(3.0), Value::Number(7.0)));
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // An unaddressed cell follows the last cell that was kept, not a dropped stray one.
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();
     assert_eq!((s.value(at("A1")), s.value(at("B1"))), (Value::Number(1.0), Value::Number(8.0)));
     assert!(s.cell(at("E1")).is_none(), "the dropped cell must not move the unaddressed one");
-    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped or replaced"]);
 
     // A row that skips columns is ordinary and stays silent.
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="E1"><v>5</v></c></row></sheetData>"#);

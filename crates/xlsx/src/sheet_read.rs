@@ -38,7 +38,8 @@ struct RowState {
     /// Row-membership checks served so far, for the work cap above.
     dynamic_checks: u64,
     dropped: u64,
-    /// Cells dropped because their address was repeated, ran backwards or named another row.
+    /// Cells dropped because their address was repeated, ran backwards or named another row,
+    /// and cells a repeated row element replaced on a row it had already read.
     misplaced: u64,
     /// Row number of the last row element read: Excel writes each row once, in increasing order.
     last_row: Option<u32>,
@@ -114,7 +115,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
     if st.misplaced > 0 {
-        cx.warn(format!("sheet \"{name}\": {} cells with a duplicate, out-of-order or wrong-row address were dropped", st.misplaced));
+        cx.warn(format!("sheet \"{name}\": {} cells with a duplicate, out-of-order or wrong-row address were dropped or replaced", st.misplaced));
     }
     drop(bytes);
 
@@ -419,12 +420,15 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         st.dropped += 1;
         return;
     }
-    // A second element for a row number already read, or one that goes back to it, repeats the
-    // addresses the sheet already holds and a later `A1` would replace the first one. Such a
-    // row keeps nothing of its own: neither its cells nor its row formatting, and it must not
-    // move the row bookkeeping either — otherwise the next element accepted as "higher" is the
-    // rejected row's own number, and an element with no address would reuse a read row number.
+    // Excel writes each row once, in ascending order, and repairs a file that does not — but an
+    // element repeating the row it just wrote is not repaired, it is merged: the later value
+    // wins, and its new cells and row formatting join the row (observed in Excel 16). An element
+    // whose number does not go past the last one read is therefore either that repeat or a row
+    // going backwards, which Excel removes together with its cells. Neither may move the row
+    // bookkeeping: a backward element must not become the mark the next element is compared
+    // against, and an element with no address must not reuse a row number already read.
     let ordered = st.last_row.is_none_or(|last| r > last);
+    let repeat = st.last_row == Some(r);
     if ordered {
         st.next_row = r + 1;
         st.last_row = Some(r);
@@ -445,7 +449,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     {
         info.style = Some(cx.style(Some(s)));
     }
-    if ordered && info != LineInfo::default() {
+    if (ordered || repeat) && info != LineInfo::default() {
         sheet.rows.insert(r, info);
     }
     let mut next_col = 0u32;
@@ -465,12 +469,20 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
             continue;
         }
         // Excel writes a row's cells in ascending column order, all in that row; a file with any
-        // other shape is damaged, and Excel repairs it. Placing such cells as they are written
-        // would move values, let a later duplicate shadow an earlier cell and land an unaddressed
-        // cell on an unrelated column, all without a word to the user.
-        if !ordered || pos.row != r || pos.col < next_col {
+        // other shape is damaged, and Excel repairs it ("Removed Records: Cell information").
+        // Placing such cells as they are written would move values, let a later duplicate shadow
+        // an earlier cell and land an unaddressed cell on an unrelated column, all without a word
+        // to the user. A repeat is read the same way, with its own column cursor, so only the
+        // cells it names wrongly are turned away; a backward element still drops every cell.
+        if (!ordered && !repeat) || pos.row != r || pos.col < next_col {
             st.misplaced += 1;
             continue;
+        }
+        // A repeat may name a cell the row already holds. Excel takes the later value without a
+        // word, and #2531 asks that nothing change silently, so the replacement is counted with
+        // the cells that are dropped.
+        if repeat && sheet.cell(pos).is_some() {
+            st.misplaced += 1;
         }
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);

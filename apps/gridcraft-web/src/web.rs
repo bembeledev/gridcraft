@@ -60,6 +60,17 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
+                    // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
+                    // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps
+                    // everything, as the default does.
+                    if let Some(chrome) = query_param("chrome") {
+                        match chrome.as_str() {
+                            "none" => app.chrome = gridcraft_ui_egui::Chrome { title_bar: false, file_tab: false },
+                            "notitlebar" => app.chrome.title_bar = false,
+                            "nofiletab" => app.chrome.file_tab = false,
+                            _ => {}
+                        }
+                    }
                     // Follow the browser's language, except one needing a script face this build
                     // lacks: the web has no system fonts, only the Indian-script faces embedded from
                     // craft-fonts (CRAFT_FONTS_DIR), so a CJK interface would render as tofu.

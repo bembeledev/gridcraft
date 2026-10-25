@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (ten Indian languages; web build: Indian-script faces from craft-fonts; missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (Punjabi tags naming a script other than Gurmukhi stay English; ten Indian languages; web build: Indian-script faces from craft-fonts; missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -45,7 +45,8 @@ right-to-left sheets and full complex-script support. Part of
 - **Indian languages (2026-10-11).** Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada,
   Malayalam, Odia and Punjabi (Gurmukhi) catalogs (`i18n/{hi,bn,mr,te,ta,gu,kn,ml,or,pa}.rs`), each
   covering every key of the reference table (392 labels, ~18%), with their locale tags
-  (`hi-IN`…; Shahmukhi `pa-Arab`/`pa-PK` stays English). Machine-translated, no native review yet.
+  (`hi-IN`…; Punjabi naming another script, as `pa-Arab`, `pa-Latn` or a POSIX modifier such as
+  `@arab`, and `pa-PK`/`pa-586` without `Guru` stay English). Machine-translated, no native review yet.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation), and for the nine Indian scripts (Devanagari, Bengali,
   Gurmukhi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam) on 2026-10-11: Nirmala UI and the
@@ -140,6 +141,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Punjabi locale tags: one naming a script other than Gurmukhi (`pa-Latn-IN`, `pa-Arab`, a POSIX modifier such as `@arab` or ICU's `@script=arab`) stays English like `pa-PK`/`pa-586`; `pa-Guru-PK` and `@guru` get the Punjabi catalog; private-use subtags (`-x-guru`) and `@euro` are ignored |
 | 2026-10-23 | minor | Ten Indian languages (hi, bn, mr, te, ta, gu, kn, ml, or, pa; the shared ~392-label core each), Indian-script system faces on Windows/macOS/Linux/BSD, and on the web Indian-script faces from craft-fonts (`CRAFT_FONTS_DIR`); corrected "no shaping": epaint 0.36 shapes with harfrust. Hindi 12–18 h → 6–10 h; total 95–155 h |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |

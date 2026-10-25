@@ -200,17 +200,33 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        // Punjabi in Pakistan is written in Shahmukhi (Arabic script), not the Gurmukhi catalog,
-        // unless the tag names Gurmukhi (`pa-Guru-PK`); a tag that names Arabic is Shahmukhi.
-        // A POSIX locale's encoding is dropped and its modifier counts as a subtag (`pa_IN.UTF-8@arab`).
-        // Subtags after a singleton (`-x-`, `-u-`) are extensions or private use, not a script or region.
+        // The Punjabi catalog is Gurmukhi: a tag naming another script (`pa-Arab`, `pa-Latn-IN`) is
+        // not it, and Punjabi in Pakistan is written in Shahmukhi (Arabic script) unless the tag names
+        // Gurmukhi (`pa-Guru-PK`; Pakistan is `PK` or `586`). Every four-letter subtag is read as a
+        // script, so a tag naming any other script stays English; a POSIX locale's encoding is dropped
+        // and its modifier names a script too (`@arab`, `@latin`, ICU's `@script=arab`), except
+        // `@euro`, a currency. Subtags after a singleton (`-x-`, `-u-`) are extensions or private use.
         let lower = tag.trim().to_ascii_lowercase();
         let (locale, modifier) = lower.split_once('@').unwrap_or((&lower, ""));
         let locale = locale.split_once('.').map_or(locale, |(locale, _)| locale);
         let parts: Vec<&str> = locale.split(['-', '_']).take_while(|part| part.len() != 1).collect();
-        let has = |subtag: &str| parts.contains(&subtag) || modifier == subtag;
-        if parts.first() == Some(&"pa") && (has("arab") || (has("pk") && !has("guru"))) {
-            return None;
+        if parts.first() == Some(&"pa") {
+            const GURMUKHI: [&str; 2] = ["guru", "gurmukhi"];
+            let subtags: Vec<&str> =
+                parts.iter().skip(1).copied().filter(|part| part.len() == 4 && part.bytes().all(|b| b.is_ascii_alphabetic())).collect();
+            let modifier = match modifier {
+                keywords if keywords.contains('=') => keywords.split(';').find_map(|keyword| keyword.strip_prefix("script=")),
+                "" | "euro" => None,
+                script => Some(script),
+            };
+            let gurmukhi = if subtags.is_empty() && modifier.is_none() {
+                !parts.iter().any(|part| matches!(*part, "pk" | "586"))
+            } else {
+                subtags.into_iter().chain(modifier).all(|script| GURMUKHI.contains(&script))
+            };
+            if !gurmukhi {
+                return None;
+            }
         }
         match *parts.first()? {
             "en" => Some(Self::En),
@@ -626,6 +642,22 @@ mod tests {
         assert_eq!(Language::from_tag("pa.UTF-8"), Some(Language::Pa), "a POSIX encoding without a region");
         assert_eq!(Language::from_tag("hi_IN.UTF-8"), Some(Language::Hi));
         assert_eq!(Language::from_tag("pa_IN.UTF-8@arab"), None, "a POSIX @arab modifier is Shahmukhi");
+        assert_eq!(Language::from_tag("pa-Latn-IN"), None, "an explicit script other than Gurmukhi");
+        assert_eq!(Language::from_tag("pa_PK@guru"), Some(Language::Pa), "a POSIX @guru modifier names Gurmukhi");
+        assert_eq!(Language::from_tag("pa_PK@gurmukhi"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa_IN@latin"), None, "glibc spells script modifiers out");
+        assert_eq!(Language::from_tag("pa_IN.UTF-8@euro"), Some(Language::Pa), "a modifier that names no script");
+        assert_eq!(Language::from_tag("pa-Aran-IN"), None, "Nastaliq Shahmukhi");
+        assert_eq!(Language::from_tag("pa_IN@aran"), None, "the same script as a modifier");
+        assert_eq!(Language::from_tag("pa_IN@shahmukhi"), None);
+        assert_eq!(Language::from_tag("pa@script=arab"), None);
+        assert_eq!(Language::from_tag("pa-586"), None, "Pakistan by its numeric region code");
+        assert_eq!(Language::from_tag("pa-Guru-IN@arab"), None, "the subtag and the modifier disagree");
+        assert_eq!(Language::from_tag("pa_PK.UTF-8@euro"), None, "a currency modifier leaves the region rule");
+        assert_eq!(Language::from_tag("pa_IN@nastaliq"), None, "any modifier but Gurmukhi names another script");
+        assert_eq!(Language::from_tag("pa_PK@script=guru;calendar=gregorian"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa_IN@calendar=gregorian;script=arab"), None);
+        assert_eq!(Language::from_tag("pa_IN@calendar=gregorian"), Some(Language::Pa), "keywords without a script");
         assert_eq!(Language::from_tag("pt-PT"), Some(Language::PtBr), "only Punjabi tags are screened");
     }
 

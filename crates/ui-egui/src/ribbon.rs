@@ -2823,6 +2823,7 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
                 let (r, resp) = ui.allocate_exact_size(egui::vec2(CONTROL_W, TITLE_H), egui::Sense::click());
                 let label = app.ui.language.tr(match kind {
                     "minimize" => "Minimize",
+                    "maximize" if maximized => "Restore Down",
                     "maximize" => "Maximize",
                     _ => "Close",
                 });
@@ -2846,6 +2847,12 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
                 match kind {
                     "minimize" => {
                         ui.painter().line_segment([egui::pos2(m.x - 5.0, m.y), egui::pos2(m.x + 5.0, m.y)], stroke);
+                    }
+                    "maximize" if maximized => {
+                        let front = egui::Rect::from_min_size(egui::pos2(m.x - 5.0, m.y - 3.0), egui::vec2(8.0, 8.0));
+                        ui.painter().rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+                        ui.painter().line_segment([egui::pos2(m.x - 3.0, m.y - 5.0), egui::pos2(m.x + 5.0, m.y - 5.0)], stroke);
+                        ui.painter().line_segment([egui::pos2(m.x + 5.0, m.y - 5.0), egui::pos2(m.x + 5.0, m.y + 3.0)], stroke);
                     }
                     "maximize" => {
                         ui.painter().rect_stroke(r.shrink(15.0), 0.0, stroke, egui::StrokeKind::Inside);

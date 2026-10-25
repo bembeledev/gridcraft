@@ -22,7 +22,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # The same craft-fonts commit as release.yml and freebsd.yml, so the gate tests the fonts that ship.
-      craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+      craft-fonts-ref: d47f68570a43b364afcd832d00c297a9edea6932
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
         libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers

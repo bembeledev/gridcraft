@@ -4,26 +4,37 @@
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
 //! to the system's language ([`Language::system`]), and the View tab switches it by hand.
 //!
-//! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
-//! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
+//! Script fonts stay system-provided: [`crate::theme`] appends available CJK and Indian-script faces
+//! to every family so Japanese, Chinese, Korean and Indian-language labels and workbook text can
+//! render without bundling font files.
 
 use serde::{Deserialize, Serialize};
 
+mod bn;
 mod cs;
 mod de;
 mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod gu;
+mod hi;
 mod it;
 mod ja;
+mod kn;
 mod ko;
+mod ml;
+mod mr;
 mod nl;
+mod or;
+mod pa;
 mod pl;
 mod pt;
 mod ro;
 mod ru;
 mod sr;
+mod ta;
+mod te;
 mod tr;
 mod uk;
 mod vi;
@@ -53,10 +64,20 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Hi,
+    Bn,
+    Mr,
+    Te,
+    Ta,
+    Gu,
+    Kn,
+    Ml,
+    Or,
+    Pa,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 29] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -76,11 +97,22 @@ impl Language {
         Self::Nl,
         Self::Ro,
         Self::Tr,
+        Self::Hi,
+        Self::Bn,
+        Self::Mr,
+        Self::Te,
+        Self::Ta,
+        Self::Gu,
+        Self::Kn,
+        Self::Ml,
+        Self::Or,
+        Self::Pa,
     ];
 
     /// Every language in the order the switcher lists them: English first (the source language),
     /// then the rest by their own name with accents folded, so Čeština sits under C. Names in
-    /// other scripts follow the Latin ones in code point order: Cyrillic, then the CJK languages.
+    /// other scripts follow the Latin ones in code point order: Cyrillic, the Indian scripts, then
+    /// the CJK languages.
     pub fn for_picker() -> Vec<Self> {
         let mut rest: Vec<Self> = Self::ALL.into_iter().filter(|l| *l != Self::En).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));
@@ -109,6 +141,16 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::Hi => "हिन्दी",
+            Self::Bn => "বাংলা",
+            Self::Mr => "मराठी",
+            Self::Te => "తెలుగు",
+            Self::Ta => "தமிழ்",
+            Self::Gu => "ગુજરાતી",
+            Self::Kn => "ಕನ್ನಡ",
+            Self::Ml => "മലയാളം",
+            Self::Or => "ଓଡ଼ିଆ",
+            Self::Pa => "ਪੰਜਾਬੀ",
         }
     }
 
@@ -134,6 +176,16 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::Hi => "hi",
+            Self::Bn => "bn",
+            Self::Mr => "mr",
+            Self::Te => "te",
+            Self::Ta => "ta",
+            Self::Gu => "gu",
+            Self::Kn => "kn",
+            Self::Ml => "ml",
+            Self::Or => "or",
+            Self::Pa => "pa",
         }
     }
 
@@ -148,7 +200,35 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        // The Punjabi catalog is Gurmukhi: a tag naming another script (`pa-Arab`, `pa-Latn-IN`) is
+        // not it, and Punjabi in Pakistan is written in Shahmukhi (Arabic script) unless the tag names
+        // Gurmukhi (`pa-Guru-PK`; Pakistan is `PK` or `586`). Every four-letter subtag is read as a
+        // script, so a tag naming any other script stays English; a POSIX locale's encoding is dropped
+        // and its modifier names a script too (`@arab`, `@latin`, ICU's `@script=arab`), except
+        // `@euro`, a currency. Subtags after a singleton (`-x-`, `-u-`) are extensions or private use.
+        let lower = tag.trim().to_ascii_lowercase();
+        let (locale, modifier) = lower.split_once('@').unwrap_or((&lower, ""));
+        let locale = locale.split_once('.').map_or(locale, |(locale, _)| locale);
+        let parts: Vec<&str> = locale.split(['-', '_']).take_while(|part| part.len() != 1).collect();
+        if parts.first() == Some(&"pa") {
+            const GURMUKHI: [&str; 2] = ["guru", "gurmukhi"];
+            let subtags: Vec<&str> =
+                parts.iter().skip(1).copied().filter(|part| part.len() == 4 && part.bytes().all(|b| b.is_ascii_alphabetic())).collect();
+            let modifier = match modifier {
+                keywords if keywords.contains('=') => keywords.split(';').find_map(|keyword| keyword.strip_prefix("script=")),
+                "" | "euro" => None,
+                script => Some(script),
+            };
+            let gurmukhi = if subtags.is_empty() && modifier.is_none() {
+                !parts.iter().any(|part| matches!(*part, "pk" | "586"))
+            } else {
+                subtags.into_iter().chain(modifier).all(|script| GURMUKHI.contains(&script))
+            };
+            if !gurmukhi {
+                return None;
+            }
+        }
+        match *parts.first()? {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
@@ -168,6 +248,16 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            "hi" => Some(Self::Hi),
+            "bn" => Some(Self::Bn),
+            "mr" => Some(Self::Mr),
+            "te" => Some(Self::Te),
+            "ta" => Some(Self::Ta),
+            "gu" => Some(Self::Gu),
+            "kn" => Some(Self::Kn),
+            "ml" => Some(Self::Ml),
+            "or" => Some(Self::Or),
+            "pa" => Some(Self::Pa),
             _ => None,
         }
     }
@@ -183,6 +273,54 @@ impl Language {
         {
             web_sys::window().and_then(|window| window.navigator().language()).and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)
         }
+    }
+
+    /// The ISO 15924 script of an interface that needs a face egui's bundled fonts lack (CJK, the
+    /// Indian scripts); `None` for Latin, Greek, Cyrillic and the other scripts they cover.
+    pub fn script(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Zh => "Hans",
+            Self::Ja => "Jpan",
+            Self::Ko => "Kore",
+            Self::Hi | Self::Mr => "Deva",
+            Self::Bn => "Beng",
+            Self::Pa => "Guru",
+            Self::Gu => "Gujr",
+            Self::Or => "Orya",
+            Self::Ta => "Taml",
+            Self::Te => "Telu",
+            Self::Kn => "Knda",
+            Self::Ml => "Mlym",
+            Self::En
+            | Self::Es
+            | Self::El
+            | Self::Ru
+            | Self::PtBr
+            | Self::De
+            | Self::Cs
+            | Self::Fr
+            | Self::Sr
+            | Self::Tr
+            | Self::Pl
+            | Self::It
+            | Self::Uk
+            | Self::Vi
+            | Self::Nl
+            | Self::Ro => return None,
+        })
+    }
+
+    /// Whether the interface needs a script face that egui's bundled fonts lack (CJK, Indian
+    /// scripts). The desktop apps find one among the system fonts; the web build only has the
+    /// faces embedded from craft-fonts ([`crate::craft_fonts`]).
+    pub fn needs_script_fonts(self) -> bool {
+        self.script().is_some()
+    }
+
+    /// Whether this build can draw the interface without system fonts: no script face is needed,
+    /// or craft-fonts embedded one. The web build follows the browser's language only then.
+    pub fn renders_without_system_fonts(self) -> bool {
+        self.script().is_none_or(crate::craft_fonts::covers)
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
@@ -214,6 +352,16 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::Hi => hi::translate(text),
+            Self::Bn => bn::translate(text),
+            Self::Mr => mr::translate(text),
+            Self::Te => te::translate(text),
+            Self::Ta => ta::translate(text),
+            Self::Gu => gu::translate(text),
+            Self::Kn => kn::translate(text),
+            Self::Ml => ml::translate(text),
+            Self::Or => or::translate(text),
+            Self::Pa => pa::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -352,6 +500,14 @@ mod tests {
         assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
         assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
+        assert!(Language::Hi.needs_script_fonts() && Language::Ja.needs_script_fonts());
+        assert!(!Language::Fr.needs_script_fonts() && !Language::Ru.needs_script_fonts());
+        assert_eq!(Language::Mr.script(), Some("Deva"), "Marathi is written in Devanagari");
+        assert_eq!(Language::Pa.script(), Some("Guru"));
+        assert!(Language::En.renders_without_system_fonts() && Language::Ru.renders_without_system_fonts());
+        for l in Language::ALL.into_iter().filter(|l| l.needs_script_fonts()) {
+            assert_eq!(l.renders_without_system_fonts(), l.script().is_some_and(crate::craft_fonts::covers), "{l:?}");
+        }
     }
 
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
@@ -447,6 +603,62 @@ mod tests {
         assert_eq!(Language::from_tag("ro-RO"), Some(Language::Ro));
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
+        assert_eq!(Language::from_tag("hi-IN"), Some(Language::Hi));
+        assert_eq!(Language::from_tag("hi_IN"), Some(Language::Hi));
+        assert_eq!(Language::parse("hi"), Some(Language::Hi));
+        assert_eq!(Language::from_tag("bn-IN"), Some(Language::Bn));
+        assert_eq!(Language::from_tag("bn_BD"), Some(Language::Bn));
+        assert_eq!(Language::parse("bn"), Some(Language::Bn));
+        assert_eq!(Language::from_tag("mr-IN"), Some(Language::Mr));
+        assert_eq!(Language::from_tag("mr_IN"), Some(Language::Mr));
+        assert_eq!(Language::parse("mr"), Some(Language::Mr));
+        assert_eq!(Language::from_tag("te-IN"), Some(Language::Te));
+        assert_eq!(Language::from_tag("te_IN"), Some(Language::Te));
+        assert_eq!(Language::parse("te"), Some(Language::Te));
+        assert_eq!(Language::from_tag("ta-IN"), Some(Language::Ta));
+        assert_eq!(Language::from_tag("ta_LK"), Some(Language::Ta));
+        assert_eq!(Language::parse("ta"), Some(Language::Ta));
+        assert_eq!(Language::from_tag("gu-IN"), Some(Language::Gu));
+        assert_eq!(Language::from_tag("gu_IN"), Some(Language::Gu));
+        assert_eq!(Language::parse("gu"), Some(Language::Gu));
+        assert_eq!(Language::from_tag("kn-IN"), Some(Language::Kn));
+        assert_eq!(Language::from_tag("kn_IN"), Some(Language::Kn));
+        assert_eq!(Language::parse("kn"), Some(Language::Kn));
+        assert_eq!(Language::from_tag("ml-IN"), Some(Language::Ml));
+        assert_eq!(Language::from_tag("ml_IN"), Some(Language::Ml));
+        assert_eq!(Language::parse("ml"), Some(Language::Ml));
+        assert_eq!(Language::from_tag("or-IN"), Some(Language::Or));
+        assert_eq!(Language::from_tag("or_IN"), Some(Language::Or));
+        assert_eq!(Language::parse("or"), Some(Language::Or));
+        assert_eq!(Language::from_tag("pa-IN"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa-Guru-IN"), Some(Language::Pa));
+        assert_eq!(Language::parse("pa"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa-Arab-PK"), None, "Shahmukhi Punjabi is not the Gurmukhi catalog");
+        assert_eq!(Language::from_tag("pa_PK"), None);
+        assert_eq!(Language::from_tag("pa-Guru-PK"), Some(Language::Pa), "an explicit Gurmukhi script wins over the region");
+        assert_eq!(Language::from_tag("pa-Guru-Arab-PK"), None);
+        assert_eq!(Language::from_tag("pa-PK-x-guru"), None, "a private-use subtag is not a script");
+        assert_eq!(Language::from_tag("pa-IN-x-arab"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa.UTF-8"), Some(Language::Pa), "a POSIX encoding without a region");
+        assert_eq!(Language::from_tag("hi_IN.UTF-8"), Some(Language::Hi));
+        assert_eq!(Language::from_tag("pa_IN.UTF-8@arab"), None, "a POSIX @arab modifier is Shahmukhi");
+        assert_eq!(Language::from_tag("pa-Latn-IN"), None, "an explicit script other than Gurmukhi");
+        assert_eq!(Language::from_tag("pa_PK@guru"), Some(Language::Pa), "a POSIX @guru modifier names Gurmukhi");
+        assert_eq!(Language::from_tag("pa_PK@gurmukhi"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa_IN@latin"), None, "glibc spells script modifiers out");
+        assert_eq!(Language::from_tag("pa_IN.UTF-8@euro"), Some(Language::Pa), "a modifier that names no script");
+        assert_eq!(Language::from_tag("pa-Aran-IN"), None, "Nastaliq Shahmukhi");
+        assert_eq!(Language::from_tag("pa_IN@aran"), None, "the same script as a modifier");
+        assert_eq!(Language::from_tag("pa_IN@shahmukhi"), None);
+        assert_eq!(Language::from_tag("pa@script=arab"), None);
+        assert_eq!(Language::from_tag("pa-586"), None, "Pakistan by its numeric region code");
+        assert_eq!(Language::from_tag("pa-Guru-IN@arab"), None, "the subtag and the modifier disagree");
+        assert_eq!(Language::from_tag("pa_PK.UTF-8@euro"), None, "a currency modifier leaves the region rule");
+        assert_eq!(Language::from_tag("pa_IN@nastaliq"), None, "any modifier but Gurmukhi names another script");
+        assert_eq!(Language::from_tag("pa_PK@script=guru;calendar=gregorian"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa_IN@calendar=gregorian;script=arab"), None);
+        assert_eq!(Language::from_tag("pa_IN@calendar=gregorian"), Some(Language::Pa), "keywords without a script");
+        assert_eq!(Language::from_tag("pt-PT"), Some(Language::PtBr), "only Punjabi tags are screened");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (ten Indian interface languages; Indian-script faces in the web build; AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -63,7 +63,7 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~10% (ribbon in 19 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -92,9 +92,10 @@ collaboration, mobile, AI).
 
 The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
-added 10-11), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
+added 10-11) and ten Indian languages (Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada,
+Malayalam, Odia, Punjabi; ~392 labels each, ~18%), the
+interface follows the system language, and CJK, Thai, Hebrew and Indian-script text falls back to
+system fonts (#38) and is shaped (conjuncts, reordered vowel signs). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
 The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
@@ -103,10 +104,10 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 |---|---|---|---|
 | English | en | full (source language) | 100% |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
-| Hindi | hi | none | 0% |
+| Spanish | es | menus only | ~17% |
+| Hindi | hi | menus only | ~18% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
+| French | fr | menus, File view, dialog titles | ~24% |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
@@ -114,7 +115,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Korean | ko | menus only | ~12% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: 3 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%).
+Other shipped languages: 12 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%; the Indian languages bn, mr, te, ta, gu, kn, ml, or, pa, menus only, ~18%).
 
 ## Upcoming
 
@@ -144,6 +145,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-24 | PivotTables: right-clicking a value, subtotal or grand total cell offers Show Details in the cell menu, which lists the cell's source records on a new sheet as double-clicking does |
 | 2026-10-24 | Sheet tabs: dragging the handle between the tabs and the horizontal scrollbar gives the tabs more or less of the bar, as in Excel; each open workbook keeps its own share |
 | 2026-10-24 | Charts: 100% Stacked Area (`insert.chart` `{type: "area", subtype: "stacked100"}`), drawn as each value's share of its category's total; XLSX `percentStacked` area charts open as 100% stacked instead of stacked |
+| 2026-10-23 | Ten Indian interface languages (Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada, Malayalam, Odia, Punjabi) with system Indian-script fonts on Windows, macOS, Linux and BSD, shaped correctly; the web build embeds Noto Sans faces from craft-fonts when built with `CRAFT_FONTS_DIR` |
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |
@@ -238,6 +240,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
+| 2026-10-23 | minor | Ten Indian languages, Indian-script fonts (desktop and web); language counts and table updated; progress log row |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |

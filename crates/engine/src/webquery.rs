@@ -15,6 +15,9 @@ pub const DEFAULT_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// Longest text a cell holds (Excel's limit).
 pub const MAX_TEXT: usize = 32_767;
+/// Cells a single imported table holds at most, however wide its `colspan`s or its padding
+/// (`clip_html.rs` keeps the same cap for pasted HTML).
+pub const MAX_TABLE_CELLS: usize = 1_000_000;
 
 /// One page download: the URL and the caps the fetch must honour.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +101,9 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                 }
             }
             ("tr" | "td" | "th", false) => {
+                if current.as_ref().is_some_and(|t| t.full()) {
+                    continue;
+                }
                 match current.as_mut() {
                     // Inside a nested table the markup stays part of the enclosing cell's text.
                     Some(t) if depth > 0 => t.push_text(&format!("<{tag}>")),
@@ -136,6 +142,8 @@ struct TableState {
     cell_span: (usize, Option<usize>),
     /// Per column: the row index (exclusive) down to which a `rowspan` from above covers it.
     covered_until: Vec<usize>,
+    /// Cells still allowed before the table is cut short (padding included).
+    budget: usize,
 }
 
 impl TableState {
@@ -150,6 +158,7 @@ impl TableState {
             cell_open: false,
             cell_span: (1, Some(1)),
             covered_until: Vec::new(),
+            budget: MAX_TABLE_CELLS.min(max_rows.saturating_mul(max_cols)),
         }
     }
 
@@ -168,6 +177,17 @@ impl TableState {
     fn start_row(&mut self) {
         self.close_cell();
         self.flush_row();
+    }
+
+    /// Charges one cell against the budget; false when it is spent (the table is then full).
+    fn spend(&mut self) -> bool {
+        match self.budget.checked_sub(1) {
+            Some(left) => {
+                self.budget = left;
+                true
+            }
+            None => false,
+        }
     }
 
     /// `</thead>`/`</tbody>`/`</tfoot>`: a `rowspan="0"` cell covers no further rows.
@@ -193,17 +213,17 @@ impl TableState {
         // The row being built is the next one to flush: index rows.len().
         let r = self.rows.len();
         while self.covered_until.get(self.row.len()).is_some_and(|&until| until > r) {
-            if self.row.len() >= self.max_cols {
+            if !self.spend() || self.row.len() >= self.max_cols {
                 return;
             }
             self.row.push(String::new());
         }
         let start = self.row.len();
-        if self.row.len() < self.max_cols {
+        if self.spend() && self.row.len() < self.max_cols {
             self.row.push(text);
         }
         for _ in 1..colspan {
-            if self.row.len() >= self.max_cols {
+            if !self.spend() || self.row.len() >= self.max_cols {
                 break;
             }
             self.row.push(String::new());
@@ -235,13 +255,21 @@ impl TableState {
         self.rows.push(std::mem::take(&mut self.row));
     }
 
-    /// `</table>`: close the open cell and row, pad every row to the table's width.
+    /// The budget is spent: nothing more is read into this table.
+    fn full(&self) -> bool {
+        self.budget == 0
+    }
+
+    /// `</table>`: close the open cell and row, pad every row to the table's width (within the
+    /// cell budget; a hostile table pads to no more than it paid for).
     fn close(&mut self) {
         self.close_cell();
         self.flush_row();
         let w = self.rows.iter().map(Vec::len).max().unwrap_or(0).min(self.max_cols);
         for r in &mut self.rows {
-            r.resize(w, String::new());
+            let pad = w.saturating_sub(r.len()).min(self.budget);
+            self.budget -= pad;
+            r.resize(r.len() + pad, String::new());
         }
     }
 }
@@ -441,6 +469,17 @@ mod tests {
                     <tbody><tr><td>x</td><td>y</td></tr></tbody></table>";
         let t = extract_tables(html, 100, 100);
         assert_eq!(t[0].rows, vec![vec!["A", "B"], vec!["", "C"], vec!["x", "y"],]);
+    }
+
+    #[test]
+    fn a_hostile_table_cannot_blow_the_cell_budget() {
+        // One row, each cell spanning the whole column count: without a budget the padding
+        // alone would be rows * cols.
+        let html = "<table><tr><td colspan=\"10000\">a</td></tr></table>";
+        let t = extract_tables(html, 5_000_000, 20_000);
+        assert!(t[0].rows.len() <= 5_000_000);
+        let cells: usize = t[0].rows.iter().map(Vec::len).sum();
+        assert!(cells <= 1_000_000, "cells = {cells}");
     }
 
     #[test]

@@ -163,12 +163,15 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
         s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": generated}))
     })?;
     let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, w as u32 - 1).a1()}));
+    // The table that was actually created: its name may be a generated one when the page
+    // table's name was taken or not valid. The connection and the result both report it.
+    let created_name = {
+        let d = s.doc()?;
+        d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.range == range).map(|t| t.name.clone())).unwrap_or_else(|| tname.clone())
+    };
     if save {
         let synced = now_ms();
-        let name = {
-            let d = s.doc()?;
-            d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.range == range).map(|t| t.name.clone())).unwrap_or_else(|| tname.clone())
-        };
+        let name = created_name.clone();
         let q =
             gridcraft_model::WebQuery { name, url: req.url.clone(), table: table.name.clone(), sheet: sheet_name.clone(), last_synced: Some(synced) };
         edit(s, |cx| {
@@ -178,7 +181,7 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
             Ok(())
         })?;
     }
-    Ok(json!({"sheet": sheet_name, "table": tname, "rows": table.rows.len(), "cols": w, "tables_found": table_count(s)}))
+    Ok(json!({"sheet": sheet_name, "table": created_name, "rows": table.rows.len(), "cols": w, "tables_found": table_count(s)}))
 }
 
 fn table_count(s: &Session) -> usize {
@@ -435,6 +438,20 @@ mod tests {
         // The header sits where the moved table is, and A1 stayed empty.
         assert_eq!(a1(&s, "A3"), "Sym");
         assert_eq!(a1(&s, "A1"), "");
+    }
+
+    #[test]
+    fn the_result_and_connection_name_the_created_table() {
+        let mut s = session_with_source();
+        // "prices" is a valid name, so the first import takes it; the second, from another
+        // sheet, must fall back to a generated name and report it.
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "One"})).unwrap();
+        let r = s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Two"})).unwrap();
+        let made = r["table"].as_str().unwrap();
+        assert_ne!(made, "prices");
+        assert!(made.starts_with("Web_Table"));
+        let d = s.active().unwrap();
+        assert!(d.wb.web_queries.iter().any(|q| q.name == made));
     }
 
     #[test]

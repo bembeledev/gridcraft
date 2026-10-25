@@ -2816,12 +2816,13 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             for kind in ["minimize", "maximize", "close"] {
                 let (r, resp) = ui.allocate_exact_size(egui::vec2(CONTROL_W, TITLE_H), egui::Sense::click());
+                let label = app.ui.language.tr(match kind { "minimize" => "Minimize", "maximize" => "Maximize", _ => "Close" });
                 let hot = resp.hovered() || resp.is_pointer_button_down_on();
                 if hot { ui.painter().rect_filled(r, 0.0, if kind == "close" { egui::Color32::from_rgb(0xC4,0x2B,0x1C) } else if resp.is_pointer_button_down_on() { t.pressed } else { t.hover }); }
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, kind));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
                 let m = r.center(); let stroke = egui::Stroke::new(1.0, if kind == "close" && hot { egui::Color32::WHITE } else { t.text });
                 match kind { "minimize" => ui.painter().line_segment([egui::pos2(m.x-5.0,m.y),egui::pos2(m.x+5.0,m.y)], stroke), "maximize" => { ui.painter().rect_stroke(r.shrink(15.0), 0.0, stroke, egui::StrokeKind::Inside); }, _ => { ui.painter().line_segment([m-egui::vec2(5.0,5.0),m+egui::vec2(5.0,5.0)], stroke); ui.painter().line_segment([m+egui::vec2(5.0,-5.0),m-egui::vec2(5.0,-5.0)], stroke); } }
-                if resp.clicked() { match kind { "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)), "maximize" => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)), "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close), _ => {} } }
+                if resp.on_hover_text(label).clicked() { match kind { "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)), "maximize" => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)), "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close), _ => {} } }
             }
         });
     });

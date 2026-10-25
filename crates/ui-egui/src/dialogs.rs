@@ -2992,6 +2992,11 @@ fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut
     d.values.insert("url".into(), json!(url.clone()));
     let mut load = true;
     ok_cancel(ui, confirm, &mut load);
+    if *confirm && url.trim().is_empty() {
+        // OK with no address: stay open and say so, instead of closing with nothing.
+        app.message = Some(("From Web".into(), "Enter an https:// address first.".into()));
+        *confirm = false;
+    }
     if *confirm && !url.trim().is_empty() {
         let pick = d.values.get("pick").and_then(Json::as_u64).unwrap_or(0);
         let table = tables.get(pick as usize).and_then(|t| t["name"].as_str()).map(String::from);

@@ -282,6 +282,8 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
 /// write the new rows, and resize the table. Formulas and formatting outside the range are kept.
 fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTable) -> Result<(usize, usize)> {
     let d = s.doc()?;
+    // Only the connection's own table: a name match anywhere, else the same name on the
+    // connection's sheet. Never the first unrelated table that happens to be there.
     let Some((sheet, tname, old)) =
         d.wb.sheets
             .iter()
@@ -289,7 +291,9 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             .find_map(|(si, sh)| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&q.name)).map(|t| (si, t.name.clone(), t.range)))
             .or_else(|| {
                 d.wb.sheets.iter().enumerate().find_map(|(si, sh)| {
-                    sh.name.eq_ignore_ascii_case(&q.sheet).then(|| sh.tables.first().map(|t| (si, t.name.clone(), t.range))).flatten()
+                    (sh.name.eq_ignore_ascii_case(&q.sheet) && sh.tables.iter().any(|t| t.name.eq_ignore_ascii_case(&q.name)))
+                        .then(|| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&q.name)).map(|t| (si, t.name.clone(), t.range)))
+                        .flatten()
                 })
             })
     else {
@@ -504,6 +508,25 @@ mod tests {
         assert_eq!(c.value, gridcraft_core::Value::text("=HYPERLINK(\"http://evil\")"));
         // A plain negative number is still a number.
         assert_eq!(sh.value(CellRef::parse("B2").unwrap()), Value::number(-5.0));
+    }
+
+    #[test]
+    fn refresh_never_falls_back_to_an_unrelated_table() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // Rename the imported table so the connection's name no longer matches any table.
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        let d = s.doc().unwrap();
+        let tname = d.wb.active().unwrap().tables[0].name.clone();
+        s.execute("table.rename", json!({"table": tname, "name": "Renamed"})).unwrap();
+        // Another, unrelated table now sits on the sheet.
+        s.execute("range.setValues", json!({"range": "E1", "sheet": "Web", "values": [["keep"]]})).unwrap();
+        s.execute("insert.table", json!({"range": "E1", "header": true, "name": "Unrelated"})).unwrap();
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        // The connection's table is gone: refresh reports it, and E1 is untouched.
+        assert_eq!(r["refreshed"], 0);
+        assert!(!r["errors"].as_array().unwrap().is_empty());
+        assert_eq!(a1(&s, "E1"), "keep");
     }
 
     #[test]

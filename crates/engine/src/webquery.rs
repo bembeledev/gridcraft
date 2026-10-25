@@ -21,6 +21,9 @@ pub const MAX_TABLE_CELLS: usize = 1_000_000;
 /// Tables a page holds at most. The download cap alone admits hundreds of thousands of empty
 /// `<table></table>` repetitions, each a retained `WebTable`; this stops the read.
 pub const MAX_TABLES: usize = 1_000;
+/// Cells a page holds in all its tables together: 1,000 tables × wide `colspan` padding would
+/// otherwise expand far past the download size before the table-count cap applies.
+pub const MAX_PAGE_CELLS: usize = 4_000_000;
 
 /// One page download: the URL and the caps the fetch must honour.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,8 +47,9 @@ pub type WebFetch = std::sync::Arc<dyn Fn(&WebRequest) -> Result<Vec<WebTable>, 
 /// The tables of `html`, in document order. Nested tables are flattened into the cell text of
 /// the enclosing table (like Excel's detection, a table inside a cell stays part of the cell).
 /// `max_rows`/`max_cols` cap each table's size; longer tables are reported truncated. A page
-/// holds at most [`MAX_TABLES`] tables and each at most [`MAX_TABLE_CELLS`] cells: a hostile
-/// page cannot exhaust memory with thousands of tables or `colspan` padding.
+/// holds at most [`MAX_TABLES`] tables, [`MAX_PAGE_CELLS`] cells across all of them, and each
+/// table at most [`MAX_TABLE_CELLS`] cells: a hostile page cannot exhaust memory with
+/// thousands of tables or `colspan` padding.
 pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTable> {
     let mut out: Vec<WebTable> = Vec::new();
     if html.len() > DEFAULT_MAX_BYTES {
@@ -54,6 +58,9 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
     let mut rest = html;
     let mut current: Option<TableState> = None;
     let mut depth = 0usize;
+    // The page-wide cell budget, shared by every table: what remains when the last table
+    // closed is what the next one may take.
+    let mut page_budget: usize = MAX_PAGE_CELLS;
     while !rest.is_empty() {
         let Some(lt) = rest.find('<') else { break };
         let text = rest.get(..lt).unwrap_or_default();
@@ -87,7 +94,7 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                     None => {
                         let id = attr(body, "id");
                         let name = id.filter(|s| !s.trim().is_empty()).map(String::from).unwrap_or_else(|| format!("Table {}", out.len() + 1));
-                        current = Some(TableState::new(name, max_rows, max_cols));
+                        current = Some(TableState::new(name, max_rows, max_cols, page_budget));
                         depth = 0;
                     }
                 }
@@ -100,11 +107,13 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                     }
                 } else if let Some(mut t) = current.take() {
                     t.close();
+                    page_budget = page_budget.saturating_sub(t.spent());
                     if !t.rows.is_empty() {
                         out.push(WebTable { name: t.name, rows: t.rows });
                     }
-                    // A page of nothing but tiny tables is cut short at the aggregate cap.
-                    if out.len() >= MAX_TABLES {
+                    // A page of nothing but tiny tables is cut short at the aggregate cap,
+                    // and a page of wide padded ones at the shared cell budget.
+                    if out.len() >= MAX_TABLES || page_budget == 0 {
                         break;
                     }
                 }
@@ -153,10 +162,12 @@ struct TableState {
     covered_until: Vec<usize>,
     /// Cells still allowed before the table is cut short (padding included).
     budget: usize,
+    /// Cells this table has taken, so the page-wide budget can be updated when it closes.
+    spent: usize,
 }
 
 impl TableState {
-    fn new(name: String, max_rows: usize, max_cols: usize) -> Self {
+    fn new(name: String, max_rows: usize, max_cols: usize, page_budget: usize) -> Self {
         Self {
             name,
             max_rows,
@@ -167,8 +178,14 @@ impl TableState {
             cell_open: false,
             cell_span: (1, Some(1)),
             covered_until: Vec::new(),
-            budget: MAX_TABLE_CELLS.min(max_rows.saturating_mul(max_cols)),
+            budget: MAX_TABLE_CELLS.min(max_rows.saturating_mul(max_cols)).min(page_budget),
+            spent: 0,
         }
+    }
+
+    /// Cells this table has taken from the budgets.
+    fn spent(&self) -> usize {
+        self.spent
     }
 
     fn push_text(&mut self, text: &str) {
@@ -193,6 +210,7 @@ impl TableState {
         match self.budget.checked_sub(1) {
             Some(left) => {
                 self.budget = left;
+                self.spent += 1;
                 true
             }
             None => false,
@@ -278,6 +296,7 @@ impl TableState {
         for r in &mut self.rows {
             let pad = w.saturating_sub(r.len()).min(self.budget);
             self.budget -= pad;
+            self.spent += pad;
             r.resize(r.len() + pad, String::new());
         }
     }
@@ -478,6 +497,17 @@ mod tests {
                     <tbody><tr><td>x</td><td>y</td></tr></tbody></table>";
         let t = extract_tables(html, 100, 100);
         assert_eq!(t[0].rows, vec![vec!["A", "B"], vec!["", "C"], vec!["x", "y"],]);
+    }
+
+    #[test]
+    fn wide_colspan_padding_across_many_tables_shares_a_page_budget() {
+        // Each table pads one cell to 4,000 columns; without a page-wide budget 1,000 of
+        // them retain ~4,000,000 padded cells.
+        let html = "<table><tr><td colspan=\"4000\">x</td></tr></table>".repeat(1_000);
+        let t = extract_tables(&html, DEFAULT_MAX_ROWS, MAX_COLS);
+        let cells: usize = t.iter().map(|tb| tb.rows.iter().map(Vec::len).sum::<usize>()).sum();
+        assert!(cells <= MAX_PAGE_CELLS, "cells = {cells}");
+        assert!(t.len() <= MAX_TABLES);
     }
 
     #[test]

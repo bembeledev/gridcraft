@@ -208,7 +208,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     let fill_tag = app.grid.fill_tag.is_some();
     if corner_visible && (open || (!busy && !fill_tag)) {
         let mut clicked = false;
-        egui::Area::new(Id::new("quick_analysis_button")).fixed_pos(button.min).order(Order::Foreground).show(&ctx, |ui| {
+        egui::Area::new(Id::unique("quick_analysis_button")).fixed_pos(button.min).order(Order::Foreground).show(&ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(button.size(), Sense::click());
             let fill = if resp.is_pointer_button_down_on() || open {
                 t.pressed
@@ -229,7 +229,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     let Some(opened_for) = app.grid.quick_analysis.open else { return };
     let pos = pos2(button.left(), button.bottom() + 4.0);
     let mut picked: Option<Action> = None;
-    let resp = egui::Area::new(Id::new("quick_analysis_popup")).fixed_pos(pos).order(Order::Foreground).constrain(true).show(&ctx, |ui| {
+    let resp = egui::Area::new(Id::unique("quick_analysis_popup")).fixed_pos(pos).order(Order::Foreground).constrain(true).show(&ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             let state = &mut app.grid.quick_analysis;
             ui.horizontal(|ui| {

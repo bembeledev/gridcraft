@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: Formulas › Function Library as labelled buttons with category menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used follows the formulas entered) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
+| 2026-10-24 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-24 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-24 | Status bar: a right-click opens a menu that sets which selection statistics show (Average, Count and Sum by default; Numerical Count, Minimum and Maximum are new), kept with the preferences (`view.statusBar`) |
@@ -244,6 +245,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
+| 2026-10-24 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-24 | minor | Progress log: Function Library |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |

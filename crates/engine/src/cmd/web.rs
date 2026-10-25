@@ -11,6 +11,8 @@ use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest,
 const PREVIEW_ROWS: usize = 10;
 const PREVIEW_COLS: usize = 8;
 
+/// The From Web commands: import (`data.fromWeb`), the Navigator preview (`data.webPreview`)
+/// and the saved-connection refresh (`data.webRefresh`).
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -58,6 +60,8 @@ fn now_ms() -> u64 {
 }
 
 /// A page request from the command params, with the caps clamped.
+/// A page request from the command params, with the caps clamped (shared by the three
+/// commands).
 fn request(p: &Json) -> Result<WebRequest> {
     const ID: &str = "data.fromWeb";
     let url = str_param(p, "url").map(str::trim).filter(|u| u.starts_with("http")).ok_or_else(|| bad(ID, "missing `url`"))?;
@@ -68,6 +72,8 @@ fn request(p: &Json) -> Result<WebRequest> {
     Ok(WebRequest { url: url.to_string(), max_rows, max_cols: MAX_COLS, max_bytes: DEFAULT_MAX_BYTES })
 }
 
+/// `data.fromWeb`: import the page table (Navigator choice or the first) into a new sheet
+/// and save its connection; with no `url` (interactive call) it opens the From Web dialog.
 fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "url").map(|u| u.trim().is_empty()).unwrap_or(true) {
         s.ui_requests.push(crate::UiRequest::Dialog("fromWeb".into(), json!({})));
@@ -111,20 +117,18 @@ fn default_sheet_name(url: &str) -> String {
 /// several tables with the same name (duplicate ids): `occurrence` picks which one, zero-based.
 fn pick_table<'a>(tables: &'a [WebTable], want: Option<&str>, occurrence: usize) -> Option<&'a WebTable> {
     match want {
+        // A missing occurrence is no match: the page's tables changed, and importing a
+        // different same-named one would silently replace the user's data.
         Some(w) => tables
             .iter()
             .filter(|t| t.name.eq_ignore_ascii_case(w))
             .nth(occurrence)
-            .or_else(|| {
-                // No such occurrence: the page's tables changed; fall back to the last one
-                // with the name rather than nothing.
-                tables.iter().rfind(|t| t.name.eq_ignore_ascii_case(w))
-            })
             .or_else(|| w.parse::<usize>().ok().and_then(|n| tables.get(n.saturating_sub(1)))),
         None => tables.first(),
     }
 }
 
+/// The error message for a table the page does not hold, naming the ones it does.
 fn no_table_message(tables: &[WebTable]) -> String {
     if tables.is_empty() {
         "No tables were found on the page.".into()
@@ -200,6 +204,7 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
     Ok(json!({"sheet": sheet_name, "table": created_name, "rows": table.rows.len(), "cols": w, "tables_found": table_count(s)}))
 }
 
+/// How many web connections the workbook holds (the import result's `tables_found`).
 fn table_count(s: &Session) -> usize {
     s.doc().map(|d| d.wb.web_queries.len()).unwrap_or(0)
 }
@@ -231,6 +236,9 @@ fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
 /// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
 /// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
 /// `input_to_cell` (cmd/edit.rs).
+/// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
+/// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
+/// `input_to_cell` (cmd/edit.rs).
 fn would_be_formula(c: &str) -> bool {
     c.starts_with('=')
         || (c.len() > 1
@@ -239,6 +247,8 @@ fn would_be_formula(c: &str) -> bool {
             && c.chars().nth(1).is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '('))
 }
 
+/// `data.webPreview`: the page's detected tables, each with a name, size and preview rows
+/// (the Navigator's list and preview pane).
 fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let req = request(p)?;
     let Some(source) = s.web_source.clone() else {
@@ -256,6 +266,8 @@ fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"url": req.url, "tables": tables.iter().map(preview).collect::<Vec<_>>()}))
 }
 
+/// `data.webRefresh`: re-fetch and rewrite the saved connections the params select (all by
+/// default), reporting per-connection errors instead of failing the batch.
 fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     const ID: &str = "data.webRefresh";
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty());
@@ -296,6 +308,8 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Re-fetch result over the sheet range the connection's table holds: clear the old range,
 /// write the new rows, and resize the table. Formulas and formatting outside the range are kept.
+/// Re-fetch result over the connection's table: clear its range, write the new rows and
+/// resize the table, as one undo step, at the table's own place.
 fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTable) -> Result<(usize, usize)> {
     let d = s.doc()?;
     // Only the connection's own table: a name match anywhere, else the same name on the
@@ -561,6 +575,25 @@ mod tests {
         let r = s.execute("data.webRefresh", json!({})).unwrap();
         assert_eq!(r["refreshed"], 1);
         assert_eq!(a1(&s, "A2"), "second");
+    }
+
+    #[test]
+    fn a_vanished_occurrence_fails_refresh_and_keeps_the_data() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let page = "<table id=\"prices\"><tr><td>first</td></tr></table>\
+                    <table id=\"prices\"><tr><td>second</td></tr></table>";
+        s.web_source = Some(Arc::new(move |req: &WebRequest| Ok(crate::webquery::extract_tables(page, req.max_rows, req.max_cols))));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web", "table": "prices", "occurrence": 1})).unwrap();
+        assert_eq!(a1(&s, "A1"), "second");
+        // The page changes: only one table by that name is left.
+        let changed = "<table id=\"prices\"><tr><td>changed</td></tr></table>";
+        s.web_source = Some(Arc::new(move |req: &WebRequest| Ok(crate::webquery::extract_tables(changed, req.max_rows, req.max_cols))));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 0);
+        assert!(!r["errors"].as_array().unwrap().is_empty());
+        // The sheet still holds the table the user imported.
+        assert_eq!(a1(&s, "A1"), "second");
     }
 
     #[test]

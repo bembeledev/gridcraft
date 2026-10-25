@@ -961,9 +961,11 @@ fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
 }
 
+/// `data.queriesConnections`: the saved From Web connections (source, last sync) followed by
+/// the workbook's imported tables — the Queries & Connections pane's list.
 fn queries(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
-    Ok(Json::Array(
+    let tables: Vec<Json> =
         d.wb.sheets
             .iter()
             .flat_map(|sh| {
@@ -971,8 +973,19 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
                     .iter()
                     .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1)}))
             })
-            .collect(),
-    ))
+            .collect();
+    // The saved From Web connections, with the source and the last sync the pane shows.
+    let web: Vec<Json> =
+        d.wb.web_queries
+            .iter()
+            .map(|q| {
+                json!({
+                    "name": q.name, "sheet": q.sheet, "url": q.url, "table": q.table,
+                    "last_synced": q.last_synced.unwrap_or(0), "web": true,
+                })
+            })
+            .collect();
+    Ok(Json::Array([web, tables].concat()))
 }
 
 fn record(s: &mut Session, p: &Json) -> Result<Json> {

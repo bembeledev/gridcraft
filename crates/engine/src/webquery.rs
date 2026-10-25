@@ -353,6 +353,7 @@ fn decode_entities(s: &str) -> String {
     out
 }
 
+/// The character a named HTML entity stands for.
 fn named_entity(name: &str) -> Option<char> {
     Some(match name {
         "amp" => '&',

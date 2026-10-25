@@ -538,6 +538,7 @@ impl Dialog {
                 json!({"range": remove_duplicates_range(app, &sel), "header": true}),
             ),
             "fromWeb" => Dialog::custom("fromWeb", "From Web", json!({"url": "", "pick": 0})),
+            "queriesConnections" => Dialog::custom("queriesConnections", "Queries & Connections", json!({})),
             "advancedFilter" => {
                 let list = app
                     .session
@@ -1303,6 +1304,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "fromWeb" => from_web(app, ui, &mut d, &mut confirm, &mut open),
+                "queriesConnections" => queries_connections(app, ui, &mut d, &mut confirm, &mut open),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
@@ -2922,6 +2924,78 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+/// Data ▸ Queries & Connections: the workbook's saved From Web connections, each with a
+/// one-click Sync, its last-synced time, and the refresh errors and unavailable-source
+/// messages in the same window (Excel's Queries & Connections pane).
+fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let queries = app.run("data.queriesConnections", json!({})).ok().and_then(|r| r.as_array().cloned()).unwrap_or_default();
+    if queries.is_empty() {
+        ui.label("No saved connections. Import a table with Data ▸ From Web to create one.");
+    } else {
+        egui::ScrollArea::vertical().max_height(280.0).id_salt("qc_list").show(ui, |ui| {
+            for q in &queries {
+                let name = q["name"].as_str().unwrap_or_default();
+                let sheet = q["sheet"].as_str().unwrap_or_default();
+                egui::CollapsingHeader::new(name).default_open(true).show(ui, |ui| {
+                    ui.label(format!("Sheet: {sheet}"));
+                    if let Some(url) = q.get("url").and_then(Json::as_str) {
+                        ui.label(format!("Source: {}", crate::clean_url_for_display(url)));
+                    }
+                    let synced = q.get("last_synced").and_then(Json::as_u64).filter(|t| *t > 0);
+                    match synced {
+                        Some(ms) => ui.weak(format!("Last synced: {}", crate::format_sync_time(ms))),
+                        None => ui.weak("Last synced: never"),
+                    };
+                    ui.horizontal(|ui| {
+                        if ui.button("Sync").clicked() {
+                            match app.run("data.webRefresh", json!({"name": name})) {
+                                Ok(r) => {
+                                    let refreshed = r["refreshed"].as_u64().unwrap_or(0);
+                                    let errors = r["errors"].as_array().map(Vec::len).unwrap_or(0);
+                                    if refreshed > 0 && errors == 0 {
+                                        app.toast = Some((format!("Synced {name}"), crate::now_ms()));
+                                    } else if let Some(e) = r["errors"].as_array().and_then(|a| a.first()) {
+                                        let msg = e["error"].as_str().unwrap_or_default();
+                                        app.message = Some(("Queries & Connections".into(), format!("{name}: {msg}")));
+                                    }
+                                }
+                                Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
+                            }
+                        }
+                        if ui.button("Go to table").clicked() {
+                            let _ = app.run("sheet.activate", json!({"sheet": sheet}));
+                            *open = false;
+                        }
+                    });
+                });
+                ui.separator();
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Refresh All").clicked() {
+                match app.run("data.webRefresh", json!({})) {
+                    Ok(r) => {
+                        let refreshed = r["refreshed"].as_u64().unwrap_or(0);
+                        let errors = r["errors"].as_array().cloned().unwrap_or_default();
+                        if errors.is_empty() {
+                            app.toast = Some((format!("Synced {refreshed} connection(s)"), crate::now_ms()));
+                        } else {
+                            let msg = errors.iter().filter_map(|e| e["error"].as_str()).collect::<Vec<_>>().join("; ");
+                            app.message = Some(("Queries & Connections".into(), msg));
+                        }
+                    }
+                    Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
+                }
+            }
+        });
+    }
+    let mut load = true;
+    ok_cancel(ui, confirm, &mut load);
+    if *confirm || !load {
+        *open = false;
     }
 }
 

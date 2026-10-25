@@ -2217,6 +2217,18 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if web.clicked() {
         app.open_dialog("fromWeb", json!({}));
     }
+    ui.vertical(|ui| {
+        let qc = small_button(ui, Icon::Redo, "", "Queries & Connections (saved web tables, one-click Sync)", false);
+        control_keytip(app, ui, &qc, "data.queriesConnections");
+        if qc.clicked() {
+            app.open_dialog("queriesConnections", json!({}));
+        }
+        let ra = small_button(ui, Icon::Redo, "", "Refresh All (re-sync every saved web table)", false);
+        control_keytip(app, ui, &ra, "data.refreshAll");
+        if ra.clicked() {
+            act(app, "data.webRefresh", json!({}));
+        }
+    });
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

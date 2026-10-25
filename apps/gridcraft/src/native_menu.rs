@@ -203,6 +203,8 @@ impl NativeMenu {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
         let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let quit_accel = Accelerator::from_str("CMD+Q").ok();
+        let quit = MenuItem::with_id("app.quit_guard", "Quit GridCraft", true, quit_accel);
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -212,7 +214,7 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &quit,
         ]);
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
@@ -262,6 +264,10 @@ impl NativeMenu {
     pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
+            if id == "app.quit_guard" {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                continue;
+            }
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
             if app.text_box_editor.is_some() {
                 let clipboard = match id.as_str() {

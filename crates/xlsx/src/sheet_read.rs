@@ -419,12 +419,16 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         st.dropped += 1;
         return;
     }
-    st.next_row = r + 1;
     // A second element for a row number already read, or one that goes back to it, repeats the
     // addresses the sheet already holds and a later `A1` would replace the first one. Such a
-    // row keeps nothing of its own: neither its cells nor its row formatting.
+    // row keeps nothing of its own: neither its cells nor its row formatting, and it must not
+    // move the row bookkeeping either — otherwise the next element accepted as "higher" is the
+    // rejected row's own number, and an element with no address would reuse a read row number.
     let ordered = st.last_row.is_none_or(|last| r > last);
-    st.last_row = Some(r);
+    if ordered {
+        st.next_row = r + 1;
+        st.last_row = Some(r);
+    }
     let mut info = LineInfo::default();
     if let Some(ht) = row.attr_f64("ht") {
         info.custom = row.flag("customHeight", false);

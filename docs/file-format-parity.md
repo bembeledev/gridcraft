@@ -27,8 +27,9 @@ the row's own row, one element per row number. A cell that repeats an address, r
 names another row is dropped instead of being placed as written (which silently moved values, let
 a later duplicate shadow an earlier cell and landed an unaddressed cell on an unrelated column),
 and a row element that repeats a row number already read — or goes back to one — keeps neither its
-cells nor its row formatting. One import warning per sheet reports how many cells were dropped;
-the first value read for an address is kept (#2531).
+cells nor its row formatting, and leaves the row order the rows after it follow untouched. One
+import warning per sheet reports how many cells were dropped; the first value read for an address
+is kept (#2531).
 
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
 captions or private metadata. Supported numeric polylines reopen as editable ink, retaining points,

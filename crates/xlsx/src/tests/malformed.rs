@@ -379,6 +379,25 @@ fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     assert!(s.rows.get(&1).is_some_and(|line| line.size.is_some()), "the ordinary row keeps its own height");
     assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
 
+    // A row that goes back does not open the door again: rows read 3, 2, 3 must not let the
+    // second 3 replace the first one, nor take its row formatting.
+    let (wb, rep) = read(
+        r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3" ht="9" customHeight="1"><c r="A3"><v>999</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("A3")), Value::Number(3.0), "the second row 3 must not replace the first");
+    assert!(s.cell(at("A2")).is_none(), "the row that went back drops its cells");
+    assert!(!s.rows.contains_key(&2), "and it does not carry formatting either");
+    assert_eq!(warning(&rep), ["sheet \"Data\": 2 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // Nor does a rejected row move the cursor a row without an address follows: after 3 and 2
+    // it lands on row 4, not back on the row 3 that was already read.
+    let (wb, rep) =
+        read(r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row><c><v>7</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A3")), s.value(at("A4"))), (Value::Number(3.0), Value::Number(7.0)));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
     // An unaddressed cell follows the last cell that was kept, not a dropped stray one.
     let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row></sheetData>"#);
     let s = wb.sheet(0).unwrap();

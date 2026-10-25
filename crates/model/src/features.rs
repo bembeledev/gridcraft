@@ -67,6 +67,9 @@ pub struct WebQuery {
     pub url: String,
     /// The page table's name, as the import saw it.
     pub table: String,
+    /// Which same-named page table the import took, zero-based: a page can hold duplicates.
+    #[serde(default)]
+    pub occurrence: usize,
     /// The sheet the import wrote.
     pub sheet: String,
     /// When the connection last synced, in ms since the epoch; `None` until the first sync.

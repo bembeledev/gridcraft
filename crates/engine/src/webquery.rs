@@ -503,7 +503,7 @@ mod tests {
     fn wide_colspan_padding_across_many_tables_shares_a_page_budget() {
         // Each table pads one cell to 4,000 columns; without a page-wide budget 1,000 of
         // them retain ~4,000,000 padded cells.
-        let html = "<table><tr><td colspan=\"4000\">x</td></tr></table>".repeat(1_000);
+        let html = "<table><tr><td colspan=\"4001\">x</td></tr></table>".repeat(1_000);
         let t = extract_tables(&html, DEFAULT_MAX_ROWS, MAX_COLS);
         let cells: usize = t.iter().map(|tb| tb.rows.iter().map(Vec::len).sum::<usize>()).sum();
         assert!(cells <= MAX_PAGE_CELLS, "cells = {cells}");

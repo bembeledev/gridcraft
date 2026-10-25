@@ -79,9 +79,11 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let tables = source(&req).map_err(EngineError::Other)?;
     let want = str_param(p, "table").map(str::trim).filter(|t| !t.is_empty());
-    let table = pick_table(&tables, want).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
+    let occurrence = p.get("occurrence").and_then(Json::as_u64).unwrap_or(0) as usize;
+    let table = pick_table(&tables, want, occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
+    let occurrence = tables.iter().take_while(|t| !std::ptr::eq(*t, table)).filter(|t| t.name.eq_ignore_ascii_case(&table.name)).count();
     let name = str_param(p, "sheet").map(|n| n.chars().take(31).collect::<String>()).unwrap_or_else(|| default_sheet_name(&req.url));
-    load_table(s, &req, table, &name, true)
+    load_table(s, &req, table, &name, true, occurrence)
 }
 
 /// The site's own name (`https://www.example.com/x` → `example`), capped at 31 characters.
@@ -105,12 +107,20 @@ fn default_sheet_name(url: &str) -> String {
     base.chars().take(31).collect()
 }
 
-/// The table `want` names (page name or 1-based index), else the first one.
-fn pick_table<'a>(tables: &'a [WebTable], want: Option<&str>) -> Option<&'a WebTable> {
+/// The table `want` names (page name or 1-based index), else the first one. A page can hold
+/// several tables with the same name (duplicate ids): `occurrence` picks which one, zero-based.
+fn pick_table<'a>(tables: &'a [WebTable], want: Option<&str>, occurrence: usize) -> Option<&'a WebTable> {
     match want {
-        Some(w) => {
-            tables.iter().find(|t| t.name.eq_ignore_ascii_case(w)).or_else(|| w.parse::<usize>().ok().and_then(|n| tables.get(n.saturating_sub(1))))
-        }
+        Some(w) => tables
+            .iter()
+            .filter(|t| t.name.eq_ignore_ascii_case(w))
+            .nth(occurrence)
+            .or_else(|| {
+                // No such occurrence: the page's tables changed; fall back to the last one
+                // with the name rather than nothing.
+                tables.iter().rfind(|t| t.name.eq_ignore_ascii_case(w))
+            })
+            .or_else(|| w.parse::<usize>().ok().and_then(|n| tables.get(n.saturating_sub(1)))),
         None => tables.first(),
     }
 }
@@ -124,13 +134,13 @@ fn no_table_message(tables: &[WebTable]) -> String {
 }
 
 /// Writes `table` to a new sheet as a table and (when `save`) records the connection.
-pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool) -> Result<Json> {
-    s.grouped("From Web", |s| load_table_steps(s, req, table, sheet_name, save))
+pub(crate) fn load_table(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool, occurrence: usize) -> Result<Json> {
+    s.grouped("From Web", |s| load_table_steps(s, req, table, sheet_name, save, occurrence))
 }
 
 /// The import as one undo step: a failure after the sheet was inserted rolls the whole
 /// workbook back, so no empty sheet or half-written table is left behind.
-fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool) -> Result<Json> {
+fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_name: &str, save: bool, occurrence: usize) -> Result<Json> {
     let rows = json_rows(table);
     if rows.is_empty() {
         return Err(EngineError::Other("The table is empty.".into()));
@@ -172,8 +182,14 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
     if save {
         let synced = now_ms();
         let name = created_name.clone();
-        let q =
-            gridcraft_model::WebQuery { name, url: req.url.clone(), table: table.name.clone(), sheet: sheet_name.clone(), last_synced: Some(synced) };
+        let q = gridcraft_model::WebQuery {
+            name,
+            url: req.url.clone(),
+            table: table.name.clone(),
+            occurrence,
+            sheet: sheet_name.clone(),
+            last_synced: Some(synced),
+        };
         edit(s, |cx| {
             cx.wb.web_queries.retain(|x| !(x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)));
             cx.wb.web_queries.push(q.clone());
@@ -263,7 +279,7 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     for q in queries {
         let req = WebRequest { url: q.url.clone(), max_rows: DEFAULT_MAX_ROWS, max_cols: MAX_COLS, max_bytes: DEFAULT_MAX_BYTES };
         match source(&req).map_err(EngineError::Other).and_then(|tables| {
-            let table = pick_table(&tables, Some(&q.table)).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
+            let table = pick_table(&tables, Some(&q.table), q.occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
             rewrite_table(s, &q, table)
         }) {
             Ok((rows, cols)) => {
@@ -527,6 +543,24 @@ mod tests {
         assert_eq!(r["refreshed"], 0);
         assert!(!r["errors"].as_array().unwrap().is_empty());
         assert_eq!(a1(&s, "E1"), "keep");
+    }
+
+    #[test]
+    fn refresh_re_imports_the_same_occurrence_of_a_duplicate_table_name() {
+        // The page holds two tables with the same id; the import takes the second one.
+        let page = "<table id=\"prices\"><tr><th>Sym</th></tr><tr><td>first</td></tr></table>\
+                    <table id=\"prices\"><tr><th>Sym</th></tr><tr><td>second</td></tr></table>";
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.web_source = Some(Arc::new(move |req: &WebRequest| Ok(crate::webquery::extract_tables(page, req.max_rows, req.max_cols))));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web", "table": "prices", "occurrence": 1})).unwrap();
+        assert_eq!(a1(&s, "A2"), "second");
+        let d = s.active().unwrap();
+        assert_eq!(d.wb.web_queries[0].occurrence, 1);
+        // Refresh keeps importing the second one, not the first same-named table.
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+        assert_eq!(a1(&s, "A2"), "second");
     }
 
     #[test]

@@ -96,6 +96,13 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
+/// What one shared string (`si`) may hold, by the schema: one plain text `t`, one `phoneticPr`, and
+/// rich-text runs `r` and phonetic runs `rPh` without a count of their own: runs are the text, and
+/// dropping any would lose the user's data at the next save, so a string past Excel's length is
+/// kept whole and warned about instead (its size stays bounded by the element cap on an open
+/// element). The parser drops anything else before the string is handed over.
+const STRING_CHILDREN: &[(&str, usize)] = &[("t", 1), ("phoneticPr", 1), ("r", usize::MAX), ("rPh", usize::MAX)];
+
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
@@ -182,8 +189,12 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 let mut sst = Vec::new();
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
-                let res = xml::parse_streaming(&b, &["si"], &mut |si| {
+                let mut long = 0usize;
+                let res = xml::parse_streaming(&b, xml::Streaming { split: &["si"], children: STRING_CHILDREN }, &mut |si| {
                     let text = xml::rich_text(&si);
+                    if xml::exceeds_cell_text(&text) {
+                        long += 1;
+                    }
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
                     dropped += raw.saturating_sub(runs.len());
@@ -193,11 +204,22 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                     sst.push(Arc::from(text));
                     Ok(())
                 });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
+                match res {
+                    Ok(s) if s.dropped > 0 => cx.warn(format!(
+                        "shared strings: dropped {} element(s) a string may not hold (a second text or phonetic properties, or unknown elements)",
+                        s.dropped
+                    )),
+                    Ok(_) => {}
+                    Err(e) => cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len())),
                 }
                 if dropped > 0 {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
+                }
+                if long > 0 {
+                    cx.warn(format!(
+                        "shared strings: {long} string(s) longer than Excel's {} characters were kept whole; Excel may refuse or repair the saved file",
+                        gridcraft_core::MAX_CELL_CHARS
+                    ));
                 }
                 cx.sst = sst;
                 cx.keep_phonetics(phonetics);

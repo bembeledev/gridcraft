@@ -331,6 +331,50 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
     assert_eq!(wb.styles.get(last.style.unwrap()).num_fmt.as_str(), "0.00");
 }
 
+/// A row whose cells repeat an address, run backwards or name another row: Excel never writes
+/// such a row and treats it as damage to repair. The reader keeps the first value read for an
+/// address, drops the offending cells and reports how many it dropped (#2531).
+#[test]
+fn misplaced_cell_addresses_are_dropped_with_one_warning() {
+    use gridcraft_core::{CellRef, Value};
+    let at = |a: &str| CellRef::parse(a).unwrap();
+    let read = |body: &str| read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let warning = |rep: &crate::ReadReport| -> Vec<String> { rep.warnings.iter().filter(|w| w.contains("address")).cloned().collect() };
+
+    // A repeated address keeps its first value instead of taking the later one.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="A1"><v>999</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("A1")), Value::Number(1.0));
+    assert_eq!(s.value(at("B1")), Value::Number(2.0));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // A cell out of column order is dropped, and the cells read before it keep their places.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="B1"><v>2</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1")), s.value(at("C1"))), (Value::Number(1.0), Value::Empty, Value::Number(3.0)));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // A cell whose address names another row is not moved to that row.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("A1")), Value::Number(1.0));
+    assert!(s.cell(at("D7")).is_none(), "a cell named another row and must not be placed there");
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // An unaddressed cell follows the last cell that was kept, not a dropped stray one.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1"))), (Value::Number(1.0), Value::Number(8.0)));
+    assert!(s.cell(at("E1")).is_none(), "the dropped cell must not move the unaddressed one");
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // A row that skips columns is ordinary and stays silent.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="E1"><v>5</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("E1")), Value::Number(5.0));
+    assert!(warning(&rep).is_empty(), "{:?}", rep.warnings);
+}
+
 /// Show Outline Symbols off (`showOutlineSymbols="0"`) is read and written back.
 #[test]
 fn outline_symbols_flag_round_trips() {

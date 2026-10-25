@@ -38,6 +38,8 @@ struct RowState {
     /// Row-membership checks served so far, for the work cap above.
     dynamic_checks: u64,
     dropped: u64,
+    /// Cells dropped because their address was repeated, ran backwards or named another row.
+    misplaced: u64,
     rows: u64,
 }
 
@@ -108,6 +110,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     };
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
+    }
+    if st.misplaced > 0 {
+        cx.warn(format!("sheet \"{name}\": {} cells with a duplicate, out-of-order or wrong-row address were dropped", st.misplaced));
     }
     drop(bytes);
 
@@ -446,6 +451,14 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         };
         if pos.col >= MAX_COLS || pos.row >= MAX_ROWS {
             st.dropped += 1;
+            continue;
+        }
+        // Excel writes a row's cells in ascending column order, all in that row; a file with any
+        // other shape is damaged, and Excel repairs it. Placing such cells as they are written
+        // would move values, let a later duplicate shadow an earlier cell and land an unaddressed
+        // cell on an unrelated column, all without a word to the user.
+        if pos.row != r || pos.col < next_col {
+            st.misplaced += 1;
             continue;
         }
         next_col = pos.col + 1;

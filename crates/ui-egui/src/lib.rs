@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod code_editor;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -117,6 +118,14 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// The state saved by an earlier run, as the app starts with it. The ribbon tab is written to
+    /// the preferences but not restored: Excel opens on Home every launch, so a contextual tab
+    /// (Table Design) cannot come back with nothing selected to justify it.
+    pub fn at_startup(mut self) -> Self {
+        self.ribbon_tab = "Home".into();
+        self
+    }
+
     pub fn theme_preference(&self) -> egui::ThemePreference {
         if self.system_theme {
             egui::ThemePreference::System
@@ -558,7 +567,7 @@ impl SheetApp {
             return;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-        let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+        let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
         let Some(pick) = &self.services.pick_save else { return };
         let Some(path) = pick(&format!("{stem}.pdf")) else { return };
         // The picker may suggest a workbook extension; the export writes a PDF.
@@ -623,6 +632,10 @@ impl SheetApp {
             "view.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
+            }
+            "view.expandFormulaBar" => {
+                self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
+                Ok(json!({"on": self.ui.formula_bar_expanded}))
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
@@ -740,6 +753,7 @@ impl SheetApp {
                     });
                     self.begin_edit(text, false);
                 }
+                UiRequest::InsertName(name) => dialogs::insert_name(self, &name),
                 UiRequest::OpenUrl(u) => {
                     if let Some(f) = &self.services.open_url {
                         f(&u);
@@ -1384,7 +1398,19 @@ impl SheetApp {
                 keytips::Action::Command(id @ ("edit.copy" | "edit.cut")) => self.copy_to_clipboard(ctx, id),
                 keytips::Action::Command("edit.paste") => self.paste_from_clipboard(),
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
+                keytips::Action::CommandWith(id, params) => {
+                    let params: Json = serde_json::from_str(params).unwrap_or_else(|_| json!({}));
+                    // A Borders preset picked by key tip becomes the split button's face, as a
+                    // click on the same menu item does.
+                    if id == "home.borders"
+                        && let Some(preset) = params.get("preset").and_then(Json::as_str)
+                    {
+                        self.grid.last_border = preset.to_string();
+                    }
+                    self.run_or_alert(id, params);
+                }
                 keytips::Action::Dialog(name) => self.open_dialog(name, json!({})),
+                keytips::Action::DialogWith(name, params) => self.open_dialog(name, serde_json::from_str(params).unwrap_or_else(|_| json!({}))),
                 // Reserved sequence: fires silently while its command is missing. When the
                 // command lands in the catalog it goes live with no table edit.
                 keytips::Action::Pending(id) => {

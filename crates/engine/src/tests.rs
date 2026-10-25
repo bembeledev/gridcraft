@@ -1405,6 +1405,17 @@ fn protection_allows_a_permitted_column_deletion() {
 }
 
 #[test]
+fn protection_refuses_a_column_whose_crossing_row_is_locked() {
+    let mut s = s();
+    // Column D is unlocked whole, but row 5 has a locked format of its own, which outranks the
+    // column for the row's empty cells (`Sheet::style_id`): D5 stays locked and D undeletable.
+    s.execute("home.lockCell", json!({"range": "D:D", "on": false})).unwrap();
+    s.execute("home.lockCell", json!({"range": "5:5", "on": true})).unwrap();
+    s.execute("review.protectSheet", json!({"deleteColumns": true})).unwrap();
+    assert!(s.execute("home.deleteColumns", json!({"cols": "D:D"})).is_err());
+}
+
+#[test]
 fn protection_allows_deleting_a_line_of_an_unlocked_sheet() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();

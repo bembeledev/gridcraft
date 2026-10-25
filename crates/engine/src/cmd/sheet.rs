@@ -743,8 +743,8 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
 }
 
 /// Whether every cell of the given lines is unlocked, which is what Excel's "Delete rows" and
-/// "Delete columns" permissions cover. A stored cell keeps its own format; an empty one takes the
-/// line's format, then the crossing line's, then the default — the order `Sheet::style_id` applies.
+/// "Delete columns" permissions cover. A stored cell keeps its own format; an empty one takes its
+/// row's format, then its column's, then the default — the order `Sheet::style_id` applies.
 fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32) -> bool {
     let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
     let end = at.saturating_add(count.max(1) - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
@@ -757,11 +757,16 @@ fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32
     // Every line without a format of its own asks the crossing lines the same question, and a
     // deleted block can span the whole sheet: answer it once.
     let mut crossing_ok: Option<bool> = None;
+    // A crossing row's own format outranks the deleted column's for empty cells, so a locked one
+    // blocks the deletion outright, and one without a format leaves the column's to decide.
+    let rows_locked = axis == Axis::Cols && cross.values().any(|x| x.style.is_some_and(locked));
+    let rows_fall_through = axis == Axis::Cols && (cross.len() < cross_max || cross.values().any(|x| x.style.is_none()));
     for i in at..=end {
         match own.get(&i).and_then(|x| x.style) {
-            // The line's own format covers its empty cells.
+            // The line's own format covers its empty cells; a column's covers only the rows without one.
             Some(st) => {
-                if locked(st) {
+                let blocked = if axis == Axis::Cols { rows_locked || (rows_fall_through && locked(st)) } else { locked(st) };
+                if blocked {
                     return false;
                 }
             }

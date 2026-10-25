@@ -595,6 +595,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
                 ("view.darkMode", "Dark Mode", ""),

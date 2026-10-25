@@ -372,11 +372,24 @@ fn is_group_space(c: char) -> bool {
     matches!(c, ' ' | '\u{a0}' | '\u{202f}')
 }
 
-/// Splits `s` into the text before a number, the number (digits with `.`, `,` or spaces between
-/// them) and the text after: a sign or currency before, a percent sign or currency after.
+/// A digit group separator with either decimal separator: a space, or the Swiss `'`.
+fn is_group_mark(c: char) -> bool {
+    is_group_space(c) || matches!(c, '\'' | '\u{2019}')
+}
+
+/// `suffix` without a trailing minus (`1.234,50-`, as accounting exports write negatives).
+fn without_trailing_minus(suffix: &str) -> Option<&str> {
+    suffix.trim_end().strip_suffix('-')
+}
+
+/// Splits `s` into the text before a number, the number (digits with `.`, `,`, spaces or `'`
+/// between them) and the text after: a sign or currency before, a percent sign, currency or a
+/// trailing minus after.
 fn number_parts(s: &str) -> Option<(&str, &str, &str)> {
     let t = s.trim();
-    let start = t.find(|c: char| c.is_ascii_digit())?;
+    let first = t.find(|c: char| c.is_ascii_digit())?;
+    // A separator right before the first digit starts the number (`,5`, `.5`).
+    let start = if t.get(..first).is_some_and(|p| p.ends_with(['.', ','])) { first.saturating_sub(1) } else { first };
     let prefix = t.get(..start)?;
     if !prefix.chars().all(|c| matches!(c, '+' | '-' | '(' | ' ') || CURRENCY.contains(&c)) {
         return None;
@@ -384,12 +397,12 @@ fn number_parts(s: &str) -> Option<(&str, &str, &str)> {
     let rest = t.get(start..)?;
     // The number runs to its last digit; separators inside it must have digits on both sides.
     let mut end = 0;
-    let mut prev_digit = false;
+    let mut prev_digit = start < first;
     for (i, c) in rest.char_indices() {
         if c.is_ascii_digit() {
             end = i + 1;
             prev_digit = true;
-        } else if (c == '.' || c == ',' || is_group_space(c)) && prev_digit {
+        } else if (c == '.' || c == ',' || is_group_mark(c)) && prev_digit {
             prev_digit = false;
         } else {
             break;
@@ -397,10 +410,27 @@ fn number_parts(s: &str) -> Option<(&str, &str, &str)> {
     }
     let number = rest.get(..end)?;
     let suffix = rest.get(end..)?;
-    if !suffix.chars().all(|c| matches!(c, '%' | ')' | ' ') || CURRENCY.contains(&c)) {
+    // An exponent goes with the number (`1,5E3`); the separators are the mantissa's.
+    let after = suffix.get(exponent_len(suffix)..).unwrap_or(suffix);
+    let after = match without_trailing_minus(after) {
+        Some(a) if !prefix.contains(['-', '+', '(']) => a,
+        _ => after,
+    };
+    if !after.chars().all(|c| matches!(c, '%' | ')' | ' ') || CURRENCY.contains(&c)) {
         return None;
     }
     Some((prefix, number, suffix))
+}
+
+/// The length of an exponent at the start of `s` (`E3`, `e-2`), or 0.
+fn exponent_len(s: &str) -> usize {
+    let b = s.as_bytes();
+    if !matches!(b.first(), Some(b'e' | b'E')) {
+        return 0;
+    }
+    let sign = usize::from(matches!(b.get(1), Some(b'+' | b'-')));
+    let digits = b.iter().skip(1 + sign).take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 { 0 } else { 1 + sign + digits }
 }
 
 /// The value of `number` (digits and separators only) read with `decimal`, digit groups of
@@ -418,8 +448,8 @@ fn value_with(number: &str, decimal: Decimal) -> Option<f64> {
         None => int.to_string(),
         Some(g) => {
             let allowed = match decimal {
-                Decimal::Point => g == ',' || is_group_space(g),
-                Decimal::Comma => g == '.' || is_group_space(g),
+                Decimal::Point => g == ',' || is_group_mark(g),
+                Decimal::Comma => g == '.' || is_group_mark(g),
             };
             let groups: Vec<&str> = int.split(g).collect();
             let first = groups.first()?;
@@ -435,10 +465,42 @@ fn value_with(number: &str, decimal: Decimal) -> Option<f64> {
             groups.concat()
         }
     };
-    if digits.is_empty() {
+    // `,5` is 0.5; a separator alone is nothing.
+    if digits.is_empty() && frac.is_none() {
         return None;
     }
-    format!("{digits}.{}", frac.unwrap_or("0")).parse().ok()
+    format!("0{digits}.{}", frac.unwrap_or("0")).parse().ok()
+}
+
+/// An amount with a currency sign the input parser doesn't read (`1.234,50 €`, `€ 7,50`,
+/// `-3 €`): its value read with `decimal`, and a number format that shows the sign where the
+/// file writes it.
+pub fn currency_amount(field: &str, decimal: Decimal) -> Option<(f64, String)> {
+    let (prefix, number, suffix) = number_parts(field)?;
+    let sign = prefix.chars().chain(suffix.chars()).find(|c| CURRENCY.contains(c))?;
+    let signs = prefix.chars().filter(|c| matches!(c, '+' | '-')).count();
+    if exponent_len(suffix) > 0
+        || suffix.contains('%')
+        || prefix.contains('(') != suffix.contains(')')
+        || signs > 1
+        || prefix.chars().chain(suffix.chars()).filter(|c| CURRENCY.contains(c)).count() > 1
+    {
+        return None;
+    }
+    let value = value_with(number, decimal)?;
+    let minus = without_trailing_minus(suffix);
+    let suffix = minus.unwrap_or(suffix);
+    let negative = prefix.contains('-') || prefix.contains('(') || minus.is_some();
+    let decimals = number.rsplit_once(decimal.as_char()).map_or(0, |(_, f)| f.len());
+    let digits = if decimals == 0 { "#,##0".to_string() } else { format!("#,##0.{}", "0".repeat(decimals)) };
+    let code = match prefix.find(sign) {
+        Some(i) => {
+            let gap = prefix.get(i + sign.len_utf8()..).is_some_and(|after| after.contains(' '));
+            format!("\"{sign}\"{}{digits}", if gap { " " } else { "" })
+        }
+        None => format!("{digits}{}\"{sign}\"", if suffix.trim_start_matches(')').starts_with(' ') { " " } else { "" }),
+    };
+    Some((if negative { -value } else { value }, code))
 }
 
 /// What `field` says about the decimal separator; `None` when it isn't a plain number.
@@ -456,13 +518,20 @@ pub fn evidence(field: &str) -> Option<Evidence> {
 /// decimal comma (`1.234,5` → `1,234.5`, `12,5 %` → `12.5 %`), so typed-input parsing reads
 /// it and keeps its thousands format.
 pub fn comma_to_point(field: &str) -> Option<String> {
+    to_point(field, Decimal::Comma)
+}
+
+/// `field`, a number with `decimal`, the way typed-input parsing reads it: a decimal point,
+/// `,` digit groups (`1'234.5` → `1,234.5`) and a trailing minus in front (`7,5-` → `-7.5`).
+pub fn to_point(field: &str, decimal: Decimal) -> Option<String> {
     let (prefix, number, suffix) = number_parts(field)?;
-    value_with(number, Decimal::Comma)?;
-    let (int, frac) = number.split_once(',').map_or((number, None), |(i, f)| (i, Some(f)));
-    let int: String = int.chars().map(|c| if c == '.' || is_group_space(c) { ',' } else { c }).collect();
+    value_with(number, decimal)?;
+    let (int, frac) = number.split_once(decimal.as_char()).map_or((number, None), |(i, f)| (i, Some(f)));
+    let int: String = int.chars().map(|c| if c.is_ascii_digit() { c } else { ',' }).collect();
+    let (sign, suffix) = without_trailing_minus(suffix).map_or(("", suffix), |s| ("-", s));
     Some(match frac {
-        Some(f) => format!("{prefix}{int}.{f}{suffix}"),
-        None => format!("{prefix}{int}{suffix}"),
+        Some(f) => format!("{sign}{prefix}{int}.{f}{suffix}"),
+        None => format!("{sign}{prefix}{int}{suffix}"),
     })
 }
 
@@ -687,11 +756,17 @@ fn fixed_breaks(lines: &[String]) -> Vec<usize> {
     (1..width).filter(|p| blank.get(p - 1) == Some(&true) && blank.get(*p) == Some(&false)).collect()
 }
 
-/// Almost every line, whole, is a number holding the delimiter (`1.234,5`, `7,5`, `1 234`): a
-/// column of numbers, not fields. `1,2` beside a line `a,b` is two fields.
-fn splits_numbers(lines: &[String], ch: char) -> bool {
-    let hits = lines.iter().filter(|l| l.contains(ch) && evidence(l).is_some()).count();
-    !lines.is_empty() && hits * 10 >= lines.len() * 9
+/// Almost every line holding the delimiter is, whole, a number (`1.234,5`, `7,5`, `1 234`): a
+/// column of numbers, not fields. `1,2` beside a line `a,b` is two fields. `Some(true)` when
+/// another line lacks it, such as a header (`Betrag` above `99,00`): then even a `.csv` is one
+/// column, where `1,2` lines alone could be two.
+fn splits_numbers(lines: &[String], ch: char) -> Option<bool> {
+    let with: Vec<&String> = lines.iter().filter(|l| l.contains(ch)).collect();
+    let hits = with.iter().filter(|l| evidence(l).is_some()).count();
+    if with.is_empty() || hits * 10 < with.len() * 9 {
+        return None;
+    }
+    Some(lines.iter().any(|l| !l.contains(ch) && evidence(l).is_none()))
 }
 
 struct Scored {
@@ -751,7 +826,9 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
             for n in 1..=3 {
                 for w in run.windows(n) {
                     let one_standard = n == 1 && w.first().is_some_and(|c| STANDARD.iter().any(|s| s.starts_with(*c)));
-                    if !one_standard && !w.iter().any(|c| NO_AUTO.contains(c)) {
+                    // `,,` and `;;` are empty fields, not a delimiter of their own (`||` can be).
+                    let empty_fields = w.first().is_some_and(|f| matches!(f, ',' | ';') && w.iter().all(|c| c == f));
+                    if !one_standard && !empty_fields && !w.iter().any(|c| NO_AUTO.contains(c)) {
                         here.push(w.iter().collect());
                     }
                 }
@@ -851,7 +928,16 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
                     }
                 }
             }
-            let t = if n == 0 { 0.0 } else { sum / n as f64 };
+            let standard =
+                matches!(&split, Split::Delimited { delimiters, .. } if delimiters.first().is_some_and(|d| STANDARD.contains(&d.as_str())));
+            // Only empty fields (`;;;` lines): a table of empty cells.
+            let t = if n == 0 {
+                0.0
+            } else if standard && shape.k > 1 && empty_cols.len() == shape.k {
+                1.0
+            } else {
+                sum / n as f64
+            };
             let lines_split = matches!(split, Split::Lines);
             let w = if shape.k <= 1 { 0.3 } else { (shape.k - 1) as f64 / shape.k as f64 };
             // A delimiter missing from more than a quarter of the rows is text, not a separator
@@ -868,7 +954,7 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
                 Split::Delimited { delimiters, .. } => delimiters.first().and_then(|d| d.chars().next()).filter(|c| *c == ',' || *c == ' '),
                 _ => None,
             };
-            let splits_numbers = number_char.is_some_and(|c| splits_numbers(&raw, c));
+            let inside_numbers = number_char.and_then(|c| splits_numbers(&raw, c));
             // Anything but a usual delimiter needs cleaner cells: punctuation inside text
             // (`https://`, `Re:`, `Order #1`) cuts each line once into text and leftovers.
             let unusual = matches!(&split, Split::Delimited { delimiters, .. }
@@ -877,9 +963,10 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Lay
             let q = if (!lines_split && (shape.k <= 1 || !covered)) || (single_space && t < 0.75) || unclean || skips_a_header {
                 0.0
             } else {
-                shape.score * w * t * 0.97f64.powi(shape.skip as i32) * prior * if splits_numbers && kind != TextKind::Csv { 0.3 } else { 1.0 }
+                let numbers = inside_numbers.is_some_and(|header| header || kind != TextKind::Csv);
+                shape.score * w * t * 0.97f64.powi(shape.skip as i32) * prior * if numbers { 0.3 } else { 1.0 }
             };
-            Scored { split, shape, q, rows, splits_numbers }
+            Scored { split, shape, q, rows, splits_numbers: inside_numbers.is_some() }
         })
         .collect();
     scored.sort_by(|a, b| b.q.total_cmp(&a.q).then(order(&a.split).cmp(&order(&b.split))));

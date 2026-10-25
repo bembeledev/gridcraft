@@ -155,8 +155,8 @@ fn numbers_read_with_the_detected_decimal_comma() {
     assert_eq!(v(&wb, 2, 1), Value::Number(-7.25));
     assert_eq!(v(&wb, 2, 2), Value::Number(0.5));
     assert_eq!(v(&wb, 3, 1), Value::Number(999.0));
-    // German Excel reads `1,5E3` as text, not 1500 or 15000.
-    assert_eq!(v(&wb, 3, 2), Value::text("1,5E3"));
+    // German Excel reads `1,5E3` as 1500, opened, imported or typed (measured), not 15000.
+    assert_eq!(v(&wb, 3, 2), Value::Number(1500.0));
     // Saving writes the decimal comma back.
     assert!(wb.csv_decimal_comma);
     assert_eq!(wb.csv_delimiter, Some(b';'));
@@ -181,12 +181,15 @@ fn punctuation_inside_text_is_no_delimiter() {
 
 #[test]
 fn a_decimal_comma_amount_that_is_no_number_keeps_its_text() {
-    let (wb, report) = read_text("a;b\r\n1,5;1.234,50 €\r\n2,5;€1,5\r\n".as_bytes(), &auto(TextKind::Csv)).unwrap();
+    let (wb, report) = read_text("a;b\r\n1,5;1.234,50 €\r\n2,5;€1,5\r\n3,5;(1,5\r\n4,5;--1,5\r\n".as_bytes(), &auto(TextKind::Csv)).unwrap();
     assert_eq!(report.numbers.decimal, Decimal::Comma, "{report:?}");
     assert_eq!(v(&wb, 1, 0), Value::Number(1.5));
-    // The reader's rewrite (`1,234.50 €`) never reaches the cell.
-    assert_eq!(v(&wb, 1, 1), Value::text("1.234,50 €"));
-    assert_eq!(v(&wb, 2, 1), Value::text("€1,5"));
+    // Amounts with a currency sign are numbers that show it.
+    assert_eq!((v(&wb, 1, 1), fmt(&wb, 1, 1)), (Value::Number(1234.5), "#,##0.00 \"€\"".to_string()));
+    assert_eq!((v(&wb, 2, 1), fmt(&wb, 2, 1)), (Value::Number(1.5), "\"€\"#,##0.0".to_string()));
+    // The reader's rewrite (`(1.5`) never reaches the cell.
+    assert_eq!(v(&wb, 3, 1), Value::text("(1,5"));
+    assert_eq!(v(&wb, 4, 1), Value::text("--1,5"));
 }
 
 #[test]

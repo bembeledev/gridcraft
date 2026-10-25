@@ -1,5 +1,6 @@
 //! CSV import and export (RFC 4180 with the usual real-world leniency).
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use gridcraft_core::parse::{Parsed, parse_input};
@@ -302,7 +303,7 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
     wb.csv_decimal_comma = opts.parse_values && numbers.decimal == Decimal::Comma;
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
-    let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
+    let mut fmt_cache: Vec<(Cow<'static, str>, StyleId)> = vec![];
     let mut row: u32 = 0;
     let mut record = 0usize;
     let mut done = Completeness { fields: resolved.fields, ..Default::default() };
@@ -330,7 +331,7 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
                         None => {
-                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(&code));
                             fmt_cache.push((code, id));
                             id
                         }
@@ -351,29 +352,86 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
     Ok((wb, resolved.report(done)))
 }
 
+/// A field's value and the number format it gets.
+struct Read {
+    value: Value,
+    format: Option<Cow<'static, str>>,
+}
+
+impl From<Parsed> for Read {
+    fn from(p: Parsed) -> Read {
+        Read { value: p.value, format: p.format.map(Cow::Borrowed) }
+    }
+}
+
 /// One field read like typed input, with the column's decimal separator: a decimal comma
 /// number is rewritten with a point first (`1.234,5` → `1,234.5`); a value that is a number
-/// only with the other separator stays text, as it does in Excel (`0.125` and `1,5E3` under a
-/// decimal comma). In a column holding both kinds (`None`), any value that depends on the
-/// separator stays text.
-fn read_field(f: &str, decimal: Option<Decimal>, sys: gridcraft_core::DateSystem) -> Parsed {
-    let text = || Parsed { value: Value::text(f), format: None };
+/// only with the other separator stays text, as it does in Excel (`0.125` under a decimal
+/// comma), and `1,5E3` is 1500. In a column holding both kinds (`None`), any value that depends
+/// on the separator stays text. Dates with dots are day first (`01.11.2026`), amounts carry any
+/// currency sign (`7,50 €`), Swiss `'` groups and a trailing minus read (`1'234.50`, `7,50-`).
+fn read_field(f: &str, decimal: Option<Decimal>, sys: gridcraft_core::DateSystem) -> Read {
+    let text = || Read { value: Value::text(f), format: None };
+    if let Some(date) = dotted_date(f, sys) {
+        return date;
+    }
+    let number = |p: Parsed| matches!(p.value, Value::Number(_)).then(|| Read::from(p));
+    let amount = |d: Decimal| text_layout::currency_amount(f, d).map(|(v, code)| Read { value: Value::Number(v), format: Some(Cow::Owned(code)) });
+    // Typed input, else the same number with a point and `,` groups, else an amount.
+    let with_point = |p: Parsed| {
+        number(p.clone())
+            .or_else(|| text_layout::to_point(f, Decimal::Point).and_then(|t| number(parse_input(&t, sys))))
+            .or_else(|| amount(Decimal::Point))
+            .unwrap_or_else(|| p.into())
+    };
     match decimal {
-        Some(Decimal::Point) => parse_input(f, sys),
+        Some(Decimal::Point) => with_point(parse_input(f, sys)),
         Some(Decimal::Comma) => match text_layout::comma_to_point(f) {
-            // Rewritten for the reader only: what doesn't read as a number keeps the file's text
-            // (`7,50 €`, not `7.50 €`).
-            Some(point) => Some(parse_input(&point, sys)).filter(|p| matches!(p.value, Value::Number(_))).unwrap_or_else(text),
+            // Rewritten for the reader only: what doesn't read as a number keeps the file's text.
+            Some(point) => number(parse_input(&point, sys)).or_else(|| amount(Decimal::Comma)).unwrap_or_else(text),
             None if evidence(f) == Some(Evidence::Point) => text(),
             None => {
                 let p = parse_input(f, sys);
                 let date = p.format.is_some_and(|code| code.chars().any(|c| matches!(c.to_ascii_lowercase(), 'y' | 'd' | 'h' | 'm' | 's')));
-                if matches!(p.value, Value::Number(_)) && f.contains(['.', ',']) && !date { text() } else { p }
+                if matches!(p.value, Value::Number(_)) && f.contains(['.', ',']) && !date { text() } else { p.into() }
             }
         },
         None => match evidence(f) {
             Some(Evidence::Point | Evidence::Comma | Evidence::Ambiguous) => text(),
-            _ => parse_input(f, sys),
+            _ => with_point(parse_input(f, sys)),
+        },
+    }
+}
+
+/// `25.10.2026`, `1.11.26`, with a time or without (`25.10.2026 12:30`): day first, as
+/// everywhere dates are written with dots; the input parser reads them month first.
+fn dotted_date(f: &str, sys: gridcraft_core::DateSystem) -> Option<Read> {
+    let t = f.trim();
+    let (date, time) = t.split_once(' ').map_or((t, None), |(d, tm)| (d, Some(tm.trim())));
+    let parts: Vec<&str> = date.split('.').collect();
+    let [d, m, y] = parts.as_slice() else { return None };
+    let digits = |s: &str, lens: &[usize]| lens.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(d, &[1, 2]) || !digits(m, &[1, 2]) || !digits(y, &[2, 4]) {
+        return None;
+    }
+    let (d, m, y): (i64, i64, i64) = (d.parse().ok()?, m.parse().ok()?, y.parse().ok()?);
+    let y = match y {
+        0..30 => 2000 + y,
+        30..100 => 1900 + y,
+        _ => y,
+    };
+    let month = u32::try_from(m).ok().filter(|m| (1..=12).contains(m))?;
+    if y < 1900 || d < 1 || d > i64::from(gridcraft_core::date::days_in_month_in(sys, i32::try_from(y).ok()?, month)) {
+        return None;
+    }
+    let day = gridcraft_core::date::serial_from_ymd(sys, y, m, d)?;
+    match time {
+        None => Some(Read { value: Value::Number(day), format: Some(Cow::Borrowed("dd.mm.yyyy")) }),
+        Some(tm) => match parse_input(tm, sys) {
+            Parsed { value: Value::Number(fr), format: Some(code) } if (0.0..1.0).contains(&fr) && code.contains('h') => {
+                Some(Read { value: Value::Number(day + fr), format: Some(Cow::Borrowed("dd.mm.yyyy hh:mm")) })
+            }
+            _ => None,
         },
     }
 }

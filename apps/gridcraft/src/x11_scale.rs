@@ -11,8 +11,6 @@
 
 /// Re-exec with `WINIT_X11_SCALE_FACTOR` set from the desktop when on X11 and unset.
 pub fn apply() {
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
-    return;
     #[cfg(all(unix, not(target_os = "macos")))]
     apply_impl();
 }
@@ -36,7 +34,9 @@ fn apply_impl() {
     if xrdb.is_empty() && xdpy.is_empty() {
         return;
     }
-    let factor = scale_factor_from_outputs(&xrdb, &xdpy);
+    let Some(factor) = scale_factor_from_outputs_opt(&xrdb, &xdpy) else {
+        return;
+    };
     if !valid_scale_factor(factor) {
         return;
     }
@@ -81,18 +81,22 @@ fn format_factor(factor: f64) -> String {
 
 /// Combine `xrdb -query` and `xdpyinfo` outputs into a scale factor.
 pub fn scale_factor_from_outputs(xrdb: &str, xdpyinfo: &str) -> f64 {
+    scale_factor_from_outputs_opt(xrdb, xdpyinfo).unwrap_or(1.0)
+}
+
+fn scale_factor_from_outputs_opt(xrdb: &str, xdpyinfo: &str) -> Option<f64> {
     if let Some(dpi) = parse_xft_dpi(xrdb) {
         let factor = dpi / 96.0;
-        if valid_scale_factor(factor) { return factor; }
+        if valid_scale_factor(factor) { return Some(factor); }
     }
     if let Some(dpi) = parse_xdpyinfo_resolution(xdpyinfo) {
         let factor = dpi / 96.0;
-        if valid_scale_factor(factor) { return factor; }
+        if valid_scale_factor(factor) { return Some(factor); }
     }
     if let Some((pixels, mm)) = parse_xdpyinfo_dimensions(xdpyinfo) {
-        return calc_dpi_factor(pixels, mm);
+        return Some(calc_dpi_factor(pixels, mm));
     }
-    1.0
+    None
 }
 
 /// Same quantization as winit's `calc_dpi_factor`: 1/12 steps, at least 1.0.

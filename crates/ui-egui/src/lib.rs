@@ -45,6 +45,33 @@ use serde_json::{Value as Json, json};
 pub use control::{ControlRequest, ControlResponse};
 pub mod desktop_theme;
 
+fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
+    match value {
+        "north" => Some(egui::ResizeDirection::North),
+        "south" => Some(egui::ResizeDirection::South),
+        "east" => Some(egui::ResizeDirection::East),
+        "west" => Some(egui::ResizeDirection::West),
+        "northeast" => Some(egui::ResizeDirection::NorthEast),
+        "northwest" => Some(egui::ResizeDirection::NorthWest),
+        "southeast" => Some(egui::ResizeDirection::SouthEast),
+        "southwest" => Some(egui::ResizeDirection::SouthWest),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod viewport_command_tests {
+    use super::parse_resize_direction;
+
+    #[test]
+    fn resize_direction_parser_accepts_all_edges_and_rejects_unknown_values() {
+        for name in ["north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"] {
+            assert!(parse_resize_direction(name).is_some(), "{name}");
+        }
+        assert!(parse_resize_direction("middle").is_none());
+    }
+}
+
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -307,6 +334,7 @@ pub struct SheetApp {
     /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
     /// close, and the window resizes from its edges (`ribbon::window_frame`).
     pub window_controls: bool,
+    viewport_commands: Vec<egui::ViewportCommand>,
 }
 
 impl SheetApp {
@@ -354,6 +382,7 @@ impl SheetApp {
             started: now_ms(),
             allow_close: false,
             window_controls: false,
+            viewport_commands: Vec::new(),
         }
     }
 
@@ -370,6 +399,12 @@ impl SheetApp {
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
+    }
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 
     /// The font names the active workbook uses: every style's font plus the theme's heading/body
@@ -626,6 +661,26 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                Ok(Json::Null)
+            }
+            "ui.window.maximize" => {
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(true);
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(on));
+                Ok(Json::Null)
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                Ok(Json::Null)
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = p.get("direction").and_then(Json::as_str).and_then(parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                Ok(Json::Null)
+            }
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {
@@ -1328,6 +1383,7 @@ impl SheetApp {
         widgets::toast(self, &ctx);
         // Last, so its resize cursors win over the widgets under the window edges.
         ribbon::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
         if !ctx.input(|i| i.focused) {

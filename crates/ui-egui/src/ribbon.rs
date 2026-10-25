@@ -2805,7 +2805,7 @@ const TITLE_H: f32 = 38.0;
 const RESIZE_BAND: f32 = 5.0;
 
 /// Draw application controls and edge resizing for frameless windows.
-pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
+pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
     if !app.window_controls {
         return;
     }
@@ -2857,9 +2857,9 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
                 }
                 if resp.on_hover_text(label).clicked() {
                     match kind {
-                        "minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                        "maximize" => ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)),
-                        "close" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                        "minimize" => app.run_or_alert("ui.window.minimize", json!({})),
+                        "maximize" => app.run_or_alert("ui.window.maximize", json!({"on": !maximized})),
+                        "close" => app.run_or_alert("ui.window.close", json!({})),
                         _ => {}
                     }
                 }
@@ -2891,8 +2891,19 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
         && ctx.input(|i| i.pointer.primary_pressed())
         && !controls.contains(pos)
     {
-        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+        let direction = match dir {
+            egui::ResizeDirection::North => "north",
+            egui::ResizeDirection::South => "south",
+            egui::ResizeDirection::East => "east",
+            egui::ResizeDirection::West => "west",
+            egui::ResizeDirection::NorthEast => "northeast",
+            egui::ResizeDirection::NorthWest => "northwest",
+            egui::ResizeDirection::SouthEast => "southeast",
+            egui::ResizeDirection::SouthWest => "southwest",
+        };
+        app.run_or_alert("ui.window.beginResize", json!({"direction": direction}));
     }
+    app.flush_viewport_commands(ctx);
 }
 
 /// `Some(true)` when every selected area is whole rows, `Some(false)` when every one is whole

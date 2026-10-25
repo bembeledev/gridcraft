@@ -70,6 +70,13 @@ fn a_text_file_opens_through_text_import_with_what_detection_found() {
     assert_eq!(cell(&h, "B2"), Value::Number(1234.5));
     assert_eq!(cell(&h, "A3"), Value::text("Pflaume; blau"));
     assert_eq!(h.state().ui.recent.first(), Some(&p));
+
+    // Opened again while open: switched to, nothing to ask.
+    let docs = h.state().session.documents().len();
+    h.state_mut().open_path(&p);
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None);
+    assert_eq!(h.state().session.documents().len(), docs);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

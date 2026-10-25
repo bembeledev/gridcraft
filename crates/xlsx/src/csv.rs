@@ -231,7 +231,7 @@ impl Resolved {
         let (split, layout) = match (&opts.split, opts.delimiter) {
             (Some(split), _) => (split.clone(), None),
             (None, 0) => {
-                let layout = detect(&text, opts.kind, quote);
+                let layout = detect(&text, opts.kind, quote, opts.detect_any);
                 (layout.split.clone(), Some(layout))
             }
             (None, d) => (Split::delimiter(d as char), None),
@@ -361,7 +361,9 @@ fn read_field(f: &str, decimal: Option<Decimal>, sys: gridcraft_core::DateSystem
     match decimal {
         Some(Decimal::Point) => parse_input(f, sys),
         Some(Decimal::Comma) => match text_layout::comma_to_point(f) {
-            Some(point) => parse_input(&point, sys),
+            // Rewritten for the reader only: what doesn't read as a number keeps the file's text
+            // (`7,50 €`, not `7.50 €`).
+            Some(point) => Some(parse_input(&point, sys)).filter(|p| matches!(p.value, Value::Number(_))).unwrap_or_else(text),
             None if evidence(f) == Some(Evidence::Point) => text(),
             None => {
                 let p = parse_input(f, sys);

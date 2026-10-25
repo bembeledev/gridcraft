@@ -243,8 +243,13 @@ pub fn split_records(text: &str, split: &Split, quote: Option<char>, mut on_reco
             _ => delimited(text, delimiters, *consecutive, quote, on_record),
         },
         Split::FixedWidth(breaks) => {
+            // Ordered once, not for every line.
+            let mut breaks: Vec<usize> = breaks.iter().copied().filter(|b| *b > 0).collect();
+            breaks.sort_unstable();
+            breaks.dedup();
+            breaks.truncate(MAX_COLS as usize - 1);
             for line in lines(text) {
-                if !on_record(fixed_fields(line, breaks)) {
+                if !on_record(fixed_fields(line, &breaks)) {
                     return;
                 }
             }
@@ -331,15 +336,12 @@ fn delimited(text: &str, delimiters: &[String], consecutive: bool, quote: Option
     }
 }
 
-/// A line cut at the break positions inside it, each piece trimmed (Text to Columns' rule).
+/// A line cut at the break positions inside it (ascending, above 0), each piece trimmed (Text
+/// to Columns' rule).
 fn fixed_fields(line: &str, breaks: &[usize]) -> Vec<String> {
     let chars: Vec<char> = line.chars().collect();
     let mut cuts = vec![0];
-    let mut inside: Vec<usize> = breaks.iter().copied().filter(|b| *b > 0 && *b < chars.len()).collect();
-    inside.sort_unstable();
-    inside.dedup();
-    inside.truncate(MAX_COLS as usize - 1);
-    cuts.extend(inside);
+    cuts.extend(breaks.iter().copied().take_while(|b| *b < chars.len()));
     cuts.push(chars.len());
     cuts.windows(2)
         .map(|w| match w {
@@ -718,8 +720,9 @@ fn order(split: &Split) -> usize {
 
 /// Detects how the lines of `text` split: delimiter (one or more characters), runs of spaces,
 /// fixed width or none, and a title before the table. Reads at most the first
-/// [`SAMPLE_ROWS`] rows and [`SAMPLE_BYTES`] bytes.
-pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
+/// [`SAMPLE_ROWS`] rows and [`SAMPLE_BYTES`] bytes. Without `any`, only `,`, `;` and tab are
+/// tried, as Excel's File › Open of a CSV splits: nothing shows the result before it opens.
+pub fn detect(text: &str, kind: TextKind, quote: Option<char>, any: bool) -> Layout {
     let mut cut = text.len().min(SAMPLE_BYTES);
     while !text.is_char_boundary(cut) {
         cut -= 1;
@@ -728,10 +731,10 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
     let raw: Vec<String> = lines(sample).filter(|l| !l.trim().is_empty()).take(SAMPLE_ROWS).map(str::to_string).collect();
     let plain: Vec<String> = raw.iter().map(|l| unquoted(l, quote)).collect();
 
-    let mut candidates: Vec<Split> = STANDARD.iter().map(|d| Split::delimiter(*d)).collect();
+    let mut candidates: Vec<Split> = STANDARD.iter().filter(|d| any || **d != "|").map(|d| Split::delimiter(*d)).collect();
     // Other punctuation and strings only with lines to compare: on a single line, every
     // character is "steady".
-    let several = plain.len() >= 2;
+    let several = any && plain.len() >= 2;
     // Each punctuation character, and each string of two or three, with the number of lines
     // it is on; the ones on (almost) every line are tried, most widespread first.
     let mut tally: Vec<(String, usize)> = vec![];
@@ -782,8 +785,10 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
         }
     }
     let runs = !plain.is_empty() && plain.iter().filter(|l| has_space_run(l)).count() * 10 >= plain.len() * 9;
-    candidates.push(Split::Delimited { delimiters: vec![" ".into()], consecutive: runs });
-    if kind == TextKind::Prn || runs {
+    if any {
+        candidates.push(Split::Delimited { delimiters: vec![" ".into()], consecutive: runs });
+    }
+    if any && (kind == TextKind::Prn || runs) {
         candidates.push(Split::FixedWidth(fixed_breaks(&raw)));
     }
     candidates.push(Split::Lines);
@@ -807,6 +812,16 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
             _ => None,
         })
         .collect();
+    // Of those, the ones that split every row from the first: a row holding one of them is that
+    // table's header, never a title another split may skip (`Menge;Preis` above `1,5;2,30`).
+    let from_first: Vec<String> = shaped
+        .iter()
+        .filter(|(_, _, sh)| sh.skip == 0)
+        .filter_map(|(s, _, _)| match s {
+            Split::Delimited { delimiters, .. } => delimiters.first().filter(|d| steady_ones.contains(d)).cloned(),
+            _ => None,
+        })
+        .collect();
     let mut scored: Vec<Scored> = shaped
         .into_iter()
         .map(|(split, rows, shape)| {
@@ -815,6 +830,12 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
                 _ => String::new(),
             };
             let others: Vec<&str> = steady_ones.iter().map(String::as_str).filter(|o| *o != own && !own.contains(o)).collect();
+            let skips_a_header = rows
+                .get(..shape.skip)
+                .unwrap_or_default()
+                .iter()
+                .flatten()
+                .any(|f| from_first.iter().any(|o| *o != own && !own.contains(o.as_str()) && f.contains(o.as_str())));
             let body = rows.get(shape.skip..).unwrap_or_default();
             let empty_cols: Vec<usize> = if shape.k > 1 {
                 (0..shape.k).filter(|i| body.iter().all(|r| r.get(*i).is_none_or(|f| f.trim().is_empty()))).collect()
@@ -848,7 +869,12 @@ pub fn detect(text: &str, kind: TextKind, quote: Option<char>) -> Layout {
                 _ => None,
             };
             let splits_numbers = number_char.is_some_and(|c| splits_numbers(&raw, c));
-            let q = if (!lines_split && (shape.k <= 1 || !covered)) || (single_space && t < 0.75) {
+            // Anything but a usual delimiter needs cleaner cells: punctuation inside text
+            // (`https://`, `Re:`, `Order #1`) cuts each line once into text and leftovers.
+            let unusual = matches!(&split, Split::Delimited { delimiters, .. }
+                if delimiters.first().is_some_and(|d| d != " " && !STANDARD.contains(&d.as_str())));
+            let unclean = unusual && if shape.k == 2 { t <= 0.75 } else { t < 0.5 };
+            let q = if (!lines_split && (shape.k <= 1 || !covered)) || (single_space && t < 0.75) || unclean || skips_a_header {
                 0.0
             } else {
                 shape.score * w * t * 0.97f64.powi(shape.skip as i32) * prior * if splits_numbers && kind != TextKind::Csv { 0.3 } else { 1.0 }

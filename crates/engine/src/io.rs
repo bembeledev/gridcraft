@@ -228,9 +228,32 @@ fn open_plain(name: &str, bytes: &[u8], text: &TextOpen) -> Result<(Workbook, Ve
         _ => {
             let (mut wb, report) = read_text_file(kind, bytes, text)?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![], Some(report)))
+            Ok((wb, text_warnings(name, &report), Some(report)))
         }
     }
+}
+
+/// What reading a text file guessed or kept about its numbers: a `.csv` opens without a
+/// preview, so the open says it.
+fn text_warnings(name: &str, r: &gridcraft_xlsx::text_layout::TextReport) -> Vec<String> {
+    use gridcraft_xlsx::text_layout::{Decimal, DecimalBasis};
+    let mut out = vec![];
+    if r.numbers.basis == DecimalBasis::Delimiter && !r.numbers.ambiguous.is_empty() {
+        let with = if r.numbers.decimal == Decimal::Comma { "a decimal comma" } else { "a decimal point" };
+        out.push(format!("{name}: {} could be read either way and were read with {with}", r.numbers.ambiguous.join(", ")));
+    }
+    if !r.numbers.mixed.is_empty() {
+        let columns: Vec<String> = r.numbers.mixed.iter().map(|c| gridcraft_core::col_to_letters(u32::try_from(*c).unwrap_or(u32::MAX))).collect();
+        let noun = if columns.len() == 1 { "column" } else { "columns" };
+        out.push(format!(
+            "{name}: {noun} {} holds numbers with a decimal point and with a decimal comma; those that depend on it were kept as text",
+            columns.join(", ")
+        ));
+    }
+    for (row, number) in &r.split_numbers {
+        out.push(format!("{name}: in row {row} of the file, {number} was split at its thousands separator"));
+    }
+    out
 }
 
 /// Reads a CSV, TSV, TXT, PRN or other text file with the Text Import Wizard's settings.
@@ -289,6 +312,7 @@ fn csv_options(kind: Option<FileKind>, text: &TextOpen) -> gridcraft_xlsx::CsvOp
         },
         SplitChoice::Detect => {
             opts.delimiter = 0;
+            opts.detect_any = true;
             opts.start_row = text.start_row;
         }
         SplitChoice::Given(split) => opts.split = Some(split.clone()),
@@ -445,7 +469,7 @@ fn prn(wb: &Workbook, sh: &Sheet) -> Result<Vec<u8>> {
     use gridcraft_model::HAlign;
     let Some(r) = sh.used_range() else { return Ok(Vec::new()) };
     let limit = gridcraft_xlsx::MAX_CSV_BYTES;
-    let standard = gridcraft_model::points_to_chars(f64::from(sh.default_col_width)).floor() as usize + 2;
+    let standard = (gridcraft_model::points_to_chars(f64::from(sh.default_col_width)).floor() as usize).saturating_add(2);
     let cols: Vec<(u32, usize)> = (0..=r.end.col)
         .filter(|c| !sh.cols.get(c).is_some_and(|i| i.hidden))
         .map(|c| (c, sh.cols.get(&c).and_then(|i| i.size).map_or(standard, |px| gridcraft_model::points_to_chars(f64::from(px)).floor() as usize)))
@@ -852,8 +876,17 @@ fn script_sandbox_check(path: &str) -> Result<()> {
 /// reads whose bytes arrive faster than metadata can claim (device files, growing files).
 const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    let buf = read_file_head(path, MAX_READ_BYTES + 1)?;
+    if buf.len() as u64 > MAX_READ_BYTES {
+        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
+    }
+    Ok(buf)
+}
+
+/// At most the first `max` bytes of the file at `path`: a preview doesn't read a whole file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
@@ -863,16 +896,13 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
     let mut buf = Vec::new();
-    let mut limited = (&f).take(MAX_READ_BYTES + 1);
+    let mut limited = (&f).take(max);
     limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if buf.len() as u64 > MAX_READ_BYTES {
-        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
-    }
     Ok(buf)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn read_file(path: &str) -> Result<Vec<u8>> {
+pub fn read_file_head(path: &str, _max: u64) -> Result<Vec<u8>> {
     script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
@@ -940,11 +970,19 @@ pub fn base64_encode(data: &[u8]) -> String {
 }
 
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    base64_decode_head(s, usize::MAX)
+}
+
+/// The first `max` bytes `s` decodes to; what follows them isn't looked at.
+pub fn base64_decode_head(s: &str, max: usize) -> Option<Vec<u8>> {
     let s = s.split_once(',').filter(|(h, _)| h.starts_with("data:")).map(|(_, b)| b).unwrap_or(s);
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut out = Vec::with_capacity((s.len() / 4 * 3).min(max));
     let mut buf = 0u32;
     let mut bits = 0;
     for c in s.bytes() {
+        if out.len() >= max {
+            break;
+        }
         if c == b'=' || c.is_ascii_whitespace() {
             continue;
         }

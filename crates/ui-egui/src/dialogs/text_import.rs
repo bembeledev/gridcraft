@@ -77,17 +77,23 @@ fn text_import_prefill(d: &mut Dialog, found: &Json) {
 pub(super) fn text_import(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let lang = crate::i18n::current(ui.ctx());
     let t = crate::theme::Tokens::get(ui.ctx());
-    // The preview is asked for again only when a setting changes.
-    let key = {
-        let mut settings = d.values.clone();
-        settings.remove("base64");
-        Json::Object(settings).to_string()
-    };
+    // The preview is asked for again only when a setting changes. A picked file's bytes stay out
+    // of the key, which is built every frame, and the preview gets only the part it reads.
+    let picked = d.values.remove("base64");
+    let key = Json::Object(d.values.clone()).to_string();
     if d.result.as_ref().and_then(|r| r.get("key")).and_then(Json::as_str) != Some(key.as_str()) {
         let mut p = text_import_params(&d.values);
+        if let Some(b) = picked.as_ref().and_then(Json::as_str) {
+            // Four base64 characters hold three bytes.
+            let head = (gridcraft_engine::io::PREVIEW_BYTES + 1).div_ceil(3) * 4;
+            p["base64"] = json!(b.get(..head).unwrap_or(b));
+        }
         p["rows"] = json!(20);
         let r = app.session.run("file.previewText", p).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)}));
         d.result = Some(json!({"key": key, "r": r}));
+    }
+    if let Some(b) = picked {
+        d.values.insert("base64".into(), b);
     }
     let r = d.result.as_ref().and_then(|x| x.get("r")).cloned().unwrap_or(Json::Null);
     let found = &r["text"];

@@ -157,6 +157,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Resul
 pub struct CsvOptions {
     /// Field separator; `0` detects how the lines split ([`text_layout::detect`]).
     pub delimiter: u8,
+    /// Detection also tries other punctuation, strings, spaces and fixed widths (Text Import's
+    /// Detect); otherwise only `,`, `;` and tab, as File › Open of a CSV.
+    pub detect_any: bool,
     pub quote: u8,
     /// No text qualifier: quotes are ordinary characters.
     pub no_qualifier: bool,
@@ -179,6 +182,7 @@ impl Default for CsvOptions {
     fn default() -> Self {
         CsvOptions {
             delimiter: b',',
+            detect_any: false,
             quote: b'"',
             no_qualifier: false,
             date_system: DateSystem::D1900,

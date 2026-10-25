@@ -18,7 +18,7 @@ fn fmt(wb: &Workbook, r: u32, c: u32) -> String {
 
 /// Detection and number reading on, as File › Open with `delimiter: "auto"` does.
 fn auto(kind: TextKind) -> CsvOptions {
-    CsvOptions { delimiter: 0, start_row: None, decimal: None, kind, ..Default::default() }
+    CsvOptions { delimiter: 0, detect_any: true, start_row: None, decimal: None, kind, ..Default::default() }
 }
 
 fn kind_of(name: &str) -> TextKind {
@@ -41,6 +41,9 @@ fn detects_the_split_and_the_decimal_separator() {
         // `,` and `;` both give the same field count in every row; only the cells decide.
         ("de_semi_noheader.txt", "A;1,5;3\r\nB;2,25;4\r\nC;10,75;5\r\n", d(";"), Some(Comma)),
         ("de_semi_2col.txt", "A;1,5\r\nB;2,25\r\nC;10,75\r\n", d(";"), Some(Comma)),
+        // Only numbers: `,` splits them into more fields, but only by skipping the header.
+        ("de_numbers_only.csv", "Menge;Preis\r\n1,5;2,30\r\n2,5;3,10\r\n", d(";"), Some(Comma)),
+        ("de_numbers_only.txt", "Menge;Preis;Rabatt\r\n1,5;2,30;0,5\r\n2,5;3,10;1,25\r\n12,5;4,75;0\r\n", d(";"), Some(Comma)),
         ("de_semi_thousands.csv", "Artikel;Umsatz\r\nX;1.234,50\r\nY;12.345,00\r\nZ;999,99\r\n", d(";"), Some(Comma)),
         ("de_title_preamble.csv", "Umsatzbericht Oktober 2026\r\n\r\nName;Wert\r\nA;1,5\r\nB;2,25\r\n", d(";"), Some(Comma)),
         ("en_comma.csv", "Name,Value,Qty\r\nA,1.5,3\r\nB,2.25,4\r\n", d(","), Some(Point)),
@@ -157,6 +160,33 @@ fn numbers_read_with_the_detected_decimal_comma() {
     // Saving writes the decimal comma back.
     assert!(wb.csv_decimal_comma);
     assert_eq!(wb.csv_delimiter, Some(b';'));
+}
+
+#[test]
+fn punctuation_inside_text_is_no_delimiter() {
+    // Each line cut once into text and leftovers, or into leftovers only: one column.
+    let urls: String = (0..20).map(|i| format!("https://example.com/page{i}\r\n")).collect();
+    let subjects = "Re: question\r\nRe: answer\r\nFwd: report\r\nRe: Re: again\r\n";
+    let paths = "C:\\Users\\me\\file0.txt\r\nD:\\data\\b.csv\r\nC:\\x\\y.txt\r\n";
+    let orders = "Order #1000\r\nOrder #1001\r\nOrder #1002\r\n";
+    for text in [format!("url\r\n{urls}"), urls.clone(), subjects.into(), paths.into(), orders.into()] {
+        let (wb, report) = read_text(text.as_bytes(), &auto(TextKind::Tab)).unwrap();
+        assert_eq!(report.split, Split::Lines, "{text}");
+        assert_eq!(v(&wb, 0, 1), Value::Empty, "{text}");
+    }
+    // Typed values on both sides still split at a symbol.
+    let (_, report) = read_text("1§2\r\n3§4\r\n5§6\r\n".as_bytes(), &auto(TextKind::Tab)).unwrap();
+    assert_eq!(report.split, Split::delimiter("§"));
+}
+
+#[test]
+fn a_decimal_comma_amount_that_is_no_number_keeps_its_text() {
+    let (wb, report) = read_text("a;b\r\n1,5;1.234,50 €\r\n2,5;€1,5\r\n".as_bytes(), &auto(TextKind::Csv)).unwrap();
+    assert_eq!(report.numbers.decimal, Decimal::Comma, "{report:?}");
+    assert_eq!(v(&wb, 1, 0), Value::Number(1.5));
+    // The reader's rewrite (`1,234.50 €`) never reaches the cell.
+    assert_eq!(v(&wb, 1, 1), Value::text("1.234,50 €"));
+    assert_eq!(v(&wb, 2, 1), Value::text("€1,5"));
 }
 
 #[test]
@@ -283,11 +313,11 @@ fn hostile_text_stays_bounded() {
     // file far wider than the detection window, and a line of a million fields.
     let punct: String = (0x21u8..0x7f).filter(|b| !b.is_ascii_alphanumeric()).map(char::from).collect();
     let long = punct.repeat(20_000);
-    let _ = detect(&long, TextKind::Csv, Some('"'));
+    let _ = detect(&long, TextKind::Csv, Some('"'), true);
     let lines = format!("{punct}\n").repeat(5_000);
-    let _ = detect(&lines, TextKind::Other, Some('"'));
+    let _ = detect(&lines, TextKind::Other, Some('"'), true);
     let wide = format!("{}x\n{}y\n", " ".repeat(100_000), " ".repeat(100_000));
-    let _ = detect(&wide, TextKind::Prn, None);
+    let _ = detect(&wide, TextKind::Prn, None, true);
     let fields = ";".repeat(1_000_000);
     let (_, report) = read_text(fields.as_bytes(), &auto(TextKind::Csv)).unwrap();
     assert!(report.fields <= gridcraft_core::MAX_COLS as usize);

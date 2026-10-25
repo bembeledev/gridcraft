@@ -2,8 +2,10 @@ use super::*;
 
 impl SheetApp {
     pub fn open_path(&mut self, path: &str) {
-        // A text file asks how it splits first, as Excel's Text Import Wizard does (#2553).
-        if wants_text_import(path) {
+        // A text file asks how it splits first, as Excel's Text Import Wizard does (#2553); one
+        // already open is switched to, as `file.open` does, so there is nothing to ask.
+        let open = self.session.documents().iter().any(|d| d.path.as_deref() == Some(path));
+        if wants_text_import(path) && !open {
             self.open_dialog("textImport", json!({"path": path}));
             return;
         }

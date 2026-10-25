@@ -166,11 +166,18 @@ fn hebrew_1255_bytes_are_not_read_as_arabic() {
 
 #[test]
 fn delimiter_sniffing() {
-    let split = |t: &str| detect(t, TextKind::Csv, Some('"')).split;
+    let split = |t: &str| detect(t, TextKind::Csv, Some('"'), false).split;
     assert_eq!(split("a;b;c\n1;2;3\n"), Split::delimiter(";"));
     assert_eq!(split("a\tb\n1\t2\n"), Split::delimiter("\t"));
     assert_eq!(split("a,b\n\"x;y;z\",2\n"), Split::delimiter(","));
     assert_eq!(split("single"), Split::Lines);
+    // File › Open of a CSV splits only at `,`, `;` or tab: other punctuation on every line is text.
+    let urls: String = (0..20).map(|i| format!("https://example.com/page{i}\r\n")).collect();
+    assert_eq!(split(&format!("url\r\n{urls}")), Split::Lines);
+    assert_eq!(split("Home > Garden > Tools\r\nHome > Kitchen > Pots\r\nShop > Toys > Cars\r\n"), Split::Lines);
+    assert_eq!(split("id|name\r\n1|a\r\n2|b\r\n"), Split::Lines);
+    // `,` splits decimal commas into more fields, but only by skipping the header as a title.
+    assert_eq!(split("Menge;Preis\r\n1,5;2,30\r\n2,5;3,10\r\n"), Split::delimiter(";"));
     // A delimiter missing from some lines is text, not a separator (single-column export round trip).
     assert_eq!(split("alpha;beta\r\ngamma\r\n"), Split::Lines);
     assert_eq!(split("alpha\tbeta\r\ngamma\r\n"), Split::Lines);

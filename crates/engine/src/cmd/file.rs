@@ -17,7 +17,7 @@ pub fn specs() -> Vec<CommandSpec> {
              {delimiter?: \"auto\" (detect the delimiter, a title before the table and the decimal separator) | \";\" | \"||\" (any string), \
              delimiters?: [\",\", \"\\t\"] ([] for none: each line in one cell), other?: \"|\", treatConsecutive?: bool, fixedWidths?: [10, 20] (where fields start), startRow?: 1, \
              decimal?: \"auto\" (default: from the values) | \".\" | \",\", textQualifier?: \"\\\"\" | \"'\" | \"\" (none), csvAsText?: bool (every field as text)}; \
-             without them .csv is detected, .txt/.tsv split at tabs and .prn keeps each line in one cell → {index, title, sheets, warnings, \
+             without them .csv splits at the one of , ; or tab that fits, .txt/.tsv split at tabs and .prn keeps each line in one cell → {index, title, sheets, warnings, \
              text?: {split, delimiters?, fixedWidths?, detected, startRow, decimal, decimalFrom, mixedColumns, ambiguous, fields, rows, completeRows, otherRows, splitNumbers, uncertain}} \
              (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, prn, json)",
             always,
@@ -135,13 +135,16 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
 /// The Text Import Wizard's preview: the first rows as the settings split them, and what
 /// reading found, without opening the file (#2553).
 fn preview_text(_: &mut Session, p: &Json) -> Result<Json> {
+    // Only the preview's window is read: the dialog asks again on every change. One byte more
+    // says whether the file goes on.
+    let head = crate::io::PREVIEW_BYTES + 1;
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (
             str_param(p, "name").unwrap_or("Book.txt").to_string(),
-            crate::io::base64_decode(b).ok_or_else(|| bad("file.previewText", "invalid base64"))?,
+            crate::io::base64_decode_head(b, head).ok_or_else(|| bad("file.previewText", "invalid base64"))?,
         )
     } else if let Some(path) = str_param(p, "path") {
-        (path.to_string(), crate::io::read_file(path)?)
+        (path.to_string(), crate::io::read_file_head(path, head as u64)?)
     } else {
         return Err(bad("file.previewText", "missing `path` or `name` and `base64`"));
     };
@@ -156,29 +159,47 @@ fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
     use gridcraft_xlsx::text_layout::{Decimal, Split};
     let mut t = crate::io::TextOpen { as_text: bool_param(p, "csvAsText").unwrap_or(false), ..Default::default() };
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
-    let other = str_param(p, "other").filter(|o| !o.is_empty());
-    let list = p.get("delimiters").and_then(Json::as_array);
-    let fixed = p.get("fixedWidths").and_then(Json::as_array);
-    let given = [str_param(p, "delimiter").is_some(), list.is_some() || other.is_some(), fixed.is_some()];
-    if given.iter().filter(|g| **g).count() > 1 {
+    // A setting of the wrong kind is an error, never a quiet fall back to the extension's split.
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let text = |k: &str| given(k).map(|v| v.as_str().ok_or_else(|| bad("file.open", format!("`{k}` is a string")))).transpose();
+    let delimiter = text("delimiter")?;
+    let other = text("other")?.filter(|o| !o.is_empty());
+    let list = given("delimiters")
+        .map(|v| {
+            let strings = v.as_array().map(|a| a.iter().map(Json::as_str).collect::<Option<Vec<&str>>>());
+            strings.flatten().ok_or_else(|| bad("file.open", "`delimiters` is a list of strings, such as [\";\", \"\\t\"]"))
+        })
+        .transpose()?;
+    let fixed = given("fixedWidths")
+        .map(|v| {
+            let starts =
+                v.as_array().map(|a| a.iter().map(|n| n.as_u64().map(|n| usize::try_from(n).unwrap_or(usize::MAX))).collect::<Option<Vec<usize>>>());
+            starts.flatten().ok_or_else(|| bad("file.open", "`fixedWidths` is a list of character positions, such as [10, 20]"))
+        })
+        .transpose()?;
+    let chosen = [delimiter.is_some(), list.is_some() || other.is_some(), fixed.is_some()];
+    if chosen.iter().filter(|g| **g).count() > 1 {
         return Err(bad("file.open", "give one of `delimiter`, `delimiters`/`other` or `fixedWidths`"));
     }
-    if let Some(d) = str_param(p, "delimiter") {
+    // A line end ends the record before any delimiter is looked for.
+    if delimiter.into_iter().chain(other).chain(list.iter().flatten().copied()).any(|d| d.contains(['\r', '\n'])) {
+        return Err(bad("file.open", "a delimiter can't hold a line end"));
+    }
+    if let Some(d) = delimiter {
         t.split = match d {
             "" => return Err(bad("file.open", "`delimiter` is empty")),
             "auto" => SplitChoice::Detect,
             d => SplitChoice::Given(Split::Delimited { delimiters: vec![d.to_string()], consecutive }),
         };
     } else if list.is_some() || other.is_some() {
-        let mut delimiters: Vec<String> = list.into_iter().flatten().filter_map(Json::as_str).filter(|d| !d.is_empty()).map(str::to_string).collect();
+        let mut delimiters: Vec<String> = list.into_iter().flatten().filter(|d| !d.is_empty()).map(str::to_string).collect();
         delimiters.extend(other.map(str::to_string));
         // None ticked, as the wizard allows: each line in one cell.
         t.split = SplitChoice::Given(if delimiters.is_empty() { Split::Lines } else { Split::Delimited { delimiters, consecutive } });
-    } else if let Some(a) = fixed {
-        let breaks = a.iter().filter_map(Json::as_u64).map(|v| usize::try_from(v).unwrap_or(usize::MAX)).collect();
+    } else if let Some(breaks) = fixed {
         t.split = SplitChoice::Given(Split::FixedWidth(breaks));
     }
-    if let Some(row) = p.get("startRow") {
+    if let Some(row) = given("startRow") {
         let row = row.as_u64().filter(|r| *r >= 1).ok_or_else(|| bad("file.open", "`startRow` is a row number from 1"))?;
         t.start_row = Some(usize::try_from(row - 1).unwrap_or(usize::MAX));
     }
@@ -206,7 +227,7 @@ fn text_report(r: &gridcraft_xlsx::text_layout::TextReport) -> Json {
     };
     let mut out = json!({
         "detected": r.detected,
-        "startRow": r.start_row + 1,
+        "startRow": r.start_row.saturating_add(1),
         "decimal": match r.numbers.decimal { Decimal::Point => ".", Decimal::Comma => "," },
         "decimalFrom": match r.numbers.basis {
             DecimalBasis::Given => "given",

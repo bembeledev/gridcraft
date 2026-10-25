@@ -4603,9 +4603,45 @@ fn file_open_reads_text_files_with_the_import_wizards_settings() {
         json!({"startRow": 0}),
         json!({"decimal": "x"}),
         json!({"textQualifier": "x"}),
+        // The wrong kind of value, never a quiet fall back to the extension's split.
+        json!({"delimiter": 5}),
+        json!({"delimiters": ";"}),
+        json!({"delimiters": [";", 1]}),
+        json!({"fixedWidths": "10,20"}),
+        json!({"fixedWidths": 10}),
+        json!({"fixedWidths": [-5, 2.5]}),
+        // A line end ends the record before any delimiter is looked for.
+        json!({"delimiter": "\n"}),
+        json!({"other": "\r"}),
     ] {
         assert!(self::s().execute("file.open", params("x.csv", "a,b", bad.clone())).is_err(), "{bad}");
     }
+}
+
+/// A `.csv` opens without a preview, so the open says what it guessed about numbers; and only
+/// `,`, `;` or tab split it, as Excel's File › Open does.
+#[test]
+fn a_csv_open_reports_guessed_numbers_and_splits_only_at_list_separators() {
+    let open = |text: &str| {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": "w.csv", "base64": crate::io::base64_encode(text.as_bytes())})).unwrap();
+        let b2 = s.execute("cell.get", json!({"cell": "B2"})).unwrap()["value"].clone();
+        (r, b2)
+    };
+    let (r, b2) = open("Item;Weight\r\nA;2.500\r\nB;1.250\r\n");
+    assert_eq!(b2.as_f64(), Some(2500.0));
+    let warnings = r["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("2.500") && w.contains("decimal comma"))), "{warnings:?}");
+    // Both kinds in one column: what depends on the separator stays text, and the open says so.
+    let (r, _) = open("a;b\r\n1;1,5\r\n2;0.125\r\n");
+    assert!(r["warnings"].to_string().contains("column B"), "{}", r["warnings"]);
+    // Values the file shows the separator for are no guess.
+    let (r, b2) = open("Item;Weight\r\nA;2,5\r\nB;1.250,5\r\n");
+    assert_eq!((b2.as_f64(), r["warnings"].clone()), (Some(2.5), json!([])));
+    // Punctuation on every line of a one-column file is text.
+    let urls: String = (0..20).map(|i| format!("https://example.com/page{i}\r\n")).collect();
+    let (r, b2) = open(&format!("url\r\n{urls}"));
+    assert_eq!((r["text"]["split"].as_str(), b2), (Some("lines"), serde_json::Value::Null));
 }
 
 /// The Text Import preview splits the first rows as the settings say, without opening the file.
@@ -4627,9 +4663,22 @@ fn file_preview_text_shows_the_first_rows_as_the_settings_split_them() {
     assert!(s.execute("file.previewText", json!({})).is_err());
     // A file longer than the preview window is cut at a line end.
     let long = "a;b\r\n".repeat(300_000);
-    let r = s.execute("file.previewText", json!({"name": "long.csv", "base64": crate::io::base64_encode(long.as_bytes())})).unwrap();
+    let b64 = crate::io::base64_encode(long.as_bytes());
+    let r = s.execute("file.previewText", json!({"name": "long.csv", "base64": b64})).unwrap();
     assert_eq!(r["partial"], json!(true));
     assert_eq!(r["text"]["completeRows"], r["text"]["rows"]);
+    // Only the window is decoded or read; a file of exactly its size isn't partial.
+    assert_eq!(crate::io::base64_decode_head(&b64, 10).unwrap(), long.as_bytes().get(..10).unwrap());
+    let dir = std::env::temp_dir().join(format!("gridcraft-preview-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("long.csv");
+    std::fs::write(&path, &long).unwrap();
+    let r = s.execute("file.previewText", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!((&r["partial"], &r["text"]["completeRows"]), (&json!(true), &r["text"]["rows"]));
+    std::fs::write(&path, "a;b\n".repeat(crate::io::PREVIEW_BYTES / 4)).unwrap();
+    let r = s.execute("file.previewText", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(r["partial"], json!(false));
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;

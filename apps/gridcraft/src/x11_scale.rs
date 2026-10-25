@@ -4,7 +4,7 @@
 //! (EDID dimensions). An X server can deliberately run a dense panel at 96
 //! DPI, in which case only winit applications appear zoomed. Prefer the
 //! desktop's configured DPI instead, before the window is created:
-//! `Xft.dpi` when set, otherwise the server screen's DPI, otherwise 1.0.
+//! `Xft.dpi` when set, otherwise the server screen's DPI; unknown values leave winit's own guess.
 //! An explicit `WINIT_X11_SCALE_FACTOR` in the environment is always kept.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -28,9 +28,6 @@ fn apply_impl() {
     }
     let xrdb = run_query("xrdb", &["-query"]);
     let xdpy = run_query("xdpyinfo", &[]);
-    if parse_xft_dpi(&xrdb).is_none() && !run_query("xprop", &["-root", "_XSETTINGS_SETTINGS"]).is_empty() {
-        return;
-    }
     if xrdb.is_empty() && xdpy.is_empty() {
         return;
     }
@@ -238,6 +235,7 @@ mod tests {
     fn missing_screen_dimensions_fall_back_to_one() {
         assert_eq!(calc_dpi_factor(PIXELS, (0, 285)), 1.0);
         assert_eq!(scale_factor_from_outputs("", ""), 1.0);
+        assert_eq!(scale_factor_from_outputs_opt("", ""), None);
         assert_eq!(scale_factor_from_outputs("", "screen #0:\n"), 1.0);
     }
 

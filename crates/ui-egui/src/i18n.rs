@@ -200,9 +200,11 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        // Punjabi in Pakistan is written in Shahmukhi (Arabic script), not the Gurmukhi catalog.
+        // Punjabi in Pakistan is written in Shahmukhi (Arabic script), not the Gurmukhi catalog,
+        // unless the tag names Gurmukhi (`pa-Guru-PK`); a tag that names Arabic is Shahmukhi.
         let lower = tag.trim().to_ascii_lowercase();
-        if lower.starts_with("pa") && lower.split(['-', '_', '.']).any(|part| part == "arab" || part == "pk") {
+        let has = |subtag: &str| lower.split(['-', '_', '.']).any(|part| part == subtag);
+        if lower.starts_with("pa") && (has("arab") || (has("pk") && !has("guru"))) {
             return None;
         }
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
@@ -612,6 +614,8 @@ mod tests {
         assert_eq!(Language::parse("pa"), Some(Language::Pa));
         assert_eq!(Language::from_tag("pa-Arab-PK"), None, "Shahmukhi Punjabi is not the Gurmukhi catalog");
         assert_eq!(Language::from_tag("pa_PK"), None);
+        assert_eq!(Language::from_tag("pa-Guru-PK"), Some(Language::Pa), "an explicit Gurmukhi script wins over the region");
+        assert_eq!(Language::from_tag("pa-Guru-Arab-PK"), None);
         assert_eq!(Language::from_tag("pt-PT"), Some(Language::PtBr), "only Punjabi tags are screened");
     }
 

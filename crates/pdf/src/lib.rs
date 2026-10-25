@@ -337,7 +337,8 @@ impl Font {
 
 /// Width of `text` in points when set in `font` at `size` points.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
-    TextFonts::system().text_width(font, size, text)
+    static SYSTEM: OnceLock<TextFonts> = OnceLock::new();
+    SYSTEM.get_or_init(TextFonts::system).text_width(font, size, text)
 }
 
 /// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.

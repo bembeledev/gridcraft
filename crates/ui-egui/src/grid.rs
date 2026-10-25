@@ -248,21 +248,23 @@ pub struct GridState {
 /// Holds a trackpad swipe to the axis it starts along, so scrolling down a column doesn't drift
 /// sideways (or along a row, up and down) with the small off-axis movement every swipe has. A
 /// swipe within about 27° of an axis (twice as far along it as across, over its first few
-/// points) moves only along that axis until it ends, its momentum included; a clearly diagonal
-/// swipe moves freely. A swipe ends when the trackpad starts a new one or scrolling pauses.
+/// points) moves only along that axis until the trackpad ends the gesture or starts another; a
+/// clearly diagonal swipe moves freely. The rail acts only on gestures the trackpad reports with
+/// a start and an end (macOS, where the glide after the fingers lift arrives as a gesture of its
+/// own and picks its own axis; Wayland, except for the first gesture after a wheel), and only on
+/// the gesture's own movement: what else the frame carries (a mouse wheel's notch, or what egui
+/// is still smoothing of one) passes beside it. Where no gesture phases arrive (the web,
+/// trackpads reported in lines on Windows and X11, mouse wheels) nothing says where a swipe
+/// begins or ends, and the scroll passes untouched.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollRail {
-    /// How far the swipe has moved along each axis while its axis is being decided.
+    /// A gesture is in progress: the trackpad reported its start and not yet its end.
+    active: bool,
+    /// How far the gesture has moved along each axis while its axis is being decided.
     travel: egui::Vec2,
     axis: RailAxis,
-    /// When the swipe last moved.
-    last: f64,
-    /// The trackpad reported the start of this swipe and nothing has moved yet: what's left of
-    /// the earlier swipe's glide stops, as fingers touching the trackpad stop it.
-    fresh: bool,
-    /// The scroll passes unchanged for the rest of the swipe: it comes from a mouse wheel's
-    /// notches, or a modifier already holds it to one axis. Kept until the swipe ends: egui
-    /// keeps a swipe's modifiers after they're released, so the delta stays on that axis.
+    /// A modifier holds the gesture's scroll to one axis for the rest of the gesture: egui keeps
+    /// a gesture's modifiers from its start and after they're released, so the delta stays there.
     pass: bool,
 }
 
@@ -275,39 +277,45 @@ enum RailAxis {
     Free,
 }
 
-/// A pause this long ends a swipe (egui's own end-of-scroll timer where no gesture phases come).
-const RAIL_GAP: f64 = 0.15;
-/// Points of movement after which a swipe's axis is decided.
+/// Points of movement after which a gesture's axis is decided.
 const RAIL_DECIDE: f32 = 8.0;
-/// How many times further along an axis than across it a swipe must go to be held to that axis.
+/// How many times further along an axis than across it a gesture must go to be held to that axis.
 const RAIL_RATIO: f32 = 2.0;
 
 impl ScrollRail {
-    /// The trackpad reported the start of a gesture: a new swipe, even while the last one's
-    /// momentum runs (the start can come in a frame with no movement yet).
-    pub fn begin(&mut self, now: f64) {
-        *self = ScrollRail { last: now, fresh: true, ..ScrollRail::default() };
+    /// The trackpad reported the start of a gesture (it can come in a frame with no movement yet).
+    /// `forced` when the start carries a modifier that holds the scroll to one axis.
+    pub fn begin(&mut self, forced: bool) {
+        *self = ScrollRail { active: true, pass: forced, ..ScrollRail::default() };
     }
 
-    /// The part of `d` (one frame's scroll) to apply: along the swipe's axis only, or all of it
-    /// for a diagonal swipe. `reported` is the movement the device reported this frame, by axis;
-    /// it decides the axis, so the smoothed tail of an earlier swipe can't. `pass` when this
-    /// frame's scroll isn't the rail's to steer: mouse-wheel notches (line or page units), or a
-    /// modifier that already holds the scroll to one axis.
-    pub fn steer(&mut self, d: egui::Vec2, reported: egui::Vec2, pass: bool, now: f64) -> egui::Vec2 {
-        let since = now - self.last;
-        if since.is_nan() || since > RAIL_GAP {
-            // A pause ended the swipe. What egui is still smoothing out (a wheel notch after a
-            // slow frame) isn't a new swipe's movement: it goes through as it is.
-            *self = ScrollRail::default();
-        }
-        self.last = now;
-        self.pass |= pass;
-        if self.pass {
+    /// The trackpad reported the end of a gesture: egui has zeroed what it was smoothing of it,
+    /// and what follows without a start of its own isn't a gesture's.
+    pub fn end(&mut self) {
+        *self = ScrollRail::default();
+    }
+
+    /// One of the gesture's wheel events carries a modifier that holds the scroll to one axis:
+    /// egui keeps it for the gesture and moves the scroll onto that axis, so the rail lets the
+    /// rest of the gesture pass. (Outside a gesture nothing is steered, and `begin` starts over.)
+    pub fn hold(&mut self) {
+        self.pass = true;
+    }
+
+    /// The part of `d` (one frame's scroll) to apply. `own` is what the gesture's events moved this
+    /// frame, which egui adds to `d` as it is while a gesture is in progress: that part goes along
+    /// the gesture's axis only, or whole for a diagonal gesture, and the rest of `d` (a mouse
+    /// wheel's notch, or what egui is still smoothing of one) passes beside it. All of `d` passes
+    /// when no gesture is in progress, or when a modifier holds the gesture (`begin`, `hold`):
+    /// egui has moved the scroll onto one axis already, so the reported axis would be the wrong
+    /// one.
+    pub fn steer(&mut self, d: egui::Vec2, own: egui::Vec2) -> egui::Vec2 {
+        if !self.active || self.pass {
             return d;
         }
+        let rest = d - own;
         if self.axis == RailAxis::Undecided {
-            self.travel += reported.abs();
+            self.travel += own.abs();
             let t = self.travel;
             if t.length() >= RAIL_DECIDE {
                 self.axis = if t.y >= RAIL_RATIO * t.x {
@@ -319,21 +327,17 @@ impl ScrollRail {
                 };
             }
         }
-        match self.axis {
-            RailAxis::Vertical => vec2(0.0, d.y),
-            RailAxis::Horizontal => vec2(d.x, 0.0),
-            RailAxis::Free => d,
-            // Until it's decided, the swipe moves along an axis it already clearly follows, and
-            // both ways otherwise. A swipe the trackpad has just started, before it has moved,
-            // stops what's left of the earlier swipe's glide.
-            RailAxis::Undecided if self.fresh && self.travel == egui::Vec2::ZERO => egui::Vec2::ZERO,
-            // Nothing reported since a pause: what egui is still smoothing out (a wheel notch
-            // after a slow frame) goes through whole, whichever way it points.
-            RailAxis::Undecided if self.travel == egui::Vec2::ZERO => d,
-            RailAxis::Undecided if self.travel.y >= RAIL_RATIO * self.travel.x => vec2(0.0, d.y),
-            RailAxis::Undecided if self.travel.x >= RAIL_RATIO * self.travel.y => vec2(d.x, 0.0),
-            RailAxis::Undecided => d,
-        }
+        let held = match self.axis {
+            RailAxis::Vertical => vec2(0.0, own.y),
+            RailAxis::Horizontal => vec2(own.x, 0.0),
+            RailAxis::Free => own,
+            // Until it's decided, the gesture moves along an axis it already clearly follows, and
+            // both ways otherwise.
+            RailAxis::Undecided if self.travel.y >= RAIL_RATIO * self.travel.x => vec2(0.0, own.y),
+            RailAxis::Undecided if self.travel.x >= RAIL_RATIO * self.travel.y => vec2(own.x, 0.0),
+            RailAxis::Undecided => own,
+        };
+        held + rest
     }
 }
 

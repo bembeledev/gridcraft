@@ -2843,7 +2843,9 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
                 let m = r.center();
                 let stroke = egui::Stroke::new(1.0, if kind == "close" && hot { egui::Color32::WHITE } else { t.text });
                 match kind {
-                    "minimize" => ui.painter().line_segment([egui::pos2(m.x - 5.0, m.y), egui::pos2(m.x + 5.0, m.y)], stroke),
+                    "minimize" => {
+                        ui.painter().line_segment([egui::pos2(m.x - 5.0, m.y), egui::pos2(m.x + 5.0, m.y)], stroke);
+                    }
                     "maximize" => {
                         ui.painter().rect_stroke(r.shrink(15.0), 0.0, stroke, egui::StrokeKind::Inside);
                     }

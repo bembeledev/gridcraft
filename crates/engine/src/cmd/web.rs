@@ -189,9 +189,38 @@ fn table_count(s: &Session) -> usize {
 }
 
 /// The table as `range.setValues` rows: cell text parsed like typed input, so numbers, dates and
-/// booleans keep their types (Excel's column detection).
+/// booleans keep their types (Excel's column detection). A cell that would become a formula
+/// (`=`, or `+`/`-`/`@` starting one) is escaped with the leading apostrophe, which parses as
+/// the text itself: page content never becomes live formulas (CSV injection).
 fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
-    table.rows.iter().map(|row| row.iter().map(|c| if c.is_empty() { Json::Null } else { json!(c) }).collect()).collect()
+    table
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|c| {
+                    if c.is_empty() {
+                        Json::Null
+                    } else if would_be_formula(c) {
+                        json!(format!("'{c}"))
+                    } else {
+                        json!(c)
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
+/// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
+/// `input_to_cell` (cmd/edit.rs).
+fn would_be_formula(c: &str) -> bool {
+    c.starts_with('=')
+        || (c.len() > 1
+            && c.starts_with(['+', '-', '@'])
+            && gridcraft_core::parse::parse_number_text(c).is_none()
+            && c.chars().nth(1).is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '('))
 }
 
 fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
@@ -452,6 +481,29 @@ mod tests {
         assert!(made.starts_with("Web_Table"));
         let d = s.active().unwrap();
         assert!(d.wb.web_queries.iter().any(|q| q.name == made));
+    }
+
+    #[test]
+    fn page_content_never_becomes_a_formula() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>A</th><th>B</th></tr>\
+                 <tr><td>=HYPERLINK(\"http://evil\")</td><td>-5</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        // The `=` cell is the text it came as, not a live formula.
+        let c = sh.cell(CellRef::parse("A2").unwrap()).unwrap();
+        assert!(c.formula.is_none());
+        assert_eq!(c.value, gridcraft_core::Value::text("=HYPERLINK(\"http://evil\")"));
+        // A plain negative number is still a number.
+        assert_eq!(sh.value(CellRef::parse("B2").unwrap()), Value::number(-5.0));
     }
 
     #[test]

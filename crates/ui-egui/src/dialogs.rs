@@ -3028,8 +3028,16 @@ fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut
     egui::Grid::new("fw").show(ui, |ui| {
         ui.label("URL:");
         ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).hint_text("https://example.com/table.html"));
+        // An edited address invalidates the preview: don't let Load pair the old page's
+        // table names with the new URL.
+        if d.values.get("preview_url").and_then(Json::as_str).is_some_and(|u| u != url.trim()) {
+            d.values.remove("preview_url");
+            d.values.remove("tables");
+            d.values.remove("pick");
+        }
         if ui.button("Go").clicked() && !url.trim().is_empty() {
             d.values.insert("url".into(), json!(url.trim()));
+            d.values.insert("preview_url".into(), json!(url.trim()));
             d.values.insert("tables".into(), Json::Null);
             d.values.insert("pick".into(), json!(0));
             let r = app.run("data.webPreview", json!({"url": url.trim()}));

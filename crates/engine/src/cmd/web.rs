@@ -6,6 +6,8 @@ use serde_json::{Value as Json, json};
 
 use super::*;
 use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest, WebTable};
+use gridcraft_core::MAX_ROWS;
+use super::analysis::OVERWRITE_ERROR;
 
 /// Preview rows and columns per table (the Navigator's preview pane).
 const PREVIEW_ROWS: usize = 10;
@@ -334,6 +336,34 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         return Err(EngineError::Other("The table is empty.".into()));
     }
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
+    let (Some(end_row), Some(end_col)) = (
+        old.start.row.checked_add(table.rows.len() as u32 - 1).filter(|r| *r < MAX_ROWS),
+        old.start.col.checked_add(w as u32 - 1).filter(|c| *c < gridcraft_core::MAX_COLS),
+    ) else {
+        return Err(EngineError::Other("The refreshed table doesn't fit on the sheet below and right of the table's top-left cell.".into()));
+    };
+    let new_range = RangeRef::new(old.start, CellRef::new(end_row, end_col));
+    // A refresh only owns the old table's own rectangle: refuse before any change if the
+    // expanded destination would overwrite other content (a user formula, another table).
+    if let Some(sh) = d.wb.sheet(sheet) {
+        let outside = new_range.height() > old.height() || new_range.width() > old.width();
+        let clash = outside
+            && (new_range.start.row..=new_range.end.row).any(|row| {
+                sh.cells
+                    .row(row, new_range.start.col, new_range.end.col)
+                    .any(|(c, cell)| {
+                        let at = (row, c);
+                        (at < (old.start.row, old.start.col) || at > (old.end.row, old.end.col))
+                            && (!cell.value.is_empty() || cell.formula.is_some())
+                    })
+            });
+        if clash {
+            return Err(EngineError::Other(format!(
+                "The refreshed table would overwrite cells outside its old range {OVERWRITE_ERROR}: {}",
+                new_range.a1()
+            )));
+        }
+    }
     // The rewrite is one undo step over the table's own place: a failure mid-way rolls the
     // old table and its data back instead of leaving the sheet empty.
     s.grouped("Refresh Web Table", |s| {
@@ -351,8 +381,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         remove(s)?;
         // Write at the table's own origin, not A1: a moved table refreshes where it is.
         s.execute("range.setValues", json!({"range": old.start.a1(), "sheet": sheet, "values": rows}))?;
-        let range = RangeRef::new(old.start, CellRef::new(old.start.row + table.rows.len() as u32 - 1, old.start.col + w as u32 - 1));
-        s.execute("insert.table", json!({"range": range.a1(), "header": true, "name": tname}))?;
+        s.execute("insert.table", json!({"range": new_range.a1(), "header": true, "name": tname}))?;
         let synced = now_ms();
         edit(s, |cx| {
             if let Some(qq) = cx.wb.web_queries.iter_mut().find(|x| x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)) {
@@ -480,6 +509,29 @@ mod tests {
         assert_eq!(d.wb.web_queries.len(), 2);
         assert_eq!(d.wb.web_queries[0].sheet, "One");
         assert_eq!(d.wb.web_queries[1].sheet, "Two");
+    }
+
+    #[test]
+    fn refresh_refuses_to_overwrite_cells_outside_the_old_range() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // A user formula sits just below the old table; the source now serves more rows.
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A3", "input": "=1+1"})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr><tr><td>B</td><td>2</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 0);
+        let err = r["errors"][0]["error"].as_str().unwrap();
+        assert!(err.contains("already holds data"));
+        // The formula and the old table are untouched.
+        assert_eq!(a1(&s, "A3"), "2");
+        assert_eq!(a1(&s, "A2"), "ABCD");
     }
 
     #[test]

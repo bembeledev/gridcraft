@@ -1,13 +1,18 @@
 //! Python cells: the code a cell holds, its last result, and the text forms around it (the
-//! `PY(…)` formula files store it as, and the `xl("…")` references inside it).
+//! `PY("…",0|1)` formula of the function's syntax, and the `xl("…")` references inside it). An
+//! xlsx file keeps the code in its Python part instead (see the xlsx crate).
 
 use gridcraft_core::{CellError, Value};
 use serde::{Deserialize, Serialize};
 
 /// Excel's limit on the characters of one formula. A Python cell's code must fit in it once it is
-/// encoded as a file formula ([`PyCode::to_file_formula`]): quotes are doubled and every 255
-/// characters add `"&"`, so the limit on the code itself depends on what the code holds.
+/// written as the PY formula of the function's syntax ([`PyCode::to_file_formula`]): quotes are
+/// doubled and every 255 characters add `"&"`, so the limit on the code itself depends on what the
+/// code holds.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
+
+/// The most cells a Python result may have (a crafted file can claim any size).
+pub const MAX_RESULT_CELLS: usize = 1_000_000;
 
 /// The prefix files put before `PY(`, as Excel writes it ([MS-XLSX]: `_xlfn._xlws.PY`).
 pub const FILE_PREFIX: &str = "_xlfn._xlws.";
@@ -66,13 +71,14 @@ impl PyCode {
         format!("PY({lits},{})", u8::from(self.object))
     }
 
-    /// The formula a file stores the cell as: [`PyCode::to_formula`] with Excel's
-    /// `_xlfn._xlws.` prefix, so Excel reads it as its own Python function.
+    /// [`PyCode::to_formula`] with Excel's `_xlfn._xlws.` prefix: the string-literal form
+    /// [`PyCode::from_formula`] reads from files that hold it, and what the size limit measures.
+    /// An xlsx file names the code by index instead ([MS-XLSX] 2.3.10.2).
     pub fn to_file_formula(&self) -> String {
         format!("{FILE_PREFIX}{}", self.to_formula())
     }
 
-    /// Whether the code fits in a file formula of at most [`MAX_FORMULA_CHARS`] characters.
+    /// Whether the code fits in a PY formula of at most [`MAX_FORMULA_CHARS`] characters.
     pub fn fits(&self) -> bool {
         // Code longer than the limit can't fit; this also bounds the work for hostile input.
         self.code.chars().nth(MAX_FORMULA_CHARS).is_none() && self.to_file_formula().chars().nth(MAX_FORMULA_CHARS).is_none()

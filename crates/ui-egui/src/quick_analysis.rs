@@ -12,7 +12,7 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::grid::{Drag, Geo};
 use crate::icons::{self, Icon};
-use crate::theme::{self, Tokens};
+use crate::theme::{self, Cat, Tokens};
 
 /// Side of the corner button, and its gap to the selection's corner (clear of the fill handle).
 const BUTTON: f32 = 22.0;
@@ -290,7 +290,7 @@ fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str) -> bool {
 
 fn paint_glyph(ui: &Ui, t: &Tokens, glyph: Glyph, r: Rect) {
     let p = ui.painter();
-    let (green, blue, red, yellow) = (icons::GREEN, icons::BLUE, icons::RED, icons::YELLOW);
+    let (green, blue, red, yellow) = (t.cat(Cat::Green), t.cat(Cat::Blue), t.cat(Cat::Red), t.cat(Cat::Amber));
     let cell = |i: f32, j: f32| Rect::from_min_size(r.min + vec2(i * r.width() / 3.0, j * r.height() / 3.0), vec2(r.width() / 3.0, r.height() / 3.0));
     match glyph {
         Glyph::Icon(icon) => icons::paint(p, r, icon, t.text),

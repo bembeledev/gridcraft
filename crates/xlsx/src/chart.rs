@@ -29,12 +29,15 @@ fn group_kind(g: &El) -> Option<ChartKind> {
             }
         }
         "lineChart" | "line3DChart" => {
-            if stacked || pct {
-                ChartKind::LineStacked
-            } else {
-                let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                if !group_markers || (all_none && g.kids("ser").next().is_some()) { ChartKind::Line } else { ChartKind::LineMarkers }
+            let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+            let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+            let markers = group_markers && !(all_none && g.kids("ser").next().is_some());
+            match (stacked, pct, markers) {
+                (true, _, _) => ChartKind::LineStacked,
+                (_, true, true) => ChartKind::LineStacked100Markers,
+                (_, true, false) => ChartKind::LineStacked100,
+                (_, _, true) => ChartKind::LineMarkers,
+                (_, _, false) => ChartKind::Line,
             }
         }
         "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
@@ -284,6 +287,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 enum G {
     Bar { bar: bool, grouping: &'static str },
     Line { stacked: bool, markers: bool },
+    Line100 { markers: bool },
     Pie,
     Doughnut,
     Area { grouping: &'static str },
@@ -303,6 +307,8 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::Line => G::Line { stacked: false, markers: false },
         ChartKind::LineMarkers => G::Line { stacked: false, markers: true },
         ChartKind::LineStacked => G::Line { stacked: true, markers: false },
+        ChartKind::LineStacked100 => G::Line100 { markers: false },
+        ChartKind::LineStacked100Markers => G::Line100 { markers: true },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
         ChartKind::Area => G::Area { grouping: "standard" },
@@ -533,7 +539,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
-    let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
+    let line_like = matches!(g, G::Line { .. } | G::Line100 { .. } | G::Radar | G::Scatter { lines: true });
     match (&color, line_like) {
         (Some(c), true) => {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
@@ -552,7 +558,9 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
+        G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true } | G::Stock => {
+            x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
+        }
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
     }
@@ -581,7 +589,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
                 x.push_str(&cat_data(c, &s.values, wb, si));
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
-            if matches!(g, G::Line { .. }) {
+            if matches!(g, G::Line { .. } | G::Line100 { .. }) {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
         }
@@ -670,6 +678,9 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
             if stacked { "stacked" } else { "standard" }
         ),
+        G::Line100 { .. } => {
+            format!("<c:lineChart><c:grouping val=\"percentStacked\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>")
+        }
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
@@ -766,7 +777,9 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if ch.kind == ChartKind::Combo {
         // Series without a kind of their own: the first is a column, the others lines (as drawn).
         let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
+        let is_line = |k: Option<ChartKind>| {
+            matches!(k.map(group_for), Some(G::Line { .. } | G::Line100 { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }))
+        };
         let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
         let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
         let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();

@@ -10,7 +10,7 @@ use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
-use crate::theme;
+use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -333,7 +333,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
             }
             ShapeKind::Icon => {
                 if let Some(icon) = crate::icons::from_name(&sp.text) {
-                    crate::icons::paint(p, r, icon, if fill == Color32::TRANSPARENT { Color32::BLACK } else { fill });
+                    let t = Tokens::get(p.ctx());
+                    crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
                 label = false;
             }
@@ -364,7 +365,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            p.rect_filled(r, 0.0, Color32::from_gray(230));
+            p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
         }
         if app.selected_chart == Some(im.id) {
             selection_frame(p, r);
@@ -379,7 +380,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         let start = p.add(egui::Shape::Noop);
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
-        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         if app.selected_chart == Some(ch.id) {
@@ -394,9 +395,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
                     && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
                 {
                     let rr = geo.range_rect(sh, rf.range());
+                    let color = Tokens::get(p.ctx()).ref_color(0, true);
                     for pane in geo.range_panes(rf.range()) {
                         let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
-                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
+                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
                     }
                 }
             }
@@ -468,7 +470,7 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             if !r.contains(tr.left_top()) {
                 continue; // overflowed the card; skip (no scroll yet)
             }
-            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            let (fill, fg) = if *on { (tk.accent, tk.on_accent) } else { (tk.hover, tk.text_dim) };
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
@@ -512,10 +514,11 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
+    let t = Tokens::get(p.ctx());
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
     for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+        p.circle_filled(c, 4.0, t.sheet_control_bg);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
     let _ = Align2::CENTER_CENTER;
 }

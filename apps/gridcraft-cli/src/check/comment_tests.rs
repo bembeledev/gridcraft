@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use gridcraft_engine::model::Comment;
+use gridcraft_engine::model::{Comment, NoteBox, NoteCorner};
 
 use super::*;
 
@@ -15,6 +15,7 @@ fn note() -> Comment {
         resolved: false,
         visible: true,
         dates: vec![],
+        note_box: None,
     }
 }
 
@@ -154,5 +155,28 @@ fn report_caps_preserve_total_changed_comment_count() {
         let category = comment_diff(&before, &after, limit);
         assert_eq!(category.diffs, 3);
         assert_eq!(category.examples.len(), limit.min(3));
+    }
+}
+
+#[test]
+fn note_box_geometry_survives_roundtrip_and_changes_are_detected() {
+    let geometry = NoteBox {
+        from: NoteCorner { col: 0, col_px: 10, row: -1, row_px: 2 },
+        to: NoteCorner { col: 4, col_px: 32, row: 4, row_px: 8 },
+        size_pt: Some((224.25, 89.25)),
+    };
+    let original = Comment { note_box: Some(geometry), ..note() };
+    let before = book(&[("B2", original.clone())]);
+    let bytes = gridcraft_engine::io::save_bytes(&before, "note-box.xlsx").unwrap();
+    let after = gridcraft_engine::io::open_bytes("note-box.xlsx", &bytes).unwrap().0;
+    assert_eq!(comment_diff(&before, &after, 20).diffs, 0);
+    for changed in [
+        None,
+        Some(NoteBox { from: NoteCorner { col_px: 11, ..geometry.from }, ..geometry }),
+        Some(NoteBox { to: NoteCorner { row_px: 9, ..geometry.to }, ..geometry }),
+        Some(NoteBox { size_pt: Some((225.25, 89.25)), ..geometry }),
+    ] {
+        let changed = Comment { note_box: changed, ..original.clone() };
+        assert_eq!(comment_diff(&before, &book(&[("B2", changed)]), 20).diffs, 1);
     }
 }

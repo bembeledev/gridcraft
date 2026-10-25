@@ -4539,6 +4539,71 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
 
+/// File › Open's text options (#2553): detection with `delimiter: "auto"`, given delimiters,
+/// fixed widths, the start row and the decimal separator, and what reading found in the result.
+#[test]
+fn file_open_reads_text_files_with_the_import_wizards_settings() {
+    let params = |name: &str, text: &str, extra: serde_json::Value| {
+        let mut p = json!({"name": name, "base64": crate::io::base64_encode(text.as_bytes())});
+        if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+            p.extend(extra.clone());
+        }
+        p
+    };
+    let open = |s: &mut Session, name: &str, text: &str, extra: serde_json::Value| s.execute("file.open", params(name, text, extra)).unwrap();
+    let value = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+    // A German report: a title, `;`, decimal commas and thousands dots.
+    let report = "Umsatzbericht Oktober 2026\r\n\r\nArtikel;Umsatz\r\nX;1.234,50\r\nY;99,00\r\n";
+    let mut s = s();
+    let r = open(&mut s, "report.txt", report, json!({"delimiter": "auto"}));
+    assert_eq!(r["text"]["delimiters"], json!([";"]));
+    assert_eq!(r["text"]["startRow"], 3);
+    assert_eq!((r["text"]["decimal"].as_str(), r["text"]["decimalFrom"].as_str()), (Some(","), Some("values")));
+    assert_eq!(value(&mut s, "A1"), json!("Artikel"));
+    assert_eq!(value(&mut s, "B2").as_f64(), Some(1234.5));
+    // Without options a .txt still splits at tabs only and keeps the title.
+    let mut s = self::s();
+    let r = open(&mut s, "report.txt", report, json!({}));
+    assert_eq!(r["text"]["delimiters"], json!(["\t"]));
+    assert_eq!(value(&mut s, "A3"), json!("Artikel;Umsatz"));
+    // A given string delimiter, the start row and the decimal separator.
+    let mut s = self::s();
+    open(&mut s, "pairs.txt", "skip\r\na||1,5\r\n", json!({"delimiter": "||", "startRow": 2, "decimal": ","}));
+    assert_eq!(value(&mut s, "A1"), json!("a"));
+    assert_eq!(value(&mut s, "B1").as_f64(), Some(1.5));
+    // Fixed widths; and a .prn opened as Excel's File › Open does, each line in one cell.
+    let prn = "plain     a,b       1234,5\r\nr2        d2\r\n";
+    let mut s = self::s();
+    open(&mut s, "t.prn", prn, json!({"fixedWidths": [10, 20]}));
+    assert_eq!(value(&mut s, "B1"), json!("a,b"));
+    let mut s = self::s();
+    let r = open(&mut s, "t.prn", prn, json!({}));
+    assert_eq!(r["text"]["split"], "lines");
+    assert_eq!(value(&mut s, "A1"), json!("plain     a,b       1234,5"));
+    // Rows with another field count, and the number an unquoted thousands separator split.
+    let mut s = self::s();
+    let r = open(&mut s, "list.csv", "Name,Value\r\nA,1,234.50\r\nB,99.00\r\nC,12.00\r\n", json!({}));
+    assert_eq!((r["text"]["rows"].as_u64(), r["text"]["completeRows"].as_u64()), (Some(4), Some(3)));
+    assert_eq!(r["text"]["otherRows"], json!([{"row": 2, "fields": 3}]));
+    assert_eq!(r["text"]["splitNumbers"], json!([{"row": 2, "number": "1,234.50"}]));
+    // Other formats report nothing about text.
+    let mut s = self::s();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let r = s.execute("file.open", json!({"name": "b.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(r.get("text").is_none());
+    // Bad settings are refused before the file is read.
+    for bad in [
+        json!({"delimiter": ""}),
+        json!({"delimiter": ";", "fixedWidths": [3]}),
+        json!({"delimiters": []}),
+        json!({"startRow": 0}),
+        json!({"decimal": "x"}),
+        json!({"textQualifier": "x"}),
+    ] {
+        assert!(self::s().execute("file.open", params("x.csv", "a,b", bad.clone())).is_err(), "{bad}");
+    }
+}
+
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
 /// Save As makes the new file the one it names. The sheet-name formula of #1489 depends on it.
 #[test]

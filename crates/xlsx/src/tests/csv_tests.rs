@@ -1,7 +1,8 @@
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
-use crate::csv::{decode_text, parse_records, sniff_delimiter};
+use crate::csv::{decode_text, parse_records};
+use crate::text_layout::{Split, TextKind, detect};
 use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
@@ -165,14 +166,15 @@ fn hebrew_1255_bytes_are_not_read_as_arabic() {
 
 #[test]
 fn delimiter_sniffing() {
-    assert_eq!(sniff_delimiter("a;b;c\n1;2;3\n", '"'), b';');
-    assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
-    assert_eq!(sniff_delimiter("a,b\n\"x;y;z\",2\n", '"'), b',');
-    assert_eq!(sniff_delimiter("single", '"'), b',');
+    let split = |t: &str| detect(t, TextKind::Csv, Some('"')).split;
+    assert_eq!(split("a;b;c\n1;2;3\n"), Split::delimiter(";"));
+    assert_eq!(split("a\tb\n1\t2\n"), Split::delimiter("\t"));
+    assert_eq!(split("a,b\n\"x;y;z\",2\n"), Split::delimiter(","));
+    assert_eq!(split("single"), Split::Lines);
     // A delimiter missing from some lines is text, not a separator (single-column export round trip).
-    assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
-    assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
-    assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
+    assert_eq!(split("alpha;beta\r\ngamma\r\n"), Split::Lines);
+    assert_eq!(split("alpha\tbeta\r\ngamma\r\n"), Split::Lines);
+    assert_eq!(split("a;b\r\n\r\nc;d\r\n"), Split::delimiter(";"));
     let wb = read_csv(b"x;y\n1,5;2", &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 1, 1), Value::Number(2.0));
     // The workbook remembers the separator it was read with, sniffed or given.

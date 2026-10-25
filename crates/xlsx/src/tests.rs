@@ -25,6 +25,7 @@ mod shape_text_rtl;
 mod shared_media;
 mod sheet_names;
 mod smooth_roundtrip;
+mod text_layout_tests;
 mod trendline_roundtrip;
 mod xls_tests;
 mod xlsb_tests;

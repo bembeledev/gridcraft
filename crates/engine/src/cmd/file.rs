@@ -8,10 +8,24 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
-        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(
+            noundo "file.open",
+            "Open…",
+            ["File"],
+            Some("Cmd+O"),
+            "{path} | {name, base64}, plus {password} for a password-protected workbook. Text files (csv, tsv, txt, prn), the Text Import Wizard's settings: \
+             {delimiter?: \"auto\" (detect the delimiter, a title before the table and the decimal separator) | \";\" | \"||\" (any string), \
+             delimiters?: [\",\", \"\\t\"], other?: \"|\", treatConsecutive?: bool, fixedWidths?: [10, 20] (where fields start), startRow?: 1, \
+             decimal?: \"auto\" (default: from the values) | \".\" | \",\", textQualifier?: \"\\\"\" | \"'\" | \"\" (none), csvAsText?: bool (every field as text)}; \
+             without them .csv is detected, .txt/.tsv split at tabs and .prn keeps each line in one cell → {index, title, sheets, warnings, \
+             text?: {split, delimiters?, fixedWidths?, detected, startRow, decimal, decimalFrom, mixedColumns, ambiguous, fields, rows, completeRows, otherRows, splitNumbers, uncertain}} \
+             (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, prn, json)",
+            always,
+            open
+        ),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.prn/.json/.html/.pdf by extension)", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .prn: Formatted Text (Space delimited), .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
+        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|prn|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
@@ -58,7 +72,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    let (mut wb, warnings, text) = crate::io::open_bytes_text(&name, &bytes, str_param(p, "password"), &text_options(p)?)?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
     // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
@@ -101,9 +115,101 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Message(message));
     }
     let d = s.doc()?;
-    Ok(
-        json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings}),
-    )
+    let mut out = json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings});
+    if let Some(report) = &text {
+        out["text"] = text_report(report);
+    }
+    Ok(out)
+}
+
+/// The Text Import Wizard's settings from `file.open`'s params (#2553).
+fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
+    use crate::io::{Qualifier, SplitChoice};
+    use gridcraft_xlsx::text_layout::{Decimal, Split};
+    let mut t = crate::io::TextOpen { as_text: bool_param(p, "csvAsText").unwrap_or(false), ..Default::default() };
+    let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
+    let other = str_param(p, "other").filter(|o| !o.is_empty());
+    let list = p.get("delimiters").and_then(Json::as_array);
+    let fixed = p.get("fixedWidths").and_then(Json::as_array);
+    let given = [str_param(p, "delimiter").is_some(), list.is_some() || other.is_some(), fixed.is_some()];
+    if given.iter().filter(|g| **g).count() > 1 {
+        return Err(bad("file.open", "give one of `delimiter`, `delimiters`/`other` or `fixedWidths`"));
+    }
+    if let Some(d) = str_param(p, "delimiter") {
+        t.split = match d {
+            "" => return Err(bad("file.open", "`delimiter` is empty")),
+            "auto" => SplitChoice::Detect,
+            d => SplitChoice::Given(Split::Delimited { delimiters: vec![d.to_string()], consecutive }),
+        };
+    } else if list.is_some() || other.is_some() {
+        let mut delimiters: Vec<String> = list.into_iter().flatten().filter_map(Json::as_str).filter(|d| !d.is_empty()).map(str::to_string).collect();
+        delimiters.extend(other.map(str::to_string));
+        if delimiters.is_empty() {
+            return Err(bad("file.open", "`delimiters` names no delimiter"));
+        }
+        t.split = SplitChoice::Given(Split::Delimited { delimiters, consecutive });
+    } else if let Some(a) = fixed {
+        let breaks = a.iter().filter_map(Json::as_u64).map(|v| usize::try_from(v).unwrap_or(usize::MAX)).collect();
+        t.split = SplitChoice::Given(Split::FixedWidth(breaks));
+    }
+    if let Some(row) = p.get("startRow") {
+        let row = row.as_u64().filter(|r| *r >= 1).ok_or_else(|| bad("file.open", "`startRow` is a row number from 1"))?;
+        t.start_row = Some(usize::try_from(row - 1).unwrap_or(usize::MAX));
+    }
+    t.decimal = match str_param(p, "decimal") {
+        None | Some("auto") => None,
+        Some("." | "point" | "dot") => Some(Decimal::Point),
+        Some("," | "comma") => Some(Decimal::Comma),
+        Some(other) => return Err(bad("file.open", format!("unknown `decimal` `{other}`: use \"auto\", \".\" or \",\""))),
+    };
+    t.qualifier = match str_param(p, "textQualifier") {
+        None | Some("\"") => Qualifier::Double,
+        Some("'") => Qualifier::Single,
+        Some("" | "none") => Qualifier::None,
+        Some(other) => return Err(bad("file.open", format!("unknown `textQualifier` `{other}`: use \"\\\"\", \"'\" or \"\""))),
+    };
+    Ok(t)
+}
+
+/// What reading a text file found, for `file.open`'s result.
+fn text_report(r: &gridcraft_xlsx::text_layout::TextReport) -> Json {
+    use gridcraft_xlsx::text_layout::{Decimal, DecimalBasis, Split};
+    let column = |c: usize| {
+        let a1 = gridcraft_core::CellRef::new(0, u32::try_from(c).unwrap_or(u32::MAX)).to_string();
+        a1.trim_end_matches(|ch: char| ch.is_ascii_digit()).to_string()
+    };
+    let mut out = json!({
+        "detected": r.detected,
+        "startRow": r.start_row + 1,
+        "decimal": match r.numbers.decimal { Decimal::Point => ".", Decimal::Comma => "," },
+        "decimalFrom": match r.numbers.basis {
+            DecimalBasis::Given => "given",
+            DecimalBasis::Values => "values",
+            DecimalBasis::Delimiter => "delimiter",
+            DecimalBasis::Default => "default",
+        },
+        "mixedColumns": r.numbers.mixed.iter().map(|c| column(*c)).collect::<Vec<_>>(),
+        "ambiguous": r.numbers.ambiguous,
+        "fields": r.fields,
+        "rows": r.rows,
+        "completeRows": r.complete,
+        "otherRows": r.other_rows.iter().map(|(row, fields)| json!({"row": row, "fields": fields})).collect::<Vec<_>>(),
+        "splitNumbers": r.split_numbers.iter().map(|(row, number)| json!({"row": row, "number": number})).collect::<Vec<_>>(),
+        "uncertain": r.uncertain,
+    });
+    match &r.split {
+        Split::Delimited { delimiters, consecutive } => {
+            out["split"] = json!("delimited");
+            out["delimiters"] = json!(delimiters);
+            out["treatConsecutive"] = json!(consecutive);
+        }
+        Split::FixedWidth(breaks) => {
+            out["split"] = json!("fixedWidth");
+            out["fixedWidths"] = json!(breaks);
+        }
+        Split::Lines => out["split"] = json!("lines"),
+    }
+    out
 }
 
 fn save(s: &mut Session, p: &Json) -> Result<Json> {

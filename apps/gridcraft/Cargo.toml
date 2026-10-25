@@ -26,6 +26,7 @@ winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
+craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }
 

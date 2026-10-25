@@ -35,6 +35,8 @@ pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates_ui;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -326,6 +328,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// The update check, the startup prompt and a running self-update (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    updates_rt: updates_ui::Runtime,
 }
 
 impl SheetApp {
@@ -379,6 +384,8 @@ impl SheetApp {
             tab_run: None,
             started: now_ms(),
             allow_close: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_rt: Default::default(),
         }
     }
 
@@ -1234,6 +1241,8 @@ impl SheetApp {
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
         self.guard_window_close(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
         self.autosave(ctx);
@@ -1395,6 +1404,23 @@ impl SheetApp {
         }
     }
 
+    /// Look for a newer release once, in the background, as the desktop app starts (a no-op on the
+    /// web). A found release opens the update prompt; nothing is shown when GridCraft is current.
+    pub fn start_update_check(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::start(self, false);
+    }
+
+    /// Help ▸ Check for Updates…: look now, and say so when GridCraft is up to date or the check fails.
+    pub fn check_for_updates(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::start(self, true);
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.message = Some(("GridCraft".into(), "The web version is always the latest release.".into()));
+        }
+    }
+
     /// Window title, next to the close/autosave state: `ViewportCommand::Title` is valid outside a
     /// pass and a control-channel rename while hidden updates it on return.
     fn update_title(&mut self, ctx: &egui::Context) {
@@ -1473,6 +1499,8 @@ impl SheetApp {
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {

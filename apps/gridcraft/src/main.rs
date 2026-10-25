@@ -251,6 +251,14 @@ fn main() -> eframe::Result<()> {
         }
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
+    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::GRIDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        if let Err(e) = done {
+            eprintln!("GridCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -299,6 +307,7 @@ fn main() -> eframe::Result<()> {
     }
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
+    app.start_update_check();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);

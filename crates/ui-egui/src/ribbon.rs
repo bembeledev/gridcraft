@@ -124,6 +124,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
             let left_end = ui.min_rect().right();
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if app.window_controls {
+                    ui.add_space(3.0 * CONTROL_W);
+                }
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
@@ -2796,8 +2799,6 @@ fn single_area(app: &SheetApp) -> bool {
     app.session.active().is_some_and(|d| d.selection.ranges.len() == 1)
 }
 
-/// `Some(true)` when every selected area is whole rows, `Some(false)` when every one is whole
-/// columns, `None` otherwise (including the whole sheet).
 /// Width of one window-control button on the title bar.
 pub const CONTROL_W: f32 = 46.0;
 const TITLE_H: f32 = 38.0;
@@ -2894,6 +2895,8 @@ pub fn window_frame(app: &SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// `Some(true)` when every selected area is whole rows, `Some(false)` when every one is whole
+/// columns, `None` otherwise (including the whole sheet).
 fn whole_lines(app: &SheetApp) -> Option<bool> {
     let sel = &app.session.active()?.selection;
     let rows = sel.ranges.iter().all(|r| r.is_full_rows() && !r.is_full_cols());

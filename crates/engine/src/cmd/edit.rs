@@ -1539,6 +1539,12 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 }
             }
         }
+        // Conditional formats are formats too; they can cover empty cells past the used range, so
+        // they are cut by the whole selection, keeping the rest of each rule's ranges (#2536).
+        if matches!(what, "all" | "formats") {
+            let cmd = if what == "all" { "edit.clearAll" } else { "edit.clearFormats" };
+            super::data::remove_cond_format_cells(cmd, &mut cx.sheet_mut(sheet)?.cond_formats, &ranges)?;
+        }
         Ok(Json::Null)
     })
 }

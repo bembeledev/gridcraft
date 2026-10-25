@@ -1066,6 +1066,56 @@ pub(super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &
     validations.retain(|d| !d.ranges.is_empty());
 }
 
+/// The most ranges a clear grows a conditional format to. Each cut can add three, so a selection of
+/// many small parts would otherwise grow a rule (and every lookup of it) without bound; Go To
+/// Special's largest selection (2,000 areas) stays well under it.
+const MAX_CF_RANGES: usize = 16_384;
+
+/// Cuts the cells of `cuts` (largest first) out of a rule's `ranges`. Rule formulas are relative to
+/// the top-left of the first range: the piece that keeps that cell stays first, and when the cell
+/// itself is cut this returns the anchor's move for the caller to rebase them. A cut that would grow
+/// the rule past [`MAX_CF_RANGES`] (and past its own size) is refused.
+fn cut_rule_ranges(cmd: &str, ranges: &mut Vec<RangeRef>, cuts: &[RangeRef]) -> Result<Option<(CellRef, CellRef)>> {
+    let before = ranges.first().map(|r| r.start);
+    let limit = MAX_CF_RANGES.max(ranges.len());
+    for cut in cuts {
+        if !ranges.iter().any(|r| r.intersects(cut)) {
+            continue;
+        }
+        *ranges = ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        if ranges.len() > limit {
+            return Err(bad(cmd, format!("the selection would split a conditional format into more than {limit} ranges")));
+        }
+    }
+    if let Some(i) = before.and_then(|a| ranges.iter().position(|r| r.start == a))
+        && let Some(head) = ranges.get_mut(..=i)
+    {
+        head.rotate_right(1);
+    }
+    Ok(before.zip(ranges.first().map(|r| r.start)).filter(|(a, b)| a != b))
+}
+
+/// Removes the cells of `cuts` from every conditional format, keeping the rest of each rule's ranges.
+pub(super) fn remove_cond_format_cells(cmd: &str, cond_formats: &mut Vec<CondFormat>, cuts: &[RangeRef]) -> Result<()> {
+    // Largest first, so a later small cut finds less to split.
+    let mut cuts = cuts.to_vec();
+    cuts.sort_by_key(|r| std::cmp::Reverse(r.count()));
+    for cf in cond_formats.iter_mut() {
+        if let Some((from, to)) = cut_rule_ranges(cmd, &mut cf.ranges, &cuts)? {
+            match &mut cf.rule {
+                CfRule::Expression { formula, .. } => *formula = move_rule_formula(formula, from, to),
+                CfRule::CellIs { a, b, .. } => {
+                    *a = move_rule_formula(a, from, to);
+                    *b = b.as_deref().map(|f| move_rule_formula(f, from, to));
+                }
+                _ => {}
+            }
+        }
+    }
+    cond_formats.retain(|c| !c.ranges.is_empty());
+    Ok(())
+}
+
 fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;

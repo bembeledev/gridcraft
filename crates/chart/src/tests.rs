@@ -229,6 +229,96 @@ fn doughnut_with_many_series_still_draws_the_outer_rings() {
 }
 
 #[test]
+fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    // 255 series over a 46-pixel annulus: every drawn ring is one pixel tall, narrower than the
+    // 1.5-pixel white separator, which would otherwise paint over both neighbouring rings.
+    let thin = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
+    };
+    let strokes: Vec<Option<(Rgba, f32)>> = render(&c, &thin, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { stroke, .. } => Some(*stroke),
+            _ => None,
+        })
+        .collect();
+    assert!(!strokes.is_empty(), "the chart must still draw its rings");
+    assert!(strokes.iter().all(Option::is_none), "a 1.5px stroke covers a 1px band: {strokes:?}");
+
+    // A ring with room for the separator keeps it.
+    let thick = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Inner", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Outer", &[1.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+    };
+    let strokes: Vec<Option<(Rgba, f32)>> = render(&c, &thick, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { stroke, .. } => Some(*stroke),
+            _ => None,
+        })
+        .collect();
+    assert!(!strokes.is_empty());
+    assert!(strokes.iter().all(Option::is_some), "wide rings keep their separators: {strokes:?}");
+}
+
+#[test]
+fn doughnut_wedge_budget_bounds_many_series_and_categories() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    c.first_slice_angle = 0;
+    // 20,000 categories across 80 series would be hundreds of thousands of wedges: the per-series
+    // limit does not bound the product. The first ten categories of every ring are the largest.
+    let cats = 20_000usize;
+    let values: Vec<f64> = (0..cats).map(|j| if j < 10 { 1000.0 } else { 1.0 }).collect();
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: (0..cats).map(|j| format!("C{j}")).collect(),
+        series: (0..80)
+            .map(|i| SeriesData { name: format!("S{i}"), values: values.iter().map(|v| Some(*v)).collect(), ..SeriesData::default() })
+            .collect(),
+    };
+    let wedges: Vec<(f32, f32)> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { r_outer, a0, a1, .. } => Some((*r_outer, *a1 - *a0)),
+            _ => None,
+        })
+        .collect();
+    assert!(!wedges.is_empty(), "the innermost ring must still be drawn");
+    let mut radii: Vec<f32> = wedges.iter().map(|(r, _)| *r).collect();
+    radii.sort_by(f32::total_cmp);
+    radii.dedup();
+    assert!(radii.len() > 1, "every drawable ring is capped, not dropped");
+    // A slice crossing 12 o'clock is split into two primitives, so each ring may add one.
+    let budget = crate::render::MAX_WEDGES + radii.len();
+    assert!(wedges.len() <= budget, "{} wedges for {} rings", wedges.len(), radii.len());
+
+    // The first (innermost) ring keeps its largest slices and still fills the circle.
+    let inner: Vec<f32> = wedges.iter().filter(|(r, _)| *r == radii[0]).map(|(_, a)| *a).collect();
+    assert!(inner.len() < cats, "the ring was not capped: {}", inner.len());
+    assert_eq!(inner.iter().filter(|a| **a > 0.1).count(), 10, "largest slices went missing");
+    let cover: f32 = inner.iter().sum();
+    assert!((cover - std::f32::consts::TAU).abs() < 0.01, "first ring covers {cover}");
+}
+
+#[test]
 fn doughnut_first_slice_angle_rotates_the_start() {
     let mut c = chart(ChartKind::Doughnut);
     c.title = None;

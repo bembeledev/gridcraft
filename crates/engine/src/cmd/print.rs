@@ -1575,8 +1575,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
 }
 
 fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, fonts: TextFonts) -> (PdfDoc, usize) {
-    let mut doc = PdfDoc::default();
-    doc.set_text_fonts(fonts);
+    let mut doc = PdfDoc::with_text_fonts(fonts);
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();

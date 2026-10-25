@@ -42,22 +42,47 @@ pub type UnicodeFonts = [Option<Arc<UnicodeFont>>; 2];
 /// first time a PDF needs them.
 pub type UnicodeFontLoader = fn() -> [Option<Vec<u8>>; 2];
 
-static LOADER: OnceLock<UnicodeFontLoader> = OnceLock::new();
-static DEFAULT_FONTS: OnceLock<UnicodeFonts> = OnceLock::new();
+static SYSTEM_FONTS: SystemFontCache = SystemFontCache::new();
+
+/// Keeps registered faces immutable without caching the absence of a loader.
+struct SystemFontCache {
+    loader: OnceLock<UnicodeFontLoader>,
+    unicode: OnceLock<UnicodeFonts>,
+    text: OnceLock<TextFonts>,
+    unregistered: OnceLock<TextFonts>,
+}
+
+impl SystemFontCache {
+    const fn new() -> Self {
+        Self { loader: OnceLock::new(), unicode: OnceLock::new(), text: OnceLock::new(), unregistered: OnceLock::new() }
+    }
+
+    fn unicode(&self) -> &UnicodeFonts {
+        static EMPTY: UnicodeFonts = [None, None];
+        let Some(load) = self.loader.get() else { return &EMPTY };
+        self.unicode.get_or_init(|| load().map(|bytes| bytes.and_then(UnicodeFont::parse).map(Arc::new)))
+    }
+
+    fn text(&self) -> &TextFonts {
+        if self.loader.get().is_none() {
+            return self.unregistered.get_or_init(TextFonts::default);
+        }
+        self.text.get_or_init(|| TextFonts::fallback(self.unicode().clone()))
+    }
+}
 
 /// Registers how to find the system fonts used for non-Latin text (call once at start-up; the
 /// first registration wins). Without a loader, such text uses the non-embedded CID fallback. On wasm
-/// there are no system fonts, so apps there simply don't register one.
+/// there are no system fonts, so apps there simply don't register one. Registration after an
+/// earlier lookup takes effect on subsequent lookups; existing documents keep their font set.
 pub fn set_unicode_font_loader(loader: UnicodeFontLoader) {
-    let _ = LOADER.set(loader);
+    let _ = SYSTEM_FONTS.loader.set(loader);
 }
 
-/// The registered fallback fonts, loaded and parsed on first use.
+/// The registered fallback fonts, loaded and parsed once on first use after registration.
+/// A lookup before registration returns no faces without preventing later registration.
 pub fn default_unicode_fonts() -> &'static UnicodeFonts {
-    DEFAULT_FONTS.get_or_init(|| {
-        let Some(load) = LOADER.get() else { return [None, None] };
-        load().map(|bytes| bytes.and_then(UnicodeFont::parse).map(Arc::new))
-    })
+    SYSTEM_FONTS.unicode()
 }
 
 /// Whether `text` has characters WinAnsiEncoding can't represent.
@@ -83,7 +108,7 @@ impl Default for TextFonts {
 impl TextFonts {
     /// The registered regular/bold Unicode fallback, with the standard PDF fonts for Latin.
     pub fn system() -> Self {
-        Self::fallback(default_unicode_fonts().clone())
+        SYSTEM_FONTS.text().clone()
     }
 
     fn fallback([regular, bold]: UnicodeFonts) -> Self {
@@ -337,8 +362,7 @@ impl Font {
 
 /// Width of `text` in points when set in `font` at `size` points.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
-    static SYSTEM: OnceLock<TextFonts> = OnceLock::new();
-    SYSTEM.get_or_init(TextFonts::system).text_width(font, size, text)
+    SYSTEM_FONTS.text().text_width(font, size, text)
 }
 
 /// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.
@@ -947,18 +971,28 @@ fn pdf_text_string(text: &str) -> String {
 impl PdfDoc {
     /// A document that uses the registered fallback fonts ([`set_unicode_font_loader`]).
     pub fn new() -> PdfDoc {
-        PdfDoc { unicode: TextFonts::system(), ..PdfDoc::default() }
+        Self::with_text_fonts(TextFonts::system())
     }
 
-    /// Replaces the fallback fonts for text outside WinAnsiEncoding (pages added afterwards).
-    pub fn set_unicode_fonts(&mut self, fonts: UnicodeFonts) {
-        self.unicode = TextFonts::fallback(fonts);
+    /// A document using the supplied text faces for all pages.
+    pub fn with_text_fonts(fonts: TextFonts) -> PdfDoc {
+        PdfDoc { unicode: fonts, ..PdfDoc::default() }
     }
 
-    /// Sets text faces before adding pages. Existing pages keep their faces.
-    /// Use one font set for the entire document.
-    pub fn set_text_fonts(&mut self, fonts: TextFonts) {
+    /// Replaces fallback fonts for text outside WinAnsiEncoding before adding pages.
+    /// Returns an error without changing the document once any page exists.
+    pub fn set_unicode_fonts(&mut self, fonts: UnicodeFonts) -> Result<(), &'static str> {
+        self.set_text_fonts(TextFonts::fallback(fonts))
+    }
+
+    /// Sets text faces before adding pages. One font set is used for the entire document.
+    /// Returns an error without changing the document once any page exists.
+    pub fn set_text_fonts(&mut self, fonts: TextFonts) -> Result<(), &'static str> {
+        if !self.pages.is_empty() {
+            return Err("PDF text fonts cannot change after adding a page");
+        }
         self.unicode = fonts;
+        Ok(())
     }
 
     /// Adds a page of `width_pt` × `height_pt` points and returns it for drawing.

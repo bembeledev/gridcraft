@@ -61,9 +61,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // can hold a whole gesture (a start can come in a frame with no movement yet), and a modifier
     // on one of its events, whatever the unit: egui takes a gesture's modifiers from every wheel
     // event while it lasts, on every frame, whether or not the grid scrolls from it (the pointer
-    // may be off the grid, or the event may carry no movement).
+    // may be off the grid, or the event may carry no movement). First the pause that ends a
+    // gesture for egui, as egui checks it before the frame's events.
     ui.input(|i| {
+        app.grid.scroll_rail.expire(i.time);
         for e in &i.events {
+            if let egui::Event::MouseWheel { source, .. } = e {
+                app.grid.scroll_rail.heard(i.time, *source == egui::MouseWheelSource::Trackpad);
+            }
             match e {
                 egui::Event::MouseWheel { phase: egui::TouchPhase::Start, modifiers: m, .. } => app.grid.scroll_rail.begin(holds(*m)),
                 egui::Event::MouseWheel { phase: egui::TouchPhase::Move, modifiers: m, .. } if holds(*m) => app.grid.scroll_rail.hold(),

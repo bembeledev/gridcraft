@@ -3,11 +3,17 @@
 //! Only gestures the trackpad reports with a start and an end are steered; scrolling without
 //! gesture phases (the web, mouse wheels) passes untouched.
 
-use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2, vec2};
+use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Vec2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
+
+/// What egui says sent the event: a trackpad's gestures as macOS reports them, and the source
+/// the other platforms report (Wayland sends the phases without one). egui keeps a gesture whose
+/// source is a trackpad for a second without an event, any other scroll action for 150 ms.
+const TRACKPAD: MouseWheelSource = MouseWheelSource::Trackpad;
+const UNKNOWN: MouseWheelSource = MouseWheelSource::Unknown;
 
 fn harness() -> Harness {
     harness_at(1.0 / 60.0)
@@ -36,8 +42,13 @@ fn scroll(h: &Harness) -> Vec2 {
     h.state().view().scroll
 }
 
+/// One frame with a wheel event of a trackpad gesture.
 fn wheel(h: &mut Harness, phase: TouchPhase, delta: Vec2) {
-    h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
+    wheel_from(h, TRACKPAD, phase, delta);
+}
+
+fn wheel_from(h: &mut Harness, source: MouseWheelSource, phase: TouchPhase, delta: Vec2) {
+    h.input_mut().events.push(Event::MouseWheel { source, unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
     h.step();
 }
 
@@ -147,7 +158,7 @@ fn a_swipe_starting_mid_frame_decides_its_axis_from_its_own_movement() {
     for (phase, delta) in
         [(TouchPhase::Move, vec2(-1.5, -12.0)), (TouchPhase::End, Vec2::ZERO), (TouchPhase::Start, Vec2::ZERO), (TouchPhase::Move, vec2(-12.0, -1.5))]
     {
-        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::MouseWheel { source: TRACKPAD, unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
     }
     h.step();
     for _ in 0..8 {
@@ -217,12 +228,14 @@ fn a_gestures_end_and_the_next_start_in_one_frame_leave_a_gesture_in_progress() 
         wheel(&mut h, TouchPhase::Move, vec2(-1.5, -12.0));
     }
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::End,
         modifiers: Modifiers::NONE,
     });
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
@@ -250,7 +263,7 @@ fn a_gesture_held_in_one_frame_still_ends() {
     // apply in order, so the gesture is over and what follows without phases passes untouched.
     let mut h = harness();
     for (phase, delta) in [(TouchPhase::Start, Vec2::ZERO), (TouchPhase::Move, vec2(-1.5, -12.0)), (TouchPhase::End, Vec2::ZERO)] {
-        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::MouseWheel { source: TRACKPAD, unit: MouseWheelUnit::Point, delta, phase, modifiers: Modifiers::NONE });
     }
     h.step();
     for _ in 0..6 {
@@ -290,6 +303,7 @@ fn shift_turns_a_vertical_wheel_sideways() {
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
     for _ in 0..3 {
         h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
             unit: MouseWheelUnit::Line,
             delta: vec2(0.0, -2.0),
             phase: TouchPhase::Move,
@@ -320,6 +334,7 @@ fn releasing_shift_mid_swipe_keeps_scrolling() {
     wheel(&mut h, TouchPhase::Start, Vec2::ZERO);
     for _ in 0..5 {
         h.input_mut().events.push(Event::MouseWheel {
+            source: TRACKPAD,
             unit: MouseWheelUnit::Point,
             delta: vec2(-12.0, -1.5),
             phase: TouchPhase::Move,
@@ -356,6 +371,7 @@ fn shift_held_at_a_gestures_start_and_released_before_it_moves_holds_the_gesture
     let before = scroll(&h);
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
@@ -380,6 +396,7 @@ fn touching_the_trackpad_does_not_swallow_a_wheel_notch() {
         let mut h = harness();
         let before = scroll(&h);
         h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
             unit: MouseWheelUnit::Line,
             delta: vec2(0.0, -3.0),
             phase: TouchPhase::Move,
@@ -403,12 +420,14 @@ fn a_wheel_notch_in_the_frame_a_gesture_starts_does_not_free_the_gesture() {
     // takes a moment of smoothing, and the gesture that starts is held to its axis from then on.
     let mut h = harness();
     h.input_mut().events.push(Event::MouseWheel {
+        source: UNKNOWN,
         unit: MouseWheelUnit::Line,
         delta: vec2(0.0, -3.0),
         phase: TouchPhase::Move,
         modifiers: Modifiers::NONE,
     });
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
@@ -443,6 +462,7 @@ fn a_wheel_notch_during_a_gesture_scrolls_its_own_way() {
         }
         let before = scroll(&h);
         h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
             unit: MouseWheelUnit::Line,
             delta: vec2(-3.0, 0.0),
             phase: TouchPhase::Move,
@@ -472,7 +492,13 @@ fn a_slow_frame_does_not_swallow_a_wheel_notch() {
     // as at 60 fps.
     let notch = |h: &mut Harness, frames: usize, delta: Vec2| {
         let before = scroll(h);
-        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
+            unit: MouseWheelUnit::Line,
+            delta,
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run_steps(frames);
         scroll(h) - before
     };
@@ -516,7 +542,13 @@ fn a_mouse_wheel_in_lines_is_not_held_to_an_axis() {
         let deltas: &[Vec2] =
             if tilt_after_vertical { &[vec2(0.0, -3.0), vec2(0.0, -3.0), vec2(0.0, -3.0), vec2(-3.0, 0.0)] } else { &[vec2(-3.0, 0.0)] };
         for &delta in deltas {
-            h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta, phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+            h.input_mut().events.push(Event::MouseWheel {
+                source: UNKNOWN,
+                unit: MouseWheelUnit::Line,
+                delta,
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
             h.run_steps(2);
         }
         h.run_steps(30);
@@ -538,7 +570,13 @@ fn a_mouse_wheel_reporting_points_is_not_held_to_an_axis() {
         let before = scroll(&h);
         let deltas: &[Vec2] = if tilt { &[vec2(0.0, -100.0), vec2(-100.0, 0.0)] } else { &[vec2(0.0, -100.0)] };
         for &delta in deltas {
-            h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+            h.input_mut().events.push(Event::MouseWheel {
+                source: UNKNOWN,
+                unit: MouseWheelUnit::Point,
+                delta,
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
             h.run_steps(2);
         }
         h.run_steps(60);
@@ -559,6 +597,7 @@ fn shift_carried_only_by_the_wheel_events_still_holds_the_scroll() {
     let before = scroll(&h);
     for _ in 0..8 {
         h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
             unit: MouseWheelUnit::Point,
             delta: vec2(0.0, -12.0),
             phase: TouchPhase::Move,
@@ -594,6 +633,7 @@ fn a_gesture_right_after_a_wheel_notch_steers_only_its_own_movement() {
         let mut h = harness();
         let before = scroll(&h);
         h.input_mut().events.push(Event::MouseWheel {
+            source: UNKNOWN,
             unit: MouseWheelUnit::Line,
             delta: vec2(-3.0, 0.0),
             phase: TouchPhase::Move,
@@ -694,6 +734,7 @@ fn alt_holds_a_gesture_vertical_and_the_rail_lets_it() {
         let before = scroll(&h);
         h.input_mut().events.push(Event::ModifiersChanged(Modifiers::ALT));
         h.input_mut().events.push(Event::MouseWheel {
+            source: TRACKPAD,
             unit: MouseWheelUnit::Point,
             delta: Vec2::ZERO,
             phase: TouchPhase::Start,
@@ -702,6 +743,7 @@ fn alt_holds_a_gesture_vertical_and_the_rail_lets_it() {
         h.step();
         for _ in 0..8 {
             h.input_mut().events.push(Event::MouseWheel {
+                source: TRACKPAD,
                 unit: MouseWheelUnit::Point,
                 delta: vec2(-12.0, -1.5),
                 phase: TouchPhase::Move,
@@ -729,6 +771,7 @@ fn a_held_gesture_ending_in_the_frame_the_next_starts_does_not_hold_the_next() {
     let mut h = harness();
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
@@ -737,6 +780,7 @@ fn a_held_gesture_ending_in_the_frame_the_next_starts_does_not_hold_the_next() {
     h.step();
     for _ in 0..4 {
         h.input_mut().events.push(Event::MouseWheel {
+            source: TRACKPAD,
             unit: MouseWheelUnit::Point,
             delta: vec2(0.0, -12.0),
             phase: TouchPhase::Move,
@@ -747,24 +791,28 @@ fn a_held_gesture_ending_in_the_frame_the_next_starts_does_not_hold_the_next() {
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     // One frame: the Shift gesture's last move and end, then the next gesture's start and move.
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: vec2(0.0, -12.0),
         phase: TouchPhase::Move,
         modifiers: Modifiers::SHIFT,
     });
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::End,
         modifiers: Modifiers::SHIFT,
     });
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
         modifiers: Modifiers::NONE,
     });
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: vec2(-1.5, -12.0),
         phase: TouchPhase::Move,
@@ -790,6 +838,7 @@ fn shift_and_alt_together_pass_the_scroll_as_it_was() {
     let before = scroll(&h);
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT | Modifiers::ALT));
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Start,
@@ -798,6 +847,7 @@ fn shift_and_alt_together_pass_the_scroll_as_it_was() {
     h.step();
     for _ in 0..8 {
         h.input_mut().events.push(Event::MouseWheel {
+            source: TRACKPAD,
             unit: MouseWheelUnit::Point,
             delta: vec2(-1.5, -12.0),
             phase: TouchPhase::Move,
@@ -824,6 +874,7 @@ fn shift_on_a_wheel_notch_in_lines_holds_the_gesture_it_lands_in() {
     }
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
     h.input_mut().events.push(Event::MouseWheel {
+        source: UNKNOWN,
         unit: MouseWheelUnit::Line,
         delta: vec2(0.0, -1.0),
         phase: TouchPhase::Move,
@@ -853,6 +904,7 @@ fn shift_on_a_move_without_movement_holds_the_gesture() {
     wheel(&mut h, TouchPhase::Start, Vec2::ZERO);
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
     h.input_mut().events.push(Event::MouseWheel {
+        source: TRACKPAD,
         unit: MouseWheelUnit::Point,
         delta: Vec2::ZERO,
         phase: TouchPhase::Move,
@@ -867,4 +919,68 @@ fn shift_on_a_move_without_movement_holds_the_gesture() {
     let after = scroll(&h);
     assert!(after.x > before.x + 50.0, "scrolls right: {before:?} -> {after:?}");
     assert_eq!(after.y, before.y, "and not up or down: {before:?} -> {after:?}");
+}
+
+#[test]
+fn a_pause_that_ends_the_scroll_action_for_egui_ends_the_gesture() {
+    // Where nothing says what sent the events (Wayland reports the phases, not the source) egui
+    // gives a scroll action up after 150 ms without an event: it takes the modifiers afresh and
+    // smooths the larger events that follow as a mouse wheel's notches. The rail ends its gesture
+    // with it, so the movement after the pause passes untouched, and the next start is a gesture
+    // again. (Scrolled right first: the view clamps at the left edge, where a sideways jump that
+    // way would not show.)
+    let mut h = harness();
+    swipe(&mut h, vec2(-12.0, -1.5), 10);
+    let before = scroll(&h);
+    wheel_from(&mut h, UNKNOWN, TouchPhase::Start, Vec2::ZERO);
+    for _ in 0..6 {
+        wheel_from(&mut h, UNKNOWN, TouchPhase::Move, vec2(-1.5, -12.0));
+    }
+    assert!(h.ctx.input(|i| i.is_scrolling()), "egui is in the gesture");
+    h.run_steps(12);
+    assert!(!h.ctx.input(|i| i.is_scrolling()), "egui gave the scroll action up after 200 ms without an event");
+    let rested = scroll(&h);
+    assert_eq!(rested.x, before.x, "held to its axis until then: {before:?} -> {rested:?}");
+    wheel_from(&mut h, UNKNOWN, TouchPhase::Move, vec2(-12.0, -2.0));
+    h.run_steps(60);
+    let after = scroll(&h);
+    assert!(after.x > rested.x + 10.0, "the movement after the pause passes untouched: {rested:?} -> {after:?}");
+    wheel_from(&mut h, UNKNOWN, TouchPhase::End, Vec2::ZERO);
+    wheel_from(&mut h, UNKNOWN, TouchPhase::Start, Vec2::ZERO);
+    for _ in 0..6 {
+        wheel_from(&mut h, UNKNOWN, TouchPhase::Move, vec2(-1.5, -12.0));
+    }
+    wheel_from(&mut h, UNKNOWN, TouchPhase::End, Vec2::ZERO);
+    let next = scroll(&h);
+    assert!(next.y > after.y + 50.0, "the next gesture scrolls down: {after:?} -> {next:?}");
+    assert_eq!(next.x, after.x, "and is held to its axis: {after:?} -> {next:?}");
+}
+
+#[test]
+fn fingers_resting_on_a_trackpad_keep_the_gesture_for_a_second() {
+    // Where the source is known to be a trackpad (macOS) fingers resting mid-gesture send
+    // nothing, and egui keeps the scroll action for a second before giving it up: a drift frame
+    // after half a second's rest is still held to the axis, one after more than a second passes.
+    // (Scrolled right first, away from the left edge the view clamps at.)
+    let mut h = harness();
+    swipe(&mut h, vec2(-12.0, -1.5), 10);
+    let before = scroll(&h);
+    wheel(&mut h, TouchPhase::Start, Vec2::ZERO);
+    for _ in 0..6 {
+        wheel(&mut h, TouchPhase::Move, vec2(-1.5, -12.0));
+    }
+    h.run_steps(30);
+    assert!(h.ctx.input(|i| i.is_scrolling()), "egui keeps the gesture while the fingers rest");
+    wheel(&mut h, TouchPhase::Move, vec2(-12.0, -2.0));
+    h.run_steps(10);
+    let held = scroll(&h);
+    assert!(held.y > before.y + 50.0, "scrolled down: {before:?} -> {held:?}");
+    assert_eq!(held.x, before.x, "held to the axis after half a second's rest: {before:?} -> {held:?}");
+    h.run_steps(66);
+    assert!(!h.ctx.input(|i| i.is_scrolling()), "egui gave the scroll action up after more than a second");
+    wheel(&mut h, TouchPhase::Move, vec2(-12.0, -2.0));
+    h.run_steps(60);
+    let after = scroll(&h);
+    assert!(after.x > held.x + 10.0, "after more than a second the movement passes untouched: {held:?} -> {after:?}");
+    wheel(&mut h, TouchPhase::End, Vec2::ZERO);
 }

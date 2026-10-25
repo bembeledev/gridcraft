@@ -40,6 +40,8 @@ struct RowState {
     dropped: u64,
     /// Cells dropped because their address was repeated, ran backwards or named another row.
     misplaced: u64,
+    /// Row number of the last row element read: Excel writes each row once, in increasing order.
+    last_row: Option<u32>,
     rows: u64,
 }
 
@@ -418,6 +420,11 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         return;
     }
     st.next_row = r + 1;
+    // A second element for a row number already read, or one that goes back to it, repeats the
+    // addresses the sheet already holds and a later `A1` would replace the first one. Such a
+    // row keeps nothing of its own: neither its cells nor its row formatting.
+    let ordered = st.last_row.is_none_or(|last| r > last);
+    st.last_row = Some(r);
     let mut info = LineInfo::default();
     if let Some(ht) = row.attr_f64("ht") {
         info.custom = row.flag("customHeight", false);
@@ -434,7 +441,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     {
         info.style = Some(cx.style(Some(s)));
     }
-    if info != LineInfo::default() {
+    if ordered && info != LineInfo::default() {
         sheet.rows.insert(r, info);
     }
     let mut next_col = 0u32;
@@ -457,7 +464,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         // other shape is damaged, and Excel repairs it. Placing such cells as they are written
         // would move values, let a later duplicate shadow an earlier cell and land an unaddressed
         // cell on an unrelated column, all without a word to the user.
-        if pos.row != r || pos.col < next_col {
+        if !ordered || pos.row != r || pos.col < next_col {
             st.misplaced += 1;
             continue;
         }

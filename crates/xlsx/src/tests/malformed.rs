@@ -331,9 +331,10 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
     assert_eq!(wb.styles.get(last.style.unwrap()).num_fmt.as_str(), "0.00");
 }
 
-/// A row whose cells repeat an address, run backwards or name another row: Excel never writes
-/// such a row and treats it as damage to repair. The reader keeps the first value read for an
-/// address, drops the offending cells and reports how many it dropped (#2531).
+/// A row whose cells repeat an address, run backwards or name another row, and a row element
+/// that repeats a row number already read: Excel never writes such shapes and treats them as
+/// damage to repair. The reader keeps the first value read for an address, drops the offending
+/// cells and reports how many it dropped (#2531).
 #[test]
 fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     use gridcraft_core::{CellRef, Value};
@@ -359,6 +360,23 @@ fn misplaced_cell_addresses_are_dropped_with_one_warning() {
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.value(at("A1")), Value::Number(1.0));
     assert!(s.cell(at("D7")).is_none(), "a cell named another row and must not be placed there");
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // A second row element for a row already read repeats its address and keeps nothing.
+    let (wb, rep) = read(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1"><c r="A1"><v>999</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("A1")), Value::Number(1.0));
+    assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
+
+    // A row element that goes back to a row number already read is dropped with its cells, and
+    // its row formatting does not replace the first row's either.
+    let (wb, rep) = read(
+        r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="40" customHeight="1"><c r="A2"><v>2</v></c></row><row r="1" ht="9" customHeight="1"><c r="A1"><v>999</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("A2"))), (Value::Number(1.0), Value::Number(2.0)));
+    assert!(!s.rows.contains_key(&0), "the row element that went back must not carry formatting either");
+    assert!(s.rows.get(&1).is_some_and(|line| line.size.is_some()), "the ordinary row keeps its own height");
     assert_eq!(warning(&rep), ["sheet \"Data\": 1 cells with a duplicate, out-of-order or wrong-row address were dropped"]);
 
     // An unaddressed cell follows the last cell that was kept, not a dropped stray one.

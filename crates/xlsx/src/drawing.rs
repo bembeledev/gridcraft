@@ -11,6 +11,8 @@ use crate::read::Ctx;
 use crate::tables::EMU_PER_PX;
 use crate::xml::{El, esc, esc_attr};
 
+mod ink;
+
 // ---------------------------------------------------------------- reading
 
 fn emu_px(v: Option<i64>) -> f32 {
@@ -154,7 +156,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data, mime: mime_for(&target).to_string(), alt });
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -195,6 +197,9 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
 
 fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let sp = obj.child("spPr")?;
+    if let Some(shape) = ink::read(obj, anchor) {
+        return Some(shape);
+    }
     let prst = sp.child("prstGeom").and_then(|g| g.attr("prst")).unwrap_or("rect");
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
     let ln = sp.child("ln");
@@ -223,8 +228,8 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
-/// alignment (`a:pPr algn`) and the first run's properties (`a:rPr`: size, bold, italic, fill,
-/// outline, `a:latin` typeface).
+/// alignment and direction (`a:pPr algn`, `rtl`) and the first run's properties (`a:rPr`: size,
+/// bold, italic, fill, outline, `a:latin` typeface).
 fn read_text_format(body: Option<&El>) -> ShapeFormat {
     let mut f = ShapeFormat::default();
     let Some(body) = body else { return f };
@@ -233,12 +238,13 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         "b" => ShapeTextAnchor::Bottom,
         _ => ShapeTextAnchor::Top,
     });
-    let first_p = body.kids("p").next();
-    f.align = first_p.and_then(|p| p.child("pPr")).and_then(|p| p.attr("algn")).map(|a| match a {
+    let ppr = body.kids("p").next().and_then(|p| p.child("pPr"));
+    f.align = ppr.and_then(|p| p.attr("algn")).map(|a| match a {
         "ctr" => ShapeTextAlign::Center,
         "r" => ShapeTextAlign::Right,
         _ => ShapeTextAlign::Left,
     });
+    f.rtl = ppr.is_some_and(|p| p.flag("rtl", false));
     let rpr = body.kids("p").flat_map(|p| p.kids("r")).find_map(|r| r.child("rPr"));
     if let Some(r) = rpr {
         // `sz` is in hundredths of a point (100..=400000 in the schema).
@@ -358,6 +364,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 let (open, close) = anchor_open(sheet, &sh.anchor);
                 close_tag = close;
                 s.push_str(&open);
+                if let Some(xml) = ink::write(sh, theme, id) {
+                    s.push_str(&xml);
+                    s.push_str("<xdr:clientData/>");
+                    s.push_str(close_tag);
+                    continue;
+                }
                 let (prst, tx) = match sh.kind {
                     ShapeKind::Rectangle => ("rect", false),
                     ShapeKind::RoundedRectangle => ("roundRect", false),
@@ -404,12 +416,14 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                         None => "",
                     };
                     let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
-                    let ppr = match f.align {
+                    let algn = match f.align {
                         None => "",
-                        Some(ShapeTextAlign::Left) => "<a:pPr algn=\"l\"/>",
-                        Some(ShapeTextAlign::Center) => "<a:pPr algn=\"ctr\"/>",
-                        Some(ShapeTextAlign::Right) => "<a:pPr algn=\"r\"/>",
+                        Some(ShapeTextAlign::Left) => " algn=\"l\"",
+                        Some(ShapeTextAlign::Center) => " algn=\"ctr\"",
+                        Some(ShapeTextAlign::Right) => " algn=\"r\"",
                     };
+                    let rtl = if f.rtl { " rtl=\"1\"" } else { "" };
+                    let ppr = if algn.is_empty() && rtl.is_empty() { String::new() } else { format!("<a:pPr{algn}{rtl}/>") };
                     let (rpr_attrs, rpr_body) = run_props(f, theme);
                     for line in sh.text.split('\n') {
                         if line.is_empty() {

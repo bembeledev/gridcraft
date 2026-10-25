@@ -30,7 +30,21 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
         Expr::Name(n) if scope.iter().any(|s| s.eq_ignore_ascii_case(&n)) => Expr::Name(format!("{PARAM_PREFIX}{n}")),
         Expr::Unary(op, x) => Expr::Unary(op, sub(x, scope)),
         Expr::Paren(x) => Expr::Paren(sub(x, scope)),
-        Expr::Binary(op, a, b) => Expr::Binary(op, sub(a, scope), sub(b, scope)),
+        Expr::Binary(op, a, b) => {
+            // A long chain such as A1+A2+… nests on its left: follow it in a loop, not one
+            // level of recursion per operand.
+            let mut spine = vec![(op, b)];
+            let mut left = *a;
+            while let Expr::Binary(op, a, b) = left {
+                spine.push((op, b));
+                left = *a;
+            }
+            let mut acc = prefix_params(left, scope);
+            while let Some((op, b)) = spine.pop() {
+                acc = Expr::Binary(op, Box::new(acc), sub(b, scope));
+            }
+            acc
+        }
         Expr::Invoke(c, args) => Expr::Invoke(sub(c, scope), args.into_iter().map(|a| prefix_params(a, scope)).collect()),
         Expr::Call(name, args) if name == "LET" || name == "LAMBDA" => {
             let last = args.len().saturating_sub(1);
@@ -82,6 +96,9 @@ fn expr_to_file(e: Expr) -> String {
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
         // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`.
         Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call("_xlfn.SINGLE".into(), vec![*x]),
+        // Nor the `[@Col]` shorthand: files spell it `[[#This Row],[Col]]`, or Excel repairs
+        // the file and drops the table. Carried as a name, which prints verbatim.
+        Expr::Struct(st) => Expr::Name(gridcraft_formula::printer::struct_ref_file(&st)),
         // Nor trim-reference operators: written as the equivalent `TRIMRANGE(range,n,n)`, which
         // every Excel with trim references reads. (Excel's own file spelling of `A1:.E10` is
         // not publicly documented; the `_xlfn._TRO_*` call forms are accepted on read.)
@@ -150,6 +167,32 @@ mod tests {
     #[test]
     fn unbracketed_this_row_column() {
         assert_eq!(from_file("Sales[[#This Row],Units]*[[#This Row],Price]"), "Sales[@Units]*[@Price]");
+    }
+
+    #[test]
+    fn this_row_long_form() {
+        // `[@Col]` is only Excel's display shorthand; a file holding it is repaired by Excel,
+        // which drops the table.
+        assert_eq!(to_file(&Formula::new("Sales[@Units]*Sales[@[Unit Price]]")), "Sales[[#This Row],[Units]]*Sales[[#This Row],[Unit Price]]");
+        assert_eq!(text_to_file("=[@Units]&COUNTA(Sales[@])"), "[[#This Row],[Units]]&COUNTA(Sales[#This Row])");
+        assert_eq!(text_to_file("=SUM(Sales[Units])+[#Totals]"), "SUM(Sales[Units])+[#Totals]");
+        for f in ["Sales[@Units]*[@[Unit Price]]", "Sales[@]", "[@[Unit Price]]+1"] {
+            let file = to_file(&Formula::new(f));
+            assert!(!file.contains("[@"), "{file}");
+            assert_eq!(from_file(&file), f);
+        }
+    }
+
+    #[test]
+    fn struct_ref_column_with_bang() {
+        // A `!` inside the brackets is part of the column name, not a sheet separator.
+        assert_eq!(to_file(&Formula::new("SUM(Table1[Done!])")), "SUM(Table1[Done!])");
+        assert_eq!(text_to_file("=Table1[[#This Row],[a!b]]"), "Table1[[#This Row],[a!b]]");
+        // `Table1[#REF!]` was found by the command-sequence fuzzer (seed 40).
+        for text in ["SUM(Table1[Done!])", "Table1[#REF!]", "Table1[@[x!]]", "Sheet2!A1+Table1[[#All],[a!b]]"] {
+            let f = Formula::new(text);
+            assert_eq!(from_file(&to_file(&f)), f.text);
+        }
     }
 
     #[test]

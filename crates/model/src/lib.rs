@@ -18,14 +18,14 @@ pub mod workbook;
 pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
 pub use password::PasswordHash;
-pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedXml};
-pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility};
+pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
+pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{
     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
     VAlign, VertAlign,
 };
-pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, Workbook};
+pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, PhoneticProps, PhoneticRun, PhoneticString, ShowObjects, Workbook};
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font
 /// (e.g. the metric-compatible Carlito) when it isn't installed.

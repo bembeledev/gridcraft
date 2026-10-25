@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 # The Slider and ZoomBar from storytold/craft-libs#33, pinned to its branch in a fork until it merges.
-craft-ui = { git = "https://github.com/brzuchal/craft-libs", rev = "58eb50f1673c1ae98badddc57d0eb53d9ac7136c" }
+craft-ui = { git = "https://github.com/brzuchal/craft-libs", rev = "677d0aa28d1bdbbf1a8e75ee057d7ec2d5ea2455" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 egui = { workspace = true }

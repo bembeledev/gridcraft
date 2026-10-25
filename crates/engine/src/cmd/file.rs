@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
@@ -34,7 +34,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
         Some(name) => {
             let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
             let title = crate::sample::title(name);
-            s.add_document(DocState::new(wb, None, title))
+            s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
         None => s.new_workbook(),
     };
@@ -56,7 +56,15 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
+    let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
+    // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
+    // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
+    // from, as Excel does, even though Save must still ask where to put the .xlsx.
+    wb.source_path = match str_param(p, "path") {
+        Some(path) => crate::io::source_path(path),
+        None => Some(std::path::PathBuf::from(&name)),
+    };
     let imported =
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
             || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
@@ -75,7 +83,12 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let i = s.add_document(DocState::new(wb, path, title));
+    // Someone else may have made the file: its active content asks before it runs.
+    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
+    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+        doc.content_kind = Some(crate::io::FileKind::Xlsx);
+    }
+    let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
     if !shown.is_empty() {
@@ -105,11 +118,25 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;
-    let bytes = crate::io::save_bytes(&d.wb, &path)?;
+    // The document's own file keeps the format its content had when opened; any other path
+    // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
+    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
+    let wb = rebased.as_ref().unwrap_or(&d.wb);
+    let bytes = match kind {
+        Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
+        None => crate::io::save_bytes(wb, &path)?,
+    };
     crate::io::write_file(&path, &bytes)?;
-    let kind = crate::io::FileKind::from_path(&path).unwrap_or(crate::io::FileKind::Xlsx);
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
-    if matches!(kind, crate::io::FileKind::Xlsx | crate::io::FileKind::Json) {
+    if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
+        // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
+        // before the `saved` snapshot, or the workbook would read as dirty the moment it was
+        // saved; and only when it changes, so an ordinary Save does not clone the workbook.
+        let file = crate::io::source_path(&path);
+        if d.wb.source_path != file {
+            std::sync::Arc::make_mut(&mut d.wb).source_path = file;
+        }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
@@ -127,8 +154,9 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
     let d = s.doc()?;
-    let bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    // The file name goes into a PivotChart's link to its PivotTable.
+    let bytes = crate::io::save_bytes(&d.wb, &name)?;
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 

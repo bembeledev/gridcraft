@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -129,7 +129,7 @@ fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
 fn point_color(data: &ChartData, j: usize) -> Rgba {
     match (j, data.series.first()) {
         (0, Some(s)) => s.color,
-        _ => series_color(&Theme::default(), j),
+        _ => j.checked_rem(data.palette.len()).and_then(|k| data.palette.get(k)).copied().unwrap_or_else(|| series_color(&Theme::default(), j)),
     }
 }
 
@@ -190,7 +190,9 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 
 fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
+        palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
+        category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
         series: d
             .series
             .iter()
@@ -254,7 +256,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         Doughnut => pie(ctx, chart, data, area, 0.5, false),
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
-        Funnel => funnel(ctx, data, area),
+        Funnel => funnel(ctx, chart, data, area),
         Radar => radar(ctx, chart, data, area),
         _ => {
             let area = axis_titles(ctx, chart, area);
@@ -266,8 +268,8 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 Scatter | ScatterLines | Bubble => scatter(ctx, chart, data, area),
                 Histogram => histogram(ctx, chart, data, area),
                 Waterfall => waterfall(ctx, chart, data, area),
-                BoxWhisker => box_whisker(ctx, data, area),
-                Stock => stock(ctx, data, area),
+                BoxWhisker => box_whisker(ctx, chart, data, area),
+                Stock => stock(ctx, chart, data, area),
                 _ => cartesian(ctx, chart, data, area, false),
             }
         }
@@ -390,8 +392,18 @@ fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos
 // ---------------------------------------------------------------- axes frame
 
 enum CatAxis<'a> {
-    Labels(&'a [String]),
+    /// Category labels and, for a multi-level axis, the outer levels (nearest the labels first;
+    /// one entry per category, non-empty where a group starts).
+    Labels(&'a [String], &'a [Vec<String>]),
     Numeric(Scale, &'a Fmt),
+}
+
+/// Groups of an outer category level: `(first, end)` index pairs, a group starting at every
+/// non-empty entry (and at the first category).
+fn level_groups(level: &[String], n: usize) -> Vec<(usize, usize)> {
+    let mut starts: Vec<usize> = (0..n).filter(|&j| j == 0 || level.get(j).is_some_and(|t| !t.is_empty())).collect();
+    starts.push(n);
+    starts.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).collect()
 }
 
 struct ValAxis<'a> {
@@ -419,7 +431,11 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
             (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
             _ => 4.0,
         };
-        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 };
+        let levels = match &cat {
+            CatAxis::Labels(_, o) => o.len() as f32,
+            CatAxis::Numeric(..) => 0.0,
+        };
+        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
         if !plot.ok() {
             return plot;
         }
@@ -440,7 +456,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
         match cat {
-            CatAxis::Labels(l) => {
+            CatAxis::Labels(l, outer) => {
                 let n = l.len().max(1);
                 let cw = plot.w / n as f32;
                 let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
@@ -448,6 +464,22 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 for (j, t) in l.iter().enumerate().step_by(k) {
                     let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
                     ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                }
+                // Outer levels, one row each below the labels: a group's name centred under its
+                // categories, and a separator at each group boundary down through the rows.
+                for (i, level) in outer.iter().enumerate() {
+                    let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
+                    for (first, end) in level_groups(level, n) {
+                        let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
+                        if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                            let t = ctx.fit(t, ls, x1 - x0 - 2.0);
+                            ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                        }
+                        if first > 0 {
+                            ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
+                        }
+                    }
+                    ctx.vline(plot.right(), plot.bottom(), top + lh - 2.0, AXIS, 0.75);
                 }
             }
             CatAxis::Numeric(s, f) => {
@@ -468,13 +500,17 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         }
         plot
     } else {
-        let labels: Vec<String> = match cat {
-            CatAxis::Labels(l) => l.to_vec(),
-            CatAxis::Numeric(..) => vec![],
+        let (labels, outer): (Vec<String>, &[Vec<String>]) = match cat {
+            CatAxis::Labels(l, o) => (l.to_vec(), o),
+            CatAxis::Numeric(..) => (vec![], &[]),
         };
         let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
+        // Outer levels stand in columns left of the labels, each as wide as its longest name.
+        let level_w: Vec<f32> =
+            outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+        let levels_w: f32 = level_w.iter().sum();
         let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
-        let plot = Bx { x: area.x + lw, y: area.y + 2.0, w: area.w - lw - right, h: area.h - lh - 6.0 };
+        let plot = Bx { x: area.x + lw + levels_w, y: area.y + 2.0, w: area.w - lw - levels_w - right, h: area.h - lh - 6.0 };
         if !plot.ok() {
             return plot;
         }
@@ -499,6 +535,24 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         for (j, t) in labels.iter().enumerate().step_by(k) {
             let t = ctx.fit(t, ls, lw - 6.0);
             ctx.text(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, HAlign::Right, VAlign::Middle);
+        }
+        // Outer levels: a group's name centred beside its categories, separators at the
+        // boundaries running right to the axis.
+        let mut x1 = plot.x - lw;
+        for (level, w) in outer.iter().zip(&level_w) {
+            let x0 = x1 - w;
+            for (first, end) in level_groups(level, n) {
+                let (y0, y1) = (plot.bottom() - end as f32 * ch, plot.bottom() - first as f32 * ch);
+                if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
+                    let t = ctx.fit(t, ls, w - 4.0);
+                    ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, HAlign::Center, VAlign::Middle);
+                }
+                if first > 0 {
+                    ctx.hline(x0, plot.x, y1, AXIS, 0.75);
+                }
+            }
+            ctx.hline(x0, plot.x, plot.y, AXIS, 0.75);
+            x1 = x0;
         }
         plot
     }
@@ -657,6 +711,13 @@ fn forecast(v: f64) -> f64 {
     if v.is_finite() && v > 0.0 { v.min(1e9) } else { 0.0 }
 }
 
+/// Most empty category slots a forward forecast may add after `ncat` categories: four times the
+/// data (at least 32), and never past `MAX_CATS` in total. A larger forecast would shrink every
+/// column to nothing.
+fn max_forward_slots(ncat: usize) -> f64 {
+    (ncat.saturating_mul(4).max(32)).min(MAX_CATS.saturating_sub(ncat)) as f64
+}
+
 /// Longest forward forecast among `s`'s regression trendlines.
 fn max_forward(s: &SeriesData) -> f64 {
     s.trendlines.iter().filter(|t| !matches!(t.spec.kind, TrendlineKind::MovingAverage(_))).map(|t| forecast(t.spec.forward)).fold(0.0, f64::max)
@@ -747,6 +808,7 @@ fn draw_trendlines(
     frac: &dyn Fn(f64, f64) -> (f64, f64),
     px: &dyn Fn((f64, f64)) -> [f32; 2],
     labels: &mut Vec<String>,
+    window: (f64, f64),
 ) {
     let Some((xlo, xhi)) = value_range(pts.iter().map(|p| p.0)) else { return };
     for t in s.trendlines.iter().take(MAX_TRENDLINES) {
@@ -755,7 +817,8 @@ fn draw_trendlines(
             TrendlineKind::MovingAverage(p) => moving_average(pts, p).into_iter().map(|(x, y)| Some(frac(x, y))).collect(),
             _ => {
                 let Some(fit) = fit_trendline(spec, pts) else { continue };
-                let (lo, hi) = (xlo - forecast(spec.backward), xhi + forecast(spec.forward));
+                // Sample only the part of the forecast that is on the plot.
+                let (lo, hi) = ((xlo - forecast(spec.backward)).max(window.0), (xhi + forecast(spec.forward)).min(window.1));
                 if spec.display_equation {
                     labels.push(fit.equation());
                 }
@@ -805,6 +868,7 @@ enum Fam {
     LineStack,
     Area,
     AreaStack,
+    Area100,
 }
 
 fn family(k: ChartKind) -> Fam {
@@ -816,8 +880,14 @@ fn family(k: ChartKind) -> Fam {
         LineStacked => Fam::LineStack,
         Area => Fam::Area,
         AreaStacked => Fam::AreaStack,
+        AreaStacked100 => Fam::Area100,
         _ => Fam::Col,
     }
+}
+
+/// Families stacked to 100%: each category's values are shares of its total.
+fn is_100(f: Fam) -> bool {
+    matches!(f, Fam::Col100 | Fam::Area100)
 }
 
 fn is_col(f: Fam) -> bool {
@@ -837,25 +907,38 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
 
-    // Totals for 100% stacking, per axis.
-    let mut totals = [vec![0.0f64; ncat], vec![0.0f64; ncat]];
+    // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
+    let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
-        if fams.get(i) == Some(&Fam::Col100) {
-            let a = sec.get(i).copied().unwrap_or(false) as usize;
+        let fam = fams.get(i).copied().unwrap_or(Fam::Col);
+        if is_100(fam) {
+            let key = (sec.get(i).copied().unwrap_or(false), fam);
+            let p = match totals.iter().position(|(k, _)| *k == key) {
+                Some(p) => p,
+                None => {
+                    totals.push((key, vec![0.0; ncat]));
+                    totals.len() - 1
+                }
+            };
             for (j, v) in s.values.iter().take(ncat).enumerate() {
-                if let (Some(v), Some(t)) = (v, totals.get_mut(a).and_then(|t| t.get_mut(j))) {
+                if let (Some(v), Some(t)) = (v, totals.get_mut(p).and_then(|(_, t)| t.get_mut(j))) {
                     *t += v.abs();
                 }
             }
         }
     }
+    // A value's share of its category's total, for the 100% families.
+    let share = |key: (bool, Fam), j: usize, v: f64| {
+        let t = totals.iter().find(|(k, _)| *k == key).and_then(|(_, t)| t.get(j)).copied().unwrap_or(0.0);
+        if t > 0.0 { v / t } else { 0.0 }
+    };
     // Stack accumulators keyed by (axis, family): positive and negative running sums.
     let mut stacks: Vec<((bool, Fam), Vec<f64>, Vec<f64>)> = Vec::new();
     let mut spans: Vec<Vec<Option<(f64, f64)>>> = Vec::with_capacity(data.series.len());
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -873,12 +956,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             let v = s.values.get(j).copied().flatten();
             let span = match (si.and_then(|p| stacks.get_mut(p)), fam) {
                 (Some((_, pos, neg)), Fam::ColStack | Fam::Col100) => v.and_then(|v| {
-                    let v = if fam == Fam::Col100 {
-                        let t = totals.get(a as usize).and_then(|t| t.get(j)).copied().unwrap_or(0.0);
-                        if t > 0.0 { v / t } else { 0.0 }
-                    } else {
-                        v
-                    };
+                    let v = if fam == Fam::Col100 { share(key, j, v) } else { v };
                     let acc = if v >= 0.0 { pos.get_mut(j) } else { neg.get_mut(j) }?;
                     let base = *acc;
                     *acc += v;
@@ -886,6 +964,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }),
                 (Some((_, pos, _)), _) => {
                     let v = v.unwrap_or(0.0);
+                    let v = if fam == Fam::Area100 { share(key, j, v) } else { v };
                     pos.get_mut(j).map(|acc| {
                         let base = *acc;
                         *acc = clean(*acc + v);
@@ -907,7 +986,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             continue;
         }
         let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
-        let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
+        let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
@@ -935,9 +1014,12 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         .filter(|(i, _)| kinds.get(*i).is_some_and(|k| supports_trendline(*k)))
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
-    let ncat_slots = ncat.saturating_add(fwd.ceil() as usize).min(MAX_CATS.max(ncat));
+    let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
     let labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
-    let plot = frame(ctx, area, CatAxis::Labels(&labels), &y1, y2.as_ref(), horizontal, chart.gridlines);
+    // Outer levels padded to the slots (forecast slots stay in the last group).
+    let outer: Vec<Vec<String>> =
+        data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -970,13 +1052,15 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let nslots = slot_keys.len().max(1) as f32;
     let bw = cw / (nslots + 1.5);
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
+    // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
+    let mut area_labels = Vec::new();
 
     // Areas first, then columns, then lines on top.
     for pass in 0..3 {
         for (i, s) in data.series.iter().enumerate() {
             let fam = fams.get(i).copied().unwrap_or(Fam::Col);
             let want = match pass {
-                0 => matches!(fam, Fam::Area | Fam::AreaStack),
+                0 => matches!(fam, Fam::Area | Fam::AreaStack | Fam::Area100),
                 1 => is_col(fam),
                 _ => is_line(fam),
             };
@@ -998,6 +1082,13 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         let c = center(j);
                         top.push([c, vpos(t, &sc)]);
                         base.push([c, vpos(b, &sc)]);
+                        // Source values (not stack totals), just above the top edge like the line labels.
+                        if labels_on
+                            && sp.is_some()
+                            && let Some(v) = s.values.get(j).copied().flatten()
+                        {
+                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
+                        }
                     }
                     if top.len() == 1 {
                         // A single point: give it some width.
@@ -1072,6 +1163,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }
             }
         }
+        for (x, y, t) in area_labels.drain(..) {
+            ctx.text(x, y, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+        }
     }
     // Trendlines on top: x is the category number 1..n.
     let mut trend_labels = Vec::new();
@@ -1089,7 +1183,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h]
             }
         };
-        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels);
+        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
 }
@@ -1183,7 +1277,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         let pts: Vec<(f64, f64)> = pts.iter().flatten().copied().collect();
         let frac = |x: f64, y: f64| ((x - xs.min) / (xs.max - xs.min), (y - ys.min) / (ys.max - ys.min));
         let px = |(fx, fy): (f64, f64)| [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h];
-        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels);
+        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
 }
@@ -1201,10 +1295,12 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         bins = 1;
     }
     let width = if bins == 1 && span.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) { 1.0 } else { span / bins as f64 };
+    // Upper edge of each bin, exactly as shown in the labels below. Bins are right-inclusive (the first is closed on both sides), so a value
+    // equal to an edge belongs to the bin that ends there.
+    let edges: Vec<f64> = (0..bins).map(|b| if b + 1 == bins { hi.max(lo + b as f64 * width) } else { lo + (b + 1) as f64 * width }).collect();
     let mut counts = vec![0usize; bins];
     for v in &vals {
-        let b = if width > 0.0 { ((v - lo) / width).floor() } else { 0.0 };
-        let b = if b.is_finite() && b > 0.0 { (b as usize).min(bins - 1) } else { 0 };
+        let b = edges.partition_point(|e| e < v).min(bins - 1);
         if let Some(c) = counts.get_mut(b) {
             *c += 1;
         }
@@ -1213,7 +1309,7 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let labels: Vec<String> = (0..bins)
         .map(|b| {
             let a = lo + b as f64 * width;
-            let e = if b + 1 == bins { hi.max(a) } else { a + width };
+            let e = edges.get(b).copied().unwrap_or(a);
             let open = if b == 0 { '[' } else { '(' };
             format!("{open}{}, {}]", f.format(a, Some(width / 10.0)), f.format(e, Some(width / 10.0)))
         })
@@ -1221,7 +1317,7 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
     let fc = Fmt::new("General");
-    let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -1273,7 +1369,7 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
     let f = Fmt::new(&s.number_format);
-    let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -1301,7 +1397,7 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- funnel
 
-fn funnel(ctx: &mut Ctx, data: &ChartData, area: Bx) {
+fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some(s) = data.series.first() else { return };
     let n = data.categories.len().max(s.values.len()).min(MAX_CATS);
     if n == 0 {
@@ -1331,9 +1427,11 @@ fn funnel(ctx: &mut Ctx, data: &ChartData, area: Bx) {
         }
         if show {
             let yc = y + bh / 2.0;
-            let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
-            let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
-            ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, HAlign::Center, VAlign::Middle);
+            if chart.data_labels {
+                let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
+                ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, HAlign::Center, VAlign::Middle);
+            }
             let l = ctx.fit(labels.get(j).map(String::as_str).unwrap_or(""), LABEL_SIZE, lw - 8.0);
             ctx.text(plot.x - 6.0, yc, &l, LABEL_SIZE, TEXT, HAlign::Right, VAlign::Middle);
         }
@@ -1544,12 +1642,16 @@ fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- box & whisker
 
-fn quantile(sorted: &[f64], q: f64) -> f64 {
+fn quantile(sorted: &[f64], q: f64, method: QuartileMethod) -> f64 {
     let n = sorted.len();
     if n == 0 {
         return 0.0;
     }
-    let pos = q * (n - 1) as f64;
+    // Clamp exclusive ranks for short samples so one or two points remain drawable.
+    let pos = match method {
+        QuartileMethod::Inclusive => q * (n - 1) as f64,
+        QuartileMethod::Exclusive => (q * (n as f64 + 1.0) - 1.0).clamp(0.0, (n - 1) as f64),
+    };
     let i = pos.floor() as usize;
     let frac = pos - i as f64;
     let a = sorted.get(i).copied().unwrap_or(0.0);
@@ -1557,12 +1659,12 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
     a + (b - a) * frac
 }
 
-fn box_whisker(ctx: &mut Ctx, data: &ChartData, area: Bx) {
+fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let labels: Vec<String> = data.series.iter().map(|s| s.name.clone()).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, true);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -1576,7 +1678,8 @@ fn box_whisker(ctx: &mut Ctx, data: &ChartData, area: Bx) {
             continue;
         }
         v.sort_by(f64::total_cmp);
-        let (q1, med, q3) = (quantile(&v, 0.25), quantile(&v, 0.5), quantile(&v, 0.75));
+        let method = chart.series.get(i).map(|s| s.quartiles).unwrap_or_default();
+        let (q1, med, q3) = (quantile(&v, 0.25, method), quantile(&v, 0.5, method), quantile(&v, 0.75, method));
         let iqr = q3 - q1;
         let (flo, fhi) = (q1 - 1.5 * iqr, q3 + 1.5 * iqr);
         let wlo = v.iter().copied().find(|x| *x >= flo).unwrap_or(q1);
@@ -1601,7 +1704,7 @@ fn box_whisker(ctx: &mut Ctx, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- stock
 
-fn stock(ctx: &mut Ctx, data: &ChartData, area: Bx) {
+fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
         return;
@@ -1610,7 +1713,7 @@ fn stock(ctx: &mut Ctx, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, true);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -1750,5 +1853,36 @@ mod smooth_tests {
         let out = smooth_run(pts, plot);
         assert!(out.len() > 5);
         assert!(out.iter().all(|p| (0.0..=300.0).contains(&p[0]) && (10.0..=110.0).contains(&p[1])));
+    }
+}
+
+#[cfg(test)]
+mod quartile_tests {
+    use super::*;
+
+    #[test]
+    fn box_whisker_default_quartiles_are_exclusive() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(quantile(&values, 0.25, QuartileMethod::default()), 1.75);
+        assert_eq!(quantile(&values, 0.5, QuartileMethod::default()), 3.5);
+        assert_eq!(quantile(&values, 0.75, QuartileMethod::default()), 5.25);
+    }
+
+    #[test]
+    fn quartile_methods_and_short_samples() {
+        for (values, exclusive, inclusive) in [
+            (vec![1., 2., 3.], (1., 3.), (1.5, 2.5)),
+            (vec![1., 2., 3., 4.], (1.25, 3.75), (1.75, 3.25)),
+            (vec![1., 2., 3., 4., 5.], (1.5, 4.5), (2., 4.)),
+            (vec![1., 2., 3., 4., 5., 6., 7.], (2., 6.), (2.5, 5.5)),
+            (vec![1., 1., 2., 3., 5., 8.], (1., 5.75), (1.25, 4.5)),
+            (vec![1., 2.], (1., 2.), (1.25, 1.75)),
+            (vec![1.], (1., 1.), (1., 1.)),
+            (vec![], (0., 0.), (0., 0.)),
+        ] {
+            for (method, expected) in [(QuartileMethod::Exclusive, exclusive), (QuartileMethod::Inclusive, inclusive)] {
+                assert_eq!((quantile(&values, 0.25, method), quantile(&values, 0.75, method)), expected);
+            }
+        }
     }
 }

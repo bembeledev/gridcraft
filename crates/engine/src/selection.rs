@@ -43,6 +43,13 @@ impl Selection {
     pub fn is_single_cell(&self) -> bool {
         self.ranges.len() == 1 && self.current().is_single()
     }
+    /// The corner of the current area opposite the anchor: the end that Shift+arrows move.
+    pub fn moving_end(&self) -> CellRef {
+        let r = self.current();
+        let row = if self.anchor.row == r.start.row { r.end.row } else { r.start.row };
+        let col = if self.anchor.col == r.start.col { r.end.col } else { r.start.col };
+        CellRef::new(row, col)
+    }
     /// Extends the current area from the anchor to `to` (Shift+click / Shift+arrows).
     pub fn extend_to(&mut self, to: CellRef) {
         let r = RangeRef::new(self.anchor, to);
@@ -56,9 +63,13 @@ impl Selection {
     pub fn a1(&self) -> String {
         self.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")
     }
-    /// Expands areas so merged cells are included whole.
+    /// Expands areas so merged cells are included whole. Whole columns and whole rows stay as
+    /// they are: clicking column B's header selects just B even when B1:C1 is merged, as in Excel.
     pub fn expand_merges(&mut self, sheet: &Sheet) {
         for r in self.ranges.iter_mut() {
+            if r.is_full_cols() || r.is_full_rows() {
+                continue;
+            }
             let mut cur = *r;
             loop {
                 let mut grown = cur;

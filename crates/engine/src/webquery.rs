@@ -18,6 +18,9 @@ pub const MAX_TEXT: usize = 32_767;
 /// Cells a single imported table holds at most, however wide its `colspan`s or its padding
 /// (`clip_html.rs` keeps the same cap for pasted HTML).
 pub const MAX_TABLE_CELLS: usize = 1_000_000;
+/// Tables a page holds at most. The download cap alone admits hundreds of thousands of empty
+/// `<table></table>` repetitions, each a retained `WebTable`; this stops the read.
+pub const MAX_TABLES: usize = 1_000;
 
 /// One page download: the URL and the caps the fetch must honour.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +43,9 @@ pub type WebFetch = std::sync::Arc<dyn Fn(&WebRequest) -> Result<Vec<WebTable>, 
 
 /// The tables of `html`, in document order. Nested tables are flattened into the cell text of
 /// the enclosing table (like Excel's detection, a table inside a cell stays part of the cell).
-/// `max_rows`/`max_cols` cap each table's size; longer tables are reported truncated.
+/// `max_rows`/`max_cols` cap each table's size; longer tables are reported truncated. A page
+/// holds at most [`MAX_TABLES`] tables and each at most [`MAX_TABLE_CELLS`] cells: a hostile
+/// page cannot exhaust memory with thousands of tables or `colspan` padding.
 pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTable> {
     let mut out: Vec<WebTable> = Vec::new();
     if html.len() > DEFAULT_MAX_BYTES {
@@ -97,6 +102,10 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                     t.close();
                     if !t.rows.is_empty() {
                         out.push(WebTable { name: t.name, rows: t.rows });
+                    }
+                    // A page of nothing but tiny tables is cut short at the aggregate cap.
+                    if out.len() >= MAX_TABLES {
+                        break;
                     }
                 }
             }
@@ -469,6 +478,13 @@ mod tests {
                     <tbody><tr><td>x</td><td>y</td></tr></tbody></table>";
         let t = extract_tables(html, 100, 100);
         assert_eq!(t[0].rows, vec![vec!["A", "B"], vec!["", "C"], vec!["x", "y"],]);
+    }
+
+    #[test]
+    fn a_page_of_tiny_tables_is_capped_at_the_aggregate_limit() {
+        let html = "<table><tr><td>x</td></tr></table>".repeat(5_000);
+        let t = extract_tables(&html, 100, 100);
+        assert_eq!(t.len(), MAX_TABLES);
     }
 
     #[test]

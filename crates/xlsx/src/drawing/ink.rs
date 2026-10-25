@@ -1,7 +1,13 @@
 //! The open, solid polylines the model can represent as editable ink. This is DrawingML
 //! geometry, not Office InkML. Unsupported geometry keeps the existing shape-import fallback.
 
-use super::*;
+use std::fmt::Write as _;
+
+use gridcraft_model::{Anchor, Color, Shape, ShapeKind, Theme};
+
+use super::xfrm;
+use crate::tables::EMU_PER_PX;
+use crate::xml::El;
 
 const MAX_POINTS: usize = 20_000;
 const MAX_COORD: f64 = 1e7;
@@ -24,14 +30,7 @@ fn one<'a>(e: &'a El, name: &str) -> Option<&'a El> {
     found.next().is_none().then_some(first)
 }
 
-/// Do not partially import a path: losing a curve, subpath, transform or line effect changes
-/// the drawing. Accept only the explicit subset emitted below, including its line styling.
-///
-/// A stroke on its own is written at offset 0 with its anchor's size. A stroke in a group
-/// (`grouped`) sits at its offset and size in the group's child space, which the group maps
-/// onto `anchor`, and may carry a `rot`, which the group keeps for saving; the path fills that
-/// box whatever its size, so only a positive extent is required there.
-pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
+fn validate_shape_obj(obj: &El) -> Option<&El> {
     if obj.name != "sp"
         || !only_children(obj, &["nvSpPr", "spPr"])
         || !only_attrs(obj, &["macro", "textlink"])
@@ -48,6 +47,10 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
     if !no_fill.attrs.is_empty() || !no_fill.children.is_empty() {
         return None;
     }
+    Some(sp)
+}
+
+fn validate_xfrm(sp: &El, anchor: &Anchor, grouped: bool) -> Option<()> {
     let xf = one(sp, "xfrm")?;
     if !only_attrs(xf, if grouped { &["rot"] } else { &[] }) || !only_children(xf, &["off", "ext"]) {
         return None;
@@ -71,6 +74,10 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
     if !grouped && (!same_extent(ew, anchor.width) || !same_extent(eh, anchor.height)) {
         return None;
     }
+    Some(())
+}
+
+fn validate_cust_geom(sp: &El) -> Option<(&El, i64, i64)> {
     let geom = one(sp, "custGeom")?;
     if !geom.attrs.is_empty() || !only_children(geom, &["avLst", "gdLst", "ahLst", "cxnLst", "rect", "pathLst"]) {
         return None;
@@ -99,6 +106,10 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
     {
         return None;
     }
+    Some((path, w, h))
+}
+
+fn validate_line(sp: &El) -> Option<(i64, Color)> {
     let ln = one(sp, "ln")?;
     if !only_attrs(ln, &["w", "cap", "cmpd", "algn"])
         || ln.attr("cap") != Some("flat")
@@ -138,6 +149,10 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
         }
     }
     let line = Color::from_hex(color.attr("val")?)?;
+    Some((width, line))
+}
+
+fn parse_points(path: &El, anchor: &Anchor, w: i64, h: i64) -> Option<String> {
     let mut text = String::new();
     for (i, command) in path.children.iter().enumerate() {
         if command.name != if i == 0 { "moveTo" } else { "lnTo" } || !command.attrs.is_empty() || command.children.len() != 1 {
@@ -157,6 +172,22 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
         }
         let _ = write!(text, "{},{}", x as f32, y as f32);
     }
+    Some(text)
+}
+
+/// Do not partially import a path: losing a curve, subpath, transform or line effect changes
+/// the drawing. Accept only the explicit subset emitted below, including its line styling.
+///
+/// A stroke on its own is written at offset 0 with its anchor's size. A stroke in a group
+/// (`grouped`) sits at its offset and size in the group's child space, which the group maps
+/// onto `anchor`, and may carry a `rot`, which the group keeps for saving; the path fills that
+/// box whatever its size, so only a positive extent is required there.
+pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
+    let sp = validate_shape_obj(obj)?;
+    validate_xfrm(sp, &anchor, grouped)?;
+    let (path, w, h) = validate_cust_geom(sp)?;
+    let (width, line) = validate_line(sp)?;
+    let text = parse_points(path, &anchor, w, h)?;
     Some(Shape { id: 0, kind: ShapeKind::Ink, anchor, fill: Color::Rgb((width as u32) << 16), line, text, format: Default::default() })
 }
 

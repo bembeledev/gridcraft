@@ -250,12 +250,13 @@ fn drawing_objects(children: &[El]) -> Vec<&El> {
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
-    for a in &x.children {
+    for (n, a) in x.children.iter().enumerate() {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
+        let n = n + 1;
         let px = 1.0 / EMU_PER_PX;
         let place = Place { anchor, rect: sheet.anchor_rect(&anchor), scale: (px, px), flip: (false, false) };
         for obj in drawing_objects(&a.children) {
-            read_object(cx, &rels, sheet, obj, place, 0)?;
+            read_object(cx, part, n, &rels, sheet, obj, place, 0)?;
         }
     }
     Ok(())
@@ -265,7 +266,16 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
 /// out through the group's child coordinate space (nested groups compose), keep the outer
 /// anchor's mode and are listed, back to front, in a [`DrawingGroup`]; children that aren't
 /// supported are dropped with their own warning.
-fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, place: Place, depth: usize) -> Result<Option<DrawingRef>, IoError> {
+fn read_object(
+    cx: &mut Ctx<'_>,
+    part: &str,
+    n: usize,
+    rels: &[Rel],
+    sheet: &mut Sheet,
+    obj: &El,
+    place: Place,
+    depth: usize,
+) -> Result<Option<DrawingRef>, IoError> {
     let anchor = place.anchor;
     match obj.name.as_str() {
         "pic" => {
@@ -288,7 +298,10 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
             let Some(gd) = obj.path(&["graphic", "graphicData"]) else { return Ok(None) };
             let uri = gd.attr("uri").unwrap_or("");
             if let Some(rid) = gd.child("chart").and_then(|c| c.attr("id")) {
-                let Some(rel) = rels.iter().find(|r| r.id == rid) else { return Ok(None) };
+                let Some(rel) = rels.iter().find(|r| r.id == rid) else {
+                    cx.warn(format!("a chart without its chart part was skipped ({part}, object {n})"));
+                    return Ok(None);
+                };
                 let target = rel.target.clone();
                 if let Some(cx_xml) = cx.optional_xml(&target)? {
                     let chartex = uri.contains("chartex");
@@ -302,11 +315,13 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
                         }
                         None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
                     }
+                } else {
+                    cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
                 }
             } else if uri.contains("chartex") || uri.contains("chartEx") {
-                cx.warn("a histogram, waterfall, treemap… chart without its chart part was skipped");
+                cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
             } else {
-                cx.warn("an embedded object (SmartArt, OLE…) was skipped");
+                cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
             }
             Ok(None)
         }
@@ -318,7 +333,7 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
         }
         "grpSp" => {
             if depth >= MAX_GROUP_DEPTH {
-                cx.warn("deeply nested grouped shapes were skipped");
+                cx.warn(format!("deeply nested grouped shapes were skipped ({part}, object {n})"));
                 return Ok(None);
             }
             let id = cx.next_object_id();
@@ -342,7 +357,7 @@ fn read_object(cx: &mut Ctx<'_>, rels: &[Rel], sheet: &mut Sheet, obj: &El, plac
                 let rot = if child.name == "grpSp" { 0 } else { xfrm_rot(cxf) };
                 let rect = map.child(cxf, quarter_turn(rot));
                 let place = Place { anchor: sheet.rect_anchor(rect, anchor.mode), rect, scale: map.scale, flip: map.flip };
-                let Some(m) = read_object(cx, rels, sheet, child, place, depth + 1)? else {
+                let Some(m) = read_object(cx, part, n, rels, sheet, child, place, depth + 1)? else {
                     file_complete = false;
                     continue;
                 };

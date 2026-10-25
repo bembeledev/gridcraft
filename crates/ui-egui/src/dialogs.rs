@@ -54,6 +54,9 @@ pub struct Dialog {
 #[derive(Clone, Debug)]
 struct RefPick {
     key: &'static str,
+    /// When true, the picked value is a plain cell/range reference (no leading `=`), used by
+    /// dialogs such as Create PivotTable instead of formula boxes.
+    range_mode: bool,
     /// The sheet the dialog was opened on, by name: its index changes when sheets are inserted or
     /// moved while the dialog is open. References to another sheet carry that sheet's name.
     sheet: String,
@@ -112,6 +115,20 @@ impl Dialog {
     /// dialog's own.
     pub fn pick_reference(&mut self, cell: CellRef, active_sheet: &str, extend: bool) {
         let Some(pick) = self.pick.as_mut() else { return };
+        if pick.range_mode {
+            if !extend {
+                pick.anchor = cell;
+            }
+            let range = abs(&RangeRef::new(pick.anchor, cell));
+            let reference = if active_sheet.eq_ignore_ascii_case(&pick.sheet) {
+                range
+            } else {
+                format!("{}!{range}", gridcraft_engine::formula::quote_sheet(active_sheet))
+            };
+            self.values.insert(pick.key.into(), json!(reference));
+            pick.refocus = true;
+            return;
+        }
         let text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
         let mut ed = crate::editor::EditState::new(0, cell, text, true, false);
         ed.caret = pick.caret.min(ed.text.chars().count());
@@ -199,6 +216,101 @@ impl Dialog {
                 }],
                 json!({"shift": "down"}),
             ),
+            "pivotFieldSettings" => {
+                // Callers pass flat params; the control channel's `ui.dialog` nests them under
+                // `values` (and puts the dialog name in `name`, which must not leak into the form).
+                let src = match params.get("values").and_then(Json::as_object) {
+                    Some(v) => v.clone(),
+                    None => params.as_object().cloned().unwrap_or_default(),
+                };
+                let getv = |k: &str| src.get(k).cloned().unwrap_or(Json::Null);
+                let pivot = getv("pivot").as_str().unwrap_or("").to_string();
+                let field = getv("field").as_str().unwrap_or("").to_string();
+                let area = getv("area").as_str().unwrap_or("").to_string();
+                let mut defaults = json!({
+                    "pivot": pivot, "field": field, "area": area,
+                    "func": "sum", "showAs": "normal", "numberFormat": "General",
+                    "tab": "summarize", "numTouched": false,
+                });
+                // Same dialog opened headlessly can seed any setting.
+                if let Some(dst) = defaults.as_object_mut() {
+                    dst.extend(src.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+                let mut d = Dialog::custom("pivotFieldSettings", "Value Field Settings", defaults);
+                // Load current settings from the engine.
+                // An empty pivot means "the one under the active cell": passing `pivot: ""`
+                // would look for a PivotTable actually named "" and find nothing.
+                let query = if pivot.is_empty() { json!({}) } else { json!({"pivot": pivot}) };
+                if let Ok(info) = app.session.run("pivot.fields", query)
+                    && let Some(vals) = info.get("values").and_then(Json::as_array)
+                    // The pane passes a value field's caption ("Sum of Sales"); the engine lists
+                    // the source column in `field` and the caption in `name`. Match either.
+                    && let Some(v) = vals.iter().find(|x| {
+                        ["name", "field"].iter().any(|k| x.get(*k).and_then(Json::as_str).is_some_and(|s| s.eq_ignore_ascii_case(&field)))
+                    })
+                {
+                    if let Some(f) = v.get("func").and_then(Json::as_str) {
+                        d.values.insert("func".into(), json!(f));
+                    }
+                    if let Some(s) = v.get("showAs").and_then(Json::as_str) {
+                        d.values.insert("showAs".into(), json!(s));
+                        // Excel opens on the tab that holds the field's current setting.
+                        if s != "normal" {
+                            d.values.insert("tab".into(), json!("showas"));
+                        }
+                    }
+                    match v.get("numberFormat").and_then(Json::as_str) {
+                        Some(n) => {
+                            d.values.insert("numberFormat".into(), json!(n));
+                            let (cat, dec, thou) = number_controls(n);
+                            d.values.insert("numCat".into(), json!(cat));
+                            d.values.insert("numDec".into(), json!(dec));
+                            d.values.insert("numThou".into(), json!(thou));
+                        }
+                        // No explicit format: a percentage mode shows Excel's automatic
+                        // 0.00%, so the dialog opens on Percentage rather than "Number".
+                        None => {
+                            let pct = v.get("showAs").and_then(Json::as_str).is_some_and(show_as_is_percent);
+                            d.values.insert("numCat".into(), json!(if pct { "Percentage" } else { "Number" }));
+                        }
+                    }
+                    // Base field/item choices (Difference From and friends).
+                    if let Some(fields) = info.get("fields").and_then(Json::as_array) {
+                        d.values.insert("baseSource".into(), json!(fields));
+                    }
+                    if let Some(n) = v.get("name").and_then(Json::as_str) {
+                        d.values.insert("name".into(), json!(n));
+                        // The caption the engine chose. Untouched, it must not be sent back: that
+                        // would undo the automatic rename when the function changes.
+                        d.values.insert("origName".into(), json!(n));
+                    }
+                }
+                d
+            }
+            "insertPivotTable" => {
+                let mut d = Dialog::custom("insertPivotTable", "Create PivotTable", json!({"source": sel, "destination": "new", "location": active}));
+                let (sheet, applies_to) = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        (
+                            doc.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
+                            doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(","),
+                        )
+                    })
+                    .unwrap_or_default();
+                d.pick = Some(RefPick {
+                    key: "source",
+                    range_mode: true,
+                    sheet: sheet.clone(),
+                    caret: 0,
+                    point: None,
+                    anchor: CellRef::new(0, 0),
+                    refocus: false,
+                    applies_to: applies_to.clone(),
+                });
+                d
+            }
             "insertPaste" => Dialog::form(
                 "insertPaste",
                 "Insert Paste",
@@ -780,7 +892,16 @@ impl Dialog {
                             )
                         })
                         .unwrap_or_default();
-                    d.pick = Some(RefPick { key: "formula", sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+                    d.pick = Some(RefPick {
+                        key: "formula",
+                        range_mode: false,
+                        sheet,
+                        caret: 0,
+                        point: None,
+                        anchor: CellRef::new(0, 0),
+                        refocus: false,
+                        applies_to,
+                    });
                 }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
@@ -1260,7 +1381,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut win_open = true;
     let mut confirm = false;
     let width = match d.name.as_str() {
-        "formatCells" => 560.0,
+        "formatCells" | "pivotFieldSettings" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
@@ -1295,6 +1416,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
+                "insertPivotTable" => insert_pivot_table(app, ui, &mut d, &mut confirm),
+                "pivotFieldSettings" => pivot_field_settings(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
@@ -1702,6 +1825,11 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
 }
 
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_enabled(ui, confirm, open, true)
+}
+
+/// OK/Cancel with OK greyed out when the dialog's inputs can't be submitted yet.
+fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enabled: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -1709,8 +1837,9 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
-            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            let ok =
+                ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
+            if ok.clicked() || (enabled && ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
@@ -2395,6 +2524,458 @@ fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bo
     if *confirm {
         app.run_or_alert("edit.goTo", json!({"reference": r, "record": true}));
         app.grid.ensure_visible = true;
+    }
+    if !open {
+        *confirm = true;
+    }
+}
+
+fn pivot_field_settings(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
+    let pivot = d.values.get("pivot").and_then(Json::as_str).unwrap_or("").to_string();
+    let field = d.values.get("field").and_then(Json::as_str).unwrap_or("").to_string();
+    let area = d.values.get("area").and_then(Json::as_str).unwrap_or("").to_string();
+    let mut tab = d.values.get("tab").and_then(Json::as_str).unwrap_or("summarize").to_string();
+    let mut func = d.values.get("func").and_then(Json::as_str).unwrap_or("sum").to_string();
+    let mut show_as = d.values.get("showAs").and_then(Json::as_str).unwrap_or("normal").to_string();
+    let mut num_cat = d.values.get("numCat").and_then(Json::as_str).unwrap_or("Number").to_string();
+    let mut num_dec = d.values.get("numDec").and_then(Json::as_u64).unwrap_or(2) as usize;
+    let mut num_thou = d.values.get("numThou").and_then(Json::as_bool).unwrap_or(true);
+    let mut num_symbol = d.values.get("numSymbol").and_then(Json::as_str).unwrap_or("$").to_string();
+    // Only send a format code when the user edited the Number Format controls: otherwise the
+    // engine's automatic format (0.00% for Show Values As percentages) must survive OK.
+    let mut num_touched = d.values.get("numTouched").and_then(Json::as_bool).unwrap_or(false);
+    let mut name = d.values.get("name").and_then(Json::as_str).unwrap_or("").to_string();
+    let mut base_field = d.values.get("baseField").and_then(Json::as_str).map(str::to_string);
+    let mut base_item = d.values.get("baseItem").and_then(Json::as_str).map(str::to_string);
+
+    ui.label(format!("{}: {}", lang.tr("Source Name"), field));
+    ui.horizontal(|ui| {
+        ui.label(lang.tr("Custom Name:"));
+        ui.add(egui::TextEdit::singleline(&mut name).desired_width(180.0));
+    });
+    ui.separator();
+
+    // Tabs: plain text, bold when selected (no coloured button chrome).
+    let dim = crate::theme::Tokens::get(ui.ctx()).text_dim;
+    ui.horizontal(|ui| {
+        for (i, (key, label)) in [("summarize", "Summarize Values By"), ("showas", "Show Values As")].into_iter().enumerate() {
+            if i > 0 {
+                ui.add_space(28.0);
+            }
+            let text = if tab == key { egui::RichText::new(lang.tr(label)).strong() } else { egui::RichText::new(lang.tr(label)).color(dim) };
+            if ui.add(egui::Button::new(text).frame(false).min_size(vec2(0.0, 24.0))).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                tab = key.to_string();
+            }
+        }
+    });
+    ui.separator();
+
+    match tab.as_str() {
+        "showas" => {
+            ui.horizontal(|ui| {
+                ui.label(lang.tr("Show values as:"));
+                egui::ComboBox::from_id_salt("showas").width(210.0).selected_text(lang.tr(show_as_label(&show_as))).show_ui(ui, |ui| {
+                    for (s, l) in SHOW_AS_MODES {
+                        ui.selectable_value(&mut show_as, s.to_string(), lang.tr(l));
+                    }
+                });
+            });
+            // A percent mode displays percentages, so the format follows it (Excel does the
+            // same); an explicit Number Format choice by the user still wins.
+            if show_as_is_percent(&show_as) && !num_touched {
+                num_cat = "Percentage".to_string();
+            }
+            // Base field/item only matter where a base is used (Excel greys them otherwise).
+            let needs_base = matches!(show_as.as_str(), "differenceFrom" | "percentDifferenceFrom");
+            ui.add_enabled_ui(needs_base, |ui| {
+                let fields: Vec<(String, Vec<String>)> = d
+                    .values
+                    .get("baseSource")
+                    .and_then(Json::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|f| {
+                                let name = f.get("name").and_then(Json::as_str)?.to_string();
+                                let samples = f
+                                    .get("samples")
+                                    .and_then(Json::as_array)
+                                    .map(|s| s.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                                    .unwrap_or_default();
+                                Some((name, samples))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(lang.tr("Base field:"));
+                    egui::ComboBox::from_id_salt("basefield")
+                        .width(200.0)
+                        .selected_text(base_field.clone().unwrap_or_else(|| lang.tr("(none)").to_string()))
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(base_field.is_none(), lang.tr("(none)")).clicked() {
+                                base_field = None;
+                            }
+                            for (name, _) in &fields {
+                                if ui.selectable_label(base_field.as_deref() == Some(name.as_str()), name).clicked() {
+                                    base_field = Some(name.clone());
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label(lang.tr("Base item:"));
+                    let items: Vec<String> =
+                        fields.iter().find(|(n, _)| base_field.as_deref() == Some(n.as_str())).map(|(_, s)| s.clone()).unwrap_or_default();
+                    egui::ComboBox::from_id_salt("baseitem")
+                        .width(200.0)
+                        .selected_text(base_item.clone().unwrap_or_else(|| lang.tr("(none)").to_string()))
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(base_item.is_none(), lang.tr("(none)")).clicked() {
+                                base_item = None;
+                            }
+                            for it in &items {
+                                if ui.selectable_label(base_item.as_deref() == Some(it.as_str()), it).clicked() {
+                                    base_item = Some(it.clone());
+                                }
+                            }
+                        });
+                });
+            });
+        }
+        _ => {
+            // List box: every function visible at once (no clipped scroll area).
+            egui::Frame::new().inner_margin(6.0).show(ui, |ui| {
+                ui.set_min_width(260.0);
+                for (f, l) in SUMMARY_FUNCS {
+                    let text = if func == f { egui::RichText::new(lang.tr(l)).strong() } else { egui::RichText::new(lang.tr(l)) };
+                    if ui
+                        .add(egui::Button::new(text).frame(false).min_size(vec2(260.0, 22.0)))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        func = f.to_string();
+                    }
+                }
+            });
+        }
+    }
+    ui.separator();
+
+    // Number Format: the same controls as Format Cells ▸ Number. The code is derived from the
+    // controls *after* they are drawn, so a change made this frame (then OK) is never lost.
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(lang.tr("Number Format")).strong());
+    });
+    ui.columns(2, |cols| {
+        for c in NUMBER_CATEGORIES {
+            let text = if num_cat == c { egui::RichText::new(lang.tr(c)).strong() } else { egui::RichText::new(lang.tr(c)) };
+            if cols[0].add(egui::Button::new(text).frame(false).min_size(vec2(200.0, 22.0))).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+            {
+                num_cat = c.to_string();
+                num_touched = true;
+            }
+        }
+        if matches!(num_cat.as_str(), "Number" | "Currency" | "Accounting" | "Percentage" | "Scientific") {
+            cols[1].horizontal(|ui| {
+                ui.label(lang.tr("Decimal places:"));
+                if ui.add(egui::DragValue::new(&mut num_dec).range(0..=30)).changed() {
+                    num_touched = true;
+                }
+            });
+        }
+        if (num_cat == "Number" || num_cat == "Currency") && cols[1].checkbox(&mut num_thou, lang.tr("Use 1000 Separator (,)")).changed() {
+            num_touched = true;
+        }
+        if num_cat == "Currency" {
+            cols[1].horizontal(|ui| {
+                ui.label(lang.tr("Symbol:"));
+                if ui.add(egui::TextEdit::singleline(&mut num_symbol).desired_width(40.0)).changed() {
+                    num_touched = true;
+                }
+            });
+        }
+        let derived = number_code(&num_cat, num_dec, num_thou, &num_symbol);
+        cols[1].add_space(4.0);
+        cols[1].label(lang.tr("Sample"));
+        cols[1].label(egui::RichText::new(&derived).small().weak());
+        let preview = app
+            .session
+            .active()
+            .map(|doc| gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(1234.5678), &derived, &doc.wb).text)
+            .unwrap_or_default();
+        cols[1].label(egui::RichText::new(preview).font(theme::ui_font(14.0)));
+    });
+
+    let number_format = number_code(&num_cat, num_dec, num_thou, &num_symbol);
+
+    d.values.insert("tab".into(), json!(tab.clone()));
+    d.values.insert("func".into(), json!(func.clone()));
+    d.values.insert("showAs".into(), json!(show_as.clone()));
+    d.values.insert("numberFormat".into(), json!(number_format.clone()));
+    d.values.insert("numCat".into(), json!(num_cat.clone()));
+    d.values.insert("numDec".into(), json!(num_dec));
+    d.values.insert("numThou".into(), json!(num_thou));
+    d.values.insert("numSymbol".into(), json!(num_symbol.clone()));
+    d.values.insert("numTouched".into(), json!(num_touched));
+    d.values.insert("name".into(), json!(name.clone()));
+    d.values.insert("baseField".into(), json!(base_field.clone()));
+    d.values.insert("baseItem".into(), json!(base_item.clone()));
+
+    if area != "values" {
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button(lang.tr("Sort A to Z")).clicked() {
+                app.run_or_alert("pivot.sort", json!({"pivot": pivot, "field": field, "order": "asc"}));
+            }
+            if ui.button(lang.tr("Sort Z to A")).clicked() {
+                app.run_or_alert("pivot.sort", json!({"pivot": pivot, "field": field, "order": "desc"}));
+            }
+        });
+        ui.horizontal(|ui| {
+            for (g, l) in GROUP_MODES {
+                if ui.button(lang.tr(l)).clicked() {
+                    app.run_or_alert("pivot.group", json!({"pivot": pivot, "field": field, "by": g}));
+                }
+            }
+        });
+    }
+
+    ui.separator();
+    let mut open = true;
+    ui.horizontal(|ui| {
+        if area != "values" && ui.button(lang.tr("Remove Field")).clicked() {
+            app.run_or_alert("pivot.removeField", json!({"pivot": pivot, "field": field, "area": area}));
+            *confirm = true;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Plain buttons: this dialog has no accent-coloured OK.
+            if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
+                open = false;
+            }
+            if ui.button(format!("  {}  ", lang.tr("OK"))).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+                *confirm = true;
+            }
+        });
+    });
+    if *confirm && area == "values" {
+        let mut params = json!({"field": field, "func": func, "showAs": show_as});
+        // Untouched, the field keeps its format (Excel does not clear it on OK). "General" clears it,
+        // so the engine's automatic format (0.00% for the percent modes) applies again.
+        if num_touched {
+            params["numberFormat"] = if num_cat == "General" { Json::Null } else { json!(number_format) };
+        }
+        // "(none)" clears the base; an untouched one is simply not sent.
+        params["baseField"] = base_field.as_ref().map_or(Json::Null, |bf| json!(bf));
+        params["baseItem"] = base_item.as_ref().map_or(Json::Null, |bi| json!(bi));
+        if !pivot.is_empty() {
+            params["pivot"] = json!(pivot);
+        }
+        let orig = d.values.get("origName").and_then(Json::as_str).unwrap_or("");
+        if !name.trim().is_empty() && !name.trim().eq_ignore_ascii_case(orig) {
+            params["name"] = json!(name);
+        }
+        app.run_or_alert("pivot.valueSettings", params);
+    }
+    if !open {
+        *confirm = true;
+    }
+}
+
+const SUMMARY_FUNCS: [(&str, &str); 11] = [
+    ("sum", "Sum"),
+    ("count", "Count"),
+    ("average", "Average"),
+    ("max", "Max"),
+    ("min", "Min"),
+    ("product", "Product"),
+    ("countNumbers", "Count Numbers"),
+    ("stdDev", "StdDev"),
+    ("stdDevP", "StdDevP"),
+    ("var", "Var"),
+    ("varP", "VarP"),
+];
+
+const SHOW_AS_MODES: [(&str, &str); 12] = [
+    ("normal", "No Calculation"),
+    ("percentOfGrandTotal", "% of Grand Total"),
+    ("percentOfColumnTotal", "% of Column Total"),
+    ("percentOfRowTotal", "% of Row Total"),
+    ("runningTotal", "Running Total"),
+    ("percentRunningTotalIn", "% Running Total In"),
+    ("differenceFrom", "Difference From"),
+    ("percentDifferenceFrom", "% Difference From"),
+    ("rank", "Rank Largest to Smallest"),
+    ("rankAscending", "Rank Smallest to Largest"),
+    ("index", "Index"),
+    ("percentOfParentRowTotal", "% of Parent Row Total"),
+];
+
+const NUMBER_CATEGORIES: [&str; 10] = ["General", "Number", "Currency", "Accounting", "Date", "Time", "Percentage", "Fraction", "Scientific", "Text"];
+
+const GROUP_MODES: [(&str, &str); 4] =
+    [("years", "Group by Years"), ("quarters", "Group by Quarters"), ("months", "Group by Months"), ("none", "Ungroup")];
+
+/// The format code for a Number Format choice (Format Cells ▸ Number, matching Excel's presets).
+fn number_code(cat: &str, decimals: usize, thousands: bool, symbol: &str) -> String {
+    let dec = if decimals == 0 { String::new() } else { format!(".{}", "0".repeat(decimals)) };
+    match cat {
+        "General" => "General".into(),
+        "Percentage" => format!("0{dec}%"),
+        "Currency" => format!("{symbol}#,##0{dec}"),
+        "Accounting" => format!("{symbol}#,##0{dec};({symbol}#,##0{dec})"),
+        "Scientific" => format!("0.0{}E+00", "0".repeat(decimals.saturating_sub(1))),
+        "Fraction" => "# ?/?".into(),
+        "Date" => "m/d/yyyy".into(),
+        "Time" => "h:mm:ss".into(),
+        "Text" => "@".into(),
+        _ => {
+            if thousands {
+                format!("#,##0{dec}")
+            } else {
+                format!("0{dec}")
+            }
+        }
+    }
+}
+
+/// Which Number Format controls a stored format code came from (so the dialog opens on the
+/// user's current setting instead of resetting it).
+fn number_controls(code: &str) -> (&'static str, u64, bool) {
+    let decimals = code.split('.').nth(1).map(|r| r.chars().take_while(|c| *c == '0').count()).unwrap_or(0) as u64;
+    let cat = if code == "General" {
+        "General"
+    } else if code.contains('%') {
+        "Percentage"
+    } else if code.contains('E') {
+        "Scientific"
+    } else if code.contains("?/") {
+        "Fraction"
+    } else if code.contains('d') || code.contains('m') && code.contains('y') {
+        "Date"
+    } else if code.contains('h') {
+        "Time"
+    } else if code == "@" {
+        "Text"
+    } else if code.contains('$') || code.contains('€') || code.contains('£') || code.contains('¥') {
+        if code.contains("(") { "Accounting" } else { "Currency" }
+    } else {
+        "Number"
+    };
+    (cat, decimals, code.contains(','))
+}
+
+/// Whether a Show Values As mode renders percentages (Excel forces a percent format on these).
+fn show_as_is_percent(mode: &str) -> bool {
+    matches!(
+        mode,
+        "percentOfGrandTotal"
+            | "percentOfColumnTotal"
+            | "percentOfRowTotal"
+            | "percentOf"
+            | "percentDifferenceFrom"
+            | "percentRunningTotalIn"
+            | "percentOfParentRowTotal"
+    )
+}
+
+fn show_as_label(mode: &str) -> &'static str {
+    SHOW_AS_MODES.iter().find(|(m, _)| *m == mode).map(|(_, l)| *l).unwrap_or("No Calculation")
+}
+
+fn insert_pivot_table(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
+    let mut source = d.values.get("source").and_then(Json::as_str).unwrap_or("").to_string();
+    let mut destination = d.values.get("destination").and_then(Json::as_str).unwrap_or("new").to_string();
+    let mut location = d.values.get("location").and_then(Json::as_str).unwrap_or("").to_string();
+    let mut source_type = d.values.get("sourceType").and_then(Json::as_str).unwrap_or("range").to_string();
+
+    ui.label(lang.tr("Select the data that you want to analyze"));
+    ui.radio_value(&mut source_type, "range".into(), lang.tr("Select a table or range"));
+    ui.horizontal(|ui| {
+        ui.add_space(20.0);
+        let r = ui.add(egui::TextEdit::singleline(&mut source).desired_width(200.0));
+        if let Some(pick) = d.pick.as_mut().filter(|p| p.key == "source") {
+            track_pick(pick, &r, r.changed());
+        }
+        if ui.small_button("...").clicked() {
+            let (sheet, applies_to) = app
+                .session
+                .active()
+                .map(|doc| {
+                    (
+                        doc.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
+                        doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(","),
+                    )
+                })
+                .unwrap_or_default();
+            d.pick = Some(RefPick {
+                key: "source",
+                range_mode: true,
+                sheet,
+                caret: 0,
+                point: None,
+                anchor: CellRef::new(0, 0),
+                refocus: false,
+                applies_to,
+            });
+        }
+    });
+    // External sources and the Data Model aren't implemented, so they can't be chosen (a range is
+    // what `insert.pivotTable` reads; picking one of these would silently make a range report).
+    ui.add_enabled_ui(false, |ui| {
+        ui.radio_value(&mut source_type, "external".into(), lang.tr("Use an external data source"));
+        ui.radio_value(&mut source_type, "model".into(), lang.tr("Use this workbook's Data Model"));
+    });
+
+    ui.add_space(8.0);
+
+    ui.label(lang.tr("Choose where you want the PivotTable report to be placed"));
+    ui.radio_value(&mut destination, "new".into(), lang.tr("New Worksheet"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut destination, "existing".into(), lang.tr("Existing Worksheet"));
+        if destination == "existing" {
+            let r = ui.add(egui::TextEdit::singleline(&mut location).desired_width(160.0));
+            if let Some(pick) = d.pick.as_mut().filter(|p| p.key == "location") {
+                track_pick(pick, &r, r.changed());
+            }
+            if ui.small_button("...").clicked() {
+                let (sheet, applies_to) = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        (
+                            doc.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
+                            doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(","),
+                        )
+                    })
+                    .unwrap_or_default();
+                d.pick = Some(RefPick {
+                    key: "location",
+                    range_mode: true,
+                    sheet,
+                    caret: 0,
+                    point: None,
+                    anchor: CellRef::new(0, 0),
+                    refocus: false,
+                    applies_to,
+                });
+            }
+        }
+    });
+
+    d.values.insert("source".into(), json!(source.clone()));
+    d.values.insert("sourceType".into(), json!(source_type.clone()));
+    d.values.insert("destination".into(), json!(destination.clone()));
+    d.values.insert("location".into(), json!(location.clone()));
+
+    // "Existing Worksheet" needs a place: an empty one would make the engine silently create a
+    // sheet (and skip the structure-protection check), so OK stays disabled until it's filled.
+    let usable = destination != "existing" || !location.trim().is_empty();
+    let mut open = true;
+    ok_cancel_enabled(ui, confirm, &mut open, usable);
+    if *confirm {
+        app.run_or_alert("insert.pivotTable", json!({"source": source, "destination": destination, "location": location}));
     }
     if !open {
         *confirm = true;

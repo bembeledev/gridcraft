@@ -465,10 +465,13 @@ fn pivot_fields_pane_follows_the_interface_language() {
     if es("PivotTable Fields") != "PivotTable Fields" {
         assert!(h.query_by_label("PivotTable Fields").is_none());
     }
-    h.get_by_label("Region ▾").click();
+    let region = h.get_by_label("Region ▾").rect().center();
+    h.input_mut().events.push(Event::PointerButton { pos: region, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos: region, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    for english in ["Move to Column Labels", "Group by Years", "Remove Field"] {
-        assert!(h.query_by_label(es(english)).is_some(), "the field menu shows `{}`", es(english));
+    for english in ["Group by Years", "Remove Field"] {
+        assert!(h.query_by_label(es(english)).is_some(), "the field settings dialog shows `{}`", es(english));
     }
     if es("Remove Field") != "Remove Field" {
         assert!(h.query_by_label("Remove Field").is_none());

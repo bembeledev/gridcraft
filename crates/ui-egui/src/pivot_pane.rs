@@ -3,11 +3,17 @@
 //! with move/remove menus. Everything runs `pivot.*` commands.
 
 use egui::{Ui, vec2};
-use serde_json::{Value as Json, json};
+use serde_json::json;
 
 use crate::SheetApp;
 use crate::i18n;
 use crate::theme::{self, Tokens};
+
+#[derive(Clone)]
+struct PivotFieldDrag {
+    field: String,
+    from: Option<String>,
+}
 
 /// Whether the active cell is inside a pivot report (so the pane should show).
 pub fn active_pivot(app: &SheetApp) -> Option<String> {
@@ -42,14 +48,37 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     f["areas"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
                 let mut on = !areas.is_empty();
                 let numeric = f["numeric"].as_bool().unwrap_or(false);
-                let r = ui.checkbox(&mut on, egui::RichText::new(&fname).font(theme::ui_font(13.0)));
-                if r.changed() {
-                    let res = if on {
-                        app.run("pivot.addField", json!({"pivot": name, "field": fname, "area": if numeric { "values" } else { "rows" }}))
-                    } else {
-                        app.run("pivot.removeField", json!({"pivot": name, "field": fname}))
-                    };
-                    if let Err(e) = res {
+                let drag = PivotFieldDrag { field: fname.clone(), from: None };
+                let r = ui
+                    .dnd_drag_source(ui.make_persistent_id(format!("pv_field_{fname}")), drag, |ui| {
+                        ui.checkbox(&mut on, egui::RichText::new(&fname).font(theme::ui_font(13.0)))
+                    })
+                    .inner;
+                // Excel: right-click a field name to add it to a chosen area.
+                let popup_id = ui.make_persistent_id(format!("pv_field_{fname}")).with("ctx");
+                if ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary)) && r.hovered() {
+                    egui::Popup::open_id(ui.ctx(), popup_id);
+                }
+                let anchor_rect = r.rect;
+                egui::Popup::new(popup_id, ui.ctx().clone(), egui::PopupAnchor::ParentRect(anchor_rect), ui.layer_id()).open_memory(None).show(
+                    |ui| {
+                        for (to, l) in [
+                            ("rows", "Add to Row Label"),
+                            ("columns", "Add to Column Label"),
+                            ("values", "Add to Values"),
+                            ("filters", "Add to Report Filter"),
+                        ] {
+                            if ui.button(lang.tr(l)).clicked() {
+                                app.run_or_alert("pivot.addField", json!({"pivot": name, "field": fname, "area": to}));
+                            }
+                        }
+                    },
+                );
+                if r.changed() && on {
+                    // Only adding via the checkbox; removal happens via drag-out or "Remove Field".
+                    // (Excel unchecks to remove, but the user asked for removal only on drag-out.)
+                    if let Err(e) = app.run("pivot.addField", json!({"pivot": name, "field": fname, "area": if numeric { "values" } else { "rows" }}))
+                    {
                         app.message = Some(("PivotTable".into(), crate::clean_error(&e)));
                     }
                 }
@@ -87,79 +116,86 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             for (i, (key, label)) in [("filters", "Filters"), ("columns", "Columns"), ("rows", "Rows"), ("values", "Values")].iter().enumerate() {
                 let ui = &mut cols[i % 2];
                 ui.label(egui::RichText::new(lang.tr(label)).strong());
-                egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
+                let frame = egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0);
+                // Displayed slots: the area's fields, plus Σ Values (a label for the value fields,
+                // not a field) shown at its position in Rows/Columns.
+                let mut slots: Vec<(String, bool, egui::Rect)> = Vec::new();
+                let (_, dropped) = ui.dnd_drop_zone::<PivotFieldDrag, _>(frame, |ui| {
                     ui.set_min_size(vec2(ui.available_width(), 60.0));
                     for f in area_with_values(key) {
                         let is_values = f == VALUES_FIELD;
-                        let b = ui.add(
-                            egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
-                                .fill(t.ribbon)
-                                .min_size(vec2(ui.available_width(), 20.0)),
-                        );
-                        egui::Popup::menu(&b).show(|ui| {
-                            for (to, l) in [
-                                ("rows", "Move to Row Labels"),
-                                ("columns", "Move to Column Labels"),
-                                ("filters", "Move to Report Filter"),
-                                ("values", "Move to Values"),
-                            ] {
-                                if to != *key && (!is_values || matches!(to, "rows" | "columns")) && ui.button(lang.tr(l)).clicked() {
-                                    app.run_or_alert("pivot.moveField", json!({"pivot": name, "field": f, "from": key, "to": to}));
-                                }
-                            }
-                            if is_values {
-                                return;
-                            }
-                            if *key == "values" {
-                                ui.separator();
-                                for (func, l) in [
-                                    ("sum", "Summarize by Sum"),
-                                    ("count", "Summarize by Count"),
-                                    ("average", "Summarize by Average"),
-                                    ("max", "Summarize by Max"),
-                                    ("min", "Summarize by Min"),
-                                ] {
-                                    if ui.button(lang.tr(l)).clicked() {
-                                        app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "func": func}));
-                                    }
-                                }
-                                for (sa, l) in [
-                                    ("normal", "Show as No Calculation"),
-                                    ("percentOfGrandTotal", "Show as % of Grand Total"),
-                                    ("runningTotal", "Show as Running Total"),
-                                    ("rank", "Show as Rank"),
-                                ] {
-                                    if ui.button(lang.tr(l)).clicked() {
-                                        app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "showAs": sa}));
-                                    }
-                                }
-                            } else {
-                                ui.separator();
-                                for (o, l) in [("asc", "Sort A to Z"), ("desc", "Sort Z to A")] {
-                                    if ui.button(lang.tr(l)).clicked() {
-                                        app.run_or_alert("pivot.sort", json!({"pivot": name, "field": f, "order": o}));
-                                    }
-                                }
-                                for (g, l) in [
-                                    ("years", "Group by Years"),
-                                    ("quarters", "Group by Quarters"),
-                                    ("months", "Group by Months"),
-                                    ("none", "Ungroup"),
-                                ] {
-                                    if ui.button(lang.tr(l)).clicked() {
-                                        app.run_or_alert("pivot.group", json!({"pivot": name, "field": f, "by": g}));
-                                    }
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(lang.tr("Remove Field")).clicked() {
-                                app.run_or_alert("pivot.removeField", json!({"pivot": name, "field": f, "area": key}));
-                            }
+                        let drag = PivotFieldDrag { field: f.clone(), from: Some(key.to_string()) };
+                        let inner = ui.dnd_drag_source(ui.make_persistent_id(format!("pv_{key}_{f}")), drag, |ui| {
+                            ui.add(
+                                egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
+                                    .fill(t.ribbon)
+                                    .min_size(vec2(ui.available_width(), 20.0)),
+                            )
                         });
+                        let b = inner.inner;
+                        slots.push((f.clone(), is_values, b.rect));
+                        let secondary = ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary) && b.hovered());
+                        if secondary {
+                            app.open_dialog("pivotFieldSettings", json!({"pivot": name, "field": f, "area": key}));
+                        }
                     }
                 });
+                if let Some(payload) = dropped {
+                    let p = payload.as_ref().clone();
+                    // Landing slot: compare the release point with every displayed slot's centre.
+                    let y = ui.input(|i| i.pointer.interact_pos().map(|pt| pt.y).unwrap_or(f32::INFINITY));
+                    let dragged = slots.iter().position(|(n, _, _)| *n == p.field);
+                    let (mut di, mut sigma_above, mut others_fields) = (0, 0, 0);
+                    for (idx, (_, is_values, rect)) in slots.iter().enumerate() {
+                        if rect.center().y < y {
+                            di += 1;
+                            if !*is_values && Some(idx) != dragged {
+                                others_fields += 1;
+                            }
+                            if *is_values {
+                                sigma_above += 1;
+                            }
+                        }
+                    }
+                    let same = p.from.as_deref() == Some(key);
+                    if p.field == VALUES_FIELD && !matches!(*key, "rows" | "columns") {
+                        // Σ Values only lives in Rows/Columns; dropping it elsewhere does nothing.
+                    } else if p.field == VALUES_FIELD && *key == "rows" {
+                        // Σ position counts fields only; in Columns it always sits after the last field.
+                        app.run_or_alert(
+                            "pivot.moveField",
+                            json!({"pivot": name, "field": p.field, "from": p.from, "to": key, "position": di - sigma_above}),
+                        );
+                    } else if same {
+                        // Same area: the engine removes the field first, so subtract it.
+                        app.run_or_alert(
+                            "pivot.moveField",
+                            json!({"pivot": name, "field": p.field, "from": key, "to": key, "position": others_fields}),
+                        );
+                    } else {
+                        let pos = if matches!(*key, "rows" | "columns") { di - sigma_above } else { di };
+                        match &p.from {
+                            Some(from) => app
+                                .run_or_alert("pivot.moveField", json!({"pivot": name, "field": p.field, "from": from, "to": key, "position": pos})),
+                            None => app.run_or_alert("pivot.addField", json!({"pivot": name, "field": p.field, "area": key, "position": pos})),
+                        }
+                    }
+                }
             }
         });
+
+        // If a field was dragged out of every area, remove it (Excel behaviour). A click, or a
+        // click with a hand-tremor wobble, is not a drag: `is_decidedly_dragging` is false for
+        // those, so only a real drag-out removes the field.
+        let dragged_out = ui.input(|i| i.pointer.primary_released() && i.pointer.is_decidedly_dragging());
+        if dragged_out
+            && egui::DragAndDrop::has_payload_of_type::<PivotFieldDrag>(ui.ctx())
+            && let Some(payload) = egui::DragAndDrop::take_payload::<PivotFieldDrag>(ui.ctx())
+            && let Some(from) = payload.from.clone()
+        {
+            app.run_or_alert("pivot.removeField", json!({"pivot": name, "field": payload.field, "area": from}));
+        }
+
         ui.separator();
         ui.horizontal(|ui| {
             if ui.button(lang.tr("Refresh")).clicked() {
@@ -176,6 +212,5 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 }
             });
         });
-        let _: Option<Json> = None;
     });
 }

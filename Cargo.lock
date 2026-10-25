@@ -1576,6 +1576,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.12.1"
 dependencies = [
+ "chrono",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",

@@ -105,7 +105,7 @@ fn workbook() -> Workbook {
                 ..PivotValue::default()
             },
         ],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]), value_filter: None }],
         layout: PivotLayout::Tabular,
         enable_show_details: false,
         grand_totals_rows: false,
@@ -116,6 +116,11 @@ fn workbook() -> Workbook {
         show_headers: false,
         last_range: Some(rr("A2:H12")),
         calculated_fields: vec![],
+        calculated_items: vec![],
+        repeat_item_labels: false,
+        blank_lines: false,
+        show_items_with_no_data: false,
+        shared_cache: None,
         values_on_rows: false,
         values_position: None,
     };
@@ -127,8 +132,26 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                group_bins: None,
+                grouped_items: vec![],
+                sort_by: None,
+                custom_order: vec![],
+                collapsed_items: vec!["2024".into()],
+            },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Months,
+                sort: PivotSort::Asc,
+                group_bins: None,
+                grouped_items: vec![],
+                sort_by: None,
+                custom_order: vec![],
+                collapsed_items: vec![],
+            },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -137,14 +160,32 @@ fn workbook() -> Workbook {
                 func: PivotFunc::Sum,
                 name: "Share".into(),
                 show_as: PivotShowAs::PercentOfGrandTotal,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
                 number_format: None,
             },
-            PivotValue { source_col: "Sales".into(), func: PivotFunc::Max, name: "Rank".into(), show_as: PivotShowAs::Rank, number_format: None },
+            PivotValue {
+                source_col: "Sales".into(),
+                func: PivotFunc::Max,
+                name: "Rank".into(),
+                show_as: PivotShowAs::Rank,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
+                number_format: None,
+            },
             PivotValue {
                 source_col: "Sales".into(),
                 func: PivotFunc::Average,
                 name: "Running".into(),
                 show_as: PivotShowAs::RunningTotal,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
                 number_format: None,
             },
             PivotValue {
@@ -152,6 +193,10 @@ fn workbook() -> Workbook {
                 func: PivotFunc::StdDevP,
                 name: "Spread".into(),
                 show_as: PivotShowAs::PercentOfColumnTotal,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
                 number_format: None,
             },
             PivotValue {
@@ -159,12 +204,16 @@ fn workbook() -> Workbook {
                 func: PivotFunc::VarP,
                 name: "RowPct".into(),
                 show_as: PivotShowAs::PercentOfRowTotal,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
                 number_format: None,
             },
         ],
         filters: vec![
-            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]) },
-            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]) },
+            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]), value_filter: None },
+            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".to_string(), "B".to_string()]), value_filter: None },
         ],
         layout: PivotLayout::Outline,
         enable_show_details: true,
@@ -176,6 +225,11 @@ fn workbook() -> Workbook {
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
         calculated_fields: vec![],
+        calculated_items: vec![],
+        repeat_item_labels: false,
+        blank_lines: false,
+        show_items_with_no_data: false,
+        shared_cache: None,
         values_on_rows: false,
         values_position: None,
     };
@@ -187,7 +241,7 @@ fn workbook() -> Workbook {
         anchor: at("AB1"),
         rows: vec![field("Product")],
         values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Product, name: "Product of Units".into(), ..PivotValue::default() }],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None, value_filter: None }],
         last_range: Some(rr("AB1:AC6")),
         ..PivotTable::default()
     };
@@ -525,7 +579,7 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(pt.values.iter().any(|v| v.func == PivotFunc::Sum && v.source_col == "V"));
     assert!(report.warnings.iter().any(|w| w.contains("bogus")), "{:?}", report.warnings);
     assert!(report.warnings.iter().any(|w| w.contains("grouping")), "{:?}", report.warnings);
-    assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("percentOfParent")), "{:?}", report.warnings);
 }
 
 #[test]
@@ -744,4 +798,209 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+#[test]
+fn pivot_settings_survive_a_round_trip() {
+    // These were all silently dropped: the grouping, the sort-by, the report toggles and the
+    // filters. Losing them means saving and reopening a grouped or filtered pivot loses the work.
+    let mut wb = workbook();
+    let pt = &mut wb.sheet_mut(1).unwrap().pivots[2];
+    pt.rows[0].group_bins = Some((0.0, 10.0));
+    pt.rows[0].grouped_items = vec![vec!["A".to_string(), "B".to_string()]];
+    pt.rows[0].sort_by = Some("Sales".to_string());
+    pt.rows[0].custom_order = vec!["B".to_string(), "A".to_string()];
+    pt.repeat_item_labels = true;
+    pt.blank_lines = true;
+    pt.show_items_with_no_data = true;
+    pt.calculated_items = vec![PivotCalcItem { name: "East+West".into(), field: "Region".into(), formula: "=East+West".into() }];
+    pt.filters[0].value_filter = Some(PivotValueFilter { n: 2, top: true, by_field: Some("Sales".into()), ..PivotValueFilter::default() });
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let got = &back.sheet(1).unwrap().pivots[2];
+    assert_eq!(got.rows[0].group_bins, Some((0.0, 10.0)), "number bins");
+    assert_eq!(got.rows[0].grouped_items, vec![vec!["A".to_string(), "B".to_string()]], "manual text groups");
+    assert_eq!(got.rows[0].sort_by.as_deref(), Some("Sales"), "sort by a value field");
+    assert_eq!(got.rows[0].custom_order, vec!["B".to_string(), "A".to_string()], "custom order");
+    assert!(got.repeat_item_labels, "repeat item labels");
+    assert!(got.blank_lines, "blank lines between groups");
+    assert!(got.show_items_with_no_data, "show items with no data");
+    assert_eq!(got.calculated_items.len(), 1, "calculated items");
+    assert_eq!(got.calculated_items[0].formula, "=East+West");
+    let vf = got.filters.iter().find_map(|f| f.value_filter.as_ref()).expect("the value filter survives");
+    assert_eq!((vf.n, vf.top), (2, true), "Top 2 by Sales");
+    assert_eq!(vf.by_field.as_deref(), Some("Sales"));
+}
+
+#[test]
+fn the_gridcraft_extension_is_well_formed_and_ignored_by_the_reader_when_absent() {
+    // The settings live in an `ext` Excel ignores, so it must be a well-formed element nested
+    // inside the standard extLst, and a file without it must still read.
+    let mut wb = workbook();
+    let pt = &mut wb.sheet_mut(1).unwrap().pivots[2];
+    pt.blank_lines = true;
+    pt.rows[0].group_bins = Some((2.5, 7.0));
+    pt.rows[0].sort_by = Some("Sales & \"more\"".to_string());
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let xml = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").cloned().unwrap_or_default()).unwrap();
+    assert!(xml.contains("<extLst>"), "the extension list is written");
+    assert!(xml.contains("<gc:pivotSettings"), "our settings are inside it");
+    assert!(xml.contains("binStart=\"2.5\"") && xml.contains("binSize=\"7\""), "the bin is escaped and written");
+    assert!(xml.contains("Sales &amp; &quot;more&quot;"), "attributes are XML-escaped");
+    // Every `ext` sits in the one extLst, which ends once, right before the closing element.
+    assert_eq!(xml.matches("<extLst>").count(), 1);
+    assert_eq!(xml.matches("</extLst>").count(), 1);
+    assert!(xml.ends_with("</extLst></pivotTableDefinition>"));
+    // A pivot with no such settings writes no extension at all.
+    let plain = unzip(&write_xlsx(&workbook()).unwrap());
+    let plain_xml = String::from_utf8(plain.get("xl/pivotTables/pivotTable3.xml").cloned().unwrap_or_default()).unwrap();
+    assert!(!plain_xml.contains("gc:pivotSettings"));
+}
+
+#[test]
+fn a_shared_cache_is_not_reused_for_a_pivot_it_cannot_serve() {
+    // `shared_cache` can arrive from JSON (imported or hand-built workbooks), not only from our own
+    // writer: two tables may share a key while disagreeing. A date grouping is the clearest case —
+    // the shared cache has no month field, so the second table must get a cache of its own rather
+    // than borrow the first one's axis mapping.
+    let mut wb = workbook();
+    {
+        let sh = wb.sheet_mut(1).unwrap();
+        sh.pivots[1].rows = vec![PivotField { source_col: "Region".into(), ..PivotField::default() }];
+        sh.pivots[2].rows = vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, ..PivotField::default() }];
+        sh.pivots[1].shared_cache = Some("Cache1".into());
+        sh.pivots[2].shared_cache = Some("Cache1".into());
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    assert!(caches >= 3, "an incompatible share gets its own cache (pivot 0's, the shared one, theirs), got {caches}");
+    // And the month grouping is written, so the file reads back with the axis the table asked for.
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots[2].rows[0].date_group, PivotDateGroup::Months);
+}
+
+#[test]
+fn a_compatible_shared_cache_is_still_reused() {
+    let mut wb = workbook();
+    {
+        let sh = wb.sheet_mut(1).unwrap();
+        sh.pivots[1].shared_cache = Some("Sales".into());
+        sh.pivots[2] = sh.pivots[1].clone();
+        sh.pivots[2].id = 99;
+        sh.pivots[2].name = "Copy".into();
+        sh.pivots[2].anchor = at("A40");
+        sh.pivots[2].shared_cache = Some("Sales".into());
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    // Pivot 0 has its own cache; the two identical tables after it share one.
+    assert_eq!(caches, 2, "one shared cache for the two identical tables, plus pivot 0's");
+}
+
+#[test]
+fn a_value_fields_base_survives_the_round_trip() {
+    // Difference From / % Difference From are computed from `base_field` / `base_item`. The writer
+    // used to emit a first-axis field and item 0, which the reader restored as None, so reopening
+    // a saved report compared against a different field or sibling.
+    let mut wb = workbook();
+    {
+        let pt = &mut wb.sheet_mut(1).unwrap().pivots[2];
+        let v = pt.values.first_mut().unwrap();
+        v.show_as = PivotShowAs::DifferenceFrom;
+        v.base_field = Some("Units".into());
+        v.base_item = Some("B".into());
+        // The error/empty replacement text has no standard attribute either.
+        v.error_display = Some("#N/A".into());
+        v.empty_display = Some("-".into());
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let v = &back.sheet(1).unwrap().pivots[2].values[0];
+    assert_eq!(v.show_as, PivotShowAs::DifferenceFrom, "the mode survives");
+    assert_eq!(v.base_field.as_deref(), Some("Units"), "the base value field survives");
+    assert_eq!(v.base_item.as_deref(), Some("B"), "the base item survives");
+    assert_eq!(v.error_display.as_deref(), Some("#N/A"), "the error text survives");
+    assert_eq!(v.empty_display.as_deref(), Some("-"), "the empty text survives");
+}
+
+#[test]
+fn a_shared_cache_key_does_not_cross_sources() {
+    // `shared_cache` is plain JSON: two tables can carry the same key while reading different
+    // ranges. Reusing the first one's cache would save the second pointing at the wrong data.
+    let mut wb = workbook();
+    {
+        let sh = wb.sheet_mut(1).unwrap();
+        sh.pivots[1].shared_cache = Some("Cache1".into());
+        sh.pivots[2].shared_cache = Some("Cache1".into());
+        // Same field names, different range.
+        sh.pivots[2].source = "Data!$A$1:$F$5".into();
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    assert!(caches >= 3, "a different source gets its own cache (pivot 0's, the shared one, theirs), got {caches}");
+    // Each written cache names its own range, so neither table reads the other's rows.
+    let ranges: Vec<String> = parts
+        .iter()
+        .filter(|(k, _)| k.starts_with("xl/pivotCache/pivotCacheDefinition"))
+        .map(|(_, v)| String::from_utf8_lossy(v).to_string())
+        .filter_map(|x| {
+            let i = x.find("<worksheetSource ref=\"")? + "<worksheetSource ref=\"".len();
+            x[i..].split('"').next().map(str::to_string)
+        })
+        .collect();
+    assert!(ranges.iter().any(|r| r.ends_with("F5")), "the second table's own range is written, got {ranges:?}");
+}
+
+#[test]
+fn a_shared_cache_key_does_not_hide_calculated_fields() {
+    // Same source and key, but the second table has a calculated field the first's cache lacks.
+    // Reusing that cache made `table_xml` drop the value field built on it.
+    let mut wb = workbook();
+    {
+        let sh = wb.sheet_mut(1).unwrap();
+        sh.pivots[1].shared_cache = Some("Shared".into());
+        sh.pivots[1].calculated_fields = vec![];
+        sh.pivots[2].shared_cache = Some("Shared".into());
+        sh.pivots[2].source = sh.pivots[1].source.clone();
+        sh.pivots[2].calculated_fields = vec![PivotCalcField { name: "Margin".into(), formula: "=Sales-Units".into() }];
+        sh.pivots[2].values =
+            vec![PivotValue { source_col: "Margin".into(), func: PivotFunc::Sum, name: "Sum of Margin".into(), ..PivotValue::default() }];
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let caches = parts.keys().filter(|k| k.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    assert!(caches >= 3, "the table with its own calculated field gets its own cache, got {caches}");
+    // And its calculated field is written, so the value field is not dropped.
+    let has_margin =
+        parts.iter().filter(|(k, _)| k.starts_with("xl/pivotCache/pivotCacheDefinition")).any(|(_, v)| String::from_utf8_lossy(v).contains("Margin"));
+    assert!(has_margin, "a cache carries the calculated field");
+}
+
+#[test]
+fn an_empty_timeline_selection_survives_the_round_trip() {
+    // `pivot.timeline` stores "no date in range" as Some(empty). OOXML hides items per field and
+    // refuses to hide them all, so the writer used to reset that to "all visible" and reopening
+    // lost the filter.
+    let mut wb = workbook();
+    {
+        let pt = &mut wb.sheet_mut(1).unwrap().pivots[1];
+        pt.filters = vec![PivotFilter { source_col: "Product".into(), selected: Some(Vec::new()), value_filter: None }];
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let f = back.sheet(1).unwrap().pivots[1].filters.iter().find(|f| f.source_col == "Product").expect("the filter survives");
+    assert_eq!(f.selected.as_deref(), Some(&[][..]), "an explicit empty selection stays empty, not None");
+}
+
+#[test]
+fn a_label_selection_survives_the_round_trip() {
+    let mut wb = workbook();
+    {
+        let pt = &mut wb.sheet_mut(1).unwrap().pivots[1];
+        pt.filters = vec![PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "C".into()]), value_filter: None }];
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let f = back.sheet(1).unwrap().pivots[1].filters.iter().find(|f| f.source_col == "Product").expect("the filter survives");
+    assert_eq!(f.selected.as_deref(), Some(&["A".to_string(), "C".to_string()][..]));
 }

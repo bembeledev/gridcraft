@@ -1631,7 +1631,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
     control_keytip(app, ui, &__k, "insert.pivotTable");
     if __k.clicked() {
-        act(app, "insert.pivotTable", json!({}));
+        app.open_dialog("insertPivotTable", json!({}));
     }
     let __k = big_button(ui, Icon::Table, "Table", "Table", false);
     control_keytip(app, ui, &__k, "insert.table");

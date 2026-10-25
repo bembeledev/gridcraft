@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (§8: PivotTable base field means a row/column field, as in Excel) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -83,12 +83,27 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
-  its source records on a new sheet. The "Enable show details" option (`pivot.options`
-  `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
-  yet (command only).
+  `insert.pivotChart`, `table.insertSlicer`; calculated items are modelled and CRUD-able but **not
+  evaluated** in the report; GETPIVOTDATA missing (calculated fields and values on rows done).
+  Show Details (double-click a value, subtotal or grand total cell) lists its source records on a new
+  sheet. The "Enable show details" option (`pivot.options` `enableShowDetails`, saved as
+  `enableDrill`) turns it off; it has no PivotTable Options dialog yet (command only).
+  Done: all twelve show-values-as modes, date grouping (years/quarters/months/days, plus
+  hours/minutes/seconds), number bins, manual text grouping, value filters (Top/Bottom N, Top %,
+  above/below/between, by field), sort by a value field, custom item order, blank lines, empty/error
+  display, repeat item labels, show items with no data (single axis), slicer-style item toggle,
+  timeline range filter, shared pivot caches on write, and field-list drag & drop between the four
+  areas (engine commands reused; kittest covers reorder, cross-area move, drag-out removal and the
+  right-click settings dialog).
 - **Impact:** pivots are the analyst's main tool.
+- **Round trip:** number bins, manual text groups, sort-by-field, custom order, blank lines,
+  calculated items and value filters are written in GridCraft's own `<gc:pivotSettings>` element
+  inside the pivot's `<extLst>`, and read back; repeat item labels and show-items-with-no-data use
+  the standard `repeatItemLabels` / `showAll` attributes. Excel should ignore an `ext` it does not
+  know, so these files should open without a repair prompt (not yet checked in Excel) — but it
+  drops the extension when it saves, so a GridCraft → Excel → GridCraft trip loses those settings.
+  Settings OOXML can express (date grouping, layout, totals, sort direction, collapsed items,
+  show-values-as, formats) survive any editor.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
 ### 9. Keyboard-first users: key tips, shortcuts, context menus (U)
@@ -181,8 +196,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | §8: `baseField` names a row/column field, as in Excel, so Difference From and % Of can compare against another axis level; a cleared base is stored as cleared |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
+| 2026-10-25 | minor | §8: PivotTable close-out pass: sort_by applied in build_tree, repeat_item_labels in tabular flatten, show_items_with_no_data (single-axis), pivot.timeline command, shared-cache XLSX reuse; field-list DnD 1:1 verified by kittest. The XLSX round trip now keeps bins, text groups, sort-by, custom order, blank lines, calculated items and value filters (own `gc:pivotSettings` ext; Excel ignores it but drops it on save); `percentOfParentRowTotal` renamed from the non-OOXML `normalized` |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |

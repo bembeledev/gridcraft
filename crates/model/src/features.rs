@@ -963,6 +963,9 @@ pub enum PivotDateGroup {
     Quarters,
     Months,
     Days,
+    Hours,
+    Minutes,
+    Seconds,
 }
 
 /// A field placed in the Rows or Columns area.
@@ -973,6 +976,14 @@ pub struct PivotField {
     pub source_col: String,
     pub sort: PivotSort,
     pub date_group: PivotDateGroup,
+    /// Number grouping: (start, size). `None` = no binning.
+    pub group_bins: Option<(f64, f64)>,
+    /// Manual text grouping: each inner vec is a group of item labels.
+    pub grouped_items: Vec<Vec<String>>,
+    /// Sort row/column items by this value field's aggregate instead of the item label.
+    pub sort_by: Option<String>,
+    /// Custom order of item labels (first = first).
+    pub custom_order: Vec<String>,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
 }
@@ -1002,10 +1013,24 @@ pub enum PivotShowAs {
     PercentOfGrandTotal,
     PercentOfColumnTotal,
     PercentOfRowTotal,
+    /// % of a base field's total.
+    PercentOf,
+    /// Difference from a base item.
+    DifferenceFrom,
+    /// % difference from a base item.
+    PercentDifferenceFrom,
     /// Running total in the first row field.
     RunningTotal,
+    /// % running total in a base field.
+    PercentRunningTotalIn,
     /// Rank largest to smallest among sibling row items.
     Rank,
+    /// Rank smallest to largest.
+    RankAscending,
+    /// Index: (value/row total)/(col total/grand)*100.
+    Index,
+    /// Value over the subtotal of its parent row group (`percentOfParentRow` in OOXML).
+    PercentOfParentRowTotal,
 }
 
 /// A field in the Values area.
@@ -1017,7 +1042,28 @@ pub struct PivotValue {
     /// Caption, e.g. "Sum of Sales".
     pub name: String,
     pub show_as: PivotShowAs,
+    pub base_field: Option<String>,
+    pub base_item: Option<String>,
+    pub error_display: Option<String>,
+    pub empty_display: Option<String>,
     pub number_format: Option<String>,
+}
+
+/// A value-based filter on a PivotTable field (Top/Bottom N, above/below, between).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotValueFilter {
+    /// How many (for Top/Bottom N) or threshold.
+    pub n: u32,
+    pub top: bool,
+    pub bottom: bool,
+    pub above: Option<f64>,
+    pub below: Option<f64>,
+    pub between_lo: Option<f64>,
+    pub between_hi: Option<f64>,
+    pub top_percent: bool,
+    /// Value field used to measure (name); `None` = first value field.
+    pub by_field: Option<String>,
 }
 
 /// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
@@ -1027,6 +1073,8 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// Value-based filter, if any.
+    pub value_filter: Option<PivotValueFilter>,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
@@ -1060,7 +1108,12 @@ pub struct PivotTable {
     /// Area written by the last refresh.
     pub last_range: Option<RangeRef>,
     /// Calculated fields, usable in the Values area by name.
+    pub repeat_item_labels: bool,
+    pub blank_lines: bool,
+    pub show_items_with_no_data: bool,
+    pub shared_cache: Option<String>,
     pub calculated_fields: Vec<PivotCalcField>,
+    pub calculated_items: Vec<PivotCalcItem>,
     /// The Σ Values pseudo-field (it exists with two or more value fields) sits in Rows rather
     /// than Columns (Excel's "values on rows").
     pub values_on_rows: bool,
@@ -1075,6 +1128,17 @@ pub struct PivotTable {
 #[serde(default)]
 pub struct PivotCalcField {
     pub name: String,
+    /// Formula text, starting with `=`.
+    pub formula: String,
+}
+
+/// A calculated item: a formula over items of a field.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcItem {
+    pub name: String,
+    /// Field the item belongs to.
+    pub field: String,
     /// Formula text, starting with `=`.
     pub formula: String,
 }
@@ -1100,6 +1164,11 @@ impl Default for PivotTable {
             show_headers: true,
             last_range: None,
             calculated_fields: vec![],
+            calculated_items: vec![],
+            repeat_item_labels: false,
+            blank_lines: false,
+            show_items_with_no_data: false,
+            shared_cache: None,
             values_on_rows: false,
             values_position: None,
         }

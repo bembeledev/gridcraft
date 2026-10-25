@@ -439,6 +439,13 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        if id == "insert.pivotTable"
+            && let Ok(r) = &r
+            && let Some(sh) = r.get("sheet").and_then(Json::as_str)
+        {
+            let _ = self.session.run("sheet.activate", json!({"sheet": sh}));
+            self.after_engine();
+        }
         r
     }
 

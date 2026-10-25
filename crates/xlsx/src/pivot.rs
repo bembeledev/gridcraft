@@ -18,7 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook,
+    PivotCalcField, PivotCalcItem, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue,
+    PivotValueFilter, Workbook,
 };
 
 use crate::IoError;
@@ -42,6 +43,11 @@ const MAX_FIELDS: usize = 16_384;
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+/// GridCraft's own `<pivotTableDefinition>` extension: the report settings OOXML has no attribute
+/// for. Excel ignores an `ext` it does not know, so this round-trips through our own app without
+/// risking a repair prompt in Excel (unlike inventing attributes on the standard elements).
+const EXT_GRIDCRAFT: &str = "{A1B2C3D4-5E6F-4A7B-8C9D-0E1F2A3B4C5D}";
+const NS_GRIDCRAFT: &str = "https://gridcraft.dev/xlsx/pivot";
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -118,6 +124,9 @@ fn group_by_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
         PivotDateGroup::None => "range",
     }
 }
@@ -128,6 +137,9 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "Quarters",
         PivotDateGroup::Months => "Months",
         PivotDateGroup::Days => "Days",
+        PivotDateGroup::Hours => "Hours",
+        PivotDateGroup::Minutes => "Minutes",
+        PivotDateGroup::Seconds => "Seconds",
         PivotDateGroup::None => "Group",
     }
 }
@@ -169,7 +181,7 @@ fn key(v: &Value) -> Key {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Stats {
     blank: bool,
     text: bool,
@@ -220,6 +232,7 @@ impl Stats {
 }
 
 /// Date grouping of a cache field.
+#[derive(Clone)]
 struct Group {
     by: PivotDateGroup,
     /// The database field the grouping applies to.
@@ -232,6 +245,7 @@ struct Group {
     items: Vec<String>,
 }
 
+#[derive(Clone)]
 struct CField {
     name: String,
     /// Column offset in the source (database fields only).
@@ -257,6 +271,7 @@ impl CField {
 }
 
 /// A cache built from a PivotTable's source.
+#[derive(Clone)]
 struct Cache {
     fields: Vec<CField>,
     /// Pivot field → cache field, by the pivot field's position in rows, then columns.
@@ -273,6 +288,8 @@ pub struct PivotWriter {
     caches: Vec<(u32, String)>,
     pending: Vec<Pending>,
     tables: u32,
+    /// Reused caches keyed by shared_cache name.
+    shared: std::collections::HashMap<String, (u32, String, Cache)>,
 }
 
 struct Pending {
@@ -289,9 +306,31 @@ impl PivotWriter {
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
         let Some(sheet) = wb.sheet(si) else { return };
         for (idx, pt) in sheet.pivots.iter().enumerate() {
+            // Reuse an existing cache when the pivot shares one (shared_cache) *and* that cache was
+            // built from the same source and can serve this table's axes and groupings; otherwise
+            // fall through and write its own. A key alone proves nothing: it can arrive from JSON.
+            let shared_key = pt.shared_cache.clone();
+            let src = resolve_source(wb, &pt.source, si, 0).map(|(_, _, xml)| xml);
+            if let Some((cid, cache_part, cache)) = shared_key.as_ref().and_then(|k| self.shared.get(k))
+                && src.as_deref() == Some(cache.source_xml.as_str())
+                && calc_fields_match(&cache.fields, pt)
+                && let Some(axis_map) = shared_axis_map(&cache.fields, pt)
+            {
+                let mut reused_cache = cache.clone();
+                reused_cache.axis_map = axis_map;
+                self.tables += 1;
+                let t = self.tables;
+                rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
+                let mut tr = Rels::default();
+                tr.add("pivotCacheDefinition", &format!("../pivotCache/{}", cache_part.trim_start_matches("pivotCache/")));
+                out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
+                self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: *cid, cache: reused_cache });
+                continue;
+            }
             let Some(cache) = build_cache(wb, pt, si) else { continue };
             let n = self.caches.len() as u32 + 1;
             let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+            let cache_rel = format!("pivotCache/pivotCacheDefinition{n}.xml");
             let rec_rid = if let Some((count, xml)) = &cache.records {
                 let mut r = Rels::default();
                 let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
@@ -310,7 +349,10 @@ impl PivotWriter {
             let mut tr = Rels::default();
             tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
             out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache: cache.clone() });
+            if let Some(k) = shared_key {
+                self.shared.insert(k, (n, cache_rel.clone(), cache.clone()));
+            }
         }
     }
 
@@ -415,6 +457,48 @@ fn header_text(v: &Value) -> String {
     }
 }
 
+/// Whether a cache already carries this PivotTable's calculated fields (name and formula). A value
+/// field built on a calculated field is dropped by `table_xml` when the reused cache lacks it.
+fn calc_fields_match(fields: &[CField], pt: &PivotTable) -> bool {
+    pt.calculated_fields.iter().all(|cf| {
+        let f = cf.formula.trim();
+        let f = f.strip_prefix('=').unwrap_or(f).trim();
+        fields.iter().any(|x| x.formula.as_deref().is_some_and(|xf| same(&x.name, &cf.name) && xf == f))
+    })
+}
+
+/// Maps this PivotTable's axis fields onto an existing cache's fields, or `None` when the cache
+/// can't serve it: a field that isn't a database field of that cache, a date grouping the cache
+/// didn't build, or an axis/page field whose items the cache never itemized (so the table part
+/// would write an empty `<items>` list). A shared cache is reused only when this succeeds.
+fn shared_axis_map(fields: &[CField], pt: &PivotTable) -> Option<Vec<Option<usize>>> {
+    let mut map = Vec::with_capacity(pt.rows.len() + pt.columns.len());
+    for pf in pt.rows.iter().chain(pt.columns.iter()) {
+        let b = fields.iter().position(|f| f.col.is_some() && same(&f.name, &pf.source_col))?;
+        let at = if pf.date_group == PivotDateGroup::None {
+            b
+        } else {
+            fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group))?
+        };
+        let usable = fields.get(at).is_some_and(|f| f.group.is_some() || f.itemized);
+        if !usable {
+            return None;
+        }
+        map.push(Some(at));
+    }
+    // Page fields need their items too (a one-item selection is written as an item index).
+    for f in &pt.filters {
+        if pt.rows.iter().chain(pt.columns.iter()).any(|a| same(&a.source_col, &f.source_col)) {
+            continue;
+        }
+        let i = fields.iter().position(|x| x.col.is_some() && same(&x.name, &f.source_col))?;
+        if !fields.get(i).is_some_and(|x| x.group.is_some() || x.itemized) {
+            return None;
+        }
+    }
+    Some(map)
+}
+
 fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cache> {
     let (si, r, source_xml) = resolve_source(wb, &pt.source, pivot_sheet, 0)?;
     if r.count() > MAX_SOURCE_CELLS {
@@ -498,11 +582,14 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         }
     }
     let fineness = |g: &PivotDateGroup| match g {
-        PivotDateGroup::Days => 0,
-        PivotDateGroup::Months => 1,
-        PivotDateGroup::Quarters => 2,
-        PivotDateGroup::Years => 3,
-        PivotDateGroup::None => 4,
+        PivotDateGroup::Seconds => 0,
+        PivotDateGroup::Minutes => 1,
+        PivotDateGroup::Hours => 2,
+        PivotDateGroup::Days => 3,
+        PivotDateGroup::Months => 4,
+        PivotDateGroup::Quarters => 5,
+        PivotDateGroup::Years => 6,
+        PivotDateGroup::None => 7,
     };
     for (b, list) in groupings.iter_mut() {
         list.sort_by_key(fineness);
@@ -656,6 +743,9 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec
                 }
             }
         }
+        PivotDateGroup::Hours => v.extend((0..24).map(|h| format!("{:02}", h))),
+        PivotDateGroup::Minutes => v.extend((0..60).map(|m| format!("{:02}", m))),
+        PivotDateGroup::Seconds => v.extend((0..60).map(|s| format!("{:02}", s))),
     }
     v.push(format!(">{}", mdy(sys, end)));
     v
@@ -894,6 +984,9 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         if f.group.is_some() {
             s.push_str(" numFmtId=\"14\"");
         }
+        if pt.repeat_item_labels && axis.is_some() {
+            s.push_str(" repeatItemLabels=\"1\"");
+        }
         let filter = hidden.get(&i).copied();
         let labels = f.item_labels();
         let is_page = axis == Some("axisPage");
@@ -908,7 +1001,8 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         if is_page && hide.iter().any(|h| *h) {
             s.push_str(" multipleItemSelectionAllowed=\"1\"");
         }
-        s.push_str(" showAll=\"0\"");
+        // `showAll` is the OOXML way to keep items with no records, per axis field.
+        s.push_str(if pt.show_items_with_no_data { " showAll=\"1\"" } else { " showAll=\"0\"" });
         if let Some(af) = axis_field(i) {
             match af.sort {
                 PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
@@ -989,11 +1083,32 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
                 PivotShowAs::PercentOfGrandTotal => s.push_str(" showDataAs=\"percentOfTotal\" baseField=\"0\" baseItem=\"0\""),
                 PivotShowAs::PercentOfColumnTotal => s.push_str(" showDataAs=\"percentOfCol\" baseField=\"0\" baseItem=\"0\""),
                 PivotShowAs::PercentOfRowTotal => s.push_str(" showDataAs=\"percentOfRow\" baseField=\"0\" baseItem=\"0\""),
+                PivotShowAs::PercentOf => {
+                    let _ = write!(s, " showDataAs=\"percent\" baseField=\"{base_field}\" baseItem=\"0\"");
+                }
+                PivotShowAs::DifferenceFrom => {
+                    let _ = write!(s, " showDataAs=\"difference\" baseField=\"{base_field}\" baseItem=\"0\"");
+                }
+                PivotShowAs::PercentDifferenceFrom => {
+                    let _ = write!(s, " showDataAs=\"percentDiff\" baseField=\"{base_field}\" baseItem=\"0\"");
+                }
                 PivotShowAs::RunningTotal => {
                     let _ = write!(s, " showDataAs=\"runTotal\" baseField=\"{base_field}\" baseItem=\"0\"");
                 }
+                PivotShowAs::PercentRunningTotalIn => {
+                    let _ = write!(s, " showDataAs=\"percentRunningTotal\" baseField=\"{base_field}\" baseItem=\"0\"");
+                }
                 PivotShowAs::Rank => {
                     let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"0\"");
+                }
+                PivotShowAs::RankAscending => {
+                    let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"0\"");
+                }
+                PivotShowAs::Index => {
+                    s.push_str(" showDataAs=\"index\" baseField=\"0\" baseItem=\"0\"");
+                }
+                PivotShowAs::PercentOfParentRowTotal => {
+                    s.push_str(" showDataAs=\"percentOfParentRow\" baseField=\"0\" baseItem=\"0\"");
                 }
             }
             if let Some(id) = v.number_format.as_deref().and_then(fmt_id) {
@@ -1003,6 +1118,11 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
                 let _ = write!(
                     s,
                     "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext></extLst></dataField>"
+                );
+            } else if v.show_as == PivotShowAs::RankAscending {
+                let _ = write!(
+                    s,
+                    "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankAscending\"/></ext></extLst></dataField>"
                 );
             } else {
                 s.push_str("/>");
@@ -1015,14 +1135,123 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
-    if hide_values_row {
-        let _ = write!(
-            s,
-            "<extLst><ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext></extLst>"
-        );
+    // Report settings OOXML cannot express: GridCraft's own extension (ignored by Excel).
+    let settings = pt_settings_xml(pt);
+    if hide_values_row || !settings.is_empty() {
+        s.push_str("<extLst>");
+        if hide_values_row {
+            let _ = write!(s, "<ext uri=\"{EXT_X14_PIVOT_TABLE}\" xmlns:x14=\"{NS_X14}\"><x14:pivotTableDefinition hideValuesRow=\"1\"/></ext>");
+        }
+        if !settings.is_empty() {
+            let _ = write!(s, "<ext uri=\"{EXT_GRIDCRAFT}\" xmlns:gc=\"{NS_GRIDCRAFT}\">{settings}</ext>");
+        }
+        s.push_str("</extLst>");
     }
     s.push_str("</pivotTableDefinition>");
     s
+}
+
+/// The report settings with no OOXML attribute, for the GridCraft extension element.
+///
+/// `<gc:pivotSettings>` carries the report flags; each `<gc:field>` carries one axis field's
+/// grouping, sort-by and custom order; `<gc:item>`/`<gc:valueFilter>` carry calculated items and
+/// value filters. `index` is the field's position in the pivot's `rows` then `columns`.
+fn pt_settings_xml(pt: &PivotTable) -> String {
+    let mut body = String::new();
+    let mut flags = String::new();
+    if pt.blank_lines {
+        flags.push_str(" blankLines=\"1\"");
+    }
+    let axis: Vec<&PivotField> = pt.rows.iter().chain(pt.columns.iter()).collect();
+    for (index, f) in axis.iter().enumerate() {
+        if f.group_bins.is_none() && f.grouped_items.is_empty() && f.sort_by.is_none() && f.custom_order.is_empty() {
+            continue;
+        }
+        let _ = write!(body, "<gc:field index=\"{index}\"");
+        if let Some((start, size)) = f.group_bins.filter(|(a, b)| a.is_finite() && b.is_finite() && *b > 0.0) {
+            let _ = write!(body, " binStart=\"{}\" binSize=\"{}\"", crate::xml::num(start), crate::xml::num(size));
+        }
+        if let Some(by) = &f.sort_by {
+            let _ = write!(body, " sortBy=\"{}\"", esc_attr(by));
+        }
+        body.push('>');
+        for group in &f.grouped_items {
+            body.push_str("<gc:group>");
+            for it in group {
+                let _ = write!(body, "<gc:item v=\"{}\"/>", esc_attr(it));
+            }
+            body.push_str("</gc:group>");
+        }
+        for it in &f.custom_order {
+            let _ = write!(body, "<gc:order v=\"{}\"/>", esc_attr(it));
+        }
+        body.push_str("</gc:field>");
+    }
+    for c in &pt.calculated_items {
+        let _ =
+            write!(body, "<gc:calculatedItem field=\"{}\" name=\"{}\" formula=\"{}\"/>", esc_attr(&c.field), esc_attr(&c.name), esc_attr(&c.formula));
+    }
+    // Label selections, including an explicit empty one (a timeline outside every date). OOXML
+    // hides items per field and refuses to hide them all, so that state has nowhere else to go.
+    for f in pt.filters.iter().filter(|f| f.selected.is_some()) {
+        let Some(sel) = f.selected.as_ref() else { continue };
+        let _ = write!(body, "<gc:selection field=\"{}\"", esc_attr(&f.source_col));
+        body.push('>');
+        for label in sel {
+            let _ = write!(body, "<gc:item v=\"{}\"/>", esc_attr(label));
+        }
+        body.push_str("</gc:selection>");
+    }
+    // A value field's own settings that OOXML's `<dataField>` cannot express: its base for
+    // Difference From / % Difference From (GridCraft's base is another *value* field, not an axis
+    // field index) and its error/empty replacement text. The standard attributes on `<dataField>`
+    // stay as they are for Excel's benefit.
+    for (i, v) in pt.values.iter().enumerate() {
+        if v.base_field.is_none() && v.base_item.is_none() && v.error_display.is_none() && v.empty_display.is_none() {
+            continue;
+        }
+        let _ = write!(body, "<gc:valueBase index=\"{i}\"");
+        if let Some(bf) = &v.base_field {
+            let _ = write!(body, " baseField=\"{}\"", esc_attr(bf));
+        }
+        if let Some(bi) = &v.base_item {
+            let _ = write!(body, " baseItem=\"{}\"", esc_attr(bi));
+        }
+        if let Some(e) = &v.error_display {
+            let _ = write!(body, " errorDisplay=\"{}\"", esc_attr(e));
+        }
+        if let Some(e) = &v.empty_display {
+            let _ = write!(body, " emptyDisplay=\"{}\"", esc_attr(e));
+        }
+        body.push_str("/>");
+    }
+    for f in pt.filters.iter().filter(|f| f.value_filter.is_some()) {
+        let Some(vf) = f.value_filter.as_ref() else { continue };
+        let _ = write!(body, "<gc:valueFilter field=\"{}\" n=\"{}\"", esc_attr(&f.source_col), vf.n);
+        if vf.top {
+            body.push_str(" top=\"1\"");
+        }
+        if vf.bottom {
+            body.push_str(" bottom=\"1\"");
+        }
+        if vf.top_percent {
+            body.push_str(" topPercent=\"1\"");
+        }
+        for (k, v) in [("above", vf.above), ("below", vf.below), ("betweenLo", vf.between_lo), ("betweenHi", vf.between_hi)] {
+            if let Some(v) = v.filter(|v| v.is_finite()) {
+                let _ = write!(body, " {k}=\"{}\"", crate::xml::num(v));
+            }
+        }
+        if let Some(by) = &vf.by_field {
+            let _ = write!(body, " byField=\"{}\"", esc_attr(by));
+        }
+        body.push_str("/>");
+    }
+    // Nothing to record: no element at all, so an untouched pivot's XML stays clean.
+    if flags.is_empty() && body.is_empty() {
+        return String::new();
+    }
+    format!("<gc:pivotSettings{flags}>{body}</gc:pivotSettings>")
 }
 
 /// `<rowFields>`/`<colFields>`: the axis's cache field indices, with Σ Values (`-2`) at `values_at`.
@@ -1153,6 +1382,9 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
                     Some("quarters") => Some(PivotDateGroup::Quarters),
                     Some("months") => Some(PivotDateGroup::Months),
                     Some("days") => Some(PivotDateGroup::Days),
+                    Some("hours") => Some(PivotDateGroup::Hours),
+                    Some("minutes") => Some(PivotDateGroup::Minutes),
+                    Some("seconds") => Some(PivotDateGroup::Seconds),
                     _ => None,
                 };
                 let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
@@ -1244,6 +1476,65 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Reads `<gc:pivotSettings>` back into the pivot (see [`pt_settings_xml`]).
+fn read_settings(e: &El, pt: &mut PivotTable, filters: &mut Vec<PivotFilter>) {
+    pt.blank_lines = e.flag("blankLines", false);
+    for f in e.kids("field") {
+        let Some(index) = f.attr_u32("index").map(|i| i as usize) else { continue };
+        // `index` counts rows then columns, the same order the writer walked.
+        let field = if index < pt.rows.len() { pt.rows.get_mut(index) } else { pt.columns.get_mut(index.saturating_sub(pt.rows.len())) };
+        let Some(field) = field else { continue };
+        if let (Some(start), Some(size)) = (f.attr_f64("binStart"), f.attr_f64("binSize"))
+            && size > 0.0
+            && size.is_finite()
+        {
+            field.group_bins = Some((start, size));
+        }
+        if let Some(by) = f.attr("sortBy").filter(|b| !b.trim().is_empty()) {
+            field.sort_by = Some(by.to_string());
+        }
+        field.grouped_items = f
+            .kids("group")
+            .map(|g| g.kids("item").filter_map(|i| i.attr("v").map(str::to_string)).collect::<Vec<_>>())
+            .filter(|g: &Vec<String>| !g.is_empty())
+            .collect();
+        field.custom_order = f.kids("order").filter_map(|o| o.attr("v").map(str::to_string)).collect();
+    }
+    for c in e.kids("calculatedItem") {
+        let (Some(field), Some(name), Some(formula)) = (c.attr("field"), c.attr("name"), c.attr("formula")) else { continue };
+        pt.calculated_items.push(PivotCalcItem { field: field.to_string(), name: name.to_string(), formula: formula.to_string() });
+    }
+    for v in e.kids("valueFilter") {
+        let Some(field) = v.attr("field") else { continue };
+        let vf = PivotValueFilter {
+            n: v.attr_u32("n").unwrap_or(0),
+            top: v.flag("top", false),
+            bottom: v.flag("bottom", false),
+            above: v.attr_f64("above"),
+            below: v.attr_f64("below"),
+            between_lo: v.attr_f64("betweenLo"),
+            between_hi: v.attr_f64("betweenHi"),
+            top_percent: v.flag("topPercent", false),
+            by_field: v.attr("byField").map(str::to_string),
+        };
+        // A value filter shares the field's filter entry with any label selection.
+        match filters.iter_mut().find(|f| same(&f.source_col, field)) {
+            Some(f) => f.value_filter = Some(vf),
+            None => filters.push(PivotFilter { source_col: field.to_string(), selected: None, value_filter: Some(vf) }),
+        }
+    }
+    // Label selections (an empty one is a timeline that matched no date).
+    for s in e.kids("selection") {
+        let Some(field) = s.attr("field") else { continue };
+        let labels: Vec<String> = s.kids("item").filter_map(|i| i.attr("v").map(str::to_string)).collect();
+        let selected = Some(labels);
+        match filters.iter_mut().find(|f| same(&f.source_col, field)) {
+            Some(f) => f.selected = selected,
+            None => filters.push(PivotFilter { source_col: field.to_string(), selected, value_filter: None }),
+        }
+    }
+}
+
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -1294,7 +1585,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut filters: Vec<PivotFilter> = Vec::new();
 
     // (fields, position of Σ Values (`-2`) among them)
-    let axis = |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>| -> (Vec<PivotField>, Option<usize>) {
+    let mut axis = |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>| -> (Vec<PivotField>, Option<usize>) {
         let mut v = Vec::new();
         let mut values_at = None;
         for &i in list {
@@ -1308,7 +1599,16 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let i = i as usize;
             let Some((name, group)) = field_ref(cx, cache, i) else { continue };
             let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
+            let mut f = PivotField {
+                source_col: name.clone(),
+                date_group: group,
+                sort: PivotSort::None,
+                group_bins: None,
+                grouped_items: vec![],
+                sort_by: None,
+                custom_order: vec![],
+                collapsed_items: vec![],
+            };
             if let Some(e) = pf(i) {
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,
@@ -1318,10 +1618,16 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 let items = items_of(e);
                 let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
                 f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
+                if e.flag("repeatItemLabels", false) {
+                    pt.repeat_item_labels = true;
+                }
+                if e.flag("showAll", false) {
+                    pt.show_items_with_no_data = true;
+                }
                 if items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), value_filter: None });
                     }
                 }
             }
@@ -1348,7 +1654,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, value_filter: None });
     }
     let mut axis_filters = Vec::new();
     let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters);
@@ -1362,6 +1668,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         if pt.values_on_rows { rows_values.or_else(|| x.attr_u32("dataPosition").map(|p| p as usize)).filter(|p| *p < pt.rows.len()) } else { None };
     filters.extend(page_filters);
     filters.extend(axis_filters);
+    // Our own extension: the settings OOXML has no attribute for. Read before the filters move
+    // into `pt` so a value filter lands on the existing entry rather than duplicating it.
+    if let Some(ext) = x
+        .child("extLst")
+        .into_iter()
+        .flat_map(|l| l.kids("ext"))
+        .find(|e| e.attr("uri").is_some_and(|u| same(u, EXT_GRIDCRAFT)))
+        .and_then(|e| e.child("pivotSettings"))
+    {
+        read_settings(ext, &mut pt, &mut filters);
+    }
     pt.filters = filters;
 
     // Values.
@@ -1384,6 +1701,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .find_map(|e| e.attr("pivotShowAs").map(str::to_string));
             let show_as = match (ext.as_deref(), d.attr("showDataAs")) {
                 (Some("rankDescending"), _) => PivotShowAs::Rank,
+                (Some("rankAscending"), _) => PivotShowAs::RankAscending,
                 (Some(other), _) => {
                     cx.warn(format!("PivotTable show-values-as {other} is not supported"));
                     PivotShowAs::Normal
@@ -1392,7 +1710,13 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 (None, Some("percentOfTotal")) => PivotShowAs::PercentOfGrandTotal,
                 (None, Some("percentOfCol")) => PivotShowAs::PercentOfColumnTotal,
                 (None, Some("percentOfRow")) => PivotShowAs::PercentOfRowTotal,
+                (None, Some("percent")) => PivotShowAs::PercentOf,
+                (None, Some("difference")) => PivotShowAs::DifferenceFrom,
+                (None, Some("percentDiff")) => PivotShowAs::PercentDifferenceFrom,
                 (None, Some("runTotal")) => PivotShowAs::RunningTotal,
+                (None, Some("percentRunningTotal")) => PivotShowAs::PercentRunningTotalIn,
+                (None, Some("index")) => PivotShowAs::Index,
+                (None, Some("percentOfParentRow" | "normalized")) => PivotShowAs::PercentOfParentRowTotal,
                 (None, Some(other)) => {
                     cx.warn(format!("PivotTable show-values-as {other} is not supported"));
                     PivotShowAs::Normal
@@ -1403,7 +1727,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .filter(|id| *id != 0)
                 .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
-            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format });
+            pt.values.push(PivotValue {
+                source_col: f.name.clone(),
+                func,
+                name,
+                show_as,
+                base_field: None,
+                base_item: None,
+                error_display: None,
+                empty_display: None,
+                number_format,
+            });
         }
     }
 
@@ -1418,7 +1752,32 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             pt.calculated_fields.push(PivotCalcField { name: f.name.clone(), formula });
         }
     }
-
+    // Value-field bases from GridCraft's extension (see `pt_settings_xml`). Read here, after
+    // `pt.values` exists, since the element indexes into it.
+    if let Some(settings) = x
+        .child("extLst")
+        .into_iter()
+        .flat_map(|l| l.kids("ext"))
+        .find(|e| e.attr("uri").is_some_and(|u| same(u, EXT_GRIDCRAFT)))
+        .and_then(|e| e.child("pivotSettings"))
+    {
+        for b in settings.kids("valueBase") {
+            let Some(i) = b.attr_u32("index").map(|i| i as usize) else { continue };
+            let Some(v) = pt.values.get_mut(i) else { continue };
+            if let Some(bf) = b.attr("baseField") {
+                v.base_field = Some(bf.to_string());
+            }
+            if let Some(bi) = b.attr("baseItem") {
+                v.base_item = Some(bi.to_string());
+            }
+            if let Some(e) = b.attr("errorDisplay") {
+                v.error_display = Some(e.to_string());
+            }
+            if let Some(e) = b.attr("emptyDisplay") {
+                v.empty_display = Some(e.to_string());
+            }
+        }
+    }
     pt.anchor = loc.start;
     let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));

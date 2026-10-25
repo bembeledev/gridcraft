@@ -647,22 +647,37 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
-    if let Some(p) = &prior {
+    {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+        // A new file gets the restrictive default (owner only), not whatever a permissive umask
+        // such as 0002 would give it.
+        opts.mode(prior.as_ref().map_or(0o600, std::fs::Permissions::mode));
     }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
-    #[cfg(not(unix))]
-    if let Some(p) = &prior {
-        let _ = f.set_permissions(p.clone());
-    }
     f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    // The mode above is filtered by the umask, so a group-writable destination under a restrictive
+    // umask (0664 saved with umask 022) would lose its group write, and under umask 077 a fresh
+    // file would come out 0600 (or 0000 with umask 0777). Set the permissions explicitly on the
+    // finished temporary, before it replaces the destination.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = prior.as_ref().map_or(0o600, std::fs::Permissions::mode);
+        f.set_permissions(std::fs::Permissions::from_mode(mode)).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Other(format!("{path}: {e}"))
+        })?;
+    }
+    #[cfg(not(unix))]
+    if let Some(p) = &prior {
+        let _ = f.set_permissions(p.clone());
+    }
     std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
@@ -770,9 +785,7 @@ mod tests {
     fn save_fails_upfront_when_the_temp_name_is_taken() {
         // Another local user who can write the directory must not be able to point the
         // save's predictable temporary name at their own file: creation is exclusive.
-        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = unique_dir("fs-safety");
         let victim = dir.join("victim.txt");
         std::fs::write(&victim, b"original").unwrap();
         let dest = dir.join("book.xlsx");
@@ -788,29 +801,38 @@ mod tests {
     #[test]
     fn save_keeps_the_destination_access_restrictions() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-permissions-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = unique_dir("fs-mode");
         let dest = dir.join("private.xlsx");
         std::fs::write(&dest, b"v1").unwrap();
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
         write_file(dest.to_str().unwrap(), b"v2").unwrap();
         let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        // And a brand-new file is created with the restrictive, not permissive, default.
+        // Saving keeps the destination's bits *exactly*: the mode given to `open` is filtered by the
+        // umask, so without an explicit set_permissions a 0664 file becomes 0644 under umask 022
+        // (and a collaborator loses write access) and a 0666 one becomes 0664 even under umask 002.
+        for prior in [0o600, 0o664, 0o666] {
+            let path = dir.join(format!("mode-{prior:o}.xlsx"));
+            std::fs::write(&path, b"v1").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(prior)).unwrap();
+            write_file(path.to_str().unwrap(), b"v2").unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, prior, "a save keeps mode {prior:o} (got {mode:o})");
+        }
+        // And a brand-new file is created with the restrictive default, exactly: the mode given to
+        // `open` is filtered by the umask, so under umask 077 it would otherwise be narrower (and
+        // under 0777 unusable) rather than the documented 0600.
         let fresh = dir.join("new.xlsx");
         write_file(fresh.to_str().unwrap(), b"v").unwrap();
         let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
-        assert!(mode & 0o022 == 0, "mode {mode:o}");
+        assert_eq!(mode, 0o600, "a new file is owner-only, got {mode:o}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn open_refuses_directories_and_unknowable_lengths() {
-        let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = unique_dir("fs-open");
         assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");
         assert!(read_file(dir.join("missing").to_str().unwrap()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1038,6 +1060,28 @@ mod tests {
         }
         let (wb, _) = open_bytes("Sales.csv", b"1\n").unwrap();
         assert_eq!(wb.sheets[0].name, "Sales");
+    }
+
+    /// A fresh, exclusively created directory for one test run. Tests in one binary share a process
+    /// id and run in parallel, so the pid alone is not unique; a directory that already exists is
+    /// another test's (or another run's), never reused.
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let base = std::env::temp_dir();
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = base.join(format!("gridcraft-{tag}-{}-{n}", std::process::id()));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return dir,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    let _ = std::fs::create_dir_all(&dir);
+                    return dir;
+                }
+            }
+        }
     }
 
     /// A save that can't be put in place (here a folder already has the workbook's name, as

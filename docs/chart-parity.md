@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (axis and data label number formats typed in Excel's Format pane are read, drawn and saved; PivotChart refresh keeps label formats by the series' pivot items (read from Excel's header-cell names below the "Column Labels" caption; by position only if no name matches, the series count is unchanged, and the names show no row or column item of the pivot and aren't only value field names), also for series a refresh dropped and brought back; stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158 and #161 merged)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-24 · **Change:** minor (100% stacked area charts; axis and data label number formats typed in Excel's Format pane are read, drawn and saved; PivotChart refresh keeps label formats by the series' pivot items) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -17,7 +17,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
 | Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
 | Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | no exploded, pie of pie, bar of pie |
-| Area | area, stacked, 100%, 3-D ×3 | 2 of 6 | no 100%, no 3-D |
+| Area | area, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
 | Bubble | bubble, 3-D bubble | 1 of 2 | |
 | Stock | high-low-close, open-high-low-close, volume-HLC, volume-OHLC | 1 kind | |
@@ -29,7 +29,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Waterfall, Funnel | 2 | 2 of 2 | XLSX round-trip preserves the chartex kind (PR #161) |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
 | Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
-| **Total** | ~60 subtypes | **25 (~42%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
+| **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
 
@@ -88,6 +88,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

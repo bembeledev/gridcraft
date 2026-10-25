@@ -362,7 +362,7 @@ fn greek_text_embeds_a_unicode_font_instead_of_question_marks() {
     let pdf = doc.finish();
     check_xref(&pdf);
     assert!(find(&pdf, b"/U1 12 Tf").is_some(), "Greek uses the embedded font");
-    assert!(find(&pdf, b"<0001000200030004> Tj").is_some(), "glyph ids, not `?`");
+    assert!(find(&pdf, b"<0001000200030004> Tj").is_some(), "distinct Unicode character codes, not `?`");
     assert!(find(&pdf, b"(\x3f\x3f").is_none(), "no question marks");
     assert!(find(&pdf, b"/F1 12 Tf").is_some(), "Latin text keeps the standard font");
     assert!(find(&pdf, b"/Subtype /CIDFontType2").is_some());
@@ -394,10 +394,10 @@ fn distinct_chars(texts: &[&str]) -> Vec<char> {
     chars
 }
 
-/// The `Tj` operand for `text` in a [`tiny_ttf`] font built from `chars` (glyph `i + 1` per char).
-fn glyph_operand(chars: &[char], text: &str) -> String {
-    let ids: String = text.chars().map(|c| format!("{:04X}", chars.iter().position(|x| *x == c).unwrap() + 1)).collect();
-    format!("<{ids}> Tj")
+/// Character codes follow first use within each face, independently of the font's glyph ids.
+fn character_operand(chars: &[char], text: &str) -> String {
+    let codes: String = text.chars().map(|c| format!("{:04X}", chars.iter().position(|x| *x == c).unwrap() + 1)).collect();
+    format!("<{codes}> Tj")
 }
 
 #[test]
@@ -419,8 +419,8 @@ fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() {
     check_xref(&pdf);
     assert!(find(&pdf, b"/U1 12 Tf").is_some(), "regular Cyrillic uses the embedded regular face");
     assert!(find(&pdf, b"/U2 12 Tf").is_some(), "bold Cyrillic uses the embedded bold face");
-    assert!(find(&pdf, glyph_operand(&chars, serbian).as_bytes()).is_some(), "Serbian goes out as glyph ids");
-    assert!(find(&pdf, glyph_operand(&chars, russian).as_bytes()).is_some(), "Russian goes out as glyph ids");
+    assert!(find(&pdf, character_operand(&distinct_chars(&[serbian]), serbian).as_bytes()).is_some(), "Serbian uses Unicode character codes");
+    assert!(find(&pdf, character_operand(&distinct_chars(&[russian]), russian).as_bytes()).is_some(), "Russian uses Unicode character codes");
     assert!(find(&pdf, b"(\x3f\x3f").is_none(), "no question marks");
     assert!(find(&pdf, b"/F1 12 Tf\n").is_some() && find(&pdf, b"(Total 2026) Tj").is_some(), "Latin keeps the standard font");
     assert_eq!(pdf.windows(10).filter(|w| w == b"/FontFile2").count(), 2, "regular and bold are both embedded");
@@ -428,7 +428,7 @@ fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() {
     // ToUnicode keeps the text searchable and copyable: Ђ U+0402, ј U+0458, џ U+045F, я U+044F,
     // ё U+0451 map back from their glyphs.
     for c in ['Ђ', 'ј', 'џ', 'я', 'ё'] {
-        let entry = format!("<{:04X}> <{:04X}>", chars.iter().position(|x| *x == c).unwrap() + 1, c as u32);
+        let entry = format!("> <{:04X}>", c as u32);
         assert!(find(&pdf, entry.as_bytes()).is_some(), "ToUnicode entry for {c}: {entry}");
     }
 }
@@ -524,4 +524,70 @@ fn named_families_bound_registration_and_detect_missing_glyphs() {
     assert_eq!(fonts.missing_glyph(mapped, "Ω"), Some('Ω'));
     assert_eq!(fonts.missing_glyph(Font::Helvetica, "Ω"), None);
     assert_eq!(fonts.text_width(Font::Embedded(usize::MAX), 10.0, "A"), 6.0, "hostile handles cannot panic");
+}
+
+#[test]
+fn shared_glyph_keeps_each_unicode_character_copyable_across_pages() {
+    let mut bytes = tiny_ttf(&['A', 'B', 'Ω'], 600, 0);
+    let record = find(&bytes, b"cmap").unwrap();
+    let cmap = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap()) as usize;
+    // Four format-4 segments (A, B, Omega and sentinel): make B share A's glyph.
+    let delta = cmap + 12 + 16 + 4 * 4 + 2;
+    bytes[delta..delta + 2].copy_from_slice(&1u16.wrapping_sub('B' as u16).to_be_bytes());
+    let font = Arc::new(UnicodeFont::parse(bytes).unwrap());
+    assert_eq!(font.glyph('A'), font.glyph('B'));
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(TextFonts::custom(font, None, None, None));
+    doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ABΩ");
+    doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "BA");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"> <0041>").is_some(), "A must survive Unicode extraction");
+    assert!(find(&pdf, b"> <0042>").is_some(), "B must survive even though it shares A's glyph");
+    assert!(find(&pdf, b"<0001> <0041>").is_some());
+    assert!(find(&pdf, b"<0002> <0042>").is_some());
+    assert!(find(&pdf, b"stream\n\0\0\0\x01\0\x01\0\x03\nendstream").is_some(), "two CIDs map to the shared glyph");
+}
+
+#[test]
+fn supplementary_characters_keep_utf16_surrogate_pair_extraction() {
+    let font = Arc::new(UnicodeFont::parse(tiny_ttf(&['A', 'Ω', '😀'], 600, 0)).unwrap());
+    assert_eq!(font.glyph('😀'), 3, "format-12 font fixture covers supplementary Unicode");
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(TextFonts::custom(font, None, None, None));
+    doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "AΩ😀");
+    assert_eq!(doc.missing_glyph(), None);
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"<000100020003> Tj").is_some());
+    assert!(find(&pdf, b"<0003> <D83DDE00>").is_some(), "ToUnicode uses the UTF-16 surrogate pair");
+}
+
+#[test]
+fn unicode_alias_maps_are_bounded_per_page_and_across_pages() {
+    let font = Arc::new(UnicodeFont::parse(tiny_ttf(&['A'], 600, 0)).unwrap());
+    let fonts = TextFonts::custom(font, None, None, None);
+    let chars: Vec<_> = (0x1000..=0x10FFFF).filter_map(char::from_u32).take(MAX_FONT_CHARACTERS + 1).collect();
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(fonts.clone());
+    let text: String = chars.iter().collect();
+    doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], &text);
+    assert_eq!(doc.pages[0].glyphs[0].len(), MAX_FONT_CHARACTERS);
+    assert!(doc.text_limit_exceeded());
+    let mut doc = PdfDoc::default();
+    doc.set_text_fonts(fonts);
+    for chunk in chars.chunks(MAX_FONT_CHARACTERS / 2) {
+        let text: String = chunk.iter().collect();
+        doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], &text);
+    }
+    assert!(doc.pages.iter().take(2).all(|p| !p.text_limit_exceeded));
+    assert!(doc.pages.last().unwrap().text_limit_exceeded);
+    assert!(doc.text_limit_exceeded(), "the document-wide union also respects the cap");
+}
+
+#[test]
+fn missing_glyph_checks_the_space_used_to_render_a_tab() {
+    let face = Arc::new(UnicodeFont::parse(tiny_ttf(&['A'], 600, 0)).unwrap());
+    let fonts = TextFonts::custom(face, None, None, None);
+    assert_eq!(fonts.missing_glyph(Font::Helvetica, "A\tA"), Some(' '));
 }

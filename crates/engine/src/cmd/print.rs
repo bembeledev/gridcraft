@@ -1721,6 +1721,9 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
     let (doc, pages) = render_document(&d.wb, &lays, &d.display_title(), &path, fonts);
+    if doc.text_limit_exceeded() {
+        return Err(bad(cmd, "PDF font exceeds the limit of 65,535 distinct Unicode characters across exported pages"));
+    }
     if let Some(c) = doc.missing_glyph() {
         return Err(bad(cmd, format!("custom PDF font has no glyph for U+{:04X} ({c}); supply a face covering the exported text", c as u32)));
     }

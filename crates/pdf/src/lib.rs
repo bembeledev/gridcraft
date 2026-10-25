@@ -3,7 +3,7 @@
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text.
 //! - Text WinAnsiEncoding can't carry (Greek, Cyrillic, …) is set in an embedded TrueType font
-//!   (Identity-H, with a ToUnicode map so it stays searchable and copyable) when the app has
+//!   (an explicit CID-to-glyph map and ToUnicode map keep it searchable and copyable) when the app has
 //!   registered one with [`set_unicode_font_loader`]; otherwise it uses the non-embedded CID fallback.
 //! - Explicit [`TextFonts`] replace all text faces per document, including Latin, and supply
 //!   matching advance widths for layout.
@@ -24,7 +24,7 @@ pub mod test_support;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use truetype::{MAX_FONT_BYTES, UnicodeFont};
 
@@ -32,6 +32,8 @@ pub use truetype::{MAX_FONT_BYTES, UnicodeFont};
 pub const MAX_FONT_FAMILIES: usize = 32;
 /// Total bytes of explicit font faces accepted for one export.
 pub const MAX_TOTAL_FONT_BYTES: u64 = 256 * 1024 * 1024;
+/// Bounds the character maps for each embedded face, including Unicode aliases.
+pub const MAX_FONT_CHARACTERS: usize = 65_535;
 
 /// Regular and bold fonts for text outside WinAnsiEncoding.
 pub type UnicodeFonts = [Option<Arc<UnicodeFont>>; 2];
@@ -176,7 +178,7 @@ impl TextFonts {
             return None;
         }
         let face = self.slot(font, text).and_then(|i| self.faces.get(i)?.as_deref())?;
-        text.chars().find(|c| !c.is_control() && !face.has(*c))
+        text.chars().map(|c| if c == '\t' { ' ' } else { c }).find(|c| !c.is_control() && !face.has(*c))
     }
 }
 
@@ -497,6 +499,27 @@ struct LinkAnnotation {
     target: LinkTarget,
 }
 
+/// One document-wide character-code allocator per face. CID 0 stays .notdef; every Unicode
+/// character gets its own CID even when the TrueType cmap shares its glyph with another.
+#[derive(Default)]
+struct FontEncoding {
+    characters: BTreeMap<char, u16>,
+}
+
+impl FontEncoding {
+    fn code(&mut self, c: char) -> Option<u16> {
+        if let Some(code) = self.characters.get(&c) {
+            return Some(*code);
+        }
+        if self.characters.len() >= MAX_FONT_CHARACTERS {
+            return None;
+        }
+        let code = u16::try_from(self.characters.len().checked_add(1)?).ok()?;
+        self.characters.insert(c, code);
+        Some(code)
+    }
+}
+
 /// A page under construction. Obtain one with [`PdfDoc::add_page`].
 pub struct Page {
     width: f32,
@@ -505,11 +528,13 @@ pub struct Page {
     fonts: [bool; FONT_SLOTS],
     /// The fallback fonts and, per slot, the glyphs used with the character each one shows.
     unicode: TextFonts,
-    glyphs: Vec<BTreeMap<u16, char>>,
+    glyphs: Vec<BTreeMap<u16, (char, u16)>>,
+    encodings: Vec<Arc<Mutex<FontEncoding>>>,
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
     missing_glyph: Option<char>,
+    text_limit_exceeded: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -741,7 +766,7 @@ impl Page {
         }
         self.missing_glyph = self.missing_glyph.or_else(|| self.unicode.missing_glyph(font, text));
         if let Some(slot) = self.unicode.slot(font, text) {
-            let shown = self.glyph_string(slot, text);
+            let shown = self.unicode_string(slot, text);
             let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
             let s = format!(
                 "BT\n{}\n/U{} {} Tf\n{} {} {} {} {} {} Tm\n{} Tj\nET",
@@ -782,20 +807,32 @@ impl Page {
         self.op(&s);
     }
 
-    /// `text` as a hex string of 2-byte glyph ids in fallback font `slot`, recording the glyphs.
-    fn glyph_string(&mut self, slot: usize, text: &str) -> String {
-        let mut s = String::with_capacity(text.len() * 4 + 2);
+    /// Assigns document-wide two-byte character codes, independently of TrueType glyph ids.
+    fn unicode_string(&mut self, slot: usize, text: &str) -> String {
+        let mut s = String::with_capacity(text.len().saturating_mul(4).saturating_add(2).min(MAX_PAGE_CONTENT));
         s.push('<');
         let font = self.unicode.faces.get(slot).cloned().flatten();
-        for c in text.chars() {
+        let Some(encoding) = self.encodings.get(slot).cloned() else {
+            self.text_limit_exceeded = true;
+            return "<>".into();
+        };
+        let mut encoding = encoding.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for c in text.chars().take(MAX_PAGE_CONTENT / 4) {
             let c = if c == '\t' { ' ' } else { c };
             let g = font.as_deref().map_or(0, |f| f.glyph(c));
-            if g != 0
+            let code = match encoding.code(c) {
+                Some(code) => code,
+                None => {
+                    self.text_limit_exceeded = true;
+                    0
+                }
+            };
+            if code != 0
                 && let Some(used) = self.glyphs.get_mut(slot)
             {
-                used.entry(g).or_insert(c);
+                used.insert(code, (c, g));
             }
-            let _ = write!(s, "{g:04X}");
+            let _ = write!(s, "{code:04X}");
         }
         s.push('>');
         s
@@ -847,6 +884,7 @@ pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
     unicode: TextFonts,
+    encodings: Vec<Arc<Mutex<FontEncoding>>>,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -926,6 +964,7 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
+        self.encodings.resize_with(self.unicode.faces.len(), || Arc::new(Mutex::new(FontEncoding::default())));
         self.pages.push(Page {
             width,
             height,
@@ -933,10 +972,12 @@ impl PdfDoc {
             fonts: [false; FONT_SLOTS],
             unicode: self.unicode.clone(),
             glyphs: vec![BTreeMap::new(); self.unicode.faces.len()],
+            encodings: self.encodings.clone(),
             images: Vec::new(),
             links: Vec::new(),
             depth: 0,
             missing_glyph: None,
+            text_limit_exceeded: false,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
@@ -954,6 +995,11 @@ impl PdfDoc {
     /// First character unavailable in a custom face used by this document.
     pub fn missing_glyph(&self) -> Option<char> {
         self.pages.iter().find_map(|p| p.missing_glyph)
+    }
+
+    /// Whether an embedded face exceeds its bounded Unicode map across all pages.
+    pub fn text_limit_exceeded(&self) -> bool {
+        self.pages.iter().any(|p| p.text_limit_exceeded)
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
@@ -1017,19 +1063,19 @@ impl PdfDoc {
         }
         let slots = self.pages.iter().map(|p| p.unicode.faces.len()).max().unwrap_or(0);
         for slot in 0..slots {
-            let mut glyphs: BTreeMap<u16, char> = BTreeMap::new();
+            let mut glyphs: BTreeMap<u16, (char, u16)> = BTreeMap::new();
             let mut font = None;
             for p in &self.pages {
                 if let (Some(used), Some(Some(f))) = (p.glyphs.get(slot), p.unicode.faces.get(slot))
                     && !used.is_empty()
                 {
-                    glyphs.extend(used.iter().map(|(g, c)| (*g, *c)));
+                    glyphs.extend(used.iter().map(|(code, glyph)| (*code, *glyph)));
                     font = Some(f.clone());
                 }
             }
             if let Some(font) = font {
                 let id = next;
-                next += 5;
+                next += 6;
                 let _ = write!(font_dict, "/U{} {} 0 R ", slot + 1, id);
                 objects.extend(unicode_font_objects(&font, &glyphs, slot, id));
             }
@@ -1162,13 +1208,19 @@ impl PdfDoc {
     }
 }
 
-/// The five objects of an embedded fallback font, numbered from `id`: the Type0 font, its
-/// CIDFontType2 descendant, the font descriptor, the TrueType file and the ToUnicode CMap.
-fn unicode_font_objects(font: &UnicodeFont, glyphs: &BTreeMap<u16, char>, slot: usize, id: u32) -> Vec<(u32, Vec<u8>)> {
+/// The six objects of an embedded font: Type0, CIDFontType2, descriptor, TrueType file,
+/// ToUnicode and the explicit CID-to-glyph map.
+fn unicode_font_objects(font: &UnicodeFont, glyphs: &BTreeMap<u16, (char, u16)>, slot: usize, id: u32) -> Vec<(u32, Vec<u8>)> {
     let name = format!("GridCraftUnicode{}", slot + 1);
     let mut widths = String::new();
-    for g in glyphs.keys() {
-        let _ = write!(widths, "{} [{}] ", g, font.glyph_width(*g));
+    let map_len = glyphs.last_key_value().map_or(2, |(cid, _)| (usize::from(*cid) + 1) * 2);
+    let mut cid_to_gid = vec![0u8; map_len];
+    for (code, (_, glyph)) in glyphs {
+        let _ = write!(widths, "{} [{}] ", code, font.glyph_width(*glyph));
+        let offset = usize::from(*code) * 2;
+        if let Some(entry) = cid_to_gid.get_mut(offset..offset + 2) {
+            entry.copy_from_slice(&glyph.to_be_bytes());
+        }
     }
     let [x0, y0, x1, y1] = font.bbox;
     let mut file = format!("<< /Length {0} /Length1 {0} >>\nstream\n", font.data.len()).into_bytes();
@@ -1177,13 +1229,13 @@ fn unicode_font_objects(font: &UnicodeFont, glyphs: &BTreeMap<u16, char>, slot: 
     let mut cmap = String::from(
         "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
     );
-    let entries: Vec<(&u16, &char)> = glyphs.iter().collect();
+    let entries: Vec<(&u16, &(char, u16))> = glyphs.iter().collect();
     for chunk in entries.chunks(100) {
         let _ = writeln!(cmap, "{} beginbfchar", chunk.len());
-        for (g, c) in chunk {
+        for (code, (c, _)) in chunk {
             let mut units = [0u16; 2];
             let hex: String = c.encode_utf16(&mut units).iter().map(|u| format!("{u:04X}")).collect();
-            let _ = writeln!(cmap, "<{g:04X}> <{hex}>");
+            let _ = writeln!(cmap, "<{code:04X}> <{hex}>");
         }
         cmap.push_str("endbfchar\n");
     }
@@ -1191,13 +1243,16 @@ fn unicode_font_objects(font: &UnicodeFont, glyphs: &BTreeMap<u16, char>, slot: 
     let mut to_unicode = format!("<< /Length {} >>\nstream\n", cmap.len()).into_bytes();
     to_unicode.extend_from_slice(cmap.as_bytes());
     to_unicode.extend_from_slice(b"\nendstream");
+    let mut mapping = format!("<< /Length {} >>\nstream\n", cid_to_gid.len()).into_bytes();
+    mapping.extend_from_slice(&cid_to_gid);
+    mapping.extend_from_slice(b"\nendstream");
     vec![
         (id, format!("<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [{} 0 R] /ToUnicode {} 0 R >>", id + 1, id + 4).into_bytes()),
         (
             id + 1,
             format!(
-                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {} 0 R /DW 1000 /W [{widths}] /CIDToGIDMap /Identity >>",
-                id + 2
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {} 0 R /DW 1000 /W [{widths}] /CIDToGIDMap {} 0 R >>",
+                id + 2, id + 5
             )
             .into_bytes(),
         ),
@@ -1214,6 +1269,7 @@ fn unicode_font_objects(font: &UnicodeFont, glyphs: &BTreeMap<u16, char>, slot: 
         ),
         (id + 3, file),
         (id + 4, to_unicode),
+        (id + 5, mapping),
     ]
 }
 

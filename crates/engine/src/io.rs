@@ -619,6 +619,10 @@ pub(crate) fn read_file_limited(path: &str, limit: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     let limit = limit.min(MAX_READ_BYTES);
     script_sandbox_check(path)?;
+    // Reject known pipes/devices before opening: opening a FIFO can otherwise block forever.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.

@@ -5,7 +5,7 @@
 /// Largest font file accepted for embedding.
 pub const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 
-/// A parsed TrueType (glyf-outline) font, embedded whole as a CID font (Identity-H).
+/// A parsed TrueType (glyf-outline) font, embedded whole as a CID font.
 #[derive(Debug)]
 pub struct UnicodeFont {
     pub(crate) data: Vec<u8>,

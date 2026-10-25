@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (multiple named PDF font families; per-export TrueType fonts through CLI/MCP; §8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; §8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -181,6 +181,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
 | 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
 | 2026-10-25 | minor | PDF exports accept per-request regular, bold, italic and bold-italic TrueType faces through CLI/MCP, with matching text measurement and validation; adapted embedding from #1555 while retaining the CID fallback |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |

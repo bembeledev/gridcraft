@@ -506,9 +506,27 @@ pub fn pdf_unicode_fonts() -> [Option<Vec<u8>>; 2] {
         candidates(role)
             .into_iter()
             .filter(|(path, index)| *index == 0 && path.to_ascii_lowercase().ends_with(".ttf"))
-            .filter_map(|(path, _)| std::fs::read(path).ok())
+            .filter_map(|(path, _)| read_pdf_font(&path))
             .find(|bytes| gridcraft_engine::pdf::UnicodeFont::parse(bytes.clone()).is_some_and(|f| pdf_font_covers_greek_or_cyrillic(&f)))
     })
+}
+
+/// Bound the native fallback read before parsing or cloning bytes. A system-font symlink may
+/// point at a device or a growing file, so metadata alone never limits the allocation.
+fn read_pdf_font(path: &str) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let limit = gridcraft_engine::pdf::MAX_FONT_BYTES as u64;
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
 }
 
 /// Whether a PDF fallback font has real Greek or Cyrillic letters, not just Latin: a capital and
@@ -1473,13 +1491,28 @@ mod tests {
     }
 
     #[test]
+    fn pdf_font_reads_reject_oversized_and_non_regular_inputs() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-pdf-font-reader-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("font.ttf");
+        std::fs::write(&path, b"small input").unwrap();
+        assert_eq!(read_pdf_font(path.to_str().unwrap()), Some(b"small input".to_vec()));
+        assert!(read_pdf_font(dir.to_str().unwrap()).is_none());
+        std::fs::File::create(&path).unwrap().set_len(gridcraft_engine::pdf::MAX_FONT_BYTES as u64 + 1).unwrap();
+        assert!(read_pdf_font(path.to_str().unwrap()).is_none());
+        #[cfg(unix)]
+        assert!(read_pdf_font("/dev/zero").is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn pdf_unicode_fonts_set_cyrillic_in_real_glyphs() {
         // Real-font check, like `fallback_covers_its_script`: skips on a machine with no cell font
         // that has Cyrillic, fails if one is installed but printing would still lose the text.
         use gridcraft_engine::pdf::UnicodeFont;
         let samples = ["Добар дан, Ђорђе! Љубав, њива, џеп, ћуп", "Съешь же ещё этих мягких булок"];
         let has_cyrillic = |role: &str| {
-            candidates(role).iter().filter_map(|(p, _)| std::fs::read(p).ok()).filter_map(UnicodeFont::parse).any(|f| f.has('Ж') && f.has('џ'))
+            candidates(role).iter().filter_map(|(p, _)| read_pdf_font(p)).filter_map(UnicodeFont::parse).any(|f| f.has('Ж') && f.has('џ'))
         };
         for (i, role) in ["cell", "cell-bold"].into_iter().enumerate() {
             if !has_cyrillic(role) {

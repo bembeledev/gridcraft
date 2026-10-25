@@ -83,7 +83,9 @@ PDF fonts and Unicode fallbacks. All these CLI options require `.pdf` output.
 
 Font paths belong to the host performing the export, including when called over MCP or the control
 channel. At most 32 mapped families and 256 MiB of font faces are accepted per export, with a 64 MiB
-limit per face. Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
+limit per face. Each embedded face accepts at most 65,535 distinct Unicode characters across
+all exported pages. Distinct characters remain copyable even when the font shares their glyph.
+Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
 embedding, and characters absent from a selected face return an error before the output file is
 written. TrueType outlines in an OpenType container are accepted; extensions do not validate font
 bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures, bidi or

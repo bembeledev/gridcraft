@@ -35,6 +35,22 @@ pub fn tiny_ttf(chars: &[char], advance: u16, fs_type: u16) -> Vec<u8> {
     segs.iter().for_each(|_| sub.extend_from_slice(&be16(0)));
     let mut cmap = vec![0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 12];
     cmap.extend_from_slice(&sub);
+    if chars.iter().any(|c| *c as u32 > 0xFFFF) {
+        let mut groups: Vec<_> = chars.iter().enumerate().map(|(i, c)| (*c as u32, i as u32 + 1)).collect();
+        groups.sort();
+        let mut sub = Vec::new();
+        sub.extend_from_slice(&[0, 12, 0, 0]);
+        sub.extend_from_slice(&(16u32 + groups.len() as u32 * 12).to_be_bytes());
+        sub.extend_from_slice(&[0; 4]);
+        sub.extend_from_slice(&(groups.len() as u32).to_be_bytes());
+        for (c, g) in groups {
+            for value in [c, c, g] {
+                sub.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+        cmap = vec![0, 0, 0, 1, 0, 3, 0, 10, 0, 0, 0, 12];
+        cmap.extend_from_slice(&sub);
+    }
     let loca = vec![0u8; usize::from(num_glyphs + 1) * 2];
     let mut os2 = vec![0u8; 96];
     os2[0..2].copy_from_slice(&be16(4));

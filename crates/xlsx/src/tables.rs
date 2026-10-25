@@ -355,7 +355,7 @@ mod tests {
         // 23-36 are locale formats, above 49 is custom.
         assert_eq!((23..=36).find_map(builtin_format), None);
         assert_eq!(builtin_format(50), None);
-        // Writing: an exact (case-sensitive) code gives its id, except the currency formats 5-8.
+        // Writing: an exact (case-sensitive) code gives its id, except the locale-dependent currency and accounting formats 5-8, 42 and 44.
         assert_eq!(builtin_id("General"), Some(0));
         assert_eq!(builtin_id("GENERAL"), None);
         assert_eq!(builtin_id("[H]:MM:SS"), None);
@@ -363,7 +363,7 @@ mod tests {
         assert_eq!(builtin_id("#,##0.00_);(#,##0.00)"), None);
         for id in 0..=60 {
             let Some(code) = builtin_format(id) else { continue };
-            let expected = if (5..=8).contains(&id) { None } else { Some(id) };
+            let expected = if matches!(id, 5..=8 | 42 | 44) { None } else { Some(id) };
             assert_eq!(builtin_id(code), expected, "id {id}");
         }
     }

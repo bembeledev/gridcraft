@@ -1,6 +1,7 @@
 //! Swedish translations for the interface strings in i18n.rs. Labels follow Microsoft
 //! Excel's Swedish wording; anything absent falls back to English.
 
+/// Translates an English interface label to Swedish using Microsoft Excel terminology.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         " (password)" => " (lösenord)",
@@ -1053,7 +1054,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Undo" => "Ångra",
         "Undo (⌘Z)" => "Ångra (⌘Z)",
         "Undo list" => "Ångralista",
-        "Unfreeze Panes" => "Avmarkera fönsterrutor",
+        "Unfreeze Panes" => "Lås upp fönsterrutor",
         "Ungroup" => "Dela upp grupp",
         "Unhide" => "Ta fram",
         "Unhide Columns" => "Ta fram kolumner",

@@ -12,7 +12,7 @@ use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex,
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{EditState, REF_COLORS};
+use crate::editor::EditState;
 use crate::theme::{self, Tokens};
 
 pub const COL_HEADER_H: f32 = 21.0;
@@ -1230,7 +1230,7 @@ pub(crate) fn paint_quadrant(
                 StrokeKind::Inside,
             );
             if on {
-                crate::icons::paint(p, b.shrink(1.5), crate::icons::Icon::Check, Color32::WHITE);
+                crate::icons::paint_on_sheet(p, b.shrink(1.5), crate::icons::Icon::Check, Color32::WHITE);
             }
             continue;
         }
@@ -1561,9 +1561,15 @@ pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeadin
 }
 
 fn paint_filter_button(p: &Painter, r: Rect, filtered: bool) {
-    p.rect_filled(r, 2.0, Color32::from_gray(250));
-    p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-    crate::icons::paint(p, r.shrink(1.5), if filtered { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+    let t = Tokens::get(p.ctx());
+    p.rect_filled(r, 2.0, t.sheet_control_bg);
+    p.rect_stroke(r, 2.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+    crate::icons::paint_on_sheet(
+        p,
+        r.shrink(1.5),
+        if filtered { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron },
+        t.sheet_control_text,
+    );
 }
 
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
@@ -1792,7 +1798,7 @@ pub(crate) fn paint_selection(
                 continue;
             }
             let rr = geo.range_rect(sh, r);
-            let col = REF_COLORS[idx];
+            let col = Tokens::get(p.ctx()).ref_color(idx, true);
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
             p.rect_stroke(rr, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
             for corner in [rr.left_top(), rr.right_top(), rr.left_bottom(), rr.right_bottom()] {
@@ -2384,6 +2390,19 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
             return;
         }
+        // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
+        // selection, which the dialog acts on, stays.
+        if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
+            d.pick_reference(c, &sh.name, false);
+            app.grid.drag = Drag::Select;
+            app.grid.drag_select = true;
+            if resp.drag_started()
+                && let Some(p) = pos
+            {
+                select_to_pointer(app, geo, sh, wb, p);
+            }
+            return;
+        }
         // Point mode while editing a formula: clicking inserts a reference.
         if let Some(ed) = app.editor.as_mut()
             && ed.can_point()
@@ -2721,7 +2740,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
 /// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
 /// pointing a formula reference, which also drags a Select).
 fn format_painter_apply(app: &mut SheetApp) {
-    if app.session.format_painter.is_some() && !app.editor.as_ref().is_some_and(|ed| ed.can_point()) {
+    if app.session.format_painter.is_some()
+        && !app.editor.as_ref().is_some_and(|ed| ed.can_point())
+        && !app.dialog.as_ref().is_some_and(|d| d.picks_references())
+    {
         let dest = app.session.active().map(|d| d.selection.current().a1());
         if let Some(dest) = dest
             && let Err(e) = app.run("edit.formatPainter", json!({"apply": dest}))
@@ -2774,7 +2796,9 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
         geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
         geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
     );
-    if let Some(ed) = app.editor.as_mut()
+    if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
+        d.pick_reference(cell, &sh.name, true);
+    } else if let Some(ed) = app.editor.as_mut()
         && ed.point.is_some()
     {
         if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).or(ed.point_cell) {
@@ -3237,6 +3261,9 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
+    // Grows with the text: the in-cell editor shows every line and never scrolls (the formula bar
+    // is the one that stops at five lines).
+    let shown = lines;
     // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
     // Otherwise it widens to the text's one-line width.
     let wrap = st.align.wrap;
@@ -3244,7 +3271,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
         // The field wraps at the width it is given (the editor's less its 2 px inset a side): its
         // frame is `Frame::NONE`, so no text margin is taken off.
         let wrapped = ui.painter().layout(ed.text.clone(), font.clone(), Color32::BLACK, (rect.width() - 4.0).max(1.0));
-        (rect.width(), (wrapped.size().y.max(size * 1.3 * lines) + 4.0).max(rect.height()))
+        (rect.width(), (wrapped.size().y.max(size * 1.3 * shown) + 4.0).max(rect.height()))
     } else {
         let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
         // Excel keeps the cell's height for one line and only grows for extra lines.
@@ -3272,7 +3299,8 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
     child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
-    crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0);
+    crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0, erect.height() - 2.0);
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gridcraft.cell_editor.rect"), erect));
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -3750,9 +3778,10 @@ pub(crate) fn paint_overlays(
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
     {
-        p.rect_filled(r, 2.0, Color32::from_gray(245));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(3.0), crate::icons::Icon::Chevron, Color32::from_gray(60));
+        let t = Tokens::get(p.ctx());
+        p.rect_filled(r, 2.0, t.sheet_control_bg);
+        p.rect_stroke(r, 2.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+        crate::icons::paint_on_sheet(p, r.shrink(3.0), crate::icons::Icon::Chevron, t.sheet_control_text);
     }
     // Input message of the active cell's validation, hidden while its list is open: it would cover the items.
     if app.editor.is_none()

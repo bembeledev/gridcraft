@@ -1475,9 +1475,29 @@ fn wedge(ctx: &mut Ctx, cx: f32, cy: f32, r_outer: f32, r_inner: f32, a0: f32, s
     let a1 = a0 + sweep;
     if a1 <= TAU {
         ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0, a1, fill, stroke });
-    } else {
-        ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0, a1: TAU, fill, stroke });
-        ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0: 0.0, a1: a1 - TAU, fill, stroke });
+        return;
+    }
+    // The halves are filled without a stroke: each would outline its own radial edge at 12
+    // o'clock, painting the white separator straight through the slice.
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0, a1: TAU, fill, stroke: None });
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0: 0.0, a1: a1 - TAU, fill, stroke: None });
+    if let Some((color, width)) = stroke {
+        // One outline for the whole slice: the outer and inner arcs run through 12 o'clock, and
+        // the two radial edges at the slice's own start and end close the path.
+        let arc = |r: f32, from: f32, to: f32| -> Vec<[f32; 2]> {
+            let steps = ((r.abs() * (to - from).abs() / 2.0).ceil() as usize).clamp(4, 512);
+            let at = |a: f32| [cx + r * a.sin(), cy - r * a.cos()];
+            (0..=steps).map(|k| at(from + (to - from) * k as f32 / steps as f32)).collect()
+        };
+        let mut pts = arc(r_outer, a0, a1);
+        if r_inner > 0.0 {
+            pts.extend(arc(r_inner, a1, a0));
+        } else {
+            pts.push([cx, cy]);
+        }
+        let start = pts[0];
+        pts.push(start);
+        ctx.out.push(Prim::Line { pts, color, width, dash: false });
     }
 }
 

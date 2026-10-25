@@ -380,6 +380,51 @@ fn rotated_wedges_cover_each_slice_once_without_overlap() {
     }
 }
 
+/// A slice that crosses 12 o'clock is filled as two halves but outlined once: stroking each half
+/// separately ran the white separator along the shared radial edge, straight through the slice.
+#[test]
+fn slice_crossing_twelve_has_no_internal_seam() {
+    const TAU: f32 = std::f32::consts::TAU;
+    let mut c = chart(ChartKind::Pie);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.first_slice_angle = 90;
+    let a = [230, 126, 34, 255];
+    let b = [39, 174, 96, 255];
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![a, b],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Only", &[1.0, 1.0], a, ChartKind::Pie)],
+    };
+    let (w, h) = (400u32, 400u32);
+    let prims = render(&c, &d, w as f32, h as f32, &ApproxMeasure);
+    // The second slice starts at 270° and wraps past 0°, so it is drawn as two unstroked halves.
+    let mut halves = 0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut r = 0.0;
+    for p in &prims {
+        if let Prim::Wedge { cx: x, cy: y, r_outer, a0, a1, fill, stroke, .. } = p
+            && *fill == b
+        {
+            assert!(stroke.is_none(), "a split half must not stroke its shared edge: {p:?}");
+            assert!(*a0 == 0.0 || *a1 == TAU, "the crossing slice is split at 12 o'clock: {p:?}");
+            halves += 1;
+            (cx, cy, r) = (*x, *y, *r_outer);
+        }
+    }
+    assert_eq!(halves, 2, "one slice crosses 12 o'clock");
+    // Exactly one outline covers the whole crossing slice, drawn as line primitives.
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Line { color, .. } if *color == [255, 255, 255, 255])).count(), 1, "{prims:?}");
+    // No white pixel inside the slice along 12 o'clock, where the shared edge used to be stroked.
+    let img = rasterize(&prims, w, h, [255, 255, 255, 255]);
+    for t in [0.3f32, 0.5, 0.7] {
+        assert_eq!(pixel(&img, w, cx as u32, (cy - r * t) as u32), b, "white seam at {t} of the slice");
+    }
+}
+
 #[test]
 fn doughnut_legend_names_categories_and_matches_every_ring() {
     let mut c = chart(ChartKind::Doughnut);

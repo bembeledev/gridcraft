@@ -15,13 +15,23 @@ pub fn specs() -> Vec<CommandSpec> {
             Some("Cmd+O"),
             "{path} | {name, base64}, plus {password} for a password-protected workbook. Text files (csv, tsv, txt, prn), the Text Import Wizard's settings: \
              {delimiter?: \"auto\" (detect the delimiter, a title before the table and the decimal separator) | \";\" | \"||\" (any string), \
-             delimiters?: [\",\", \"\\t\"], other?: \"|\", treatConsecutive?: bool, fixedWidths?: [10, 20] (where fields start), startRow?: 1, \
+             delimiters?: [\",\", \"\\t\"] ([] for none: each line in one cell), other?: \"|\", treatConsecutive?: bool, fixedWidths?: [10, 20] (where fields start), startRow?: 1, \
              decimal?: \"auto\" (default: from the values) | \".\" | \",\", textQualifier?: \"\\\"\" | \"'\" | \"\" (none), csvAsText?: bool (every field as text)}; \
              without them .csv is detected, .txt/.tsv split at tabs and .prn keeps each line in one cell → {index, title, sheets, warnings, \
              text?: {split, delimiters?, fixedWidths?, detected, startRow, decimal, decimalFrom, mixedColumns, ambiguous, fields, rows, completeRows, otherRows, splitNumbers, uncertain}} \
              (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, prn, json)",
             always,
             open
+        ),
+        cmd!(
+            query "file.previewText",
+            "Text Import Preview",
+            [],
+            None,
+            "{path} | {name, base64}, and file.open's text settings (delimiter, delimiters, other, treatConsecutive, fixedWidths, startRow, decimal, textQualifier), \
+             rows?: 20 (at most 200) → {text: as file.open reports it, preview: [[field, …], …] (fields as the text they hold), partial: bool (only the first MiB was read)}",
+            always,
+            preview_text
         ),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.prn/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .prn: Formatted Text (Space delimited), .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
@@ -122,6 +132,24 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 
+/// The Text Import Wizard's preview: the first rows as the settings split them, and what
+/// reading found, without opening the file (#2553).
+fn preview_text(_: &mut Session, p: &Json) -> Result<Json> {
+    let (name, bytes) = if let Some(b) = str_param(p, "base64") {
+        (
+            str_param(p, "name").unwrap_or("Book.txt").to_string(),
+            crate::io::base64_decode(b).ok_or_else(|| bad("file.previewText", "invalid base64"))?,
+        )
+    } else if let Some(path) = str_param(p, "path") {
+        (path.to_string(), crate::io::read_file(path)?)
+    } else {
+        return Err(bad("file.previewText", "missing `path` or `name` and `base64`"));
+    };
+    let rows = u32_param(p, "rows").map_or(20, |n| n.min(200)) as usize;
+    let (preview, report, partial) = crate::io::preview_text(&name, &bytes, &text_options(p)?, rows)?;
+    Ok(json!({"text": text_report(&report), "preview": preview, "partial": partial}))
+}
+
 /// The Text Import Wizard's settings from `file.open`'s params (#2553).
 fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
     use crate::io::{Qualifier, SplitChoice};
@@ -144,10 +172,8 @@ fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
     } else if list.is_some() || other.is_some() {
         let mut delimiters: Vec<String> = list.into_iter().flatten().filter_map(Json::as_str).filter(|d| !d.is_empty()).map(str::to_string).collect();
         delimiters.extend(other.map(str::to_string));
-        if delimiters.is_empty() {
-            return Err(bad("file.open", "`delimiters` names no delimiter"));
-        }
-        t.split = SplitChoice::Given(Split::Delimited { delimiters, consecutive });
+        // None ticked, as the wizard allows: each line in one cell.
+        t.split = SplitChoice::Given(if delimiters.is_empty() { Split::Lines } else { Split::Delimited { delimiters, consecutive } });
     } else if let Some(a) = fixed {
         let breaks = a.iter().filter_map(Json::as_u64).map(|v| usize::try_from(v).unwrap_or(usize::MAX)).collect();
         t.split = SplitChoice::Given(Split::FixedWidth(breaks));

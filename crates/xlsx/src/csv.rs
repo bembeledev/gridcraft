@@ -213,34 +213,89 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     read_text(bytes, opts).map(|(wb, _)| wb)
 }
 
+/// The settings a text file is read with, given or detected.
+struct Resolved {
+    text: String,
+    quote: Option<char>,
+    split: Split,
+    layout: Option<text_layout::Layout>,
+    start: usize,
+    fields: usize,
+    numbers: Numbers,
+}
+
+impl Resolved {
+    fn new(bytes: &[u8], opts: &CsvOptions) -> Result<Resolved, IoError> {
+        let text = decode_text(bytes);
+        let quote = (!opts.no_qualifier).then_some(if opts.quote == 0 { '"' } else { opts.quote as char });
+        let (split, layout) = match (&opts.split, opts.delimiter) {
+            (Some(split), _) => (split.clone(), None),
+            (None, 0) => {
+                let layout = detect(&text, opts.kind, quote);
+                (layout.split.clone(), Some(layout))
+            }
+            (None, d) => (Split::delimiter(d as char), None),
+        };
+        if let (Some(q), Split::Delimited { delimiters, .. }) = (quote, &split)
+            && delimiters.iter().any(|d| d.contains(q))
+        {
+            return Err(IoError::Format("the delimiter and quote character must differ".into()));
+        }
+        let start = match opts.start_row {
+            Some(n) => n,
+            None => layout.as_ref().map_or(0, |l| records_before_table(&text, &split, quote, l.start_row)),
+        };
+        let sample = sample_rows(&text, &split, quote, start);
+        let fields = layout.as_ref().map_or_else(|| most_common_fields(&sample), |l| l.fields);
+        let numbers = match opts.decimal {
+            Some(d) => Numbers::given(d),
+            None => detect_numbers(&sample, &split),
+        };
+        Ok(Resolved { text, quote, split, layout, start, fields, numbers })
+    }
+
+    fn report(self, done: Completeness) -> TextReport {
+        TextReport {
+            split: self.split,
+            detected: self.layout.is_some(),
+            start_row: self.start,
+            numbers: self.numbers,
+            fields: self.fields,
+            rows: done.rows,
+            complete: done.complete,
+            other_rows: done.other_rows,
+            split_numbers: done.split_numbers,
+            uncertain: self.layout.map(|l| l.uncertain).unwrap_or_default(),
+        }
+    }
+}
+
+/// The Text Import Wizard's preview: the first `rows` rows of the file as `opts` splits them,
+/// fields as the text they hold, and what reading found (counted over the whole of `bytes`).
+pub fn preview_text(bytes: &[u8], opts: &CsvOptions, rows: usize) -> Result<(Vec<Vec<String>>, TextReport), IoError> {
+    let r = Resolved::new(bytes, opts)?;
+    let mut out = vec![];
+    let mut record = 0usize;
+    let mut done = Completeness { fields: r.fields, ..Default::default() };
+    split_records(&r.text, &r.split, r.quote, |rec| {
+        record += 1;
+        if record > r.start {
+            done.add(record, &rec, &r.split, r.numbers.decimal);
+            if out.len() < rows {
+                out.push(rec);
+            }
+        }
+        record < MAX_ROWS as usize
+    });
+    Ok((out, r.report(done)))
+}
+
 /// [`read_csv`], with what reading found: the split used (detected when neither `split` nor
 /// `delimiter` is given), the decimal separator, and how complete the rows are over the file.
 pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextReport), IoError> {
-    let text = decode_text(bytes);
-    let quote = (!opts.no_qualifier).then_some(if opts.quote == 0 { '"' } else { opts.quote as char });
-    let (split, layout) = match (&opts.split, opts.delimiter) {
-        (Some(split), _) => (split.clone(), None),
-        (None, 0) => {
-            let layout = detect(&text, opts.kind, quote);
-            (layout.split.clone(), Some(layout))
-        }
-        (None, d) => (Split::delimiter(d as char), None),
-    };
-    if let (Some(q), Split::Delimited { delimiters, .. }) = (quote, &split)
-        && delimiters.iter().any(|d| d.contains(q))
-    {
-        return Err(IoError::Format("the delimiter and quote character must differ".into()));
-    }
-    let start = match opts.start_row {
-        Some(n) => n,
-        None => layout.as_ref().map_or(0, |l| records_before_table(&text, &split, quote, l.start_row)),
-    };
-    let sample = sample_rows(&text, &split, quote, start);
-    let fields = layout.as_ref().map_or_else(|| most_common_fields(&sample), |l| l.fields);
-    let numbers = match opts.decimal {
-        Some(d) => Numbers::given(d),
-        None => detect_numbers(&sample, &split),
-    };
+    let resolved = Resolved::new(bytes, opts)?;
+    let Resolved { text, quote, split, start, numbers, .. } = &resolved;
+    let (quote, start) = (*quote, *start);
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
     wb.csv_delimiter = split.single_byte();
@@ -250,8 +305,8 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
     let mut record = 0usize;
-    let mut done = Completeness { fields, ..Default::default() };
-    split_records(&text, &split, quote, |rec| {
+    let mut done = Completeness { fields: resolved.fields, ..Default::default() };
+    split_records(text, split, quote, |rec| {
         record += 1;
         if record <= start {
             return true;
@@ -259,7 +314,7 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
         if row >= MAX_ROWS {
             return false;
         }
-        done.add(record, &rec, &split, numbers.decimal);
+        done.add(record, &rec, split, numbers.decimal);
         // A blank line is an empty row.
         for (col, f) in rec.into_iter().enumerate() {
             if col as u32 >= MAX_COLS {
@@ -293,19 +348,7 @@ pub fn read_text(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, TextRepor
     });
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
-    let report = TextReport {
-        split,
-        detected: layout.is_some(),
-        start_row: start,
-        numbers,
-        fields,
-        rows: done.rows,
-        complete: done.complete,
-        other_rows: done.other_rows,
-        split_numbers: done.split_numbers,
-        uncertain: layout.map(|l| l.uncertain).unwrap_or_default(),
-    };
-    Ok((wb, report))
+    Ok((wb, resolved.report(done)))
 }
 
 /// One field read like typed input, with the column's decimal separator: a decimal comma

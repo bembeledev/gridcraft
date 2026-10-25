@@ -290,6 +290,12 @@ pub struct SheetApp {
 }
 
 /// Strips the engine's error prefixes for message boxes.
+/// A file the interface opens through Text Import: `.txt` and `.prn`, which Excel's File › Open
+/// takes through its Text Import Wizard. A `.csv` opens straight away, as in Excel.
+pub fn wants_text_import(name: &str) -> bool {
+    std::path::Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("txt") || e.eq_ignore_ascii_case("prn"))
+}
+
 pub fn clean_error(e: &str) -> String {
     if let Some(rest) = e.split_once("`: ").map(|(_, r)| r) {
         return rest.to_string();

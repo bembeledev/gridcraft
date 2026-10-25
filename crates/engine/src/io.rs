@@ -235,6 +235,39 @@ fn open_plain(name: &str, bytes: &[u8], text: &TextOpen) -> Result<(Workbook, Ve
 
 /// Reads a CSV, TSV, TXT, PRN or other text file with the Text Import Wizard's settings.
 fn read_text_file(kind: Option<FileKind>, bytes: &[u8], text: &TextOpen) -> Result<(Workbook, gridcraft_xlsx::text_layout::TextReport)> {
+    let (mut wb, report) = gridcraft_xlsx::read_text(bytes, &csv_options(kind, text)).map_err(|e| EngineError::Other(e.to_string()))?;
+    // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
+    if kind == Some(FileKind::Tsv) && wb.csv_delimiter == Some(b'\t') {
+        wb.csv_delimiter = None;
+    }
+    Ok((wb, report))
+}
+
+/// The most of a file the Text Import preview reads.
+pub const PREVIEW_BYTES: usize = 1 << 20;
+
+/// The Text Import Wizard's preview of the text file `name`: its first `rows` rows split as
+/// `text` says (fields as the text they hold), and what reading found, from at most the first
+/// [`PREVIEW_BYTES`] (up to the last line end in them). The flag says whether the file is longer.
+pub fn preview_text(
+    name: &str,
+    bytes: &[u8],
+    text: &TextOpen,
+    rows: usize,
+) -> Result<(Vec<Vec<String>>, gridcraft_xlsx::text_layout::TextReport, bool)> {
+    let cut = if bytes.len() > PREVIEW_BYTES {
+        let head = bytes.get(..PREVIEW_BYTES).unwrap_or(bytes);
+        head.iter().rposition(|b| *b == b'\n').map_or(head, |i| head.get(..=i).unwrap_or(head))
+    } else {
+        bytes
+    };
+    let (rows, report) =
+        gridcraft_xlsx::preview_text(cut, &csv_options(FileKind::from_path(name), text), rows).map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok((rows, report, cut.len() < bytes.len()))
+}
+
+/// The xlsx crate's options for a text file of `kind` read as `text` says.
+fn csv_options(kind: Option<FileKind>, text: &TextOpen) -> gridcraft_xlsx::CsvOptions {
     use gridcraft_xlsx::text_layout::{Split, TextKind};
     let mut opts = gridcraft_xlsx::CsvOptions {
         parse_values: !text.as_text,
@@ -265,12 +298,7 @@ fn read_text_file(kind: Option<FileKind>, bytes: &[u8], text: &TextOpen) -> Resu
         Qualifier::Single => opts.quote = b'\'',
         Qualifier::None => opts.no_qualifier = true,
     }
-    let (mut wb, report) = gridcraft_xlsx::read_text(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
-    // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
-    if kind == Some(FileKind::Tsv) && wb.csv_delimiter == Some(b'\t') {
-        wb.csv_delimiter = None;
-    }
-    Ok((wb, report))
+    opts
 }
 
 /// What to tell the user when one part of an XLSX package unpacks to more than the reader's

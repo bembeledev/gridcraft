@@ -11,12 +11,16 @@ use super::macros::macros;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
+use super::text_import::{text_import, text_import_params};
 use super::zoom::zoom;
 use super::*;
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 pub(crate) fn build_params(d: &Dialog) -> Json {
+    if d.name == "textImport" {
+        return text_import_params(&d.values);
+    }
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "advancedFilter" => {
@@ -117,7 +121,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
-        "recommendedCharts" => 600.0,
+        "recommendedCharts" | "textImport" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
@@ -153,6 +157,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
+                "textImport" => text_import(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
@@ -365,7 +370,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
-                } else if d.name == "openPassword" {
+                } else if d.name == "openPassword" || d.name == "textImport" {
                     let path = d.values.get("path").and_then(Json::as_str).map(str::to_string);
                     app.after_open(path.as_deref(), &r);
                 }

@@ -4586,6 +4586,11 @@ fn file_open_reads_text_files_with_the_import_wizards_settings() {
     assert_eq!((r["text"]["rows"].as_u64(), r["text"]["completeRows"].as_u64()), (Some(4), Some(3)));
     assert_eq!(r["text"]["otherRows"], json!([{"row": 2, "fields": 3}]));
     assert_eq!(r["text"]["splitNumbers"], json!([{"row": 2, "number": "1,234.50"}]));
+    // No delimiter ticked: each line in one cell.
+    let mut s = self::s();
+    let r = open(&mut s, "pairs.txt", "a;b\r\n", json!({"delimiters": []}));
+    assert_eq!(r["text"]["split"], "lines");
+    assert_eq!(value(&mut s, "A1"), json!("a;b"));
     // Other formats report nothing about text.
     let mut s = self::s();
     let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
@@ -4595,13 +4600,36 @@ fn file_open_reads_text_files_with_the_import_wizards_settings() {
     for bad in [
         json!({"delimiter": ""}),
         json!({"delimiter": ";", "fixedWidths": [3]}),
-        json!({"delimiters": []}),
         json!({"startRow": 0}),
         json!({"decimal": "x"}),
         json!({"textQualifier": "x"}),
     ] {
         assert!(self::s().execute("file.open", params("x.csv", "a,b", bad.clone())).is_err(), "{bad}");
     }
+}
+
+/// The Text Import preview splits the first rows as the settings say, without opening the file.
+#[test]
+fn file_preview_text_shows_the_first_rows_as_the_settings_split_them() {
+    let report = "Umsatzbericht Oktober 2026\r\n\r\nArtikel;Umsatz\r\nX;1.234,50\r\nY;99,00\r\n";
+    let b64 = crate::io::base64_encode(report.as_bytes());
+    let mut s = s();
+    let docs = s.documents().len();
+    let r = s.execute("file.previewText", json!({"name": "report.txt", "base64": b64, "delimiter": "auto", "rows": 2})).unwrap();
+    assert_eq!(r["preview"], json!([["Artikel", "Umsatz"], ["X", "1.234,50"]]));
+    assert_eq!((r["text"]["startRow"].as_u64(), r["text"]["decimal"].as_str()), (Some(3), Some(",")));
+    assert_eq!((r["text"]["rows"].as_u64(), r["text"]["completeRows"].as_u64()), (Some(3), Some(3)));
+    assert_eq!(r["partial"], json!(false));
+    // Changing a setting changes the preview; nothing was opened.
+    let r = s.execute("file.previewText", json!({"name": "report.txt", "base64": b64, "fixedWidths": [7], "startRow": 4})).unwrap();
+    assert_eq!(r["preview"], json!([["X;1.234", ",50"], ["Y;99,00"]]));
+    assert_eq!(s.documents().len(), docs);
+    assert!(s.execute("file.previewText", json!({})).is_err());
+    // A file longer than the preview window is cut at a line end.
+    let long = "a;b\r\n".repeat(300_000);
+    let r = s.execute("file.previewText", json!({"name": "long.csv", "base64": crate::io::base64_encode(long.as_bytes())})).unwrap();
+    assert_eq!(r["partial"], json!(true));
+    assert_eq!(r["text"]["completeRows"], r["text"]["rows"]);
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;

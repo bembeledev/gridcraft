@@ -2,6 +2,11 @@ use super::*;
 
 impl SheetApp {
     pub fn open_path(&mut self, path: &str) {
+        // A text file asks how it splits first, as Excel's Text Import Wizard does (#2553).
+        if wants_text_import(path) {
+            self.open_dialog("textImport", json!({"path": path}));
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
@@ -85,6 +90,11 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
+            if wants_text_import(&name) {
+                self.backstage = None;
+                self.open_dialog("textImport", json!({"name": name, "base64": b64}));
+                continue;
+            }
             match self.run("file.open", json!({"name": &name, "base64": &b64})) {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {

@@ -382,6 +382,7 @@ mod tests {
                 h.input_mut().events.push(Event::PointerMoved(egui::pos2(300.0 + i as f32 * 7.0, 400.0)));
                 h.input_mut().events.push(Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
+                    source: egui::MouseWheelSource::Unknown,
                     delta: vec2(0.0, -2.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,

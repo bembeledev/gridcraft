@@ -84,8 +84,16 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<&'static str>), Str
             continue;
         }
         covered.extend(CRAFT_SCRIPTS.iter().copied().filter(|s| scripts.contains(s)));
+        // Watched before the checks below, so fixing a bad file reruns this script.
+        println!("cargo::rerun-if-changed={}", dir.join(file).display());
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
-        println!("cargo::rerun-if-changed={}", path.display());
+        // Checked here so a directory, an unreadable file or one that is not a font (empty, a Git
+        // LFS pointer) takes the warning (or error) path above instead of failing `include_bytes!`
+        // or the font parser at startup.
+        let bytes = std::fs::read(&path).map_err(|e| format!("{file}: {e}"))?;
+        if !matches!(bytes.get(..4), Some(b"\0\x01\0\0" | b"OTTO" | b"true" | b"ttcf")) {
+            return Err(format!("{file}: not a TrueType or OpenType font"));
+        }
         let scripts: Vec<String> = scripts.iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             out,

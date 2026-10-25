@@ -202,12 +202,17 @@ impl Language {
     fn from_tag(tag: &str) -> Option<Self> {
         // Punjabi in Pakistan is written in Shahmukhi (Arabic script), not the Gurmukhi catalog,
         // unless the tag names Gurmukhi (`pa-Guru-PK`); a tag that names Arabic is Shahmukhi.
+        // A POSIX locale's encoding is dropped and its modifier counts as a subtag (`pa_IN.UTF-8@arab`).
+        // Subtags after a singleton (`-x-`, `-u-`) are extensions or private use, not a script or region.
         let lower = tag.trim().to_ascii_lowercase();
-        let has = |subtag: &str| lower.split(['-', '_', '.']).any(|part| part == subtag);
-        if lower.starts_with("pa") && (has("arab") || (has("pk") && !has("guru"))) {
+        let (locale, modifier) = lower.split_once('@').unwrap_or((&lower, ""));
+        let locale = locale.split_once('.').map_or(locale, |(locale, _)| locale);
+        let parts: Vec<&str> = locale.split(['-', '_']).take_while(|part| part.len() != 1).collect();
+        let has = |subtag: &str| parts.contains(&subtag) || modifier == subtag;
+        if parts.first() == Some(&"pa") && (has("arab") || (has("pk") && !has("guru"))) {
             return None;
         }
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        match *parts.first()? {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
@@ -616,6 +621,11 @@ mod tests {
         assert_eq!(Language::from_tag("pa_PK"), None);
         assert_eq!(Language::from_tag("pa-Guru-PK"), Some(Language::Pa), "an explicit Gurmukhi script wins over the region");
         assert_eq!(Language::from_tag("pa-Guru-Arab-PK"), None);
+        assert_eq!(Language::from_tag("pa-PK-x-guru"), None, "a private-use subtag is not a script");
+        assert_eq!(Language::from_tag("pa-IN-x-arab"), Some(Language::Pa));
+        assert_eq!(Language::from_tag("pa.UTF-8"), Some(Language::Pa), "a POSIX encoding without a region");
+        assert_eq!(Language::from_tag("hi_IN.UTF-8"), Some(Language::Hi));
+        assert_eq!(Language::from_tag("pa_IN.UTF-8@arab"), None, "a POSIX @arab modifier is Shahmukhi");
         assert_eq!(Language::from_tag("pt-PT"), Some(Language::PtBr), "only Punjabi tags are screened");
     }
 

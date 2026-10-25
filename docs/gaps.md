@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (§3, §8: PivotTable slicers landed; the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; §3, §8: PivotTable slicers landed; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -65,7 +65,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   equality (#57, so `=0.1+0.2=0.3` is TRUE and MATCH and COUNTIF agree), spill updates after
   structural edits and cleared blockers (#133, #139; PRs #148, #157), 3-D span deletion (#140),
   and qualified names after a sheet rename (#134). Iterative calculation for circular references
-  landed too (no Options dialog yet, which is §13's).
+  landed too, with its settings in File › Options › Formulas.
 - **Impact:** wrong numbers are worse than missing features, so this entry is kept until the
   oracle suite of §15 can say the category is clear rather than only these five reports being so.
 - **Estimate:** — [function-parity.md](function-parity.md#formula-language)
@@ -84,7 +84,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 8. PivotTables: no calculated items, inserting slicers, timelines; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
   `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done).
+  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
+  its source records on a new sheet. The "Enable show details" option (`pivot.options`
+  `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
+  yet (command only).
   PivotTable slicers from files are shown, filter their PivotTables when clicked and are saved;
   inserting one on a PivotTable, and slicer settings, are not done yet. A slicer connected to
   PivotTables that can't share one pivot cache (different sources or calculated fields, or a
@@ -184,8 +187,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
+| 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
+| 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | minor | §3, §8: PivotTable slicers read, shown, clickable and written |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |

@@ -15,7 +15,7 @@ fn picture(id: u32, marker: u8) -> Image {
     Image {
         id,
         anchor: Anchor { width: 24.0, height: 24.0, ..Default::default() },
-        data,
+        data: data.into(),
         mime: "image/png".into(),
         alt: "Original alternative text".into(),
     }

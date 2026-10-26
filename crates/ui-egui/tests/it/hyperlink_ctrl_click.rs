@@ -15,12 +15,12 @@ fn harness() -> Harness {
     session.execute("insert.link", json!({"cell": "B2", "target": "https://example.org/a"})).unwrap();
     session.execute("cell.set", json!({"cell": "B4", "input": "jump"})).unwrap();
     session.execute("insert.link", json!({"cell": "B4", "target": "Sheet1!F9"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -82,4 +82,16 @@ fn ctrl_click_beside_the_link_text_still_extends_the_selection() {
     let ranges: Vec<String> = d.selection.ranges.iter().map(|r| r.a1()).collect();
     assert_eq!(ranges, ["B2", "B4"], "the hyperlink cell joins the selection");
     assert!(h.state().dialog.is_none(), "no link was followed");
+}
+
+#[test]
+fn ctrl_alt_click_on_the_link_text_still_extends_the_selection() {
+    let mut h = harness();
+    click_at(&mut h, "B2", 0.9, Modifiers::NONE);
+    click_at(&mut h, "B4", 0.3, Modifiers { alt: true, ..Modifiers::COMMAND });
+    let d = h.state().session.active().unwrap();
+    let ranges: Vec<String> = d.selection.ranges.iter().map(|r| r.a1()).collect();
+    assert_eq!(ranges, ["B2", "B4"], "Ctrl+Alt+click adds the hyperlink cell to the selection");
+    assert_eq!(d.selection.active.a1(), "B4", "the link was not followed");
+    assert!(h.state().dialog.is_none(), "no link dialog");
 }

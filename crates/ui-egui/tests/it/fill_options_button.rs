@@ -1,5 +1,6 @@
 //! After a left-drag of the fill handle, the Auto Fill Options button redoes the fill as Copy Cells,
-//! Fill Series, Fill Formatting Only or Fill Without Formatting (#1403).
+//! Fill Series, Fill Formatting Only or Fill Without Formatting (#1403), and from a date as Fill
+//! Days, Fill Weekdays, Fill Months or Fill Years.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::Queryable;
@@ -14,15 +15,7 @@ fn harness(setup: impl FnOnce(&mut Session)) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     setup(&mut session);
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 /// B1:B2 holds 1, 2 and is selected.
@@ -139,6 +132,33 @@ fn a_lone_number_copies_on_drag_and_counts_up_with_fill_series() {
     assert_eq!(values(&h, &["B2", "B3", "B4"]), [n(6.0), n(7.0), n(8.0)]);
 }
 
+#[test]
+fn fill_months_redoes_a_date_drag_by_months() {
+    let mut h = harness(|s| {
+        // 1/31/2026 is serial 46053.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1/31/2026"})).unwrap();
+        s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    });
+    drag_handle(&mut h, "B1", "B3", PointerButton::Primary);
+    assert_eq!(values(&h, &["B2", "B3"]), [n(46054.0), n(46055.0)], "a plain drag steps by days");
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    h.get_by_label("Fill Months").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B2", "B3"]), [n(46081.0), n(46112.0)], "Feb 28 and Mar 31");
+}
+
+#[test]
+fn a_number_drag_offers_no_date_fills() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Copy Cells").is_some());
+    assert!(h.query_by_label("Fill Days").is_none());
+}
+
 fn formatted(s: &mut Session) {
     s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [null], [9]]})).unwrap();
     s.execute("home.bold", json!({"range": "B1:B2", "on": true})).unwrap();
@@ -208,4 +228,66 @@ fn the_button_stays_inside_the_grid_on_a_right_to_left_sheet() {
     assert!(geo.cells.contains_rect(button), "{button:?} outside {:?}", geo.cells);
     let filled = geo.screen_cell_rect(sheet, CellRef::parse("B6").unwrap());
     assert!(button.center().x < filled.left() && button.top() >= filled.bottom() - 1.0, "below-left of the mirrored range's corner");
+}
+
+/// Right-to-left sheet with column A made `chars` wide (so column B's right edge, where the fill
+/// range B1:B6 ends, sits far enough right to be scrolled to either edge of the cells area).
+fn rtl_wide_a(chars: u32) -> Harness {
+    harness(|s| {
+        one_two(s);
+        s.execute("home.columnWidth", json!({"cols": "A:A", "chars": chars})).unwrap();
+        s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    })
+}
+
+/// Logical right edge of the filled column B (scroll-dependent) and the current geometry.
+fn b_right(h: &Harness) -> (f32, Geo) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    (geo.cell_rect(sheet, CellRef::parse("B6").unwrap()).right(), geo)
+}
+
+fn scroll_b_right_to(h: &mut Harness, logical_x: f32) {
+    let (now, geo) = b_right(h);
+    h.state_mut().view_mut().unwrap().scroll.x += (now - logical_x) / geo.z;
+    h.run_steps(3);
+    let got = b_right(h).0;
+    assert!((got - logical_x).abs() < 1.0, "setup: column B ends at logical x {got}, wanted {logical_x}");
+}
+
+/// Logical x of the range's corner is `cells.right() - 25`: the 18 px button (at corner + 2 ..
+/// corner + 20) fits in the cells area, so on screen it sits at the left edge of the mirrored cells
+/// area, left of the filled range. `fill_options_tag` tested the mirrored button against the
+/// unmirrored cells, i.e. against the row-heading strip it does not own, and hid it.
+#[test]
+fn the_button_shows_near_the_left_screen_edge_on_a_right_to_left_sheet() {
+    let mut h = rtl_wide_a(220);
+    let (_, geo) = b_right(&h);
+    scroll_b_right_to(&mut h, geo.cells.right() - 25.0);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+
+    let (_, geo) = b_right(&h);
+    let cells = h.state().grid.cells_rect.unwrap();
+    assert!(geo.header_w > 20.0 && geo.cells.right() - 25.0 + 20.0 > geo.cells.right() - geo.header_w, "setup: in the zone the old check hides");
+    let button = h.query_by_label("Auto Fill Options").expect("the button fits inside the cells area, so it shows").rect();
+    assert!(cells.contains_rect(button), "{button:?} outside {cells:?}");
+}
+
+/// The corner is 10 px left of `cells.left()` (scrolled partly behind the row headings, which are
+/// on the right on screen). The button would start 8 px behind the headings, so it must not be
+/// drawn there. The old check let it through because the mirrored button fits the unmirrored cells.
+#[test]
+fn the_button_stays_off_the_row_headings_on_a_right_to_left_sheet() {
+    let mut h = rtl_wide_a(20);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    assert!(h.query_by_label("Auto Fill Options").is_some(), "setup: the button shows before scrolling");
+    let (_, geo) = b_right(&h);
+    scroll_b_right_to(&mut h, geo.cells.left() - 10.0);
+
+    let cells = h.state().grid.cells_rect.unwrap();
+    if let Some(b) = h.query_by_label("Auto Fill Options") {
+        let button = b.rect();
+        assert!(cells.contains_rect(button), "{button:?} overlaps the row headings, cells area is {cells:?}");
+    }
 }

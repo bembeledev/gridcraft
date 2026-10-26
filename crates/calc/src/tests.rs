@@ -2274,3 +2274,31 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn clearing_a_cell_unblocks_the_arrays_above_and_left_of_it() {
+    let mut t = T::new();
+    for r in 1..=50 {
+        t.set(&format!("D{r}"), &format!("={r}*2"));
+    }
+    t.set("B2", "7");
+    t.set("B1", "=SEQUENCE(3)");
+    t.set("C1", "=SEQUENCE(1,3)");
+    t.set("A20", "=B1+1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("A20"), Value::Error(CellError::Spill));
+    // Emptied: the array above it spills.
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("B2"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B2"))]);
+    assert_eq!(t.num("B3"), 3.0);
+    assert_eq!(t.num("A20"), 2.0);
+    // Typing over the area blocks it again; far from it, nothing is disturbed.
+    t.set("B3", "9");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    t.set("D50", "1");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("D49"), 98.0);
+    // Clearing it again frees the array.
+    t.set("B3", "");
+    assert_eq!(t.num("B3"), 3.0);
+}

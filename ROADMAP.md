@@ -96,7 +96,8 @@ added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
+The remaining dialogs, menus and messages are English. Spanish and French formula entry and display
+are localized (function names, `;`, `,`); number and date formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |

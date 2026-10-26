@@ -37,11 +37,11 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45); Spanish and French formula input and display
-  now use localized names (`SUMA`/`SOMME`…), `;` and `,` (`FormulaLocale`). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Formulas: Spanish and French localized; formats en-US only.** Spanish and French formula
+  entry and display use localized function names (`SUMA`/`SOMME`…), `;` argument separator and
+  `,` decimal separator (`FormulaLocale`); the other languages use English names, `,` and `.`
+  (#45). Number and date formats are en-US in every language (`crates/numfmt` says "en-US
+  only"). German with localized numbers and formulas is in PR #163 (open).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed

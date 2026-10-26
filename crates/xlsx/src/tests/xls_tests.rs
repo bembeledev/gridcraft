@@ -779,3 +779,19 @@ fn hostile_drawing_records_never_panic() {
     let (wb, _) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
     assert!(wb.sheets[0].images.is_empty());
 }
+
+#[test]
+fn a_drawing_group_split_across_records_is_read_whole() {
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nxyz";
+    let jpg: &[u8] = b"\xFF\xD8\xFF\xE0abc";
+    let whole = drawing_group(&[(6, 0x6E0, 0xF01E, png), (5, 0x46A, 0xF01D, jpg)]);
+    // The same bytes in two consecutive MsoDrawingGroup records, cut in the middle of the second picture.
+    let payload = &whole[4..];
+    let cut = payload.len() - 6;
+    let split = cat(&[&rec(0x00EB, &payload[..cut]), &rec(0x00EB, &payload[cut..])]);
+    let sheet = sheet_drawing(&[(2, [0, 1, 0, 1, 0, 3, 512, 4, 128])]);
+    let (wb, report) = read_xls(&workbook_with(&split, &sheet)).unwrap();
+    let images = &wb.sheets[0].images;
+    assert_eq!(images.len(), 1, "{:?}", report.warnings);
+    assert_eq!(images[0].mime, "image/jpeg");
+}

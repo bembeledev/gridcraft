@@ -156,14 +156,16 @@ fn dib_to_png(d: &[u8]) -> Option<Vec<u8>> {
     if bits <= 8 && colors == 0 {
         colors = 1 << bits;
     }
-    let palette = d.get(header..header + colors.min(256) * 4)?;
-    let pixels = d.get(header + colors.min(256) * 4..)?;
-    let stride = (w * bits as usize).div_ceil(32) * 4;
+    let pixels_at = header.checked_add(colors.min(256).checked_mul(4)?)?;
+    let palette = d.get(header..pixels_at)?;
+    let pixels = d.get(pixels_at..)?;
+    let stride = w.checked_mul(bits as usize)?.div_ceil(32).checked_mul(4)?;
     let top_down = height < 0;
     let mut rgba = Vec::with_capacity(w * h * 4);
     for y in 0..h {
         let src = if top_down { y } else { h - 1 - y };
-        let row = pixels.get(src * stride..(src + 1) * stride)?;
+        let from = src.checked_mul(stride)?;
+        let row = pixels.get(from..from.checked_add(stride)?)?;
         for x in 0..w {
             let px = match bits {
                 24 => [row[x * 3 + 2], row[x * 3 + 1], row[x * 3], 255],
@@ -172,7 +174,7 @@ fn dib_to_png(d: &[u8]) -> Option<Vec<u8>> {
                     let per = 8 / bits as usize;
                     let byte = row[x / per];
                     let shift = 8 - bits as usize * (x % per + 1);
-                    let i = usize::from((byte >> shift) & ((1u8 << bits) - 1));
+                    let i = usize::from((byte >> shift) & (u8::MAX >> (8 - bits)));
                     let c = palette.get(i * 4..i * 4 + 3)?;
                     [c[2], c[1], c[0], 255]
                 }
@@ -232,4 +234,67 @@ pub(super) fn read_shapes(drawing: &[u8]) -> SheetShapes {
     });
     close(&mut cur, &mut shapes);
     shapes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bottom-up DIB: a 40-byte header, a palette of `colors` (B, G, R, 0) and the pixel rows.
+    fn dib(width: i32, height: i32, bits: u16, colors: &[[u8; 3]], rows: &[&[u8]]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&width.to_le_bytes());
+        d.extend_from_slice(&height.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&bits.to_le_bytes());
+        d.extend_from_slice(&[0; 4]); // BI_RGB
+        d.extend_from_slice(&[0; 12]);
+        d.extend_from_slice(&(colors.len() as u32).to_le_bytes());
+        d.extend_from_slice(&[0; 4]);
+        for [b, g, r] in colors {
+            d.extend_from_slice(&[*b, *g, *r, 0]);
+        }
+        for r in rows {
+            d.extend_from_slice(r);
+        }
+        d
+    }
+
+    fn pixels(png: &[u8]) -> Vec<[u8; 4]> {
+        image::load_from_memory(png).unwrap().to_rgba8().pixels().map(|p| p.0).collect()
+    }
+
+    #[test]
+    fn an_8_bit_bitmap_uses_every_palette_entry() {
+        // 2 x 2, rows padded to 4 bytes, stored bottom-up: the bottom row (red, blue) comes first.
+        let palette = [[0, 0, 255], [255, 0, 0], [0, 255, 0]];
+        let d = dib(2, 2, 8, &palette, &[&[0, 1, 0, 0], &[2, 0, 0, 0]]);
+        let px = pixels(&dib_to_png(&d).unwrap());
+        assert_eq!(px, [[0, 255, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255]]);
+    }
+
+    #[test]
+    fn small_bit_depths_and_true_colour_bitmaps_decode() {
+        // 1 bit: eight pixels in a byte, the first in the top bit.
+        let d = dib(2, 1, 1, &[[0, 0, 0], [255, 255, 255]], &[&[0b0100_0000, 0, 0, 0]]);
+        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 255, 255, 255]]);
+        // 4 bits: two pixels in a byte.
+        let d = dib(2, 1, 4, &[[0, 0, 0], [0, 0, 255]], &[&[0x01, 0, 0, 0]]);
+        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 0, 0, 255]]);
+        // 24 bits: B, G, R.
+        let d = dib(1, 1, 24, &[], &[&[10, 20, 30, 0]]);
+        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[30, 20, 10, 255]]);
+    }
+
+    #[test]
+    fn broken_bitmaps_are_refused_not_a_crash() {
+        assert!(dib_to_png(&[]).is_none());
+        // A palette longer than the data, a header size near the top of u32, a bitmap too short.
+        assert!(dib_to_png(&dib(2, 2, 8, &[[0, 0, 0]], &[&[0, 0, 0, 0]])).is_none());
+        let mut huge = dib(1, 1, 24, &[], &[&[0, 0, 0, 0]]);
+        huge[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(dib_to_png(&huge).is_none());
+        assert!(dib_to_png(&dib(60_000, 60_000, 24, &[], &[])).is_none());
+    }
 }

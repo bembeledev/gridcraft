@@ -13,6 +13,8 @@ const MAX_SIDE: f32 = 1024.0;
 const MIN_SIDE: f32 = 256.0;
 /// Horizontal strips per pixel row for anti-aliasing.
 const STRIPS: usize = 4;
+/// Units of raster work (an edge tested against a strip, a pixel blended) a picture may cost.
+const RASTER_BUDGET: usize = 300_000_000;
 /// Segments a Bézier curve is cut into.
 const BEZIER_STEPS: usize = 12;
 
@@ -30,6 +32,9 @@ struct Canvas {
     h: usize,
     /// Premultiplied RGBA.
     px: Vec<[f32; 4]>,
+    /// Raster work left; drawing stops, keeping what is drawn, when it runs out.
+    budget: usize,
+    exhausted: bool,
 }
 
 struct Renderer {
@@ -83,7 +88,7 @@ pub(super) fn render_png(emf: &[u8]) -> Option<Vec<u8>> {
     // nHandles is a 16-bit count; writers that undercount it still reference their objects.
     let handles = ((u32_at(emf, 56).unwrap_or(1) & 0xFFFF) as usize).clamp(1024, MAX_HANDLES);
     let mut rd = Renderer {
-        canvas: Canvas { w, h, px: vec![[0.0; 4]; w * h] },
+        canvas: Canvas { w, h, px: vec![[0.0; 4]; w * h], budget: RASTER_BUDGET, exhausted: false },
         left: l as f32,
         top: t as f32,
         scale,
@@ -119,7 +124,7 @@ impl Renderer {
                 return;
             }
             self.record(ty, rec);
-            if self.edges > MAX_EDGES {
+            if self.edges > MAX_EDGES || self.canvas.exhausted {
                 return;
             }
             at += size;
@@ -425,7 +430,7 @@ impl Renderer {
                 let (nx, ny) = (-dy / len * half, dx / len * half);
                 let quad = vec![(a.0 + nx, a.1 + ny), (b.0 + nx, b.1 + ny), (b.0 - nx, b.1 - ny), (a.0 - nx, a.1 - ny)];
                 self.fill(&[quad], color);
-                if self.edges > MAX_EDGES {
+                if self.edges > MAX_EDGES || self.canvas.exhausted {
                     return;
                 }
             }
@@ -433,7 +438,7 @@ impl Renderer {
     }
 
     fn finish(self) -> Option<Vec<u8>> {
-        let Canvas { w, h, px } = self.canvas;
+        let Canvas { w, h, px, .. } = self.canvas;
         let mut rgba = Vec::with_capacity(w * h * 4);
         let mut any = false;
         for [r, g, b, a] in px {
@@ -476,10 +481,13 @@ impl Canvas {
         let mut cov = vec![0.0f32; self.w];
         let mut hits: Vec<(f32, i32)> = vec![];
         for y in y0..y1 {
-            cov.iter_mut().for_each(|c| *c = 0.0);
-            let mut touched = false;
+            // The columns of this row anything covered, so only those are cleared and blended.
+            let (mut lo, mut hi) = (usize::MAX, 0usize);
             for s in 0..STRIPS {
                 let ys = y as f32 + (s as f32 + 0.5) / STRIPS as f32;
+                if !self.spend(edges.len()) {
+                    return;
+                }
                 hits.clear();
                 for ((x0, ya), (x1, yb)) in edges {
                     if (*ya <= ys && ys < *yb) || (*yb <= ys && ys < *ya) {
@@ -488,21 +496,30 @@ impl Canvas {
                     }
                 }
                 hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if !self.spend(hits.len().saturating_mul(hits.len().max(2).ilog2() as usize + 1)) {
+                    return;
+                }
                 let mut wind = 0i32;
                 for pair in hits.windows(2) {
                     wind += if winding { pair[0].1 } else { 1 };
                     let inside = if winding { wind != 0 } else { wind % 2 == 1 };
-                    if inside {
-                        self.span(&mut cov, pair[0].0, pair[1].0);
-                        touched = true;
+                    if inside && let Some((first, last)) = self.span(&mut cov, pair[0].0, pair[1].0) {
+                        lo = lo.min(first);
+                        hi = hi.max(last);
                     }
                 }
             }
-            if !touched {
+            if lo >= hi {
                 continue;
             }
-            for (x, c) in cov.iter().enumerate() {
-                let a = (c / STRIPS as f32).min(1.0);
+            if !self.spend(hi - lo) {
+                return;
+            }
+            for x in lo..hi {
+                let a = (cov.get(x).copied().unwrap_or(0.0) / STRIPS as f32).min(1.0);
+                if let Some(c) = cov.get_mut(x) {
+                    *c = 0.0;
+                }
                 if a <= 0.0 {
                     continue;
                 }
@@ -514,11 +531,21 @@ impl Canvas {
         }
     }
 
-    /// Adds the horizontal coverage of the span `[xa, xb)` to one strip of a row.
-    fn span(&self, cov: &mut [f32], xa: f32, xb: f32) {
+    /// Takes `n` units from the raster budget. False once it is used up.
+    fn spend(&mut self, n: usize) -> bool {
+        self.budget = self.budget.saturating_sub(n);
+        if self.budget == 0 {
+            self.exhausted = true;
+        }
+        !self.exhausted
+    }
+
+    /// Adds the horizontal coverage of the span `[xa, xb)` to one strip of a row, and returns the
+    /// columns it touched.
+    fn span(&self, cov: &mut [f32], xa: f32, xb: f32) -> Option<(usize, usize)> {
         let (xa, xb) = (xa.max(0.0), xb.min(self.w as f32));
         if xb <= xa {
-            return;
+            return None;
         }
         let first = xa.floor() as usize;
         let last = (xb.ceil() as usize).min(self.w);
@@ -528,6 +555,7 @@ impl Canvas {
                 *c += overlap.max(0.0);
             }
         }
+        Some((first, last))
     }
 }
 
@@ -581,5 +609,25 @@ mod tests {
         let mut huge = red_half();
         huge[16..20].copy_from_slice(&i32::MAX.to_le_bytes());
         let _ = render_png(&huge);
+    }
+
+    #[test]
+    fn a_flood_of_long_strokes_runs_out_of_budget_instead_of_running_long() {
+        // A 1024-wide picture and 150,000 wide diagonal strokes: far more raster work than the
+        // budget allows. It must stop (keeping what it drew), which is what keeps this test short.
+        let mut header = i32s(&[0, 0, 1023, 1023, 0, 0, 1000, 1000]);
+        header.resize(80, 0);
+        let mut out = rec(1, &header);
+        out.extend(rec(
+            38,
+            &[&1u32.to_le_bytes()[..], &0u32.to_le_bytes(), &200i32.to_le_bytes(), &0i32.to_le_bytes(), &0x0000_00FFu32.to_le_bytes()].concat(),
+        ));
+        out.extend(rec(37, &1u32.to_le_bytes()));
+        for i in 0..75_000 {
+            out.extend(rec(27, &i32s(&[i % 1000, 0])));
+            out.extend(rec(54, &i32s(&[1023 - i % 1000, 1023])));
+        }
+        out.extend(rec(14, &[0; 12]));
+        assert!(render_png(&out).is_some());
     }
 }

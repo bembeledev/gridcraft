@@ -143,6 +143,8 @@ struct Globals {
     formats: HashMap<u16, String>,
     xfs: Vec<styles::Xf>,
     fonts: Vec<styles::FontRec>,
+    /// The workbook's drawing group, as written (a group may span several records).
+    drawing_group: Vec<u8>,
     /// The pictures of the workbook's drawing group.
     blips: Vec<escher::Stored>,
     /// Palette colours (0xRRGGBB) from entry 8 on, when the workbook redefines them.
@@ -323,7 +325,10 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 g.formats.insert(ifmt, code);
             }
             0x00E0 if g.xfs.len() < MAX_XFS => g.xfs.push(styles::Xf::parse(&mut c).unwrap_or_default()),
-            0x00EB => g.blips = escher::read_store(&c.rest()),
+            0x00EB => {
+                let room = MAX_DRAWING.saturating_sub(g.drawing_group.len());
+                g.drawing_group.extend(c.rest().into_iter().take(room));
+            }
             0x0031 if g.fonts.len() < MAX_FONTS => g.fonts.push(styles::FontRec::parse(&mut c).unwrap_or_default()),
             0x0092 => {
                 let n = usize::from(c.u16()?).min(styles::MAX_PALETTE);
@@ -375,6 +380,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
     // The same test `defined_names` applies, before any cell formula is decoded.
     let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
     g.links.skipped = skipped;
+    g.blips = escher::read_store(&std::mem::take(&mut g.drawing_group));
     Ok(g)
 }
 

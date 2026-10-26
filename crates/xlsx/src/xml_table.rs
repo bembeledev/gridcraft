@@ -151,11 +151,11 @@ pub fn read_xml_table(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.sheets = vec![Arc::new(Sheet::new("Sheet1"))];
         return Ok((wb, report));
     }
-    if st.truncated {
+    let max_rows = (MAX_ROWS as usize).saturating_sub(1);
+    // The header takes a row, so one data row fewer than a sheet's rows fits.
+    if st.truncated || rows.len() > max_rows {
         report.warn("The XML file is too big to show completely; the rows beyond the limit were left out.");
     }
-
-    let max_rows = (MAX_ROWS as usize).saturating_sub(1);
     let rows: Vec<Row> = rows.into_iter().take(max_rows).collect();
     let ncols = st.names.len().min(MAX_COLS as usize);
     if st.names.len() > ncols {

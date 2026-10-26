@@ -701,6 +701,18 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     fonts
 }
 
+/// A permitted Simplified Chinese face already available to the UI, for native PDF preview.
+/// Prefer the bundled OFL face; the installed fallback is never redistributed or exported.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn chinese_preview_font() -> Option<FontData> {
+    if let Some((_, font)) = craft_font_faces().into_iter().find(|(_, font)| font.scripts.contains(&"Hans")) {
+        return Some(FontData::from_static(font.bytes));
+    }
+    let candidates = cjk_han_simplified();
+    let refs: Vec<_> = candidates.iter().map(|(path, index)| (path.as_str(), *index)).collect();
+    try_load(&refs)
+}
+
 /// Builds one role family's chain: the loaded system face (or its role fallback), egui's bundled
 /// proportional/monospace base, Hack's symbols, then the script fallbacks. Keys without font data
 /// are dropped, as before.

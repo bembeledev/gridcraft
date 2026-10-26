@@ -1,5 +1,8 @@
 //! Whole-row and whole-column formatting must re-fit row heights (issue #833).
 
+use gridcraft_core::{CellRef, Value};
+use gridcraft_engine::{DocState, Session, Trust};
+use gridcraft_model::{StyleId, Workbook};
 use serde_json::json;
 
 fn sheet_mut(s: &mut gridcraft_engine::Session) -> &mut gridcraft_engine::model::Sheet {
@@ -58,4 +61,85 @@ fn whole_row_format_keeps_hidden_rows_hidden() {
     let info = sh.rows.get(&4).unwrap();
     assert!(info.size.unwrap_or(before) > before + 10.0, "hidden row still grows to its font: before={before}, size={:?}", info.size);
     assert!(info.hidden, "formatting a hidden row must not unhide it");
+}
+
+// Build the input without commands, which would already fit the row. The wrapped
+// cell in B1 must contribute even when hidden, using its stored or default width.
+fn wrapped_column_workbook(hidden: bool, width: Option<f32>, custom_height: bool) -> Workbook {
+    let mut wb = Workbook::new();
+    let wrapped = wb.styles.derive(StyleId::DEFAULT, |style| style.align.wrap = true);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.default_col_width = 80.0;
+    sh.set_value(CellRef::new(0, 0), Value::text("Label"));
+    sh.set_value(CellRef::new(0, 1), Value::text("Wrapped text spans lines"));
+    sh.set_style(CellRef::new(0, 1), wrapped);
+    let col = sh.cols.entry(1).or_default();
+    col.hidden = hidden;
+    col.size = width;
+    let row = sh.rows.entry(0).or_default();
+    row.size = Some(20.0);
+    row.custom = custom_height;
+    wb
+}
+
+fn open_wrapped_column(hidden: bool, width: Option<f32>, custom_height: bool) -> Session {
+    let bytes = gridcraft_xlsx::write_xlsx(&wrapped_column_workbook(hidden, width, custom_height)).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "wrapped-column.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+    s
+}
+
+#[test]
+fn imported_wrapped_rows_use_hidden_columns_stored_width() {
+    let mut heights = Vec::new();
+    for width in [None, Some(56.0), Some(120.0)] {
+        let visible = open_wrapped_column(false, width, false);
+        let hidden = open_wrapped_column(true, width, false);
+        let expected = visible.doc().unwrap().wb.active().unwrap().row_height(0);
+        let sh = hidden.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.row_height(0), expected, "hiding a column must not change the imported row's wrap width: {width:?}");
+        assert!(expected > 20.0, "the wrapped hidden cell must still contribute to the row height: {width:?}");
+        assert!(sh.cols.get(&1).unwrap().hidden, "fitting must not unhide the column");
+        heights.push(expected);
+    }
+    assert!(heights[1] > heights[2], "a narrow stored width must wrap onto more lines than a wide one");
+}
+
+#[test]
+fn explicit_row_autofit_uses_hidden_columns_stored_or_default_width() {
+    let mut heights = Vec::new();
+    for width in [None, Some(56.0), Some(120.0)] {
+        let mut fitted = Vec::new();
+        for hidden in [false, true] {
+            let mut s = Session::new();
+            s.add_document(DocState::new(wrapped_column_workbook(hidden, width, true), None, "Wrapped column".into(), Trust::Local));
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(0), 20.0);
+            s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            fitted.push(sh.row_height(0));
+            assert!(sh.row_height(0) > 20.0, "AutoFit must include the wrapped cell, including when hidden");
+            assert!(!sh.rows.get(&0).unwrap().custom, "explicit AutoFit releases the custom height");
+            assert_eq!(sh.cols.get(&1).unwrap().hidden, hidden);
+            assert_eq!(sh.cols.get(&1).unwrap().size, width, "AutoFit must not change the stored column width");
+            s.execute("edit.undo", json!({})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            assert_eq!(sh.row_height(0), 20.0, "undo restores the explicit row height");
+            assert!(sh.rows.get(&0).unwrap().custom);
+            assert_eq!(sh.cols.get(&1).unwrap().hidden, hidden);
+        }
+        assert_eq!(fitted[0], fitted[1], "hidden and visible columns must have the same AutoFit wrap width: {width:?}");
+        heights.push(fitted[0]);
+    }
+    assert!(heights[1] > heights[2], "AutoFit must use the stored width when present");
+}
+
+#[test]
+fn imported_wrapped_hidden_columns_keep_custom_row_heights() {
+    for hidden in [false, true] {
+        let s = open_wrapped_column(hidden, Some(56.0), true);
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.row_height(0), 20.0, "import must preserve an explicit custom height");
+        assert!(sh.rows.get(&0).unwrap().custom);
+        assert_eq!(sh.cols.get(&1).unwrap().hidden, hidden);
+    }
 }

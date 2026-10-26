@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 275 / 291 commands implemented (94.5%).**
+**Overall: 284 / 300 commands implemented (94.7%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 32 | 37 | 86% |
 | Review | 15 | 18 | 83% |
 | View | 20 | 20 | 100% |
 | Automate | 4 | 4 | 100% |
@@ -237,7 +237,7 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (32 / 37, 86%)
 
 Implemented:
 
@@ -264,6 +264,15 @@ Implemented:
 - `data.hideDetail` Hide Detail (Outline)
 - `data.solver` Solver (Analysis)
 - `data.analysisToolPak` Data Analysis (Analysis)
+- `dataModel.load` Load Data Model (Data Model)
+- `dataModel.status` Data Model (Data Model)
+- `dataModel.evaluate` Evaluate DAX (Data Model)
+- `dataModel.pivot` Data Model Pivot (Data Model)
+- `dataModel.addMeasure` Add Measure (Data Model)
+- `dataModel.updateMeasure` Update Measure (Data Model)
+- `dataModel.deleteMeasure` Delete Measure (Data Model)
+- `dataModel.addRelationship` Create Relationship (Data Model)
+- `dataModel.deleteRelationship` Delete Relationship (Data Model)
 
 Missing:
 

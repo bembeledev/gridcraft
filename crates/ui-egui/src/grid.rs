@@ -1876,7 +1876,7 @@ pub(crate) fn paint_selection(
             && let Some(pointer) = p.ctx().pointer_hover_pos()
             && p.clip_rect().contains(pointer)
             && let Some(document) = app.session.active()
-            && let Some(preview) = fill_preview_text(&document.wb, sh, sel.current(), *tr)
+            && let Some(preview) = fill_preview_text(&document.wb, sh, sel.current(), *tr, p.ctx().input(|i| i.modifiers.command))
         {
             egui::Area::new(egui::Id::unique("fill_preview_tooltip")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 18.0)).show(
                 p.ctx(),
@@ -1916,7 +1916,9 @@ pub(crate) fn paint_selection(
 
 /// Numeric series preview for the fill-handle tooltip. Keep this deliberately read-only: the
 /// actual fill command remains the single source of workbook mutations on pointer release.
-fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef) -> Option<String> {
+const MAX_FILL_PREVIEW_SOURCE_CELLS: u64 = 1_000;
+
+fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef, alternate: bool) -> Option<String> {
     // A single-cell source has no intrinsic direction; infer it from the expanded target.
     let vertical = if src.height() > 1 {
         true
@@ -1926,6 +1928,11 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
         target.height() > 1
     };
     if (vertical && src.width() != 1) || (!vertical && src.height() != 1) {
+        return None;
+    }
+    let source_len = if vertical { src.height() } else { src.width() };
+    if u64::from(source_len) > MAX_FILL_PREVIEW_SOURCE_CELLS {
+        // This runs on every drag frame; avoid allocating and scanning huge selections for a tooltip.
         return None;
     }
     let source: Vec<CellRef> = if vertical {
@@ -1945,10 +1952,12 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
         .collect::<Option<_>>()?;
     let style_cell = *source.first()?;
     let format = wb.styles.get(sh.style_id(style_cell)).num_fmt.as_str();
-    if matches!(
-        gridcraft_engine::numfmt::NumberFormat::parse(format).kind(),
-        gridcraft_engine::numfmt::FormatKind::Date | gridcraft_engine::numfmt::FormatKind::Time
-    ) {
+    if !alternate
+        && matches!(
+            gridcraft_engine::numfmt::NumberFormat::parse(format).kind(),
+            gridcraft_engine::numfmt::FormatKind::Date | gridcraft_engine::numfmt::FormatKind::Time
+        )
+    {
         // The fill engine applies calendar/time-specific rules. Do not show a numeric guess that
         // would disagree with the values committed when the drag ends.
         return None;
@@ -1985,17 +1994,64 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
     let preview = (1..=steps.min(5))
         .map(|step| {
             let sign = if forward { 1.0 } else { -1.0 };
-            let raw = base + slope * f64::from(step) * sign;
+            let source_index = if forward { (step as usize - 1) % source.len() } else { source.len() - 1 - ((step as usize - 1) % source.len()) };
+            let raw = if alternate && numbers.len() == 1 {
+                // Ctrl/Cmd swaps the normal single-number copy behavior for a +1/-1 series.
+                numbers[0] + f64::from(step) * sign
+            } else if alternate {
+                // Multi-cell sequences are copied in alternate mode rather than extrapolated.
+                numbers[source_index]
+            } else {
+                base + slope * f64::from(step) * sign
+            };
             let mag = if raw == 0.0 || !raw.is_finite() { 0 } else { raw.abs().log10().floor() as i32 };
             let precision = 10f64.powi(14 - mag);
             let rounded = if !precision.is_finite() || precision == 0.0 { raw } else { (raw * precision).round() / precision };
             let value = Value::number(rounded);
-            let source_index = if forward { (step as usize - 1) % source.len() } else { source.len() - 1 - ((step as usize - 1) % source.len()) };
             let target_format = wb.styles.get(sh.style_id(source[source_index])).num_fmt.as_str();
             gridcraft_engine::display::value_text_as(wb, &value, target_format)
         })
         .collect::<Vec<_>>();
     Some(preview.join("\n"))
+}
+
+#[cfg(test)]
+mod fill_preview_tests {
+    use super::*;
+
+    fn preview(values: &[f64], target_end: u32, alternate: bool) -> Option<String> {
+        let wb = Workbook::default();
+        let mut sh = Sheet::new("Sheet1");
+        for (row, value) in values.iter().enumerate() {
+            sh.set_value(CellRef::new(row as u32, 0), Value::number(*value));
+        }
+        fill_preview_text(
+            &wb,
+            &sh,
+            RangeRef::new(CellRef::new(0, 0), CellRef::new(values.len() as u32 - 1, 0)),
+            RangeRef::new(CellRef::new(0, 0), CellRef::new(target_end, 0)),
+            alternate,
+        )
+    }
+
+    #[test]
+    fn alternate_preview_copies_multi_cell_sequences() {
+        assert_eq!(preview(&[1.0, 2.0, 3.0], 5, true).as_deref(), Some("1\n2\n3"));
+    }
+
+    #[test]
+    fn alternate_preview_counts_up_from_a_single_number() {
+        assert_eq!(preview(&[1.0], 3, true).as_deref(), Some("2\n3\n4"));
+        assert_eq!(preview(&[1.0], 3, false).as_deref(), Some("1\n1\n1"));
+    }
+
+    #[test]
+    fn oversized_source_does_not_create_a_preview() {
+        let wb = Workbook::default();
+        let sh = Sheet::new("Sheet1");
+        let whole_column = RangeRef::cols(0, 0);
+        assert!(fill_preview_text(&wb, &sh, whole_column, whole_column, false).is_none());
+    }
 }
 
 pub(crate) fn paint_headers(

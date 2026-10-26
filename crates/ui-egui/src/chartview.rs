@@ -575,7 +575,7 @@ mod tests {
         let mut app = SheetApp::new(session, Default::default());
         {
             let d = app.session.doc_mut().unwrap();
-            let sheet = d.wb.active_sheet;
+            let sheet = d.wb.active_sheet();
             let name = d.wb.sheet(sheet).unwrap().name.clone();
             let pivot = d.wb.sheet(sheet).unwrap().pivots[0].name.clone();
             let slicer = Slicer {
@@ -599,7 +599,7 @@ mod tests {
         let wb = app.session.active().unwrap().wb.clone();
         let slicer = wb.active().unwrap().slicers[0].clone();
         let strong = Arc::strong_count(&wb);
-        let before: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        let before: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet(), &slicer).iter().map(|x| x.label.clone()).collect();
         assert_eq!(before, ["East", "North", "West"]);
         // The cache holds no strong reference, so the next edit doesn't copy the workbook.
         assert_eq!(Arc::strong_count(&wb), strong);
@@ -607,7 +607,7 @@ mod tests {
         app.session.execute("cell.set", json!({"cell": "A2", "input": "South"})).unwrap();
         let wb = app.session.active().unwrap().wb.clone();
         let slicer = wb.active().unwrap().slicers[0].clone();
-        let after: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        let after: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet(), &slicer).iter().map(|x| x.label.clone()).collect();
         assert_eq!(after, ["North", "South", "West"]);
 
         // A source value that changes only on a manual recalculation (not undoable, so the
@@ -619,7 +619,7 @@ mod tests {
         let tiles = |app: &mut SheetApp| {
             let wb = app.session.active().unwrap().wb.clone();
             let slicer = wb.active().unwrap().slicers[0].clone();
-            cached_slicer_items(app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect::<Vec<_>>()
+            cached_slicer_items(app, &wb, wb.active_sheet(), &slicer).iter().map(|x| x.label.clone()).collect::<Vec<_>>()
         };
         assert_eq!(tiles(&mut app), ["North", "South", "West"]);
         let revision = app.session.active().unwrap().revision;

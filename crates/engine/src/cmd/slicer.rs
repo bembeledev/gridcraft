@@ -224,19 +224,22 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
     let value = str_param(p, "value").ok_or_else(|| bad("slicer.toggle", "missing `value`"))?.to_string();
     let multi = bool_param(p, "multi").unwrap_or(false);
-    let sheet = s.doc()?.wb.active_sheet;
-    let d = s.doc()?;
-    let sl = d.wb.active().and_then(|sh| sh.slicers.get(idx)).ok_or_else(|| bad("slicer.toggle", "no slicer"))?;
-    let tiles = slicer_items(&d.wb, sheet, sl);
-    let Some(tile) = tiles.iter().find(|t| t.label.eq_ignore_ascii_case(&value) || t.key.eq_ignore_ascii_case(&value)) else {
-        return Err(bad("slicer.toggle", "value is not one of the slicer's items"));
-    };
-    let all: Vec<String> = tiles.iter().map(|t| t.key.clone()).collect();
-    let current = (!tiles.iter().all(|t| t.selected)).then(|| tiles.iter().filter(|t| t.selected).map(|t| t.key.clone()).collect());
-    let new_selected = next_selection(current, &all, &tile.key, multi);
-    let pivot = match &sl.source {
-        SlicerSource::Pivot { pivots, field, .. } => Some((slicer_pivots(&d.wb, pivots), field.clone())),
-        SlicerSource::Table { .. } => None,
+    let sheet = s.doc()?.wb.active_sheet();
+    let (new_selected, pivot) = {
+        let d = s.doc()?;
+        let sl = d.wb.active().and_then(|sh| sh.slicers.get(idx)).ok_or_else(|| bad("slicer.toggle", "no slicer"))?;
+        let tiles = slicer_items(&d.wb, sheet, sl);
+        let Some(tile) = tiles.iter().find(|t| t.label.eq_ignore_ascii_case(&value) || t.key.eq_ignore_ascii_case(&value)) else {
+            return Err(bad("slicer.toggle", "value is not one of the slicer's items"));
+        };
+        let all: Vec<String> = tiles.iter().map(|t| t.key.clone()).collect();
+        let current = (!tiles.iter().all(|t| t.selected)).then(|| tiles.iter().filter(|t| t.selected).map(|t| t.key.clone()).collect());
+        let new_selected = next_selection(current, &all, &tile.key, multi);
+        let pivot = match &sl.source {
+            SlicerSource::Pivot { pivots, field, .. } => Some((slicer_pivots(&d.wb, pivots), field.clone())),
+            SlicerSource::Table { .. } => None,
+        };
+        (new_selected, pivot)
     };
     edit(s, |cx| {
         match &pivot {
@@ -255,7 +258,7 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let d = s.doc()?;
     let pivot = d.wb.active().and_then(|sh| sh.slicers.get(idx)).and_then(|sl| match &sl.source {
         SlicerSource::Pivot { pivots, field, .. } => Some((slicer_pivots(&d.wb, pivots), field.clone())),
@@ -280,7 +283,7 @@ fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
 /// PivotTables filtered, as Excel does.
 fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     // Absolute column of a table slicer, so its filter criterion can be removed too.
     let abs_col = s.doc().ok().and_then(|d| {
         let sh = d.wb.active()?;

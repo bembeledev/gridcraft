@@ -4065,6 +4065,97 @@ fn vertical_alignment_commands_and_roundtrip() {
     assert_eq!(reopen_style("A3").align.v, gridcraft_model::VAlign::Bottom);
 }
 
+/// Clear Formats and Clear All remove conditional formatting from the cleared cells only: the rest
+/// of each rule's ranges stays, a rule on empty cells past the used range goes, and Undo brings
+/// the rules back (#2536).
+#[test]
+fn clear_formats_removes_conditional_formatting_from_the_cleared_cells() {
+    let mut s = s();
+    let ranges = |s: &Session| -> Vec<Vec<String>> {
+        s.doc().unwrap().wb.active().unwrap().cond_formats.iter().map(|c| c.ranges.iter().map(|r| r.a1()).collect()).collect()
+    };
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4], [5]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A5", "rule": {"type": "iconSet", "set": "3Arrows"}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D10:D12", "rule": {"type": "iconSet", "set": "3Arrows"}})).unwrap();
+
+    s.execute("edit.clearFormats", json!({"range": "A2:A3"})).unwrap();
+    // The newer rule comes first (it has priority).
+    assert_eq!(ranges(&s), [vec!["D10:D12"], vec!["A1", "A4:A5"]], "the cleared cells leave the rule; the rest keeps it");
+    s.execute("edit.clearFormats", json!({"range": "D10:D12"})).unwrap();
+    assert_eq!(ranges(&s), [vec!["A1", "A4:A5"]], "a rule on empty cells past the used range goes too");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(ranges(&s), [vec!["D10:D12"], vec!["A1", "A4:A5"]]);
+
+    s.execute("edit.clearAll", json!({"range": "A1:A5"})).unwrap();
+    assert_eq!(ranges(&s), [vec!["D10:D12"]], "Clear All clears formats, conditional ones included");
+    s.execute("edit.clearContents", json!({"range": "D10:D12"})).unwrap();
+    assert_eq!(ranges(&s), [vec!["D10:D12"]], "Clear Contents keeps them");
+}
+
+/// Rule formulas are relative to the top-left cell of the rule's first range: when a clear cuts that
+/// cell out, the formulas follow the new anchor, so every remaining cell still tests itself (#2536).
+#[test]
+fn clearing_a_rules_first_cell_keeps_its_relative_formulas_on_the_same_cells() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5, 5, 5], [1, 5, 1], [5, 1, 5], [1, 1, 1], [5, 5, 5]]})).unwrap();
+    let red = json!({"fill": "#FF0000"});
+    s.execute("home.conditionalFormat", json!({"range": "A1:A5", "rule": {"type": "expression", "formula": "=A1>2", "style": red}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "B1:C3", "rule": {"type": "cellIs", "operator": "greater", "value": "=B1-2", "style": red}}))
+        .unwrap();
+    let lit = |s: &Session, a: &str| {
+        let wb = &s.doc().unwrap().wb;
+        crate::cf::CfCache::new().look(wb, 0, CellRef::parse(a).unwrap()).is_some_and(|l| l.style.is_some())
+    };
+    s.execute("edit.clearFormats", json!({"range": "A1"})).unwrap();
+    assert_eq!([lit(&s, "A2"), lit(&s, "A3"), lit(&s, "A4"), lit(&s, "A5")], [false, true, false, true], "A2:A5 still test themselves");
+    // A 2-D cut through the top-left corner: B1 goes, C1 and B2:C3 keep comparing with themselves.
+    s.execute("edit.clearFormats", json!({"range": "B1"})).unwrap();
+    assert!(!lit(&s, "B1"));
+    assert_eq!([lit(&s, "C1"), lit(&s, "B2"), lit(&s, "C2"), lit(&s, "B3"), lit(&s, "C3")], [true; 5], "each cell compares x > x - 2 with itself");
+
+    // Undo, redo and an XLSX round trip keep the split ranges and the rebased formulas.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+    assert_eq!([lit(&s, "A1"), lit(&s, "A3"), lit(&s, "A4"), lit(&s, "B1"), lit(&s, "C2")], [false, true, false, false, true]);
+}
+
+/// A clear over many small areas (as Go To Special selects) cuts them all; one that would split a
+/// rule into more than the cap is refused without changing anything, and a large area in the same
+/// selection goes first, so the rule just goes. A cut that keeps the anchor cell leaves formulas be.
+#[test]
+fn clear_formats_over_many_areas_is_bounded() {
+    let mut s = s();
+    let ranges = |s: &Session| -> Vec<Vec<String>> {
+        s.doc().unwrap().wb.active().unwrap().cond_formats.iter().map(|c| c.ranges.iter().map(|r| r.a1()).collect()).collect()
+    };
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A1:J1000", "rule": {"type": "expression", "formula": "=A1>2", "style": {"fill": "#FF0000"}}}),
+    )
+    .unwrap();
+    let blanks: Vec<String> = (1..=500).map(|k| format!("B{}", 2 * k)).collect();
+    s.execute("edit.clearFormats", json!({"range": blanks.join(",")})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let cf = &wb.active().unwrap().cond_formats[0];
+    let formula = match &cf.rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.clone(),
+        _ => String::new(),
+    };
+    assert_eq!((cf.ranges[0].a1(), formula.as_str()), ("A1:J1".to_string(), "A1>2"), "the anchor cell survived, so the formula is unchanged");
+    s.execute("edit.clearFormats", json!({"range": "A1:J1000"})).unwrap();
+    assert!(ranges(&s).is_empty());
+
+    s.execute("home.conditionalFormat", json!({"range": "A1:C12000", "rule": {"type": "iconSet", "set": "3Arrows"}})).unwrap();
+    let many: Vec<String> = (1..=5600).map(|k| format!("B{}", 2 * k)).collect();
+    let before = ranges(&s);
+    assert!(s.execute("edit.clearFormats", json!({"range": many.join(",")})).is_err());
+    assert_eq!(ranges(&s), before, "a refused clear changes nothing");
+    s.execute("edit.clearFormats", json!({"range": format!("{},A1:C12000", many.join(","))})).unwrap();
+    assert!(ranges(&s).is_empty(), "the large area goes first and takes the rule");
+}
+
 /// Icon-set thresholds as read from a file (one per icon, the first the lower bound) decide the
 /// icon; a rule without thresholds uses Excel's defaults (percent 33 and 67) (#235).
 #[test]

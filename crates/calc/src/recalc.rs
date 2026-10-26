@@ -472,9 +472,17 @@ impl<'a> PassHost<'a> {
     }
 }
 
-/// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
-/// recalculated in this pass, and so may spill elsewhere now).
+/// Whether a table refuses the array `a` anchored at `anchor`: Excel shows a one-value result in a
+/// table cell like any other value (a `FILTER` matching one row in a calculated column, a
+/// `SEQUENCE(1)`), and refuses only a result of more than one cell (#2335). Before 0.11.1 every
+/// array anchored in a table was refused, so those single-value results showed `#SPILL!`.
+fn blocked_by_table(tables: &[gridcraft_model::Table], anchor: CellRef, a: &Array) -> bool {
+    (a.rows > 1 || a.cols > 1) && tables.iter().any(|t| t.range.contains(anchor))
+}
+
+/// Whether an array result at `k` can't spill: it is a multi-cell result in a table, or its area
+/// runs off the sheet, overlaps merged cells, holds other cells, or another formula's spill (unless
+/// that formula is recalculated in this pass, and so may spill elsewhere now).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
@@ -488,7 +496,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
-        || sh.tables.iter().any(|t| t.range.contains(anchor))
+        || blocked_by_table(&sh.tables, anchor, a)
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
@@ -500,7 +508,7 @@ fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, range: Rang
         CellRef::new(anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)), anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)));
     RangeRef::new(anchor, end) == range
         && !sheet.merges.iter().any(|m| m.intersects(&range))
-        && !sheet.tables.iter().any(|t| t.range.contains(anchor))
+        && !blocked_by_table(&sheet.tables, anchor, arr)
         && range
             .iter()
             .enumerate()
@@ -1289,7 +1297,7 @@ impl Calc {
                         || end.col >= gridcraft_core::MAX_COLS
                         || range.iter().any(|c| c != k.1 && (sheet.cells.has(c) || sheet.spill.contains_key(&c)))
                         || sheet.merges.iter().any(|m| m.intersects(&range))
-                        || sheet.tables.iter().any(|t| t.range.contains(k.1));
+                        || blocked_by_table(&sheet.tables, k.1, arr);
                     if blocked {
                         if let Some(cell) = sheet.cells.get_mut(k.1) {
                             cell.value = Value::Error(CellError::Spill);

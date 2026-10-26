@@ -708,7 +708,8 @@ fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
 
 #[test]
 fn arrays_do_not_spill_in_tables() {
-    // Excel: spilled array formulas aren't supported in tables.
+    // Excel: spilled array formulas aren't supported in tables -- a result of more than one cell
+    // is #SPILL! (#2335 tests the one-value side of the same rule).
     let mut t = T::new();
     t.wb.sheet_mut(0).unwrap().tables.push(gridcraft_model::Table {
         id: 1,
@@ -734,6 +735,45 @@ fn arrays_do_not_spill_in_tables() {
     assert_eq!(t.get("C5"), Value::Empty);
     assert_eq!(t.get("H1"), Value::Error(CellError::Spill));
     assert_eq!(t.num("E4"), 4.0);
+}
+
+#[test]
+fn a_one_value_array_shows_in_a_table() {
+    // Excel: a dynamic-array formula in a table that returns one value shows it, as it does
+    // anywhere else; only a result of more than one cell is refused (#2335). A FILTER matching
+    // one row and SEQUENCE(1) are one value; the one-value cell still anchors its 1 x 1 range
+    // (ROWS(C4#) is 1), the side of the rule #1491 fixed.
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse("B3:C6").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    t.set("D1", "5");
+    t.set("D2", "9");
+    t.set("C4", "=FILTER(D1:D2,D1:D2>6)");
+    t.set("C5", "=SEQUENCE(1)");
+    t.set("C6", "=SEQUENCE(2)");
+    t.set("E4", "=ROWS(C4#)");
+    t.set("E5", "=SUM(C4#)");
+    assert_eq!(t.num("C4"), 9.0, "a one-value FILTER is shown, not #SPILL!");
+    assert_eq!(t.num("C5"), 1.0, "SEQUENCE(1) is one value");
+    assert_eq!(t.get("C6"), Value::Error(CellError::Spill), "two values are still refused");
+    assert_eq!(t.get("C7"), Value::Empty, "nothing spilled past C6");
+    assert_eq!(t.num("E4"), 1.0, "the one-value cell still anchors its 1 x 1 range");
+    assert_eq!(t.num("E5"), 9.0);
 }
 
 #[test]

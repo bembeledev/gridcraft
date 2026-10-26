@@ -26,6 +26,7 @@ mod row_autofit;
 mod sheet_name_quoting;
 mod sparse_clear_invalidation;
 mod stored_list_shape;
+mod table_dynamic_array_one_value;
 mod table_resize_overlap;
 mod table_total_row_last_row;
 mod wrap_row_height;

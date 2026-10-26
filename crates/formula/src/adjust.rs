@@ -68,6 +68,8 @@ fn transpose_anchor(a: &Anchor, src: CellRef, dest: CellRef) -> Option<(u32, u32
     clamp_anchor(dest.row as i64 + a.col as i64 - src.col as i64, dest.col as i64 + a.row as i64 - src.row as i64)
 }
 
+/// Turns one reference with `src` → `dest`: `None` when an end falls outside the sheet, which
+/// the caller turns into `#REF!`.
 fn transpose_ref(r: &Reference, src: CellRef, dest: CellRef) -> Option<Reference> {
     let kind = match &r.kind {
         RefKind::Cell(a) => {

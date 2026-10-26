@@ -318,6 +318,8 @@ fn reads_values_formulas_formats_and_layout() {
         // Formulas: text plus the cached result.
         assert_eq!(ftext(&wb, "A3").as_deref(), Some("B1*2"));
         assert_eq!(v(&wb, 0, "A3"), Value::Number(3.0));
+        assert!(wb.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().implicit, "BIFF has no dynamic arrays");
+
         assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:C1)"));
         assert_eq!(ftext(&wb, "C3").as_deref(), Some("A1&\"!\""));
         assert_eq!(v(&wb, 0, "C3"), Value::from("Hello!"));
@@ -334,6 +336,7 @@ fn reads_values_formulas_formats_and_layout() {
         // the formula fills the range on recalculation (as when an .xlsx is read, #156).
         let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
         assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
+        assert!(!c5.implicit, "a legacy CSE array keeps array evaluation");
         assert_eq!(ftext(&wb, "C6"), None);
         assert_eq!(v(&wb, 0, "C6"), Value::Empty);
         // Number formats, merges, sizes, names, print area; embedded chart records ignored.

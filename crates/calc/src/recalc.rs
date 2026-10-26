@@ -1216,9 +1216,12 @@ impl Calc {
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
-                if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
-                    exprs.insert(*k, e);
-                }
+                let Some(f) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()) else { continue };
+                let Some(e) = f.expr_arc() else { continue };
+                // A formula from a file that predates dynamic arrays is calculated with implicit
+                // intersection, as Excel does: its references in scalar positions become `@`.
+                let e = if f.implicit && f.array.is_none() { std::sync::Arc::new(crate::implicit::scalarize(&e)) } else { e };
+                exprs.insert(*k, e);
             }
             let now = self.now();
             let mut rng = self.rng;

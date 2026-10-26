@@ -20,6 +20,52 @@ impl Shape {
     }
 }
 
+/// Functions and operators that only exist with dynamic arrays. A formula that uses one is not a
+/// legacy formula even when the file does not mark it (cell metadata `cm`): a dynamic-array
+/// formula written by Excel carries the mark, so such a file came from another tool, and the
+/// formula means what GridCraft's array evaluation gives.
+pub(crate) fn uses_dynamic_arrays(formula: &Formula) -> bool {
+    const FUNCTIONS: &[&str] = &[
+        "FILTER",
+        "SORT",
+        "SORTBY",
+        "UNIQUE",
+        "SEQUENCE",
+        "RANDARRAY",
+        "VSTACK",
+        "HSTACK",
+        "TOROW",
+        "TOCOL",
+        "WRAPROWS",
+        "WRAPCOLS",
+        "TAKE",
+        "DROP",
+        "CHOOSEROWS",
+        "CHOOSECOLS",
+        "EXPAND",
+        "GROUPBY",
+        "PIVOTBY",
+        "LET",
+        "LAMBDA",
+        "MAP",
+        "SCAN",
+        "BYROW",
+        "BYCOL",
+        "MAKEARRAY",
+        "ISOMITTED",
+        "ANCHORARRAY",
+        "SINGLE",
+    ];
+    let Some(expr) = formula.expr_arc() else { return false };
+    let mut found = false;
+    expr.walk(&mut |e| match e {
+        Expr::Unary(UnOp::At | UnOp::Spill, _) => found = true,
+        Expr::Call(name, _) => found |= FUNCTIONS.iter().any(|f| f.eq_ignore_ascii_case(name)),
+        _ => {}
+    });
+    found
+}
+
 pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
     let Some(expr) = formula.expr_arc() else { return false };
     // The budget covers every node of a formula as long as Excel allows (8,192 characters make

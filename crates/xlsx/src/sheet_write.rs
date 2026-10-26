@@ -338,7 +338,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let ex = extra.get(c);
             let array = dynamic.get(c).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                // A formula read from a legacy file keeps its implicit intersection: Excel
+                // calculates a plain formula that way, so marking it dynamic would change it.
+                (f.array.is_none() && !f.implicit && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
             });
             write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
         }

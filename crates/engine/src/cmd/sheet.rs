@@ -785,7 +785,9 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 if let Some(e) = f.expr() {
                     let ne = gridcraft_formula::adjust::delete_sheet(e, &name, &order);
                     if let Some(cell) = sh.cells.get_mut(c) {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        let mut nf = gridcraft_model::Formula::from_expr(ne);
+                        nf.implicit = f.implicit;
+                        cell.formula = Some(Arc::new(nf));
                     }
                 }
             }
@@ -839,7 +841,9 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     if text != f.text
                         && let Some(cell) = sh.cells.get_mut(c)
                     {
-                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                        let mut nf = gridcraft_model::Formula::from_expr(ne);
+                        nf.implicit = f.implicit;
+                        cell.formula = Some(Arc::new(nf));
                     }
                 }
             }

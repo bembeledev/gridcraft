@@ -23,6 +23,13 @@ pub struct Formula {
     /// rewritten in GridCraft start without it, and the writer decides from their shape.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dynamic: bool,
+    /// Read from a file that does not mark this formula as a dynamic-array formula (and it is
+    /// not a legacy CSE array): Excel has calculated it with implicit intersection since it was
+    /// written, and still does. GridCraft calculates it the same way (`gridcraft_calc::implicit`)
+    /// and leaves it as a plain formula when saving, so the file keeps behaving as it did.
+    /// Formulas entered or rewritten in GridCraft start without it, and are dynamic arrays.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub implicit: bool,
 }
 
 impl Formula {
@@ -31,12 +38,12 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false },
+            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, implicit: false },
+            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false, implicit: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false }
+        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, implicit: false }
     }
     /// The parsed expression, re-parsing after deserialization.
     pub fn expr(&self) -> Option<Expr> {

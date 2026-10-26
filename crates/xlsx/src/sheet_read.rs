@@ -521,7 +521,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
-    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
+    // A formula without it that is not a legacy CSE array is one Excel calculated with implicit
+    // intersection, and goes on doing so: the calculation and the writer both honour that.
+    read_formula_text(cx, st, f, pos, dynamic).map(|fm| {
+        let implicit = !dynamic && fm.array.is_none() && !crate::array_formula::uses_dynamic_arrays(&fm);
+        Formula { dynamic, implicit, ..fm }
+    })
 }
 
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

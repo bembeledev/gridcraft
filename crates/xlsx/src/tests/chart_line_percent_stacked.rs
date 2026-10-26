@@ -1,6 +1,6 @@
 //! Line chart groups by `grouping` and markers: `percentStacked` opens as a 100% stacked line.
 
-use gridcraft_model::{ChartKind, Workbook};
+use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Workbook};
 
 use crate::chart::{read_chart, write_chart};
 use crate::xml::parse;
@@ -32,6 +32,36 @@ fn standard_and_stacked_lines_keep_their_kinds() {
     assert_eq!(kind("standard", ""), ChartKind::LineMarkers);
     assert_eq!(kind("stacked", NO_MARKER), ChartKind::LineStacked);
     assert_eq!(kind("stacked", ""), ChartKind::LineStacked);
+}
+
+#[test]
+fn percent_stacked_chart_writer_defaults_round_trip_without_series_overrides() {
+    let wb = Workbook::default();
+    for kind in [ChartKind::LineStacked100, ChartKind::LineStacked100Markers, ChartKind::AreaStacked100] {
+        let chart = Chart {
+            id: 1,
+            kind,
+            anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 0), width: 480.0, height: 288.0, ..Default::default() },
+            title: None,
+            series: vec![Series { values: "Data!$A$1:$A$3".into(), ..Default::default() }],
+            legend: LegendPos::Bottom,
+            data_labels: false,
+            gridlines: true,
+            style: 2,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+            format: Default::default(),
+        };
+
+        let xml = write_chart(&wb, 0, &chart, "Book1");
+        let round_trip = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+
+        assert_eq!(round_trip.kind, kind, "{kind:?}");
+        assert!(round_trip.format.series.is_empty(), "writer defaults should not become explicit style overrides for {kind:?}");
+    }
 }
 
 #[test]

@@ -191,7 +191,7 @@ fn paste_places_snapshot_on_active_sheet_and_keeps_source_references() {
     assert_eq!(chart(&s), &expected);
     assert_eq!(s.doc().unwrap().undo.len(), before + 1);
     let d = s.doc().unwrap();
-    let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, chart(&s));
+    let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), chart(&s));
     assert_eq!(data.series[0].values, [Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0)]);
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.active().unwrap().charts.is_empty());

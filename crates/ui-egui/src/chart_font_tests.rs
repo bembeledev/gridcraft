@@ -52,6 +52,9 @@ fn chart_home_font_targets_text_without_touching_source_cells_and_supports_undo(
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(app.selected_chart_font().unwrap().bold, None);
     assert!(app.run("home.fontSize", json!({"size":0})).is_err());
+    assert!(app.run("home.fontSize", json!({"size":-2})).is_err());
+    app.run("home.fontSize", json!({"size":1e300})).unwrap();
+    assert_eq!(app.selected_chart_font().unwrap().size, Some(144.0));
     assert_eq!(serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap(), cells);
     app.selected_chart = None;
     app.run("home.fontSize", json!({"size":18})).unwrap();

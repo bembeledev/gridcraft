@@ -258,7 +258,7 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
             });
         });
         ui.collapsing(crate::widgets::tr(ui, "Chart|Series"), |ui| {
-            let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, chart));
+            let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), chart));
             for (i, s) in chart.series.iter().enumerate() {
                 let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series {}", i + 1));
                 let col = data
@@ -329,7 +329,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
     let names = app
         .session
         .active()
-        .map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, chart).series.into_iter().map(|s| s.name).collect::<Vec<_>>())
+        .map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), chart).series.into_iter().map(|s| s.name).collect::<Vec<_>>())
         .unwrap_or_default();
     let mut selected = selected_element(ui.ctx(), id);
     ui.label(crate::widgets::tr(ui, "Current Selection"));
@@ -410,8 +410,11 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                 | ChartKind::Line
                 | ChartKind::LineMarkers
                 | ChartKind::LineStacked
+                | ChartKind::LineStacked100
+                | ChartKind::LineStacked100Markers
                 | ChartKind::Area
                 | ChartKind::AreaStacked
+                | ChartKind::AreaStacked100
                 | ChartKind::Combo
         );
     egui::ScrollArea::vertical().id_salt(("chart_properties_scroll", id, selected, page)).auto_shrink([false, false]).show(ui, |ui| {
@@ -567,6 +570,8 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                         | ChartKind::Line
                         | ChartKind::LineMarkers
                         | ChartKind::LineStacked
+                        | ChartKind::LineStacked100
+                        | ChartKind::LineStacked100Markers
                         | ChartKind::Combo
                 );
                 if page == 0 && lines {

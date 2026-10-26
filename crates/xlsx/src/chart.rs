@@ -319,17 +319,19 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         *seen = true;
         let options = if x { &mut format.x_axis } else { &mut format.y_axis };
         if let Some(scale) = a.child("scaling") {
-            options.minimum = scale.child_val("min").and_then(|v| v.parse().ok()).or(options.minimum);
-            options.maximum = scale.child_val("max").and_then(|v| v.parse().ok()).or(options.maximum);
+            options.minimum = scale.child_val("min").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).or(options.minimum);
+            options.maximum = scale.child_val("max").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).or(options.maximum);
             options.reversed = scale.child_val("orientation") == Some("maxMin");
             if scale.child("logBase").is_some() {
                 options.logarithmic = true;
             }
         }
-        options.major_unit = a.child_val("majorUnit").and_then(|v| v.parse().ok()).or(options.major_unit);
+        options.major_unit =
+            a.child_val("majorUnit").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).or(options.major_unit);
         options.major_tick = a.child_val("majorTickMark").filter(|v| matches!(*v, "in" | "out" | "cross")).map(str::to_string);
         options.minor_tick = a.child_val("minorTickMark").filter(|v| matches!(*v, "in" | "out" | "cross")).map(str::to_string);
-        options.minor_unit = a.child_val("minorUnit").and_then(|v| v.parse().ok()).or(options.minor_unit);
+        options.minor_unit =
+            a.child_val("minorUnit").and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0).or(options.minor_unit);
         let surface = read_surface(a.child("spPr"));
         options.line.color = surface.border.filter(|color| *color != [217, 217, 217, 255]);
         options.line.width = surface.border_width;
@@ -383,6 +385,7 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
                 | ChartKind::BarStacked100
                 | ChartKind::Area
                 | ChartKind::AreaStacked
+                | ChartKind::AreaStacked100
         );
         for ser in group.kids("ser") {
             let custom = ser.child_val("idx").and_then(|value| value.parse::<usize>().ok()).and_then(|index| custom_series.get(&index));
@@ -418,8 +421,8 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
                 .map(|w| w / 12700.0)
                 .filter(|width| *width != 0.75 || marker_no_fill || marker_border_color.is_some());
             let default_marker = match kind {
-                ChartKind::Line | ChartKind::LineStacked | ChartKind::ScatterLines => Some("none"),
-                ChartKind::LineMarkers | ChartKind::Scatter => Some("circle"),
+                ChartKind::Line | ChartKind::LineStacked | ChartKind::LineStacked100 | ChartKind::ScatterLines => Some("none"),
+                ChartKind::LineMarkers | ChartKind::LineStacked100Markers | ChartKind::Scatter => Some("circle"),
                 _ => None,
             };
             let mut spec = gridcraft_model::ChartSeriesFormat {
@@ -579,6 +582,53 @@ mod native_merge_tests {
     }
 
     #[test]
+    fn native_axis_reader_discards_non_finite_limits_and_invalid_units() {
+        let root = crate::xml::parse(b"<chartSpace/>").unwrap();
+        let plot = crate::xml::parse(
+            b"<plotArea><catAx><axPos val=\"b\"/><scaling><min val=\"NaN\"/><max val=\"inf\"/></scaling><majorUnit val=\"0\"/><minorUnit val=\"-2\"/></catAx></plotArea>",
+        )
+        .unwrap();
+
+        let loaded = read_format(&root, &plot, &[]);
+
+        assert_eq!(loaded.x_axis.minimum, None);
+        assert_eq!(loaded.x_axis.maximum, None);
+        assert_eq!(loaded.x_axis.major_unit, None);
+        assert_eq!(loaded.x_axis.minor_unit, None);
+    }
+
+    #[test]
+    fn custom_axis_reader_discards_non_finite_limits_and_invalid_units() {
+        let custom = gridcraft_model::ChartFormat {
+            x_axis: gridcraft_model::ChartAxis {
+                minimum: Some(f64::INFINITY),
+                maximum: Some(f64::NEG_INFINITY),
+                major_unit: Some(0.0),
+                minor_unit: Some(-1.0),
+                ..Default::default()
+            },
+            y_axis: gridcraft_model::ChartAxis {
+                minimum: Some(f64::NAN),
+                maximum: Some(9.0),
+                major_unit: Some(f64::INFINITY),
+                minor_unit: Some(f64::NEG_INFINITY),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root_xml = format!("<chartSpace>{}</chartSpace>", format_extension(&custom, "c"));
+        let root = crate::xml::parse(root_xml.as_bytes()).unwrap();
+
+        let loaded = read_custom_format(&root).unwrap();
+
+        assert_eq!(loaded.x_axis, gridcraft_model::ChartAxis::default());
+        assert_eq!(loaded.y_axis.maximum, Some(9.0));
+        assert_eq!(loaded.y_axis.minimum, None);
+        assert_eq!(loaded.y_axis.major_unit, None);
+        assert_eq!(loaded.y_axis.minor_unit, None);
+    }
+
+    #[test]
     fn native_surface_merges_only_components_present_in_xml() {
         let mut surface = gridcraft_model::ChartSurface { fill: Some([10, 20, 30, 255]), border: Some([40, 50, 60, 255]), border_width: Some(3.0) };
         let native = crate::xml::parse(b"<spPr><ln w=\"25400\"/></spPr>").unwrap();
@@ -603,9 +653,19 @@ mod native_merge_tests {
     }
 }
 
+fn sanitize_axis_values(axis: &mut gridcraft_model::ChartAxis) {
+    axis.minimum = axis.minimum.filter(|value| value.is_finite());
+    axis.maximum = axis.maximum.filter(|value| value.is_finite());
+    axis.major_unit = axis.major_unit.filter(|value| value.is_finite() && *value > 0.0);
+    axis.minor_unit = axis.minor_unit.filter(|value| value.is_finite() && *value > 0.0);
+}
+
 pub(crate) fn read_custom_format(root: &El) -> Option<gridcraft_model::ChartFormat> {
     let ext = root.child("extLst")?.kids("ext").find(|e| e.attr("uri") == Some("{CE01AC23-6FC7-453A-BE98-475249444346}"))?.child("format")?;
-    serde_json::from_str(&ext.text).ok()
+    let mut format: gridcraft_model::ChartFormat = serde_json::from_str(&ext.text).ok()?;
+    sanitize_axis_values(&mut format.x_axis);
+    sanitize_axis_values(&mut format.y_axis);
+    Some(format)
 }
 
 pub(crate) fn format_extension(format: &gridcraft_model::ChartFormat, prefix: &str) -> String {

@@ -303,6 +303,58 @@ fn points_bounds(points: &[[f32; 2]]) -> Rect {
     points.iter().fold(Rect::NOTHING, |bounds, p| bounds.union(Rect::from_min_max(pos2(p[0], p[1]), pos2(p[0], p[1]))))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SeriesSelectionMark {
+    Shape(Rect),
+    Point(Pos2),
+}
+
+/// Returns per-datum geometry for the active series rather than one confusing frame around its
+/// entire plot-area extent. Chart primitives do not carry series IDs, so their rendered colors
+/// are matched against the series palette and any explicit formatting overrides.
+fn series_selection_marks(prims: &[Prim], colors: &[[u8; 4]]) -> Vec<SeriesSelectionMark> {
+    let matches = |color: [u8; 4]| colors.iter().any(|candidate| candidate[..3] == color[..3]);
+    let mut marks = Vec::new();
+    for prim in prims {
+        match prim {
+            Prim::Rect { x, y, w, h, fill: Some(fill), .. } if matches(*fill) => {
+                marks.push(SeriesSelectionMark::Shape(Rect::from_min_size(pos2(*x, *y), vec2(*w, *h))));
+            }
+            Prim::Circle { cx, cy, fill, stroke, .. } if fill.is_some_and(matches) || stroke.is_some_and(|(color, _)| matches(color)) => {
+                marks.push(SeriesSelectionMark::Point(pos2(*cx, *cy)));
+            }
+            Prim::Polygon { pts, fill, stroke } if matches(*fill) || stroke.is_some_and(|(color, _)| matches(color)) => {
+                // Small polygons are marker glyphs (triangles/diamonds); large ones are filled
+                // series such as areas, whose smoothed paths can contain many interpolated points.
+                let bounds = points_bounds(pts);
+                if bounds.width() <= 24.0 && bounds.height() <= 24.0 {
+                    marks.push(SeriesSelectionMark::Point(bounds.center()));
+                }
+            }
+            _ => {}
+        }
+    }
+    marks
+}
+
+fn paint_series_selection(p: &Painter, marks: &[SeriesSelectionMark], origin: Pos2, z: f32) {
+    let accent = Tokens::get(p.ctx()).accent;
+    for mark in marks {
+        match mark {
+            SeriesSelectionMark::Shape(bounds) => {
+                let bounds = Rect::from_min_max(origin + bounds.min.to_vec2() * z, origin + bounds.max.to_vec2() * z).expand(2.0);
+                p.rect_stroke(bounds, 0.0, Stroke::new(1.5, accent), StrokeKind::Outside);
+            }
+            SeriesSelectionMark::Point(point) => {
+                let center = origin + point.to_vec2() * z;
+                let bounds = Rect::from_center_size(center, vec2(7.0, 7.0));
+                p.rect_filled(bounds, 1.0, Color32::WHITE);
+                p.rect_stroke(bounds, 1.0, Stroke::new(1.25, accent), StrokeKind::Outside);
+            }
+        }
+    }
+}
+
 struct EguiMeasure<'a> {
     painter: &'a Painter,
     z: f32,
@@ -671,8 +723,18 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 && element == selected_element(p.ctx(), ch.id)
                 && bounds.is_finite()
             {
-                let bounds = Rect::from_min_max(r.min + bounds.min.to_vec2() * geo.z, r.min + bounds.max.to_vec2() * geo.z).expand(3.0);
-                p.with_clip_rect(r).rect_stroke(bounds, 0.0, Stroke::new(1.5, crate::theme::Tokens::get(p.ctx()).accent), StrokeKind::Outside);
+                let overlay = p.with_clip_rect(r);
+                if let ChartElement::Series(index) = element {
+                    let mut colors = data.series.get(index).map(|series| vec![series.color]).unwrap_or_default();
+                    if let Some(format) = ch.format.series.get(&index) {
+                        colors.extend([format.fill_color, format.line_color, format.marker_fill, format.marker_border_color].into_iter().flatten());
+                    }
+                    let marks = series_selection_marks(&prims, &colors);
+                    paint_series_selection(&overlay, &marks, r.min, geo.z);
+                } else {
+                    let bounds = Rect::from_min_max(r.min + bounds.min.to_vec2() * geo.z, r.min + bounds.max.to_vec2() * geo.z).expand(3.0);
+                    overlay.rect_stroke(bounds, 0.0, Stroke::new(1.5, crate::theme::Tokens::get(p.ctx()).accent), StrokeKind::Outside);
+                }
             }
         }
         // The source-data highlight below is in cell space: mirrored with the cells.
@@ -842,4 +904,28 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
         }
     }
     None
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::{Prim, SeriesSelectionMark, series_selection_marks};
+
+    #[test]
+    fn series_selection_marks_bars_and_explicit_points_but_not_line_segments() {
+        let color = [30, 100, 180, 255];
+        let prims = [
+            Prim::Rect { x: 2.0, y: 3.0, w: 8.0, h: 12.0, fill: Some(color), stroke: None, radius: 0.0 },
+            Prim::Rect { x: 14.0, y: 5.0, w: 8.0, h: 10.0, fill: Some(color), stroke: None, radius: 0.0 },
+            Prim::Line { pts: vec![[1.0, 30.0], [10.0, 20.0], [20.0, 25.0]], color, width: 1.5, dash: false },
+            Prim::Circle { cx: 10.0, cy: 20.0, r: 3.0, fill: Some(color), stroke: None },
+            Prim::Circle { cx: 20.0, cy: 25.0, r: 3.0, fill: Some(color), stroke: None },
+        ];
+
+        let marks = series_selection_marks(&prims, &[color]);
+
+        assert_eq!(marks.len(), 4);
+        assert!(matches!(marks[0], SeriesSelectionMark::Shape(_)));
+        assert!(matches!(marks[1], SeriesSelectionMark::Shape(_)));
+        assert_eq!(marks[2..], [SeriesSelectionMark::Point(egui::pos2(10.0, 20.0)), SeriesSelectionMark::Point(egui::pos2(20.0, 25.0)),]);
+    }
 }

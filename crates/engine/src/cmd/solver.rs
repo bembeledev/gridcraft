@@ -331,7 +331,8 @@ fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     }
     let mut seen = std::collections::HashSet::new();
     vars.retain(|c| seen.insert(*c));
-    if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some())) {
+    // Python cells count as formulas: a solution written over one would lose its code.
+    if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
         return Err(EngineError::Other("Variable cells must hold constants, not formulas.".into()));
     }
     let mut cons = Vec::new();
@@ -1899,7 +1900,7 @@ fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>) -> Vec<St
         let mut sheet = Sheet::new(name);
         for (r, c, v, b) in lines {
             let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
-            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style, py: None });
         }
         for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
             sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
@@ -2101,7 +2102,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(sheet)?;
                 for (c, v) in model.vars.iter().zip(x) {
                     let style = sh.style_id(*c);
-                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style });
+                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style, py: None });
                 }
                 for c in &model.vars {
                     cx.touch(sheet + count, *c);

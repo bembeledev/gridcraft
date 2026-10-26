@@ -32,6 +32,8 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// The code of the workbook's Python cells, from its Python part.
+    pub python: crate::python_part::ScriptsIn,
 }
 
 impl Ctx<'_> {
@@ -113,6 +115,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        python: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -140,6 +143,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             vec![]
         }
     };
+    // The code of Python cells, which their formulas name by index.
+    cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
@@ -394,6 +399,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    if let Some(w) = cx.python.warning() {
+        cx.warn(w);
+    }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;

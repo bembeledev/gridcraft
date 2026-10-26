@@ -202,6 +202,19 @@ impl Sheet {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
     }
 
+    /// Removes the spilled values inside `r`. The work is bounded by the values stored, not by
+    /// the size of `r`, so a range from a file that claims the whole sheet costs no more than the
+    /// values it holds.
+    pub fn clear_spill(&mut self, r: RangeRef) {
+        if r.count() <= self.spill.len() as u64 {
+            for c in r.iter() {
+                self.spill.remove(&c);
+            }
+        } else {
+            self.spill.retain(|c, _| !r.contains(*c));
+        }
+    }
+
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {
@@ -259,7 +272,7 @@ impl Sheet {
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
-        self.set_cell(c, Cell { value: v, formula: None, style });
+        self.set_cell(c, Cell { value: v, formula: None, style, py: None });
     }
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
@@ -278,7 +291,7 @@ impl Sheet {
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
-        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
+        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
     pub fn input_text(&self, c: CellRef) -> String {

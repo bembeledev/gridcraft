@@ -129,6 +129,7 @@ macro_rules! cmd {
 }
 pub(crate) use cmd;
 
+/// Every command the engine holds, in menu order, built once.
 pub fn command_specs() -> &'static [CommandSpec] {
     static SPECS: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
     SPECS.get_or_init(|| {

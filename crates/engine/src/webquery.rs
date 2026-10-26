@@ -167,6 +167,8 @@ struct TableState {
 }
 
 impl TableState {
+    /// A table whose cell budget is the least of its own cap, its size caps and the page's
+    /// remaining share.
     fn new(name: String, max_rows: usize, max_cols: usize, page_budget: usize) -> Self {
         Self {
             name,
@@ -188,18 +190,21 @@ impl TableState {
         self.spent
     }
 
+    /// Text between tags: part of the open cell, or nothing when none is.
     fn push_text(&mut self, text: &str) {
         if self.cell_open {
             self.cell.push_str(text);
         }
     }
 
+    /// `<td>`/`<th>`: close the previous cell, open a new one with its spans.
     fn start_cell(&mut self, colspan: usize, rowspan: Option<usize>) {
         self.close_cell();
         self.cell_open = true;
         self.cell_span = (colspan, rowspan);
     }
 
+    /// `<tr>`: close the previous cell and start the next row.
     fn start_row(&mut self) {
         self.close_cell();
         self.flush_row();
@@ -274,6 +279,7 @@ impl TableState {
         }
     }
 
+    /// Take the built row into the table, or drop it when empty or past the row cap.
     fn flush_row(&mut self) {
         if self.row.is_empty() || self.rows.len() >= self.max_rows {
             self.row.clear();
@@ -440,6 +446,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// A named table takes its id for a name; others are numbered.
     fn extracts_named_and_unnamed_tables() {
         let html = "<p>intro</p><TABLE id=\"prices\"><tr><th>Sym</th><th>Price</th></tr>\
                     <tr><td>ABCD</td><td>12.50</td></tr></table>\
@@ -453,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    /// Rows are padded to the widest; unclosed cells and rows survive broken markup.
     fn ragged_rows_are_padded_and_spans_ignored() {
         let html = "<table><tr><td>a</td><td>b</td><td>c</td></tr><tr><td>d</td></tr></table>";
         let t = extract_tables(html, 100, 100);
@@ -460,6 +468,7 @@ mod tests {
     }
 
     #[test]
+    /// Cell text collapses whitespace and decodes entities; scripts never enter it.
     fn collapses_whitespace_decodes_entities_and_skips_scripts() {
         let html = "<table><tr><td>  Red&nbsp;&amp;&nbsp;Blue\n  Widget  </td>\
                     <script>evil(1<2)</script><td>&#65;&#x42;</td></tr></table>";
@@ -468,6 +477,7 @@ mod tests {
     }
 
     #[test]
+    /// The row and column caps truncate a too-large table instead of failing.
     fn honours_row_and_col_caps() {
         let html = "<table><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>";
         assert_eq!(extract_tables(html, 1, 100)[0].rows, vec![vec!["1", "2"]]);
@@ -475,6 +485,7 @@ mod tests {
     }
 
     #[test]
+    /// Empty or broken markup yields no tables and never panics.
     fn empty_or_broken_markup_yields_nothing_without_panicking() {
         assert!(extract_tables("", 10, 10).is_empty());
         assert!(extract_tables("<table><tr><td>no end", 10, 10).is_empty());
@@ -483,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    /// `colspan` pads a row and `rowspan` covers cells below.
     fn colspan_and_rowspan_place_their_cells() {
         let html = "<table><tr><th colspan=\"2\">H</th><th>C</th></tr>\
                     <tr><td rowspan=\"2\">R</td><td>1</td><td>2</td></tr>\
@@ -492,6 +504,7 @@ mod tests {
     }
 
     #[test]
+    /// `rowspan="0"` covers to the end of its row group.
     fn rowspan_zero_spans_its_own_row_group() {
         let html = "<table><thead><tr><th rowspan=\"0\">A</th><th>B</th></tr>\
                     <tr><th>C</th></tr></thead>\
@@ -501,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    /// Wide padded tables share one page-wide cell budget.
     fn wide_colspan_padding_across_many_tables_shares_a_page_budget() {
         // Each table pads one cell to 4,000 columns; without a page-wide budget 1,000 of
         // them retain ~4,000,000 padded cells.
@@ -512,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    /// Thousands of tiny tables are cut short at the aggregate cell cap.
     fn a_page_of_tiny_tables_is_capped_at_the_aggregate_limit() {
         let html = "<table><tr><td>x</td></tr></table>".repeat(5_000);
         let t = extract_tables(&html, 100, 100);
@@ -519,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    /// A single hostile table cannot blow past its own cell budget.
     fn a_hostile_table_cannot_blow_the_cell_budget() {
         // One row, each cell spanning the whole column count: without a budget the padding
         // alone would be rows * cols.
@@ -530,6 +546,7 @@ mod tests {
     }
 
     #[test]
+    /// Attribute names match whole, not as suffixes.
     fn attr_matches_whole_names_not_suffixes() {
         let html = "<table data-id=\"x\" id=\"prices\"><tr><td>1</td></tr></table>";
         let t = extract_tables(html, 100, 100);
@@ -537,6 +554,7 @@ mod tests {
     }
 
     #[test]
+    /// A nested table's markup stays in the enclosing cell's text.
     fn nested_table_text_stays_in_the_cell() {
         let html = "<table><tr><td>outer <table><tr><td>inner</td></tr></table> end</td></tr></table>";
         let t = extract_tables(html, 100, 100);

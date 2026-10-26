@@ -2227,6 +2227,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// The Data tab: Get Data imports (CSV, From Web), Queries & Connections, Refresh All,
+/// sorting, filtering and the data tools.
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");

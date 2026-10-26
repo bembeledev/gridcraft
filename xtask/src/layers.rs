@@ -15,6 +15,7 @@ pub enum Class {
 }
 
 impl Class {
+    /// The layer a crate sits at; exempt crates have none.
     fn layer(self) -> Option<u8> {
         match self {
             Class::Layer(l) => Some(l),

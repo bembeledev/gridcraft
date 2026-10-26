@@ -992,6 +992,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"sheet": r["name"], "rows": rows.len(), "cols": w}))
 }
 
+/// `data.fromTableRange`: the selected block as CSV text into a copy of its sheet.
 fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let r = target_range(s, p)?;
     let d = s.doc()?;

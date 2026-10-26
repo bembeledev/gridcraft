@@ -165,6 +165,7 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
+/// A session with the file at `path` open, wired for web imports.
 fn open(path: &str) -> Result<Session, String> {
     let mut s = Session::new();
     s.web_source = Some(gridcraft_webquery::provider());
@@ -172,6 +173,7 @@ fn open(path: &str) -> Result<Session, String> {
     Ok(s)
 }
 
+/// A session with a fresh workbook, wired for web imports.
 fn blank() -> Session {
     let mut s = Session::new();
     s.web_source = Some(gridcraft_webquery::provider());

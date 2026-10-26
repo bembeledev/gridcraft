@@ -182,6 +182,8 @@ impl Dialog {
         }
     }
 
+    /// Build the named dialog around the current selection: its fields are prefilled from
+    /// `params`, falling back to what the selection makes sensible.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -2870,6 +2872,8 @@ fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The command search box: commands whose label or id matches what was
+/// typed, keyboard-navigable, Enter runs the highlighted one.
 fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (

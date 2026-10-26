@@ -434,11 +434,13 @@ mod tests {
     use super::*;
     use gridcraft_core::Value;
 
+    /// A page with two tables: one named, one nameless.
     fn page() -> &'static str {
         "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>ABCD</td><td>12.50</td></tr></table>\
          <table><tr><td>x</td><td>1</td></tr></table>"
     }
 
+    /// A session whose web source serves `page`.
     fn session_with_source() -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({})).unwrap();
@@ -449,6 +451,7 @@ mod tests {
         s
     }
 
+    /// The cell's displayed text on the active sheet.
     fn a1(s: &Session, at: &str) -> String {
         let d = s.active().unwrap();
         let sh = d.wb.active().unwrap();
@@ -456,6 +459,7 @@ mod tests {
     }
 
     #[test]
+    /// The default import: the first table, a new sheet, a saved connection.
     fn imports_the_first_table_into_a_new_sheet_and_saves_the_connection() {
         let mut s = session_with_source();
         let r = s.execute("data.fromWeb", json!({"url": "https://example.com/markets", "sheet": "Markets"})).unwrap();
@@ -471,6 +475,7 @@ mod tests {
     }
 
     #[test]
+    /// A named table is picked by name; its cells keep their types.
     fn imports_a_named_table_and_keeps_text_and_numbers() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "table": "Table 2"})).unwrap();
@@ -485,6 +490,7 @@ mod tests {
     }
 
     #[test]
+    /// The preview lists every table with its name and size.
     fn preview_lists_the_page_tables() {
         let mut s = session_with_source();
         let r = s.execute("data.webPreview", json!({"url": "https://example.com"})).unwrap();
@@ -496,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    /// A refresh rewrites the same rectangle with the new rows and resizes the table.
     fn refresh_rewrites_the_table_in_place() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -521,6 +528,7 @@ mod tests {
     }
 
     #[test]
+    /// A refresh keeps the user's style and totals row instead of resetting them.
     fn refresh_keeps_the_table_s_settings_and_totals_row() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -562,6 +570,7 @@ mod tests {
     }
 
     #[test]
+    /// A numeric header's column keeps its settings across a refresh.
     fn refresh_keeps_the_settings_of_a_numeric_header_column() {
         // A numeric header (`2024`) lands in the cell as a number: the column lookup must use
         // the fetched header text, or the column's settings are dropped on every refresh.
@@ -582,6 +591,7 @@ mod tests {
     }
 
     #[test]
+    /// The default sheet name is the site's own name, not the TLD or a subdomain.
     fn default_sheet_name_is_the_site_not_the_tld() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://www.example.com/markets"})).unwrap();
@@ -594,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    /// A second import adds a connection rather than replacing the first.
     fn a_second_import_keeps_the_first_connection() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "One"})).unwrap();
@@ -605,6 +616,7 @@ mod tests {
     }
 
     #[test]
+    /// A refresh that would grow over other content is refused before any change.
     fn refresh_refuses_to_overwrite_cells_outside_the_old_range() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -628,6 +640,7 @@ mod tests {
     }
 
     #[test]
+    /// The clash check tests rows and columns independently (a formula beside the old rows).
     fn refresh_refuses_to_overwrite_a_new_column_inside_the_old_rows() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -649,6 +662,7 @@ mod tests {
     }
 
     #[test]
+    /// A moved table refreshes where it is, not at its old origin.
     fn refresh_writes_at_the_moved_table_s_own_place() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -670,6 +684,7 @@ mod tests {
     }
 
     #[test]
+    /// The import result and the connection name the table that was actually created.
     fn the_result_and_connection_name_the_created_table() {
         let mut s = session_with_source();
         // "prices" is a valid name, so the first import takes it; the second, from another
@@ -684,6 +699,7 @@ mod tests {
     }
 
     #[test]
+    /// Page text that looks like a formula is imported as text, never live.
     fn page_content_never_becomes_a_formula() {
         let mut s = Session::new();
         s.execute("file.new", json!({})).unwrap();
@@ -707,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    /// With the connection's table gone, refresh reports it and touches nothing.
     fn refresh_never_falls_back_to_an_unrelated_table() {
         let mut s = session_with_source();
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
@@ -726,6 +743,7 @@ mod tests {
     }
 
     #[test]
+    /// Duplicate page names: the connection re-imports the occurrence it started with.
     fn refresh_re_imports_the_same_occurrence_of_a_duplicate_table_name() {
         // The page holds two tables with the same id; the import takes the second one.
         let page = "<table id=\"prices\"><tr><th>Sym</th></tr><tr><td>first</td></tr></table>\
@@ -744,6 +762,7 @@ mod tests {
     }
 
     #[test]
+    /// A vanished occurrence fails the refresh and keeps the sheet as it was.
     fn a_vanished_occurrence_fails_refresh_and_keeps_the_data() {
         let mut s = Session::new();
         s.execute("file.new", json!({})).unwrap();
@@ -763,6 +782,7 @@ mod tests {
     }
 
     #[test]
+    /// No source, a non-http address and a missing table are errors, not imports.
     fn errors_without_source_bad_url_or_missing_table() {
         let mut s = Session::new();
         s.execute("file.new", json!({})).unwrap();
@@ -777,12 +797,14 @@ mod tests {
     }
 
     #[test]
+    /// Headless `data.fromWeb` without a URL fails instead of opening the dialog.
     fn headless_empty_params_fail_instead_of_opening_a_dialog() {
         let mut s = session_with_source();
         assert!(s.execute_headless("data.fromWeb", json!({})).is_err());
     }
 
     #[test]
+    /// Every From Web command answers empty params with an error, not a panic.
     fn every_command_survives_empty_params() {
         let mut s = session_with_source();
         for id in ["data.fromWeb", "data.webPreview", "data.webRefresh"] {

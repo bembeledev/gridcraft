@@ -654,7 +654,7 @@ fn write_file_with_temp(path: &str, bytes: &[u8], tmp: &str) -> Result<()> {
     opts.write(true).create_new(true);
     #[cfg(unix)]
     if let Some(p) = &prior {
-        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         opts.mode(p.mode());
     }
     let mut file = opts.open(tmp).map_err(|e| {

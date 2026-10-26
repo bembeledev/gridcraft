@@ -294,6 +294,21 @@ fn us_symbol_shortcuts_keep_their_keys() {
     assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), CTRL_SHIFT, false), Some(Shortcut::Time));
 }
 
+#[test]
+fn cmd_shift_semicolon_on_a_mac_does_not_insert_the_date() {
+    // The Mac table has Cmd+; (the time) and Control+; (the date), and nothing for Cmd+Shift+;. It
+    // arrives as `:` on the US `;` key, or on the US `.` key of a Croatian or German keyboard.
+    let mut h = harness(book("C2"));
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    let cmd_shift = Modifiers { shift: true, mac_cmd: true, command: true, ..Modifiers::NONE };
+    for at in [Key::Semicolon, Key::Period] {
+        key_on_layout(&mut h, Key::Colon, at, cmd_shift);
+        assert_eq!(editor_text(&h), None, "Cmd+Shift+; at {at:?}");
+    }
+    key(&mut h, Key::Semicolon, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE });
+    assert!(editor_text(&h).is_some_and(|t| t.ends_with("AM") || t.ends_with("PM")), "Cmd+; is still the time");
+}
+
 /// #1443: Ctrl+Q (also with Shift or Alt, which is what AltGr+Q reports on Windows) must not
 /// close the window and lose unsaved input; macOS keeps Cmd+Q as the app's Quit.
 #[test]

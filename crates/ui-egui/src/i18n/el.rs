@@ -143,6 +143,34 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Εμφάνιση τύπων",
         "Error Checking" => "Έλεγχος σφαλμάτων",
         "Circular References" => "Κυκλικές αναφορές",
+        "Python Mode" => "Λειτουργία Python",
+        "Python Object" => "Αντικείμενο Python",
+        "Excel Value" => "Τιμή Excel",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Αυτή η έκδοση του GridCraft αποθηκεύει κώδικα Python αλλά δεν τον εκτελεί."
+        }
+        "Insert\nPython" => "Εισαγωγή\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Εισαγωγή Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Πρόγραμμα επεξεργασίας Python",
+        "Edit in Python Editor" => "Επεξεργασία στο πρόγραμμα επεξεργασίας Python",
+        "Unsaved changes" => "Μη αποθηκευμένες αλλαγές",
+        "The code for {cell} has unsaved changes." => "Ο κώδικας για το {cell} έχει μη αποθηκευμένες αλλαγές.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Ο κώδικας για το {cell} στο {workbook} έχει μη αποθηκευμένες αλλαγές.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Ο κώδικας δεν μπορεί να γίνει μεγαλύτερος: ένα κελί Python χωρά {max} χαρακτήρες, μετρημένους ως τύπος PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python, επομένως ο κώδικας δεν εφαρμόστηκε. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
+        }
+        "{apply} applies the code. Esc closes the editor." => "Το {apply} εφαρμόζει τον κώδικα. Το Esc κλείνει το πρόγραμμα επεξεργασίας.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "Ο μη αποθηκευμένος κώδικας του προγράμματος επεξεργασίας Python αντιγράφηκε στο πρόχειρο."
+        }
+        "Apply" => "Εφαρμογή",
+        "Discard" => "Απόρριψη",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",

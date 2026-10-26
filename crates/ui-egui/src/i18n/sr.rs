@@ -148,6 +148,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Prikaži formule",
         "Error Checking" => "Provera grešaka",
         "Circular References" => "Kružne reference",
+        "Python Mode" => "Python režim",
+        "Python Object" => "Python objekat",
+        "Excel Value" => "Excel vrednost",
+        "This version of GridCraft stores Python code but does not run it." => "Ova verzija programa GridCraft čuva Python kôd, ali ga ne pokreće.",
+        "Insert\nPython" => "Umetni\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Umetni Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python uređivač",
+        "Edit in Python Editor" => "Uredi u Python uređivaču",
+        "Unsaved changes" => "Nesačuvane promene",
+        "The code for {cell} has unsaved changes." => "Kod za {cell} ima nesačuvane promene.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Kod za {cell} u {workbook} ima nesačuvane promene.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kod ne može biti duži: Python ćelija prima {max} znakova, računato kao PY formula."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Ćelija {cell} se promenila dok je bila otvorena u Python uređivaču. Kopirajte kod ili zatvorite uređivač i ponovo ga otvorite na ćeliji."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Ćelija {cell} se promenila dok je bila otvorena u Python uređivaču, pa kod nije primenjen. Kopirajte kod ili zatvorite uređivač i ponovo ga otvorite na ćeliji."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} primenjuje kod. Esc zatvara uređivač.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Nesačuvani kod iz Python uređivača kopiran je u ostavu.",
+        "Apply" => "Primeni",
+        "Discard" => "Odbaci",
+        "Cancel" => "Otkaži",
         "Evaluate Formula" => "Proceni formulu",
         "Watch Window" => "Prozor za praćenje",
         "Calculation\nOptions" => "Opcije\nizračunavanja",

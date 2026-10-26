@@ -153,6 +153,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "수식 표시",
         "Error Checking" => "오류 검사",
         "Circular References" => "순환 참조",
+        "Python Mode" => "Python 모드",
+        "Python Object" => "Python 개체",
+        "Excel Value" => "Excel 값",
+        "This version of GridCraft stores Python code but does not run it." => "이 버전의 GridCraft는 Python 코드를 저장하지만 실행하지는 않습니다.",
+        "Insert\nPython" => "Python\n삽입",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python 삽입 (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python 편집기",
+        "Edit in Python Editor" => "Python 편집기에서 편집",
+        "Unsaved changes" => "저장하지 않은 변경 내용",
+        "The code for {cell} has unsaved changes." => "{cell}의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell}({workbook})의 코드에 저장하지 않은 변경 내용이 있습니다.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "코드를 더 길게 할 수 없습니다. Python 셀에는 PY 수식으로 계산하여 {max}자까지 들어갑니다."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}이(가) Python 편집기에서 열려 있는 동안 변경되었습니다. 따라서 코드가 적용되지 않았습니다. 코드를 복사하거나, 편집기를 닫고 셀에서 다시 여세요."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply}로 코드를 적용합니다. Esc로 편집기를 닫습니다.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python 편집기의 저장하지 않은 코드를 클립보드에 복사했습니다.",
+        "Apply" => "적용",
+        "Discard" => "버리기",
+        "Cancel" => "취소",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",

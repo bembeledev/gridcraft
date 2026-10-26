@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (the Python editor window; earlier: Python cells in the interface; earlier: Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -125,6 +125,41 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
   `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
 
+## Python cells
+
+A Python cell is a `Cell` whose `py` holds a `model::PyCode`: the code, the return type (an Excel
+value or a Python object, the `0` or `1` of Excel's `PY(code, return_type)`), the last result and a
+stale flag. Its `value` is the cached result, so formulas, display and saving read it like any
+other cell. `model::python` has the text forms: `PY("…"&"…",n)` with literals of at most 255
+characters (the function's syntax, which some files hold), the `_xlfn._xlws.` prefix, the
+8,192-character limit measured on that formula (`PyCode::fits`), and the `xl("…")` literals in
+code, which structural edits rewrite like formula references.
+
+Calc treats a Python cell as a graph node that reads nothing: a pass takes its kept result instead
+of evaluating it, so an array result spills, is blocked and unblocked, and reaches its dependents
+through the same code as a formula's. The xlsx reader and writer map Python cells to and from
+`_xlfn._xlws.PY(index,n)` formulas with cached values and the workbook's Python part, which holds
+the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::enforce_python_limits`
+bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
+size). This build runs no Python: `python.set` stores code, and new or changed code shows
+`#BLOCKED!`. `python.output` switches a cell's return type and lays its kept result out again.
+
+In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
+the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
+(`apply_in_order_until`) with stop keys for commit, cancel and leaving the mode. Every commit path
+of a Python edit runs `python.set`, except that committing empty code clears the cell through
+`cell.set`. `python_card.rs` holds the PY tag (painted in the grid's
+logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
+(`ui.pythonCard`) and the cell menu's return-type items. `python_window.rs` is the Python editor
+window: its own copy of one cell's code (by workbook uid, sheet and address) in `code_field`
+with the line-number gutter (painted for the rows in view) and an `accept` check that refuses an
+edit past `PyCode::fits` as it is typed or pasted. Apply runs `python.set` in the window's
+workbook. The questions about unsaved code are a state of the window (`Pending`), so a
+programmatic `ui.pythonEditor` never opens one; it refuses, or discards with `force`. With native
+windows, where each window draws the app with its own workbook active, the editor is drawn only in
+its workbook's window (`PyWindow::window`), and a question or an opening brings that window
+forward.
+
 ## Agent control
 
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
@@ -150,6 +185,9 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | The Python editor window (`python_window.rs`): the code field's gutter and `accept` check, and the window's questions as state |
+| 2026-10-26 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output` |
+| 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

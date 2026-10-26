@@ -32,6 +32,8 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod python_card;
+pub mod python_window;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -288,6 +290,8 @@ pub struct SheetApp {
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
+    /// The Python editor window, when open (one at a time, for one cell of one workbook).
+    pub py_window: Option<python_window::PyWindow>,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
@@ -391,6 +395,7 @@ impl SheetApp {
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
+            py_window: None,
             dialog: None,
             backstage: None,
             message: None,
@@ -508,6 +513,11 @@ impl SheetApp {
     }
 
     fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // Closing the workbook would lose the Python editor's unsaved code. The interface asks
+        // first (see `run_or_alert`); a programmatic call is refused.
+        if (id == "file.close" && python_window::blocks_close(self)) || (id == "window.close" && python_window::blocks_window_close(self, &params)) {
+            return Err("The Python editor has unsaved changes for this workbook. Apply or discard them first (ui.pythonEditor with on: false and force: true discards them).".into());
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -664,6 +674,14 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // File › Close (or Ctrl+W) with unsaved code in the Python editor: the editor asks first.
+        if id == "file.close" && python_window::blocks_close(self) {
+            return python_window::ask(self, python_window::Pending::CloseWorkbook(params));
+        }
+        // The close button of the workbook's last window (a native window) asks the same way.
+        if id == "window.close" && python_window::blocks_window_close(self, &params) {
+            return python_window::ask(self, python_window::Pending::CloseWindow(params));
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -861,6 +879,17 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.pythonMode" => {
+                // `{"on": true}` starts Python mode on the active cell (or switches the edit in
+                // progress to it), `{"on": false}` leaves it; without `on` it switches.
+                let on = self.editor.as_ref().is_some_and(|e| e.python);
+                if p.get("on").and_then(Json::as_bool).unwrap_or(!on) != on {
+                    self.toggle_python_mode();
+                }
+                Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
+            }
+            "ui.pythonCard" => python_card::command(self, p),
+            "ui.pythonEditor" => python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -1132,6 +1161,21 @@ impl SheetApp {
         if text.is_none() && sh.cell_pictures.contains_key(&at) {
             return;
         }
+        // Editing a Python cell edits its code, in Python mode; typing replaces it as in Excel.
+        if text.is_none()
+            && let Some(py) = sh.cell(at).and_then(|c| c.py.as_deref())
+        {
+            // Code hidden on a protected sheet isn't loaded into an edit, and a blank edit would
+            // write over it on commit: no edit starts. Typing still replaces the cell.
+            if gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+                return;
+            }
+            let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, py.code.clone());
+            ed.window = self.session.active_window();
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()
@@ -1200,6 +1244,15 @@ impl SheetApp {
     }
 
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
+        // Python code goes in through `python.set`, whichever way the edit is committed (the
+        // formula bar's Enter button, a click on the sheet).
+        if self.editor.as_ref().is_some_and(|e| e.python) {
+            let ok = self.commit_python_edit();
+            if ok && (dr != 0 || dc != 0) {
+                self.move_after_enter(dr, dc);
+            }
+            return ok;
+        }
         let Some(ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
         let text = match &ed.completion {
@@ -1250,11 +1303,9 @@ impl SheetApp {
         let unchanged = !fill_selection
             && !array
             && text.is_empty()
-            && self
-                .session
-                .active()
-                .and_then(|d| d.wb.sheet(ed.sheet))
-                .is_some_and(|sh| sh.cell(ed.cell).is_none_or(|c| c.formula.is_none() && c.value == gridcraft_engine::core::Value::Empty));
+            && self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).is_some_and(|sh| {
+                sh.cell(ed.cell).is_none_or(|c| c.formula.is_none() && c.py.is_none() && c.value == gridcraft_engine::core::Value::Empty)
+            });
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
@@ -1291,6 +1342,91 @@ impl SheetApp {
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
+    }
+
+    /// Starts editing the active cell in Python mode, in the formula bar: its code, or no code
+    /// yet for a cell that isn't a Python cell. A cell inside a spill isn't edited, as with the
+    /// formula bar's other entry paths.
+    pub fn begin_python_edit(&mut self) {
+        if formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        let Some(d) = self.session.active() else { return };
+        let Some(sh) = d.wb.active() else { return };
+        let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        let py = sh.cell(at).and_then(|c| c.py.as_deref());
+        // A Python cell's code hidden on a protected sheet stays out of view, and Python mode
+        // doesn't start on it with no code, which a commit would write over the hidden code.
+        if py.is_some() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
+        let code = py.map(|py| py.code.clone()).unwrap_or_default();
+        // The draft belongs to this window, as `begin_edit`'s do: switching windows commits it here.
+        let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, code);
+        ed.window = self.session.active_window();
+        self.editor = Some(ed);
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Ctrl+Alt+Shift+P (and the PY badge): Python mode on or off. An edit in progress keeps its
+    /// text; with no edit, Python mode starts on the active cell.
+    pub fn toggle_python_mode(&mut self) {
+        match self.editor.as_mut() {
+            Some(ed) if ed.python => ed.leave_python(),
+            Some(ed) => ed.enter_python(),
+            None => return self.begin_python_edit(),
+        }
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
+    /// Formulas › Insert Python: Python mode on the active cell. An entry in progress becomes
+    /// code; Python mode already on stays on.
+    pub fn insert_python(&mut self) {
+        match &self.editor {
+            Some(ed) if ed.python => {}
+            Some(_) => self.toggle_python_mode(),
+            None => self.begin_python_edit(),
+        }
+    }
+
+    /// Commits a Python mode edit through `python.set`, on the sheet the edit started on; with no
+    /// code left, a Python cell is cleared through `cell.set`. When the command refuses (code
+    /// longer than a cell holds, a protected cell), its message shows and the edit stays open with
+    /// the code as typed.
+    pub fn commit_python_edit(&mut self) -> bool {
+        let Some(ed) = self.editor.take() else { return true };
+        self.session.mode = gridcraft_engine::Mode::Ready;
+        // The code of a Python cell committed unchanged: nothing to write (no undo step, the
+        // workbook stays clean), as with F2 then Enter on any other cell.
+        let code = gridcraft_engine::model::python::normalize_code(&ed.text);
+        let old = self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).and_then(|sh| sh.cell(ed.cell)).and_then(|c| c.py.as_deref());
+        let python_cell = old.is_some();
+        if old.is_some_and(|py| py.code == code) {
+            return true;
+        }
+        // No code at all: a Python cell is cleared through cell.set, as an empty entry clears any
+        // other cell (code of spaces is still code). On another cell there is nothing to write.
+        let r = match (ed.text.is_empty(), python_cell) {
+            (true, false) => return true,
+            (true, true) => self.session.run("cell.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "input": ""})),
+            (false, _) => self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text})),
+        };
+        match r {
+            Ok(_) => {
+                self.after_engine();
+                true
+            }
+            Err(e) => {
+                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                false
+            }
+        }
     }
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
@@ -1346,6 +1482,11 @@ impl SheetApp {
     /// workbook has unsaved changes, and asks about them first.
     fn guard_window_close(&mut self, ctx: &egui::Context) {
         if self.native_windows || self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        // Unsaved code in the Python editor: the editor asks first, and the quit goes on after.
+        if python_window::ask_before_quit(self) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
         // A cell still being edited is part of the workbook, as for File › Close.
@@ -1414,10 +1555,14 @@ impl SheetApp {
         true
     }
 
-    /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, then asks
-    /// about each unsaved workbook in its window; Cancel on any of them stops the quit. A draft its
-    /// workbook refuses stops the quit too, with its window in front and the reason shown.
+    /// Quit (the macOS app menu, ⌘Q): asks about unsaved code in the Python editor first, then
+    /// commits every window's cell draft as Enter would, then asks about each unsaved workbook in
+    /// its window; Cancel on any of them stops the quit. A draft its workbook refuses stops the
+    /// quit too, with its window in front and the reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        if python_window::ask_before_quit(self) {
+            return;
+        }
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
@@ -1738,6 +1883,7 @@ impl SheetApp {
         if self.draft_elsewhere() {
             self.commit_edit(0, 0, false, false);
         }
+        python_window::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         #[cfg(not(target_arch = "wasm32"))]
@@ -1760,7 +1906,9 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
-            if self.session.prefs.formula_bar {
+            // Python mode edits only in the formula bar: it shows while a Python edit is open,
+            // also when the preference hides it.
+            if self.session.prefs.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
                 formula_bar::show(self, ui);
             }
             if self.ui.status_bar {
@@ -1775,6 +1923,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

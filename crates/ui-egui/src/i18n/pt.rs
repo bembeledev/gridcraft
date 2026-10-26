@@ -150,6 +150,34 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show Formulas" => "Exibir Fórmulas",
         "Error Checking" => "Verificação de Erros",
         "Circular References" => "Referências Circulares",
+        "Python Mode" => "Modo Python",
+        "Python Object" => "Objeto Python",
+        "Excel Value" => "Valor do Excel",
+        "This version of GridCraft stores Python code but does not run it." => {
+            "Esta versão do GridCraft armazena o código Python, mas não o executa."
+        }
+        "Insert\nPython" => "Inserir\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Inserir Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Editor do Python",
+        "Edit in Python Editor" => "Editar no Editor do Python",
+        "Unsaved changes" => "Alterações não salvas",
+        "The code for {cell} has unsaved changes." => "O código de {cell} tem alterações não salvas.",
+        "The code for {cell} in {workbook} has unsaved changes." => "O código de {cell} em {workbook} tem alterações não salvas.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "O código não pode ficar maior: uma célula do Python comporta {max} caracteres, contados como fórmula PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} mudou enquanto estava aberta no Editor do Python. Copie o código ou feche o editor e abra-o novamente na célula."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} mudou enquanto estava aberta no Editor do Python, por isso o código não foi aplicado. Copie o código ou feche o editor e abra-o novamente na célula."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} aplica o código. Esc fecha o editor.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "O código não salvo do Editor do Python foi copiado para a área de transferência."
+        }
+        "Apply" => "Aplicar",
+        "Discard" => "Descartar",
         "Evaluate Formula" => "Avaliar Fórmula",
         "Watch Window" => "Janela de Inspeção",
         "Calculation\nOptions" => "Opções de\nCálculo",

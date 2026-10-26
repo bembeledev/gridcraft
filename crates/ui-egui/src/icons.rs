@@ -135,6 +135,10 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// Python in cells: a cell with a green PY tag over its corner (original; no language logo).
+    Python,
+    /// The Python editor: a window with a column of line numbers beside lines of code (original).
+    PythonEditor,
 }
 
 struct G<'a> {
@@ -757,6 +761,28 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(4.0, 11.5), (1.5, 11.5), (1.5, 5.5), (14.5, 5.5), (14.5, 11.5), (12.0, 11.5)], c, 1.1);
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
+        }
+        Icon::Python => {
+            // A cell of a sheet, its row of code marked by short lines, and the PY tag a Python
+            // cell carries.
+            g.rect(1.5, 1.5, 11.0, 9.0, Some(paper), Some(c));
+            g.line(&[(3.5, 4.5), (6.0, 4.5)], light, 1.1);
+            g.line(&[(5.0, 7.0), (9.5, 7.0)], light, 1.1);
+            g.p.rect_filled(Rect::from_min_max(g.pt(4.5, 8.5), g.pt(15.0, 15.0)), 1.6 * g.s, green);
+            g.text(9.75, 11.85, "PY", 6.2, paper, true, false);
+        }
+        Icon::PythonEditor => {
+            // A window: its title bar, a gutter of line numbers (dots) and lines of code, the
+            // second one indented.
+            g.rect(1.5, 2.0, 13.0, 12.0, Some(paper), Some(c));
+            g.line(&[(1.5, 4.8), (14.5, 4.8)], c, 1.1);
+            g.line(&[(5.0, 4.8), (5.0, 14.0)], light, 1.0);
+            for y in [7.0, 9.4, 11.8] {
+                g.circle(3.3, y, 0.55, Some(c), None);
+            }
+            g.line(&[(6.6, 7.0), (11.0, 7.0)], green, 1.2);
+            g.line(&[(8.2, 9.4), (13.0, 9.4)], c, 1.1);
+            g.line(&[(6.6, 11.8), (10.0, 11.8)], c, 1.1);
         }
     }
 }

@@ -2,7 +2,9 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (local-clock/DST and financial date boundaries; retained current upstream formula fixes) · **Target:** Microsoft Excel (Microsoft 365)
+
+NOW/TODAY and yearless date entry use local wall time with DST. Financial date validation uses the workbook epoch, rejects negative inputs before truncation, and preserves valid previous-coupon dates before the 1904 epoch. Upstream #1507 is retained.
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -242,6 +244,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | NOW/TODAY and yearless date entry use local wall time with DST. Financial date validation uses the workbook epoch, rejects negative inputs before truncation, and preserves valid previous-coupon dates before the 1904 epoch. Upstream #1507 is retained. |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |

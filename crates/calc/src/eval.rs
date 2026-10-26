@@ -1821,11 +1821,10 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
         }),
         BinOp::Concat => match (a.to_text(), b.to_text()) {
             (Ok(x), Ok(y)) => {
-                if x.len() + y.len() > 32767 * 4 {
-                    Value::Error(CellError::Value)
-                } else {
-                    Value::text(x + &y)
-                }
+                // Excel keeps a concatenation cut to the cell's 32,767 characters, counted in
+                // UTF-16 units like `LEN`, without an error; the old 4-bytes-per-character bound
+                // only capped memory, and a longer cell saves a file Excel can't open (#2635).
+                Value::text(gridcraft_core::addr::cut_to_cell_chars(x + &y))
             }
             (Err(e), _) | (_, Err(e)) => Value::Error(e),
         },

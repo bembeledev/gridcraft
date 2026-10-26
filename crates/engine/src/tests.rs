@@ -676,7 +676,12 @@ fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
 fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
     let mut s = s();
     let text = "&".repeat(1_000_000);
-    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
+    // The 32,767-character cell limit refuses a value this long through cell.set (#2635), but a
+    // file may still hold one; the over-limit cell is built on the model to test what copy makes
+    // of it.
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let sheet = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+    sheet.set_value(gridcraft_core::CellRef::new(0, 0), Value::text(text));
     let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
     assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
     assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
@@ -2030,6 +2035,68 @@ fn copies_of_a_long_named_sheet_get_unique_names() {
     let d = s.doc().unwrap();
     let names: Vec<&str> = d.wb.sheets.iter().map(|x| x.name.as_str()).collect();
     assert_eq!(names, ["Long name of a sheet 31 chars!", "Long name of a sheet 31 cha (2)", "Long name of a sheet 31 cha (3)"]);
+}
+
+#[test]
+fn cell_text_past_excels_limit_is_refused_and_concatenation_is_cut() {
+    // #2635: a cell holds 32,767 characters, counted in UTF-16 units like `LEN`. More through
+    // cell.set saved a file Excel can't open, so editing refuses it and names the cell; at the
+    // limit itself is fine.
+    let mut s = s();
+    let at_limit = "x".repeat(32_767);
+    s.execute("cell.set", json!({"cell": "B2", "input": at_limit})).unwrap();
+    let e = s.execute("cell.set", json!({"cell": "B3", "input": "x".repeat(32_768)})).unwrap_err().to_string();
+    assert!(e.contains("B3"), "{e}");
+    assert!(e.contains("32,767"), "{e}");
+    // The count is UTF-16 units, not characters: 16,384 characters outside the Basic
+    // Multilingual Plane take 32,768 units and are refused; 16,383 fit.
+    let astral = '\u{1F600}'.to_string().repeat(16_384);
+    assert!(s.execute("cell.set", json!({"cell": "C1", "input": astral})).is_err());
+    let astral = '\u{1F600}'.to_string().repeat(16_383);
+    s.execute("cell.set", json!({"cell": "C1", "input": astral})).unwrap();
+    // range.setValues refuses too — both its parsed path and the `parse: false` one, which
+    // stores the text without input_to_cell.
+    let e = s.execute("range.setValues", json!({"range": "A1", "values": [["x".repeat(40_000)]]})).unwrap_err().to_string();
+    assert!(e.contains("32,767"), "{e}");
+    let e = s.execute("range.setValues", json!({"range": "A1", "values": [["x".repeat(40_000)]], "parse": false})).unwrap_err().to_string();
+    assert!(e.contains("32,767"), "{e}");
+    // The limit counts what the cell will hold: a leading `'` marker is not stored, so a marker
+    // plus 32,767 units fits while a marker plus 32,768 does not.
+    s.execute("cell.set", json!({"cell": "E1", "input": format!("'{}", "x".repeat(32_767))})).unwrap();
+    assert_eq!(v(&s, "E1"), Value::Text("x".repeat(32_767).into()), "the marker itself is not stored");
+    assert!(s.execute("cell.set", json!({"cell": "E2", "input": format!("'{}", "x".repeat(32_768))})).is_err());
+    // Paste and replace count what they store, too: a marker plus 32,767 units fits, a plain
+    // 32,768 does not (paste's fallback would store that raw).
+    s.execute("edit.paste", json!({"at": "F1", "text": format!("'{}", "x".repeat(32_767))})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Text("x".repeat(32_767).into()));
+    assert!(s.execute("edit.paste", json!({"at": "F2", "text": "x".repeat(32_768)})).is_err());
+    s.execute("cell.set", json!({"cell": "G1", "input": "needle"})).unwrap();
+    s.execute("edit.replace", json!({"what": "needle", "with": format!("'{}", "x".repeat(32_767))})).unwrap();
+    assert_eq!(v(&s, "G1"), Value::Text("x".repeat(32_767).into()));
+    // `&` cuts to the limit like Excel's, instead of handing the cell 40,000 characters: the
+    // old 4-bytes-per-character bound only capped memory.
+    s.execute("cell.set", json!({"cell": "D1", "input": "=REPT(\"x\",20000)&REPT(\"x\",20000)"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Text("x".repeat(32_767).into()), "LEN(D1) would say 32767");
+}
+
+#[test]
+fn a_csv_field_past_the_cell_limit_is_kept_whole_with_a_warning() {
+    // #2635: text import keeps the field whole — splitting or cutting it loses the record's
+    // shape — and warns, because what it saves is a file Excel refuses.
+    let mut csv = b"id;text\r\n1;".to_vec();
+    csv.extend(std::iter::repeat_n(b'x', 100_000));
+    csv.extend(b"\r\n");
+    let (wb, warnings) = crate::io::open_bytes("long.csv", &csv).unwrap();
+    let cell = wb.sheets[0].cells.iter().find(|(at, _)| at.a1() == "B2").map(|(_, c)| &c.value);
+    assert_eq!(cell, Some(&Value::Text("x".repeat(100_000).into())), "the field is kept whole");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("32,767"), "{warnings:?}");
+    assert!(warnings[0].contains("B2"), "{warnings:?}");
+    assert!(warnings[0].contains("Excel may refuse or repair"), "{warnings:?}");
+    // A file inside the limit says nothing.
+    let (wb, warnings) = crate::io::open_bytes("short.csv", b"id;text\r\n1;hello\r\n".as_slice()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(wb.sheets[0].name, "short");
 }
 
 #[test]

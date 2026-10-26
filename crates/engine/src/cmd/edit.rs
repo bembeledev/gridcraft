@@ -118,16 +118,35 @@ pub fn specs() -> Vec<CommandSpec> {
 
 // ---------------------------------------------------------------- entry
 
+/// A cell's text holds at most Excel's 32,767 characters, counted in UTF-16 units like `LEN`
+/// ([`gridcraft_core::addr::MAX_CELL_CHARS`]): more saves a file Excel can't open (#2635).
+/// Editing refuses it and names the cell; text files keep the field whole and warn at open.
+pub(crate) fn check_cell_text(input: &str, at: CellRef) -> Result<()> {
+    let units = gridcraft_core::addr::utf16_len(input);
+    if units > gridcraft_core::addr::MAX_CELL_CHARS {
+        return Err(EngineError::Other(format!(
+            "{}: a cell holds at most 32,767 characters, and this is {} — Excel refuses more too",
+            at.a1(),
+            units
+        )));
+    }
+    Ok(())
+}
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+    let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
+    // The limit is on what the cell will hold: the parsing path stores `parse_input`'s text with
+    // a leading `'` marker stripped, while a text-format cell keeps everything as typed.
+    let text_for_limit = if fmt_is_text { input } else { input.strip_prefix('\'').unwrap_or(input) };
+    check_cell_text(text_for_limit, at)?;
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
         return Ok(if c.is_blank() { None } else { Some(c) });
     }
-    let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
@@ -335,6 +354,9 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     // text rather than the marker that makes it text. A formula is still a
                     // formula, which is what the ticket asks for and what `=` means in a cell.
                     Json::String(text) if !parse && !text.starts_with('=') => {
+                        // This branch stores the text without input_to_cell, so the cell limit
+                        // is checked here or a 32,768-unit string slips through it (#2635).
+                        check_cell_text(text, at)?;
                         let mut style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
                         // Line breaks still turn on Wrap Text, as typed input does.
                         if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
@@ -879,7 +901,15 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let mut cell = match input_to_cell(v, sheet, c, &mut cx.wb) {
+                    Ok(cell) => cell,
+                    // The fallback stores the text as given, marker included, so it must fit the
+                    // limit too; the parsed path validated the text it stores, marker stripped.
+                    Err(_) => {
+                        check_cell_text(v, c)?;
+                        Some(Cell::value(Value::text(v.as_str())))
+                    }
+                };
                 if let Some(cl) = cell.as_mut() {
                     numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
                 }
@@ -1640,7 +1670,15 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     replace_ci(&text, &what, &with)
                 };
-                let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
+                let cell = match input_to_cell(&new, si, c, &mut cx.wb) {
+                    Ok(cell) => cell,
+                    // The fallback stores the replaced text as given, so it must fit the limit
+                    // too; the parsed path validated the text it stores, marker stripped.
+                    Err(_) => {
+                        check_cell_text(&new, c)?;
+                        Some(Cell::value(Value::text(new.as_str())))
+                    }
+                };
                 let sh = cx.sheet_mut(si)?;
                 match cell {
                     Some(cell) => sh.set_cell(c, cell),

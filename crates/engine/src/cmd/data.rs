@@ -967,6 +967,14 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
+            // Checked before input_to_cell, whose error this loop would swallow into a cleared
+            // cell: an over-limit part must be refused, not dropped. The count is what
+            // input_to_cell would store — a leading `'` marker is stripped on the parsing path —
+            // so a marker plus exactly 32,767 units is not refused.
+            let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+            let fmt_is_text = cx.wb.styles.get(style).num_fmt.as_str() == "@";
+            let stored = if fmt_is_text { t.as_str() } else { t.strip_prefix('\'').unwrap_or(t.as_str()) };
+            super::edit::check_cell_text(stored, c)?;
             let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {

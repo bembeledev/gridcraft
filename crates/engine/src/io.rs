@@ -177,14 +177,47 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            let warnings = over_limit_text_warnings(&wb, name);
+            Ok((wb, warnings))
         }
         _ => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            let warnings = over_limit_text_warnings(&wb, name);
+            Ok((wb, warnings))
         }
+    }
+}
+
+/// Text files keep every field whole, so a field past Excel's 32,767-character cell limit comes
+/// in as one cell (#2635). The workbook keeps it and this warning says what saving it does:
+/// Excel refuses or repairs the file. Naming the first cell keeps the warning actionable.
+fn over_limit_text_warnings(wb: &gridcraft_model::Workbook, name: &str) -> Vec<String> {
+    let mut count = 0usize;
+    let mut first = None;
+    for sheet in wb.sheets.iter() {
+        for (at, cell) in sheet.cells.iter() {
+            if let gridcraft_core::Value::Text(t) = &cell.value
+                && gridcraft_core::addr::utf16_len(t) > gridcraft_core::addr::MAX_CELL_CHARS
+            {
+                count += 1;
+                if first.is_none() {
+                    first = Some(format!("{}!{}", sheet.name, at.a1()));
+                }
+            }
+        }
+    }
+    match count {
+        0 => vec![],
+        _ => vec![format!(
+            "{name}: {count} cell{} hold{} more than Excel's 32,767 characters and {} kept whole, as the text file had {}; Excel may refuse or repair the file this saves to (first: {})",
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "s" } else { "" },
+            if count == 1 { "was" } else { "were" },
+            if count == 1 { "it" } else { "them" },
+            first.unwrap_or_default()
+        )],
     }
 }
 
@@ -766,6 +799,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     #[test]
     fn save_fails_upfront_when_the_temp_name_is_taken() {
         // Another local user who can write the directory must not be able to point the

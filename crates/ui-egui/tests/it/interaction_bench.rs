@@ -3,13 +3,17 @@
 //! These tests use a fixed frame clock instead of wall time, so a busy shared runner cannot turn
 //! a performance check flaky. The oracle is the visible result: while a cell-range drag is held,
 //! the painted outline must catch the selected cells within [`DRAG_FRAME_BUDGET`] rendered frames.
+//!
+//! This counts frames, not paint cost. A large sheet can still lag because a frame is slow
+//! (#1334 measured about 520 ms p95 on 100,000 rows). The gate here only fails if the outline
+//! trails the selection for more than two frames after the pointer has moved.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef};
-use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use gridcraft_ui_egui::grid::Geo;
 
-type Harness = egui_kittest::Harness<'static, SheetApp>;
+type Harness = crate::common::Harness;
 
 const FPS: f32 = 120.0;
 const DT: f32 = 1.0 / FPS;
@@ -18,16 +22,16 @@ const DRAG_FRAME_BUDGET: usize = 2;
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(DT).build_ui_state(
-        |ui, app: &mut SheetApp| {
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(DT).build_ui_state(
+        |ui, app: &mut gridcraft_ui_egui::SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
-    // Exercise the opt-in path: a drag must stay responsive even when animations are enabled.
+    // A drag must stay responsive even when animations are enabled.
     h.state_mut().ui.animations = true;
     h.ctx.all_styles_mut(|style| style.animation_time = 0.1);
     h.step();

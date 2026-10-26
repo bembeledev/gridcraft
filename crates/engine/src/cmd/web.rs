@@ -352,8 +352,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 sh.cells
                     .row(row, new_range.start.col, new_range.end.col)
                     .any(|(c, cell)| {
-                        let at = (row, c);
-                        (at < (old.start.row, old.start.col) || at > (old.end.row, old.end.col))
+                        (row < old.start.row || row > old.end.row || c < old.start.col || c > old.end.col)
                             && (!cell.value.is_empty() || cell.formula.is_some())
                     })
             });
@@ -532,6 +531,27 @@ mod tests {
         // The formula and the old table are untouched.
         assert_eq!(a1(&s, "A3"), "2");
         assert_eq!(a1(&s, "A2"), "ABCD");
+    }
+
+    #[test]
+    fn refresh_refuses_to_overwrite_a_new_column_inside_the_old_rows() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The old table is A1:B2; the source now serves a wider table, and a user formula
+        // sits in the new column inside the old rows — the tuple-ordering blind spot.
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C2", "input": "=1+1"})).unwrap();
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th><th>Chg</th></tr><tr><td>A</td><td>1</td><td>2</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 0);
+        assert!(r["errors"][0]["error"].as_str().unwrap().contains("already holds data"));
+        assert_eq!(a1(&s, "C2"), "2");
     }
 
     #[test]

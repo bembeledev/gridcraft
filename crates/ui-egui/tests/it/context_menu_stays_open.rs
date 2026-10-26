@@ -103,6 +103,7 @@ fn a_quick_right_click_between_pixels_keeps_the_menu_open_on_retina() {
 }
 
 #[test]
+/// Hovering a long command keeps both its size and rendered position fixed.
 fn hovering_a_long_context_item_does_not_resize_the_menu() {
     let mut h = harness();
     quick_right_click(&mut h, "C5");
@@ -113,6 +114,7 @@ fn hovering_a_long_context_item_does_not_resize_the_menu() {
 
     let hovered_item = h.get_by_label("Filter by Selected Cell's Value").rect();
     assert_eq!(hovered_item.size(), item.size(), "hovering keeps the command's dimensions fixed");
+    assert_eq!(hovered_item.min, item.min, "hovering keeps the rendered command position fixed");
     let menu_after = h.state().grid.context_menu.unwrap();
     assert_eq!(menu_after, menu, "hovering does not move the menu anchor");
 }

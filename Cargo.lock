@@ -2023,6 +2023,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sys-locale",
  "thiserror 2.0.21",
  "zip 3.0.0",
 ]

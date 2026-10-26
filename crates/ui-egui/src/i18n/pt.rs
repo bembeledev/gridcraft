@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Remover Setas",
         "Show Formulas" => "Exibir Fórmulas",
         "Error Checking" => "Verificação de Erros",
+        "Circular References" => "Referências Circulares",
         "Evaluate Formula" => "Avaliar Fórmula",
         "Watch Window" => "Janela de Inspeção",
         "Calculation\nOptions" => "Opções de\nCálculo",
@@ -208,6 +209,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Visualização\nde Quebras de Página",
         "Page\nLayout" => "Layout\nde Página",
         "Formula Bar" => "Barra de Fórmulas",
+        "Name Box" => "Caixa de nome",
+        "Cell Editor" => "Editor de célula",
+        "Font Size" => "Tamanho da fonte",
         "Gridlines" => "Linhas de Grade",
         "Headings" => "Títulos",
         "Zoom" => "Zoom",
@@ -306,6 +310,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Escuro",
         "Sheet Options|View" => "Exibir",
         "Print" => "Imprimir",
+        "Print What" => "O que imprimir",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Clique para adicionar dados",
         "Add header" => "Adicionar cabeçalho",
@@ -332,6 +337,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Ir para o Cabeçalho",
         "Different First Page" => "Primeira Página Diferente",
         "Different Odd & Even Pages" => "Páginas Pares e Ímpares Diferentes",
+        "Scale with Document" => "Dimensionar com o Documento",
+        "Align with Page Margins" => "Alinhar com as Margens da Página",
         "Go to Footer" => "Ir para o Rodapé",
         "Ruler" => "Régua",
         // File › Backstage view.
@@ -414,6 +421,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Salvar pastas de trabalho .xlsx automaticamente após cada alteração",
         "Workbook calculation" => "Cálculo da pasta de trabalho",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
+        "Maximum Iterations:" => "Número Máximo de Iterações:",
+        "Maximum Change:" => "Alteração Máxima:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "O número máximo de iterações deve ser um número inteiro de 1 a 32767.",
+        "Maximum Change must be a number of 0 or more." => "A alteração máxima deve ser um número maior ou igual a 0.",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
         "OK" => "OK",
         "Cancel" => "Cancelar",
@@ -776,6 +787,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Doughnut" => "Rosca",
         "Area" => "Área",
         "Stacked Area" => "Área Empilhada",
+        "100% Stacked Area" => "Área 100% Empilhada",
         "Scatter" => "Dispersão",
         "Scatter with Lines" => "Dispersão com Linhas",
         "Radar" => "Radar",
@@ -974,7 +986,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "All sheets" => "Todas as planilhas",
         "More tabs" => "Mais abas",
-        "More commands on this tab" => "Mais comandos desta aba",
         _ => return None,
     })
 }

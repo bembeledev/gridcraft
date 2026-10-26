@@ -7,8 +7,8 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
-use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::theme::{self, Cat, Tokens};
+use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -35,13 +35,14 @@ const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
+/// Draws the title bar: drag/maximize, AutoSave toggle, Home/Save/Undo/Redo/More, search, share, comments and theme controls, with a centered truncated title.
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
-        let bg = ui.interact(rect, ui.id().with("drag_title"), Sense::click_and_drag());
+        let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
         if bg.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
@@ -58,7 +59,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
             ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
             let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
+            ui.painter().circle_filled(knob, 5.0, if on { t.on_accent } else { t.text_dim });
             if resp.on_hover_text(app.ui.language.tr("AutoSave: save after every change (workbooks saved to a file)")).clicked() {
                 app.toggle_autosave();
             }
@@ -80,7 +81,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
             // Named and marked enabled or not for assistive technology (and the UI tests).
             let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
-            undo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_undo, "Undo"));
+            undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
             if undo.clicked() && can_undo {
                 app.run_or_alert("edit.undo", json!({}));
             }
@@ -101,7 +102,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 }
             });
             let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
-            redo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_redo, "Redo"));
+            redo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_redo, "Redo"));
             if redo.clicked() && can_redo {
                 app.run_or_alert("edit.redo", json!({}));
             }
@@ -153,7 +154,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 let lang = app.ui.language;
                 let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, 26.0));
                 let dark = ui.ctx().theme() == egui::Theme::Dark;
-                theme.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, dark, lang.tr("Dark Mode")));
+                theme.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, dark, lang.tr("Dark Mode")));
                 if theme.clicked() {
                     act(app, "view.darkMode", json!({}));
                 }
@@ -210,19 +211,15 @@ fn paint_title(ui: &Ui, center: egui::Pos2, title: &str, dirty: bool, max_w: f32
     }
 }
 
-/// Draws the ribbon panel, keeping tabs and the active tab's controls reachable on narrow views.
+/// Draws the ribbon tabs and active tab's controls, keeping both reachable in a narrow window.
 ///
-/// The active tab is revealed when the tab set, language or available width changes; ordinary
-/// scrolling otherwise keeps the user's position. A contextual tab whose object is no longer
-/// selected returns to Home. Command overflow mounts the same controls instead of the strip,
-/// so each editor is drawn at most once per frame. Its open state is separate from egui's child-popup
-/// state, allowing font and colour pickers to remain mounted until they close. Opening an
-/// application dialog dismisses the overflow before handing over.
+/// The active tab scrolls into view when the tab set, language or available width changes; ordinary
+/// scrolling otherwise keeps the user's position. A More tabs menu exposes every standard and
+/// contextual tab. The active tab's card uses independent horizontal scroll state and edge arrows,
+/// while a contextual tab whose object is no longer selected returns to Home.
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
-    let open_id = egui::Id::new("ribbon_overflow_open");
-    let dialog_was_open_id = egui::Id::new("ribbon_overflow_dialog_was_open");
     let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
     // A contextual tab exists only while its object is selected (Excel hides Table Design once the
     // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
@@ -247,9 +244,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     })
                     .sum();
                 let overflow = tabs_width + 64.0 > ui.available_width();
-                let reveal_id = ui.id().with("ribbon_tabs_reveal");
+                let reveal_id = ui.scope_id().with("ribbon_tabs_reveal");
                 let reveal_key =
-                    egui::Id::new((app.ui.ribbon_tab.as_str(), tabs.clone(), app.ui.language.tr("More tabs"), ui.available_width().to_bits()));
+                    egui::Id::unique((app.ui.ribbon_tab.as_str(), tabs.clone(), app.ui.language.tr("More tabs"), ui.available_width().to_bits()));
                 let reveal_active = ui.ctx().data_mut(|data| {
                     let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
                     data.insert_temp(reveal_id, reveal_key);
@@ -269,7 +266,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             let label = app.ui.language.tr(tab);
                             let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                             let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, active, label));
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, label));
                             if active && reveal_active {
                                 resp.scroll_to_me(None);
                             }
@@ -315,7 +312,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                             .show(ui, &mut draw_tabs);
                         let arrow = ui.add(egui::Button::new(egui::RichText::new("▼").color(t.text)).min_size(vec2(30.0, 28.0)).fill(t.window));
-                        arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, app.ui.language.tr("More tabs")));
+                        arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("More tabs")));
                         arrow.clone().on_hover_text(app.ui.language.tr("More tabs"));
                         egui::Popup::menu(&arrow).show(|ui| {
                             for tab in &tabs {
@@ -332,134 +329,136 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
             });
             if collapsed {
-                let dialog_is_open = app.dialog.is_some();
-                let dialog_was_open = ui.data(|data| data.get_temp::<bool>(dialog_was_open_id)).unwrap_or(dialog_is_open);
-                let overflow_open = ui.data(|data| data.get_temp::<String>(open_id)).as_deref() == Some(app.ui.ribbon_tab.as_str());
-                let dismiss_overflow = overflow_open && dialog_is_open && !dialog_was_open;
-                if dismiss_overflow {
-                    egui::Popup::close_all(ui.ctx());
-                    ui.ctx().request_repaint();
-                }
-                ui.data_mut(|data| {
-                    data.insert_temp(dialog_was_open_id, dialog_is_open);
-                    if dismiss_overflow {
-                        data.remove::<String>(open_id);
-                    }
-                });
                 return;
             }
-            // Ribbon card.
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 88.0));
+            // Ribbon card. The row above it can be wider than a narrow window, so the card is kept
+            // within the window (with the margin it has on the left), or its right scroll arrow
+            // would be drawn off screen.
+            let left = ui.cursor().min.x;
+            let screen = ui.ctx().content_rect();
+            let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                // Keep the overflow anchor outside the clipped command strip.
-                let strip_width = (inner.width() - 34.0).max(0.0);
-                let popup_id = egui::Id::new(("ribbon_overflow", &app.ui.ribbon_tab));
-                let width_id = popup_id.with("content_width");
-                // Egui's memory tracks one popup. Keep this parent separately so opening
-                // a font/colour picker cannot replace it and unmount the picker next frame.
-                let mut popup_open = ui.data(|data| data.get_temp::<String>(open_id)).as_deref() == Some(app.ui.ribbon_tab.as_str());
-                let content_width = if popup_open {
-                    ui.data(|data| data.get_temp::<f32>(width_id)).unwrap_or(inner.width())
-                } else {
-                    let content = egui::ScrollArea::horizontal()
-                        .id_salt(("ribbon_content", &app.ui.ribbon_tab))
-                        .max_width(strip_width)
-                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| ribbon_controls(app, ui));
-                        });
-                    ui.data_mut(|data| data.insert_temp(width_id, content.content_size.x));
-                    content.content_size.x
-                };
-                if popup_open || content_width > strip_width + 1.0 {
-                    let rect = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top()), vec2(30.0, inner.height()));
-                    let label = app.ui.language.tr("More commands on this tab");
-                    let arrow = ui.put(rect, egui::Button::new("▼").fill(t.ribbon).stroke(Stroke::new(1.0, t.ribbon_border)));
-                    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-                    arrow.clone().on_hover_text(label);
-                    if arrow.clicked() {
-                        popup_open = !popup_open;
-                        egui::Popup::close_all(ui.ctx());
-                        // Draw each control once per frame, including the font-size text editor.
-                        ui.ctx().request_repaint();
-                    } else {
-                        let child_was_open = egui::Popup::is_any_open(ui.ctx());
-                        let response = egui::Popup::from_response(&arrow)
-                            .id(popup_id)
-                            .open_bool(&mut popup_open)
-                            .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
-                            .show(|ui| {
-                                let viewport = ui.ctx().content_rect();
-                                let width = (viewport.width() - 32.0).max(0.0);
-                                let height = (viewport.bottom() - arrow.rect.bottom() - 24.0).max(0.0);
-                                ui.set_width(width);
-                                // Reuse the real controls and their parameterized handlers. Groups
-                                // wrap; horizontal scrolling also accommodates an oversized group.
-                                egui::ScrollArea::both()
-                                    .id_salt("ribbon_overflow_body")
-                                    .min_scrolled_height(0.0)
-                                    .min_scrolled_width(0.0)
-                                    .max_height(height)
-                                    .show(ui, |ui| {
-                                        ui.horizontal_wrapped(|ui| ribbon_controls(app, ui));
-                                    });
-                            });
-                        // A click in a child menu can be outside the overflow's own rectangle.
-                        // Let that child handle its click, including the click that closes it.
-                        if !child_was_open
-                            && !egui::Popup::is_any_open(ui.ctx())
-                            && response.is_some_and(|response| response.response.clicked_elsewhere())
-                        {
-                            popup_open = false;
+                // One scroll state per tab: a tab opened after scrolling another starts at its
+                // left edge, and a tab keeps its own offset while others are used.
+                let tab = app.ui.ribbon_tab.clone();
+                let mut area = egui::ScrollArea::horizontal()
+                    .id_salt(("ribbon_scroll", tab.as_str()))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+                // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
+                // way to move it. An arrow click records the requested offset for the next frame.
+                // Expire it if this tab stops rendering, rather than replaying it much later.
+                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
+                    && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
+                {
+                    area = area.horizontal_scroll_offset(x);
+                }
+                let scroll = area.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                        match app.ui.ribbon_tab.as_str() {
+                            "Home" => home(app, ui),
+                            "Insert" => insert(app, ui),
+                            "Draw" => draw(app, ui),
+                            "Page Layout" => page_layout(app, ui),
+                            "Formulas" => formulas(app, ui),
+                            "Data" => data(app, ui),
+                            "Review" => review(app, ui),
+                            "View" => view(app, ui),
+                            "Automate" => automate(app, ui),
+                            "Table Design" => table_design(app, ui),
+                            "Chart Design" => chart_design(app, ui),
+                            crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
+                            _ => home(app, ui),
                         }
-                    }
-                }
-                // SheetApp dialogs take over from the ribbon. Child font/size/colour
-                // popups (including More Colors) are owned by these controls instead,
-                // so they keep the parent mounted while their interaction continues.
-                let dialog_is_open = app.dialog.is_some();
-                let dialog_was_open = ui.data(|data| data.get_temp::<bool>(dialog_was_open_id)).unwrap_or(dialog_is_open);
-                if popup_open && dialog_is_open && !dialog_was_open {
-                    popup_open = false;
-                    egui::Popup::close_all(ui.ctx());
-                    ui.ctx().request_repaint();
-                }
-                ui.data_mut(|data| {
-                    data.insert_temp(dialog_was_open_id, dialog_is_open);
-                    if popup_open {
-                        data.insert_temp(open_id, app.ui.ribbon_tab.clone());
-                    } else {
-                        data.remove::<String>(open_id);
-                    }
+                    });
                 });
+                scroll_arrows(ui, &t, tab.as_str(), scroll);
             });
         });
 }
 
-/// Draws the active tab's controls in the caller's horizontal or wrapping layout.
-///
-/// The caller must mount this at most once per frame, either in the strip or in overflow: controls
-/// own persistent editor and popup state. Both placements use the same handlers, preserving
-/// required parameters, clipboard integration and keytip behavior. Unknown tabs fall back to Home.
-fn ribbon_controls(app: &mut SheetApp, ui: &mut Ui) {
-    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-    match app.ui.ribbon_tab.as_str() {
-        "Home" => home(app, ui),
-        "Insert" => insert(app, ui),
-        "Draw" => draw(app, ui),
-        "Page Layout" => page_layout(app, ui),
-        "Formulas" => formulas(app, ui),
-        "Data" => data(app, ui),
-        "Review" => review(app, ui),
-        "View" => view(app, ui),
-        "Automate" => automate(app, ui),
-        "Table Design" => table_design(app, ui),
-        "Chart Design" => chart_design(app, ui),
-        crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
-        _ => home(app, ui),
+/// How much of the active tab's groups the ribbon card shows, recorded each frame for the scroll
+/// arrows and for tests.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RibbonOverflow {
+    /// Width of all the tab's groups.
+    pub content: f32,
+    /// Width of the card's content area.
+    pub visible: f32,
+    /// How far the groups are scrolled.
+    pub offset: f32,
+    /// Height of the tallest group (a column of small buttons) and of the content area.
+    pub content_height: f32,
+    pub visible_height: f32,
+}
+
+impl RibbonOverflow {
+    /// Returns the stable id for the ribbon overflow state.
+    fn id() -> egui::Id {
+        egui::Id::unique("ribbon_overflow")
+    }
+
+    /// Where an arrow click asks the next frame's `ScrollArea` to scroll to.
+    fn scroll_target_id(tab: &str) -> egui::Id {
+        egui::Id::unique(("ribbon_scroll_target", tab))
+    }
+
+    /// Last frame's overflow.
+    pub fn get(ctx: &egui::Context) -> RibbonOverflow {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    }
+
+    /// Whether the groups are wider than the card.
+    pub fn overflows(&self) -> bool {
+        self.content > self.visible + 0.5
+    }
+}
+
+/// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
+/// trackpad input over the card still does too).
+fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+    let inner = scroll.inner_rect;
+    let max = (scroll.content_size.x - inner.width()).max(0.0);
+    let overflow = RibbonOverflow {
+        content: scroll.content_size.x,
+        visible: inner.width(),
+        offset: scroll.state.clamped_offset().x,
+        content_height: scroll.content_size.y,
+        visible_height: inner.height(),
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::id(), overflow));
+    if !overflow.overflows() {
+        return;
+    }
+    let step = (inner.width() * 0.6).max(60.0);
+    let mut target = None;
+    for (left, show) in [(true, overflow.offset > 0.5), (false, overflow.offset < max - 0.5)] {
+        if !show {
+            continue;
+        }
+        let r = if left {
+            Rect::from_min_size(inner.left_top(), vec2(18.0, inner.height()))
+        } else {
+            Rect::from_min_size(pos2(inner.right() - 18.0, inner.top()), vec2(18.0, inner.height()))
+        };
+        let resp = ui.interact(r, ui.scope_id().with(("ribbon_scroll_arrow", left)), Sense::click());
+        ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.ribbon });
+        ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if left { Icon::Left } else { Icon::Right }, t.text);
+        let name = if left { "Scroll ribbon left" } else { "Scroll ribbon right" };
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+        if resp.on_hover_text(crate::i18n::current(ui.ctx()).tr(name)).clicked() {
+            target = Some(if left { overflow.offset - step } else { overflow.offset + step });
+        }
+    }
+    if let Some(x) = target {
+        let frame = ui.ctx().cumulative_frame_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x.clamp(0.0, max))));
+        ui.ctx().request_repaint();
     }
 }
 
@@ -536,11 +535,28 @@ fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
 }
 
+/// How many cells Formulas › Error Checking › Circular References lists.
+const CIRCULAR_MENU_LIMIT: usize = 100;
+
+/// The cell listed for each circular reference, for the Circular References submenu: each once, in the order
+/// the calculation found them, as (sheet index, cell, "Sheet!A1").
+fn circular_references(app: &SheetApp) -> Vec<(usize, String, String)> {
+    let Some(d) = app.session.active() else { return Vec::new() };
+    let mut seen = std::collections::HashSet::new();
+    d.calc
+        .circular
+        .iter()
+        .filter(|k| seen.insert(**k))
+        .filter_map(|(si, c)| d.wb.sheet(*si).map(|sh| (*si, c.a1(), format!("{}!{}", gridcraft_engine::formula::quote_sheet(&sh.name), c.a1()))))
+        .take(CIRCULAR_MENU_LIMIT)
+        .collect()
+}
+
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
     let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
     let t = Tokens::get(ui.ctx());
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
     let rect = Rect::from_center_size(at, text.size() + vec2(7.0, 3.0));
     painter.rect_filled(rect, 2.0, t.input_bg);
@@ -773,17 +789,17 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
     }
 }
 
-/// Draws Home's editing controls against the active cell style, in the strip or in overflow.
+/// Draws Home's editing controls: clipboard, font, alignment, number, style, cell and editing commands.
 ///
-/// Font, size, colour and format controls collect their parameters before dispatching commands;
-/// clipboard actions use the host clipboard hooks. Colour arrows expose translated accessible
-/// names so the same pickers can be reached in either layout.
+/// Font, size and colour controls collect their parameters before dispatching commands; clipboard
+/// actions use the host clipboard hooks. Narrow windows use the same horizontal scroll and edge
+/// arrows as the other ribbon tabs.
 fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Clipboard
     let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
-    paste.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Paste"));
+    paste.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Paste"));
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["edit.paste", "edit.pasteSpecial", "dialog:pasteSpecial"])
     {
@@ -846,7 +862,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
         }
         let fp_on = app.session.format_painter.is_some();
         let fp = toggle_button(ui, Icon::Brush, fp_on, "Format Painter (double-click to keep it on)");
-        fp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), fp_on, "Format Painter"));
+        fp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), fp_on, "Format Painter"));
         control_keytip(app, ui, &fp, "edit.formatPainter");
         if fp.double_clicked() {
             act(app, "edit.formatPainter", json!({"sticky": true}));
@@ -911,7 +927,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if b {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
             }
-            ba.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Border presets"));
+            ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
             egui::Popup::menu(&ba).show(|ui| {
                 for (label, preset) in [
                     ("Bottom Border", "bottom"),
@@ -942,7 +958,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fill = app.grid.last_fill.clone();
             let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
-            fa.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Fill Color")));
+            fa.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Fill Color")));
             control_keytip(app, ui, &fa, "home.fillColor");
             if f {
                 act(app, "home.fillColor", json!({"color": fill}));
@@ -963,7 +979,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fc = app.grid.last_font_color.clone();
             let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
-            ca.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Font Color")));
+            ca.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Font Color")));
             control_keytip(app, ui, &ca, "home.fontColor");
             if c {
                 act(app, "home.fontColor", json!({"color": fc}));
@@ -1225,17 +1241,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| {
-                for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-                    if ui.button(f).clicked() {
-                        act(app, "formulas.autoSum", json!({"function": f}));
-                    }
-                }
-                ui.separator();
-                if ui.button("More Functions…").clicked() {
-                    app.open_dialog("insertFunction", json!({}));
-                }
-            });
+            egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -1328,6 +1334,20 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
+/// Function dialog.
+fn autosum_menu(app: &mut SheetApp, ui: &mut Ui) {
+    for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
+        if ui.button(f).clicked() {
+            act(app, "formulas.autoSum", json!({"function": f}));
+        }
+    }
+    ui.separator();
+    if ui.button("More Functions…").clicked() {
+        app.open_dialog("insertFunction", json!({}));
+    }
+}
+
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
@@ -1365,7 +1385,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let t = Tokens::get(ui.ctx());
     let size = st.font.size;
     let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
-    let field = egui::Id::new("gridcraft.font_size_box");
+    let field = egui::Id::unique("gridcraft.font_size_box");
     let draft = field.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.clone());
     // One frame like the Font name box beside it (same fill, border, height and corners), with the
@@ -1384,6 +1404,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         .desired_width(text_rect.width() - 12.0)
         .show(&mut field_ui);
     let resp = out.response;
+    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label(app.ui.language.tr("Font Size")));
     control_keytip(app, ui, &resp, "home.fontSize");
     if invoke(app, "home.fontSize") {
         ui.memory_mut(|m| m.request_focus(field));
@@ -1413,7 +1434,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let looks = if resp.has_focus() || ui.rect_contains_pointer(frame) { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
     let stroke = if resp.has_focus() { visuals.selection.stroke } else { looks.bg_stroke };
     ui.painter().set(bg, egui::epaint::RectShape::new(frame, looks.corner_radius, looks.weak_bg_fill, stroke, egui::StrokeKind::Inside));
-    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Font Size"));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Font Size"));
     let sizes = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
     let labels: Vec<String> = sizes.iter().map(|s| format!("{}", *s as i32)).collect();
     let items: Vec<(&str, String)> = labels.iter().map(|s| (s.as_str(), s.clone())).collect();
@@ -1550,7 +1571,7 @@ fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
                 let (r, resp) = ui.allocate_exact_size(vec2(54.0, 38.0), Sense::click());
                 paint_table_swatch(ui, r, &wb, &name);
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(&name).clicked() {
                     act(app, cmd, json!({"style": name}));
@@ -1568,7 +1589,8 @@ fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, 
     let lk = gridcraft_engine::tables::look(style);
     let res = |c: Option<gridcraft_engine::model::Color>| c.and_then(|c| c.resolve(&wb.theme)).map(theme::color32);
     let p = ui.painter();
-    p.rect_filled(r, 0.0, Color32::WHITE);
+    let t = Tokens::get(ui.ctx());
+    p.rect_filled(r, 0.0, t.grid_bg);
     let rows = 5;
     let rh = r.height() / rows as f32;
     for i in 0..rows {
@@ -1588,14 +1610,15 @@ fn paint_table_swatch(ui: &Ui, r: Rect, wb: &gridcraft_engine::model::Workbook, 
         }
         for k in 0..3 {
             let x = rr.left() + 4.0 + k as f32 * (r.width() - 8.0) / 3.0;
-            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(Color32::BLACK) } else { Color32::from_gray(120) };
+            let col = if i == 0 { res(Some(lk.header_font)).unwrap_or(t.cell_text) } else { t.sheet_control_border };
             p.line_segment([pos2(x, rr.center().y), pos2(x + 10.0, rr.center().y)], Stroke::new(1.0, col));
         }
     }
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
 }
 
 fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
     ui.set_width(520.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     let groups: &[(&str, &[&str])] = &[
@@ -1645,17 +1668,17 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     .resolve(&wb.theme)
                     .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
                     .map(theme::color32)
-                    .unwrap_or(Color32::WHITE);
+                    .unwrap_or(t.grid_bg);
                 ui.painter().rect_filled(r, 0.0, fill);
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if !st.borders.bottom.is_none() {
-                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
+                    let c = st.borders.bottom.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
                     ui.painter().line_segment(
                         [r.left_bottom() + vec2(0.0, -1.5), r.right_bottom() + vec2(0.0, -1.5)],
                         Stroke::new(st.borders.bottom.style.width(), c),
                     );
                 }
-                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
+                let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(t.cell_text);
                 let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
@@ -1665,7 +1688,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     col,
                 );
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.clicked() {
                     act(app, "home.cellStyle", json!({"name": n}));
@@ -1679,6 +1702,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, checkbox, links, comments, text box, header/footer and symbols.
 fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
     control_keytip(app, ui, &__k, "insert.pivotTable");
@@ -1693,7 +1717,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
     let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
     anchor_keytip(app, ui, &pic, &["insert.picture"]);
-    pic.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Pictures"));
+    pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
     egui::Popup::menu(&pic).show(|ui| {
         for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
             if ui.button(label).clicked() {
@@ -1760,6 +1784,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                         ("100% Stacked Column", "column", "stacked100"),
                         ("Clustered Bar", "bar", ""),
                         ("Stacked Bar", "bar", "stacked"),
+                        ("100% Stacked Bar", "bar", "stacked100"),
                     ],
                 ),
                 (
@@ -1772,6 +1797,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                         ("Stacked Line", "line", "stacked"),
                         ("Area", "area", ""),
                         ("Stacked Area", "area", "stacked"),
+                        ("100% Stacked Area", "area", "stacked100"),
                     ],
                 ),
                 (Icon::ChartPie, "Pie or Doughnut", "insert.chart.pie", vec![("Pie", "pie", ""), ("Doughnut", "doughnut", "")]),
@@ -1876,7 +1902,8 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 "€", "£", "¥", "©", "®", "™", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Σ", "Ω", "°", "•", "…", "→", "←", "↑", "↓",
                 "✓", "★", "½", "¼",
             ] {
-                if ui.button(ch).clicked() {
+                // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
+                if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
                     act(app, "insert.symbol", json!({"char": ch}));
                 }
             }
@@ -2082,11 +2109,12 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("insertFunction", json!({}));
     }
-    let s = big_button(ui, Icon::Sum, "AutoSum", "AutoSum", true);
-    control_keytip(app, ui, &s, "formulas.autoSum");
+    let (s, sa) = big_split_button(ui, Icon::Sum, "AutoSum", "AutoSum");
+    control_keytip(app, ui, &sa, "formulas.autoSum");
     if s.clicked() {
         act(app, "formulas.autoSum", json!({}));
     }
+    egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
     for (label, cat, cid) in [
         ("Financial", "Financial", "formulas.financial"),
         ("Logical", "Logical", "formulas.logical"),
@@ -2108,7 +2136,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                     {
                         let locale = app.ui.language.formula_locale();
                         let name =
-                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet)).unwrap_or(n);
+                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet())).unwrap_or(n);
                         let desc = crate::formula_locale::description(n, locale, app.ui.language).unwrap_or_default();
                         if ui.button(name).on_hover_text(desc).clicked() {
                             app.run_or_alert("formulas.insertFunction", json!({"name": n}));
@@ -2132,14 +2160,36 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("defineName", json!({}));
         }
         let use_in = small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true);
-        anchor_keytip(app, ui, &use_in, &["formulas.pasteName"]);
+        anchor_keytip(app, ui, &use_in, &["dialog:pasteName"]);
         egui::Popup::menu(&use_in).show(|ui| {
-            let names: Vec<String> = app.session.active().map(|d| d.wb.names.iter().map(|n| n.name.clone()).collect()).unwrap_or_default();
-            for n in names {
-                if ui.button(&n).clicked() {
-                    let cur = app.editor.as_ref().map(|e| e.text.clone()).unwrap_or_else(|| "=".into());
-                    app.begin_edit(Some(format!("{cur}{n}")), false);
+            // The menu lists the names Paste Names lists; clicking one runs `formulas.useInFormula`, which puts it at the caret.
+            // Listed when the menu opens, and again only after the workbook changes.
+            let cache = egui::Id::unique("gridcraft.use_in_formula_names");
+            let key = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet()));
+            let cached = ui.ctx().data(|m| m.get_temp::<(Option<(u64, u64, usize)>, std::sync::Arc<Vec<String>>)>(cache)).filter(|(k, _)| *k == key);
+            let names = match cached {
+                Some((_, names)) => names,
+                None => {
+                    let names: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
+                        app.session
+                            .active()
+                            .map(|d| gridcraft_engine::cmd::formulas::pasteable_names(&d.wb).into_iter().map(|(n, _)| n).collect())
+                            .unwrap_or_default(),
+                    );
+                    ui.ctx().data_mut(|m| m.insert_temp(cache, (key, names.clone())));
+                    names
                 }
+            };
+            for n in names.iter() {
+                if ui.button(n).clicked() {
+                    app.run_or_alert("formulas.useInFormula", json!({"name": n}));
+                }
+            }
+            if !names.is_empty() {
+                ui.separator();
+            }
+            if ui.button(app.ui.language.tr("Paste Names…")).clicked() {
+                app.open_dialog("pasteName", json!({}));
             }
         });
         let __k = small_button(ui, Icon::Table, "Create from Selection", "Create from Selection", false);
@@ -2153,28 +2203,47 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
-            app.grid.trace = Some(r);
+            app.grid.trace = crate::grid::Trace::new(app, r);
         }
         if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
             && let Ok(r) = app.run("formulas.traceDependents", json!({}))
         {
-            app.grid.trace = Some(r);
+            app.grid.trace = crate::grid::Trace::new(app, r);
         }
         if small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false).clicked() {
             app.grid.trace = None;
         }
     });
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas (⌃`)", false);
+        let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas", false);
         control_keytip(app, ui, &__k, "formulas.showFormulas");
         if __k.clicked() {
             act(app, "formulas.showFormulas", json!({}));
         }
-        let __k = small_button(ui, Icon::Validation, "Error Checking", "Error Checking", false);
-        control_keytip(app, ui, &__k, "dialog:errorChecking");
-        if __k.clicked() {
+        let (ec, ec_arrow) = small_split_button(ui, Icon::Validation, "Error Checking", "Error Checking");
+        control_keytip(app, ui, &ec, "dialog:errorChecking");
+        if ec.clicked() {
             app.open_dialog("errorChecking", json!({}));
         }
+        egui::Popup::menu(&ec_arrow).show(|ui| {
+            let lang = app.ui.language;
+            if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
+                app.open_dialog("errorChecking", json!({}));
+            }
+            let circular = circular_references(app);
+            ui.add_enabled_ui(!circular.is_empty(), |ui| {
+                ui.menu_button(lang.tr("Circular References"), |ui| {
+                    egui::ScrollArea::vertical().id_salt("circular_references").max_height(400.0).show(ui, |ui| {
+                        for (sheet, cell, label) in circular {
+                            if ui.button(label).clicked() {
+                                act(app, "selection.set", json!({"range": cell, "sheet": sheet}));
+                                app.grid.ensure_visible = true;
+                            }
+                        }
+                    });
+                });
+            });
+        });
         let __k = small_button(ui, Icon::Calc, "Evaluate Formula", "Evaluate Formula", false);
         control_keytip(app, ui, &__k, "dialog:evaluateFormula");
         if __k.clicked() {
@@ -2217,8 +2286,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
 /// Draws Data's import, filtering, outline and analysis controls in the current ribbon layout.
 ///
 /// Actions needing user input open their existing dialogs. In particular, Data Analysis opens
-/// the ToolPak chooser rather than running a report; its translated accessible name remains
-/// available when these controls are hosted in overflow.
+/// the ToolPak chooser rather than running a report; its translated accessible name is exposed
+/// to assistive technology while the tab's controls are horizontally scrolled.
 fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
@@ -2342,10 +2411,13 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         if small_button(ui, Icon::Minus, "Hide Detail", "Hide Detail", false).clicked() {
             act(app, "data.hideDetail", json!({}));
         }
+        if small_button(ui, Icon::Settings, "Settings", "Outline Settings", false).clicked() {
+            app.open_dialog("outlineSettings", json!({}));
+        }
     });
     sep(ui);
     let analysis = big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false);
-    analysis.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Data Analysis")));
+    analysis.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Data Analysis")));
     if analysis.clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
@@ -2435,6 +2507,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Draws the View tab: view modes, ruler/gridlines/formula-bar/headings toggles, zoom, freeze panes, theme, animations, interface size and language.
 fn view(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let _ = t;
@@ -2503,6 +2576,16 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "view.zoomToSelection", json!({"viewWidth": r.width(), "viewHeight": r.height()}));
     }
     sep(ui);
+    let __k = big_button(ui, Icon::NewFile, "New\nWindow", "New Window", false);
+    control_keytip(app, ui, &__k, "view.newWindow");
+    if __k.clicked() {
+        act(app, "view.newWindow", json!({}));
+    }
+    let __k = big_button(ui, Icon::Table, "Arrange\nAll", "Arrange All", false);
+    control_keytip(app, ui, &__k, "view.arrangeAll");
+    if __k.clicked() {
+        app.open_dialog("arrangeAll", json!({}));
+    }
     let fp = big_button(ui, Icon::Freeze, "Freeze\nPanes", "Freeze Panes", true);
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["view.freezePanes", "view.freezeTopRow", "view.freezeFirstColumn"])
@@ -2521,21 +2604,27 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    switch_windows(app, ui);
     ui.vertical(|ui| {
-        ui.label(lang.tr("Display theme"));
+        let label_response = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
         let label = match mode {
             "system" => "System",
             "dark" => "Dark",
             _ => "Light",
         };
-        egui::ComboBox::from_id_salt("display_theme").selected_text(lang.tr(label)).width(88.0).show_ui(ui, |ui| {
-            for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
-                    act(app, "view.theme", json!({"mode": value}));
+        egui::ComboBox::from_id_salt("display_theme")
+            .selected_text(lang.tr(label))
+            .width(88.0)
+            .show_ui(ui, |ui| {
+                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                    if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
+                        act(app, "view.theme", json!({"mode": value}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label_response.id);
         let mut animations = app.ui.animations;
         let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
         if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
@@ -2545,7 +2634,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
+        let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
         let current = app.ui.interface_scale;
         let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
         egui::ComboBox::from_id_salt("ui_interface_size")
@@ -2557,22 +2646,44 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
                         act(app, "view.interfaceScale", json!({"percent": v}));
                     }
                 }
-            });
+            })
+            .response
+            .labelled_by(label.id);
     });
     // Interface language: settings live in the View tab, like Excel's Options. The label follows
     // the current language so it stays readable; the choices are always shown in their own script.
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new(lang.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
-        egui::ComboBox::from_id_salt("ui_language").width(120.0).selected_text(egui::RichText::new(lang.name()).font(theme::ui_font(12.5))).show_ui(
-            ui,
-            |ui| {
+        let label = ui.label(egui::RichText::new(lang.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
+        egui::ComboBox::from_id_salt("ui_language")
+            .width(120.0)
+            .selected_text(egui::RichText::new(lang.name()).font(theme::ui_font(12.5)))
+            .show_ui(ui, |ui| {
                 for l in crate::i18n::Language::ALL {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
                         act(app, "app.language.set", json!({"language": l.code()}));
                     }
                 }
-            },
-        );
+            })
+            .response
+            .labelled_by(label.id);
+    });
+}
+
+/// View › Switch Windows: the open workbooks, the active one checked and unsaved ones marked;
+/// choosing one brings it forward.
+fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
+    let anchor = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
+    anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
+    control_keytip(app, ui, &anchor, "view.switchWindows");
+    let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");
+    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+        for w in app.open_windows() {
+            let label = theme::available_text(ui, &format!("{}{}", if w.active { "✓ " } else { "    " }, w.label()));
+            if ui.add(egui::Button::selectable(w.active, label).min_size(vec2(220.0, 22.0))).clicked() {
+                act(app, "view.switchWindows", json!({"window": w.window}));
+                ui.close();
+            }
+        }
     });
 }
 
@@ -2595,6 +2706,11 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("journal", json!({}));
     }
+    let __k = big_button(ui, Icon::Script, "Check for\nUpdates…", "Look for a newer GridCraft release", false);
+    control_keytip(app, ui, &__k, "checkForUpdates");
+    if __k.clicked() {
+        app.run_or_alert("app.checkForUpdates", json!({}));
+    }
     let __k = big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false);
     control_keytip(app, ui, &__k, "about");
     if __k.clicked() {
@@ -2602,6 +2718,7 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     let Some((tname, header, totals, banded, banded_c, first, last, filter, style)) = app.session.active().and_then(|d| {
         let sh = d.wb.active()?;
@@ -2612,7 +2729,7 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     };
     ui.vertical(|ui| {
         ui.label(egui::RichText::new("Table Name:").small());
-        let field = egui::Id::new(("gridcraft.table_name", &tname));
+        let field = egui::Id::unique(("gridcraft.table_name", &tname));
         if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
             && name != tname
         {
@@ -2870,11 +2987,6 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         app.run_or_alert(id, p);
         app.grid.ensure_visible = true;
     }
-}
-
-#[allow(dead_code)]
-fn unused(_: &Tokens, _: Icon) {
-    let _ = icons::GREEN;
 }
 
 #[cfg(test)]

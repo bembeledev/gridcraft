@@ -146,6 +146,8 @@ pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
     Scale { min, max, step, logarithmic: false, reversed: false }
 }
 
+/// Applies valid manual bounds and units to the automatic scale; malformed ranges are repaired
+/// to a finite non-zero span so render coordinates remain usable.
 pub(crate) fn configured_scale(lo: f64, hi: f64, zero: bool, options: &gridcraft_model::ChartAxis) -> Scale {
     let mut scale = nice_scale(lo, hi, zero);
     if options.logarithmic {

@@ -29,18 +29,23 @@ fn group_kind(g: &El) -> Option<ChartKind> {
             }
         }
         "lineChart" | "line3DChart" => {
-            if stacked || pct {
-                ChartKind::LineStacked
-            } else {
-                let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                if !group_markers || (all_none && g.kids("ser").next().is_some()) { ChartKind::Line } else { ChartKind::LineMarkers }
+            let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+            let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+            let markers = group_markers && !(all_none && g.kids("ser").next().is_some());
+            match (stacked, pct, markers) {
+                (true, _, _) => ChartKind::LineStacked,
+                (_, true, true) => ChartKind::LineStacked100Markers,
+                (_, true, false) => ChartKind::LineStacked100,
+                (_, _, true) => ChartKind::LineMarkers,
+                (_, _, false) => ChartKind::Line,
             }
         }
         "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
         "doughnutChart" => ChartKind::Doughnut,
         "areaChart" | "area3DChart" => {
-            if stacked || pct {
+            if pct {
+                ChartKind::AreaStacked100
+            } else if stacked {
                 ChartKind::AreaStacked
             } else {
                 ChartKind::Area
@@ -218,6 +223,10 @@ fn axis_ids(g: &El) -> Vec<String> {
     g.kids("axId").filter_map(|a| a.attr("val")).map(str::to_string).collect()
 }
 
+/// Reads the supported chart groups, axes, and formatting from a DrawingML chart part.
+///
+/// Returns `None` when the XML has no chart, plot area, or recognized chart group. Unsupported
+/// extension content is not projected into the chart model.
 pub fn read_chart(root: &El) -> Option<Chart> {
     let chart = root.child("chart")?;
     let plot = chart.child("plotArea")?;
@@ -609,9 +618,10 @@ pub(crate) fn format_extension(format: &gridcraft_model::ChartFormat, prefix: &s
 enum G {
     Bar { bar: bool, grouping: &'static str },
     Line { stacked: bool, markers: bool },
+    Line100 { markers: bool },
     Pie,
     Doughnut,
-    Area { stacked: bool },
+    Area { grouping: &'static str },
     Scatter { lines: bool },
     Bubble,
     Radar,
@@ -628,10 +638,13 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::Line => G::Line { stacked: false, markers: false },
         ChartKind::LineMarkers => G::Line { stacked: false, markers: true },
         ChartKind::LineStacked => G::Line { stacked: true, markers: false },
+        ChartKind::LineStacked100 => G::Line100 { markers: false },
+        ChartKind::LineStacked100Markers => G::Line100 { markers: true },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
-        ChartKind::Area => G::Area { stacked: false },
-        ChartKind::AreaStacked => G::Area { stacked: true },
+        ChartKind::Area => G::Area { grouping: "standard" },
+        ChartKind::AreaStacked => G::Area { grouping: "stacked" },
+        ChartKind::AreaStacked100 => G::Area { grouping: "percentStacked" },
         ChartKind::Scatter => G::Scatter { lines: false },
         ChartKind::ScatterLines => G::Scatter { lines: true },
         ChartKind::Bubble => G::Bubble,
@@ -858,7 +871,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
-    let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
+    let line_like = matches!(g, G::Line { .. } | G::Line100 { .. } | G::Radar | G::Scatter { lines: true });
     if let Some(spec) = spec {
         let c = color.clone().unwrap_or_else(|| format!("<a:schemeClr val=\"accent{}\"/>", idx % 6 + 1));
         let width = if matches!(g, G::Bar { .. } | G::Area { .. }) { spec.border_width.unwrap_or(0.0) } else { spec.line_width.unwrap_or(2.25) };
@@ -875,14 +888,16 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
             }
         }
         let _ = write!(x, "<a:prstDash val=\"{}\"/></a:ln></c:spPr>", if spec.dashed { "dash" } else { "solid" });
-        if matches!(g, G::Line { .. } | G::Scatter { .. }) {
+        if matches!(g, G::Line { .. } | G::Line100 { .. } | G::Scatter { .. }) {
             // Styling a line must retain its marker-free default. Markers are opt-in on
             // ScatterLines, just as they are on a line chart without markers.
-            let marker = spec.marker.as_deref().unwrap_or(if matches!(g, G::Line { markers: false, .. } | G::Scatter { lines: true }) {
-                "none"
-            } else {
-                "circle"
-            });
+            let marker = spec.marker.as_deref().unwrap_or(
+                if matches!(g, G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true }) {
+                    "none"
+                } else {
+                    "circle"
+                },
+            );
             let marker = match marker {
                 "none" => "none",
                 "circle" => "circle",
@@ -939,7 +954,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock if spec.is_none() => {
+        G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true } | G::Stock if spec.is_none() => {
             x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
         }
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
@@ -970,7 +985,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
                 x.push_str(&cat_data(c, &s.values, wb, si));
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
-            if matches!(g, G::Line { .. }) {
+            if matches!(g, G::Line { .. } | G::Line100 { .. }) {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", smooth as u8);
             }
         }
@@ -1071,14 +1086,14 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
             if stacked { "stacked" } else { "standard" }
         ),
+        G::Line100 { .. } => {
+            format!("<c:lineChart><c:grouping val=\"percentStacked\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>")
+        }
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
-        G::Area { stacked } => format!(
-            "<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>",
-            if stacked { "stacked" } else { "standard" }
-        ),
+        G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
         G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
@@ -1178,7 +1193,10 @@ fn strip_book(link: &str) -> &str {
     link.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(link, |(_, rest)| rest)
 }
 
-/// Chart part XML for a model chart on sheet `si`.
+/// Serializes a model chart as DrawingML for sheet `si`.
+///
+/// The result is the chart-part XML only; relationships and the drawing anchor are written by
+/// the package layer. Model formatting with no corresponding DrawingML representation is omitted.
 pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
     let axis_xml = |a: &Ax<'_>| axis_xml(a, ch);
     let mut s = String::from(
@@ -1208,7 +1226,9 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if ch.kind == ChartKind::Combo {
         // Series without a kind of their own: the first is a column, the others lines (as drawn).
         let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
+        let is_line = |k: Option<ChartKind>| {
+            matches!(k.map(group_for), Some(G::Line { .. } | G::Line100 { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }))
+        };
         let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
         let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
         let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();

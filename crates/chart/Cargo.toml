@@ -18,7 +18,7 @@ resvg = { version = "0.48.1", default-features = false, features = ["text", "sys
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Font bytes only: the browser has no system font directory.
-epaint_default_fonts = { workspace = true }
+epaint_default_fonts = { workspace = true, features = ["monochrome_emoji_fonts"] }
 
 [dev-dependencies]
-epaint_default_fonts = { workspace = true }
+epaint_default_fonts = { workspace = true, features = ["monochrome_emoji_fonts"] }

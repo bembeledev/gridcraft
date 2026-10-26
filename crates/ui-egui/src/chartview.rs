@@ -8,7 +8,7 @@ use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
-use crate::theme;
+use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -64,14 +64,14 @@ impl ChartElement {
 }
 
 pub(crate) fn selected_element(ctx: &egui::Context, id: u32) -> ChartElement {
-    ctx.data_mut(|d| d.get_temp(egui::Id::new(("chart_element", id)))).unwrap_or_default()
+    ctx.data_mut(|d| d.get_temp(egui::Id::unique(("chart_element", id)))).unwrap_or_default()
 }
 
 pub(crate) fn select_element(ctx: &egui::Context, id: u32, element: ChartElement) {
     if selected_element(ctx, id) != element {
-        ctx.data_mut(|d| d.remove::<(ChartElement, Rect)>(egui::Id::new(("chart_element_bounds", id))));
+        ctx.data_mut(|d| d.remove::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", id))));
     }
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("chart_element", id)), element));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("chart_element", id)), element));
 }
 
 /// Hit test the primitives actually painted, including point markers, bars, lines and labels.
@@ -155,11 +155,56 @@ pub(crate) fn element_at(ui: &egui::Ui, wb: &Workbook, si: usize, chart: &gridcr
                     };
                     if colors.iter().any(|c| c[..3] == color[..3]) { all.union(rect) } else { all }
                 })
+            } else if matches!(element, ChartElement::Legend | ChartElement::TrendlineText) {
+                let role = if element == ChartElement::Legend { "legend" } else { "trendline" };
+                let text_group = prims.iter().fold(Rect::NOTHING, |group, primitive| match primitive {
+                    Prim::Text { x, y, text, size, bold, format, align, valign, rotation, role: text_role, .. } if text_role == role => {
+                        let text_size = ui.painter().layout_no_wrap(text.clone(), text_font(format, *size, *bold), Color32::BLACK).size();
+                        let ax = match align {
+                            HAlign::Left => 0.0,
+                            HAlign::Center => 0.5,
+                            HAlign::Right => 1.0,
+                        };
+                        let ay = match valign {
+                            VAlign::Top => 0.0,
+                            VAlign::Middle => 0.5,
+                            VAlign::Bottom => 1.0,
+                        };
+                        let local = Rect::from_min_size(pos2(-text_size.x * ax, -text_size.y * ay), text_size);
+                        let (sin, cos) = rotation.sin_cos();
+                        [local.left_top(), local.right_top(), local.right_bottom(), local.left_bottom()]
+                            .into_iter()
+                            .fold(Rect::NOTHING, |rect, point| {
+                                let point = pos2(*x + point.x * cos - point.y * sin, *y + point.x * sin + point.y * cos);
+                                rect.union(Rect::from_min_max(point, point))
+                            })
+                            .union(group)
+                    }
+                    _ => group,
+                });
+                if element == ChartElement::Legend && text_group != Rect::NOTHING {
+                    prims.iter().fold(text_group, |group, primitive| {
+                        let swatch = match primitive {
+                            Prim::Rect { x, y, w, h, .. } if *w <= 24.0 && *h <= 24.0 => Some(Rect::from_min_size(pos2(*x, *y), vec2(*w, *h))),
+                            Prim::Circle { cx, cy, r, .. } if *r <= 12.0 => Some(Rect::from_center_size(pos2(*cx, *cy), vec2(*r * 2.0, *r * 2.0))),
+                            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => {
+                                let rect = points_bounds(pts);
+                                (rect.width() <= 24.0 && rect.height() <= 24.0).then_some(rect)
+                            }
+                            _ => None,
+                        };
+                        swatch.filter(|rect| text_group.expand(20.0).intersects(*rect)).map_or(group, |rect| group.union(rect))
+                    })
+                } else if text_group == Rect::NOTHING {
+                    bounds
+                } else {
+                    text_group
+                }
             } else {
                 bounds
             };
             select_element(ui.ctx(), chart.id, element);
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("chart_element_bounds", chart.id)), (element, bounds)));
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(("chart_element_bounds", chart.id)), (element, bounds)));
             element
         };
         let color = match prim {
@@ -567,7 +612,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
             ShapeKind::Icon => {
                 if let Some(icon) = crate::icons::from_name(&sp.text) {
-                    crate::icons::paint(p, r, icon, if fill == Color32::TRANSPARENT { Color32::BLACK } else { fill });
+                    let t = Tokens::get(p.ctx());
+                    crate::icons::paint_on_sheet(p, r, icon, if fill == Color32::TRANSPARENT { t.cell_text } else { fill });
                 }
                 label = false;
             }
@@ -598,7 +644,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
-            p.rect_filled(r, 0.0, Color32::from_gray(230));
+            p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
         }
         if app.selected_chart == Some(im.id) {
             selection_frame(p, r);
@@ -620,7 +666,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         if app.selected_chart == Some(ch.id) {
             selection_frame(p, r);
-            if let Some((element, bounds)) = p.ctx().data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::new(("chart_element_bounds", ch.id))))
+            if let Some((element, bounds)) =
+                p.ctx().data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", ch.id))))
                 && element == selected_element(p.ctx(), ch.id)
                 && bounds.is_finite()
             {
@@ -637,9 +684,10 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                     && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
                 {
                     let rr = geo.range_rect(sh, rf.range());
+                    let color = Tokens::get(p.ctx()).ref_color(0, true);
                     for pane in geo.range_panes(rf.range()) {
                         let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
-                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, Color32::from_rgb(0x2E, 0x6F, 0xD8)), StrokeKind::Inside);
+                        pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
                     }
                 }
             }
@@ -711,7 +759,7 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             if !r.contains(tr.left_top()) {
                 continue; // overflowed the card; skip (no scroll yet)
             }
-            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            let (fill, fg) = if *on { (tk.accent, tk.on_accent) } else { (tk.hover, tk.text_dim) };
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
             cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
@@ -755,10 +803,11 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
+    let t = Tokens::get(p.ctx());
+    p.rect_stroke(r, 0.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Outside);
     for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+        p.circle_filled(c, 4.0, t.sheet_control_bg);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
     let _ = Align2::CENTER_CENTER;
 }

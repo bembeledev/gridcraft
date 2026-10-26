@@ -192,8 +192,10 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
                 .enumerate()
                 .map(|(i, s)| {
                     let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
+                        ChartKind::Line | ChartKind::LineStacked | ChartKind::LineStacked100 | ChartKind::Radar | ChartKind::ScatterLines => {
+                            Swatch::Line
+                        }
+                        ChartKind::LineMarkers | ChartKind::LineStacked100Markers => Swatch::LineMarker,
                         ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
                         _ => Swatch::Box,
                     };
@@ -589,13 +591,15 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
     let awx = chart.format.x_axis.line.width.unwrap_or(0.75);
     let ay = chart.format.y_axis.line.color.unwrap_or(AXIS);
     let awy = chart.format.y_axis.line.width.unwrap_or(0.75);
-    let ls = ctx.font_size("x_axis", LABEL_SIZE).max(ctx.font_size("y_axis", LABEL_SIZE));
+    let lsx = ctx.font_size("x_axis", LABEL_SIZE);
+    let lsy = ctx.font_size("y_axis", LABEL_SIZE);
+    let ls = lsx.max(lsy);
     let lh = ls * 1.4;
     let ylabels = y.labels();
     let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
     if !horizontal {
         let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
-        let y2labels = y2.map(|a| a.labels());
+        let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
             (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
@@ -620,12 +624,12 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
             if grid {
                 ctx.hline(plot.x, plot.right(), yy, gy, gwy);
             }
-            ctx.text_role("y_axis", plot.x - 4.0, yy, t, ls, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text_role("y_axis", plot.x - 4.0, yy, t, lsy, TEXT, HAlign::Right, VAlign::Middle);
         }
         if let (Some(a), Some(l)) = (y2, &y2labels) {
             for (v, t) in l {
                 let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
-                ctx.text_role("y_axis", plot.right() + 4.0, yy, t, ls, TEXT, HAlign::Left, VAlign::Middle);
+                ctx.text_role("y_axis", plot.right() + 4.0, yy, t, lsy, TEXT, HAlign::Left, VAlign::Middle);
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -658,7 +662,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                         chart.format.x_axis.major_tick.as_deref(),
                         &chart.format.x_axis.tick_line,
                     );
-                    ctx.text_role("x_axis", plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                    ctx.text_role("x_axis", plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
                 }
                 if chart.format.vertical_gridlines {
                     for j in (0..n).step_by(k) {
@@ -674,7 +678,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                         let (x0, x1) = (plot.x + start as f32 * cw, plot.x + stop as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
                             let t = ctx.fit(t, ls, x1 - x0 - 2.0);
-                            ctx.text_role("x_axis", (x0 + x1) / 2.0, top, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                            ctx.text_role("x_axis", (x0 + x1) / 2.0, top, &t, lsx, TEXT, HAlign::Center, VAlign::Top);
                         }
                         if first > 0 {
                             let edge = if reverse_categories { x1 } else { x0 };
@@ -700,7 +704,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 for (v, t) in ticks.iter().zip(&labels).step_by(k) {
                     let xx = plot.x + s.frac(*v) * plot.w;
                     tick(ctx, xx, plot.bottom(), true, chart.format.x_axis.major_tick.as_deref(), &chart.format.x_axis.tick_line);
-                    ctx.text_role("x_axis", xx, plot.bottom() + 3.0, t, ls, TEXT, HAlign::Center, VAlign::Top);
+                    ctx.text_role("x_axis", xx, plot.bottom() + 3.0, t, lsx, TEXT, HAlign::Center, VAlign::Top);
                 }
                 if s.min <= 0.0 && s.max >= 0.0 {
                     let xx = plot.x + s.frac(0.0) * plot.w;
@@ -736,7 +740,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 ctx.vline(xx, plot.y, plot.bottom(), gx, gwx);
             }
             if i % k == 0 {
-                ctx.text_role("x_axis", xx, plot.bottom() + 3.0, t, ls, TEXT, HAlign::Center, VAlign::Top);
+                ctx.text_role("x_axis", xx, plot.bottom() + 3.0, t, lsx, TEXT, HAlign::Center, VAlign::Top);
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -759,7 +763,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 chart.format.y_axis.major_tick.as_deref(),
                 &chart.format.y_axis.tick_line,
             );
-            ctx.text_role("y_axis", plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text_role("y_axis", plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, lsy, TEXT, HAlign::Right, VAlign::Middle);
         }
         if chart.format.vertical_gridlines {
             for j in (0..n).step_by(k) {
@@ -776,7 +780,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 let (y0, y1) = (plot.bottom() - stop as f32 * ch, plot.bottom() - start as f32 * ch);
                 if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
                     let t = ctx.fit(t, ls, w - 4.0);
-                    ctx.text_role("y_axis", (x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, HAlign::Center, VAlign::Middle);
+                    ctx.text_role("y_axis", (x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, lsy, TEXT, HAlign::Center, VAlign::Middle);
                 }
                 if first > 0 {
                     let edge = if chart.format.y_axis.reversed { y0 } else { y1 };
@@ -1294,8 +1298,10 @@ enum Fam {
     Col100,
     Line,
     LineStack,
+    Line100,
     Area,
     AreaStack,
+    Area100,
 }
 
 fn family(k: ChartKind) -> Fam {
@@ -1305,17 +1311,24 @@ fn family(k: ChartKind) -> Fam {
         ColumnStacked100 | BarStacked100 => Fam::Col100,
         Line | LineMarkers | Scatter | ScatterLines | Radar | Stock => Fam::Line,
         LineStacked => Fam::LineStack,
+        LineStacked100 | LineStacked100Markers => Fam::Line100,
         Area => Fam::Area,
         AreaStacked => Fam::AreaStack,
+        AreaStacked100 => Fam::Area100,
         _ => Fam::Col,
     }
+}
+
+/// Families stacked to 100%: each category's values are shares of its total.
+fn is_100(f: Fam) -> bool {
+    matches!(f, Fam::Col100 | Fam::Line100 | Fam::Area100)
 }
 
 fn is_col(f: Fam) -> bool {
     matches!(f, Fam::Col | Fam::ColStack | Fam::Col100)
 }
 fn is_line(f: Fam) -> bool {
-    matches!(f, Fam::Line | Fam::LineStack)
+    matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
 }
 
 fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
@@ -1328,25 +1341,38 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
 
-    // Totals for 100% stacking, per axis.
-    let mut totals = [vec![0.0f64; ncat], vec![0.0f64; ncat]];
+    // Totals for 100% stacking, per axis and family (100% columns, lines and areas stack apart).
+    let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
-        if fams.get(i) == Some(&Fam::Col100) {
-            let a = sec.get(i).copied().unwrap_or(false) as usize;
+        let fam = fams.get(i).copied().unwrap_or(Fam::Col);
+        if is_100(fam) {
+            let key = (sec.get(i).copied().unwrap_or(false), fam);
+            let p = match totals.iter().position(|(k, _)| *k == key) {
+                Some(p) => p,
+                None => {
+                    totals.push((key, vec![0.0; ncat]));
+                    totals.len() - 1
+                }
+            };
             for (j, v) in s.values.iter().take(ncat).enumerate() {
-                if let (Some(v), Some(t)) = (v, totals.get_mut(a).and_then(|t| t.get_mut(j))) {
+                if let (Some(v), Some(t)) = (v, totals.get_mut(p).and_then(|(_, t)| t.get_mut(j))) {
                     *t += v.abs();
                 }
             }
         }
     }
+    // A value's share of its category's total, for the 100% families.
+    let share = |key: (bool, Fam), j: usize, v: f64| {
+        let t = totals.iter().find(|(k, _)| *k == key).and_then(|(_, t)| t.get(j)).copied().unwrap_or(0.0);
+        if t > 0.0 { v / t } else { 0.0 }
+    };
     // Stack accumulators keyed by (axis, family): positive and negative running sums.
     let mut stacks: Vec<((bool, Fam), Vec<f64>, Vec<f64>)> = Vec::new();
     let mut spans: Vec<Vec<Option<(f64, f64)>>> = Vec::with_capacity(data.series.len());
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -1364,12 +1390,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             let v = s.values.get(j).copied().flatten();
             let span = match (si.and_then(|p| stacks.get_mut(p)), fam) {
                 (Some((_, pos, neg)), Fam::ColStack | Fam::Col100) => v.and_then(|v| {
-                    let v = if fam == Fam::Col100 {
-                        let t = totals.get(a as usize).and_then(|t| t.get(j)).copied().unwrap_or(0.0);
-                        if t > 0.0 { v / t } else { 0.0 }
-                    } else {
-                        v
-                    };
+                    let v = if fam == Fam::Col100 { share(key, j, v) } else { v };
                     let acc = if v >= 0.0 { pos.get_mut(j) } else { neg.get_mut(j) }?;
                     let base = *acc;
                     *acc += v;
@@ -1377,6 +1398,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }),
                 (Some((_, pos, _)), _) => {
                     let v = v.unwrap_or(0.0);
+                    let v = if is_100(fam) { share(key, j, v) } else { v };
                     pos.get_mut(j).map(|acc| {
                         let base = *acc;
                         *acc = clean(*acc + v);
@@ -1398,7 +1420,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             continue;
         }
         let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
-        let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
+        let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
@@ -1515,7 +1537,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         for (i, s) in data.series.iter().enumerate() {
             let fam = fams.get(i).copied().unwrap_or(Fam::Col);
             let want = match pass {
-                0 => matches!(fam, Fam::Area | Fam::AreaStack),
+                0 => matches!(fam, Fam::Area | Fam::AreaStack | Fam::Area100),
                 1 => is_col(fam),
                 _ => is_line(fam),
             };
@@ -1608,7 +1630,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         .collect();
                     draw_clipped_runs(ctx, &pts, s.color, plot, chart.format.series.get(&i).and_then(|s| s.smooth).unwrap_or(s.smooth));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
-                    if (k == ChartKind::LineMarkers || chart.format.series.get(&i).is_some_and(|s| s.marker.is_some())) && cw >= 3.0 {
+                    if (matches!(k, ChartKind::LineMarkers | ChartKind::LineStacked100Markers)
+                        || chart.format.series.get(&i).is_some_and(|s| s.marker.is_some()))
+                        && cw >= 3.0
+                    {
                         draw_markers(ctx, pts.iter().flatten().copied().filter(|p| inside_plot(*p, plot)), 3.5, s.color);
                     }
                     if labels_on {

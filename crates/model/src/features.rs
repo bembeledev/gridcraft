@@ -406,10 +406,13 @@ pub enum ChartKind {
     Line,
     LineMarkers,
     LineStacked,
+    LineStacked100,
+    LineStacked100Markers,
     Pie,
     Doughnut,
     Area,
     AreaStacked,
+    AreaStacked100,
     Scatter,
     ScatterLines,
     Bubble,
@@ -533,7 +536,11 @@ impl Trendline {
     }
 }
 
-/// User overrides for chart axes and visual formatting. Missing values retain automatic styling.
+/// User overrides for a chart axis.
+///
+/// `minimum`, `maximum`, and `major_unit` are optional numeric-axis overrides; invalid or
+/// incompatible values are ignored by the renderer. Logarithmic axes require positive bounds.
+/// `major_tick` and `minor_tick` accept the DrawingML values `in`, `out`, and `cross`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartAxis {
@@ -553,10 +560,13 @@ pub struct ChartAxis {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartStroke {
+    /// Explicit RGBA color; `None` keeps the renderer's automatic color.
     pub color: Option<[u8; 4]>,
+    /// Width in chart points; `None` keeps the automatic width and zero suppresses the stroke.
     pub width: Option<f32>,
 }
 
+/// Text overrides for one chart role, such as `title`, `x_axis`, or `legend`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartTextFormat {
@@ -575,6 +585,7 @@ pub struct ChartSurface {
     pub border_width: Option<f32>,
 }
 
+/// Visual overrides for one series; absent properties retain renderer or workbook defaults.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartSeriesFormat {
@@ -593,6 +604,10 @@ pub struct ChartSeriesFormat {
     pub smooth: Option<bool>,
 }
 
+/// Optional chart-wide, axis, series, and text formatting.
+///
+/// `series` is keyed by series index. Text roles inherit unspecified values from the `chart` role
+/// through [`Self::text_style`]. Missing values otherwise leave rendering defaults in effect.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartFormat {
@@ -614,7 +629,10 @@ pub struct ChartFormat {
 }
 
 impl ChartFormat {
-    /// Element-specific text formatting inherits unspecified properties from the whole chart.
+    /// Resolves a text role by taking its explicit properties, then falling back to `chart`.
+    ///
+    /// This is a shallow field-by-field merge; values absent from both roles remain unset so the
+    /// renderer can apply role-specific defaults.
     pub fn text_style(&self, role: &str) -> ChartTextFormat {
         let base = self.text.get("chart").cloned().unwrap_or_default();
         let local = self.text.get(role).cloned().unwrap_or_default();
@@ -1141,6 +1159,9 @@ pub struct PivotTable {
     pub values: Vec<PivotValue>,
     pub filters: Vec<PivotFilter>,
     pub layout: PivotLayout,
+    /// PivotTable Options › Data › Enable show details: Show Details lists a value cell's
+    /// source records only while this is on.
+    pub enable_show_details: bool,
     /// Grand total for each row (the "Grand Total" column), like Excel's "On for Rows".
     pub grand_totals_rows: bool,
     /// Grand total for each column (the "Grand Total" row), like Excel's "On for Columns".
@@ -1184,6 +1205,7 @@ impl Default for PivotTable {
             values: vec![],
             filters: vec![],
             layout: PivotLayout::Compact,
+            enable_show_details: true,
             grand_totals_rows: true,
             grand_totals_cols: true,
             subtotals: true,

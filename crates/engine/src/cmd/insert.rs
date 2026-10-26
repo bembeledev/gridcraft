@@ -65,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 1), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 1), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -92,7 +92,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat with axis, gridline, text, surface and series styling overrides}",
+            "{chart?: id, type?, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat with axis, gridline, text, surface and series styling overrides}",
             has_doc,
             chart_set
         ),
@@ -597,10 +597,13 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
+        ("line", "stacked100") => ChartKind::LineStacked100,
+        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
         ("area", "stacked") => ChartKind::AreaStacked,
+        ("area", "stacked100") => ChartKind::AreaStacked100,
         ("area", _) => ChartKind::Area,
         ("scatter", "lines") => ChartKind::ScatterLines,
         ("scatter", _) => ChartKind::Scatter,
@@ -1481,9 +1484,20 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let text = str_param(p, "text").unwrap_or("").to_string();
-    let author = str_param(p, "author").map(str::to_string).unwrap_or_else(|| s.prefs.user_name.clone());
+    let named = str_param(p, "author").map(str::to_string);
+    let author = named.clone().unwrap_or_else(|| s.prefs.user_name.clone());
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.comments.insert(
+        let comments = &mut cx.sheet_mut(sheet)?.comments;
+        // Writing a note on a cell that has one edits it, as Excel's Edit Note does: the box, the
+        // replies, the dates and who wrote it stay. A note replaces a comment and vice versa.
+        if let Some(c) = comments.get_mut(&at).filter(|c| c.threaded == threaded) {
+            c.text = text.clone();
+            if let Some(author) = named.clone() {
+                c.author = author;
+            }
+            return Ok(json!({"cell": at.a1()}));
+        }
+        comments.insert(
             at,
             Comment {
                 author: author.clone(),

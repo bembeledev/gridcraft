@@ -59,6 +59,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Lists comments and replies, links each to its cell, and runs delete/resolve/reopen/reply commands.
 fn comments(app: &mut SheetApp, ui: &mut Ui) {
     let Some(d) = app.session.active() else { return };
     let Some(sh) = d.wb.active() else { return };
@@ -66,12 +67,13 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     if list.is_empty() {
         ui.label(egui::RichText::new("No comments on this sheet yet. Select a cell and choose New Comment.").italics());
     }
+    let t = crate::theme::Tokens::get(ui.ctx());
     for (cell, c) in list {
         egui::Frame::NONE
-            .fill(if c.resolved { Color32::from_gray(240) } else { Color32::WHITE })
+            .fill(if c.resolved { t.window } else { t.menu_bg })
             .corner_radius(6.0)
             .inner_margin(8.0)
-            .stroke(egui::Stroke::new(1.0, Color32::from_gray(215)))
+            .stroke(egui::Stroke::new(1.0, t.separator))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
@@ -79,16 +81,16 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                         let _ = app.run("selection.set", json!({"cell": cell}));
                         app.grid.ensure_visible = true;
                     }
-                    ui.label(egui::RichText::new(&c.author).color(Color32::from_gray(90)));
+                    ui.label(egui::RichText::new(&c.author).color(t.text_dim));
                     if c.resolved {
-                        ui.label(egui::RichText::new("Resolved").small().color(Color32::from_rgb(0x10, 0x7C, 0x41)));
+                        ui.label(egui::RichText::new("Resolved").small().color(t.accent));
                     }
                 });
                 ui.label(&c.text);
                 for (a, txt) in &c.replies {
-                    ui.label(egui::RichText::new(format!("↳ {a}: {txt}")).color(Color32::from_gray(60)));
+                    ui.label(egui::RichText::new(format!("↳ {a}: {txt}")).color(t.text));
                 }
-                let key = egui::Id::new(("reply", &cell));
+                let key = egui::Id::unique(("reply", &cell));
                 let mut draft: String = ui.ctx().data_mut(|m| m.get_temp(key)).unwrap_or_default();
                 // Buttons first, right to left, so the reply field gets exactly the width they leave:
                 // a field sized by a guess wider than the row pushes the resizable pane wider every frame.
@@ -114,6 +116,7 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Adds the active cell, lists watch values and formulas, and removes watched entries.
 fn watch(app: &mut SheetApp, ui: &mut Ui) {
     if ui.button("Add Watch (active cell)").clicked()
         && let Some(d) = app.session.active()
@@ -134,7 +137,7 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
             ui.label(&cell);
             ui.label(w["value"].as_str().unwrap_or(""));
             ui.label(w["formula"].as_str().unwrap_or(""));
-            if ui.small_button("✕").clicked() {
+            if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 let _ = app.session.run("formulas.watchWindow", json!({"remove": cell}));
             }
             ui.end_row();
@@ -142,6 +145,7 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Lists the sheet's objects and dispatches select, bring-forward, send-backward and delete.
 fn selection(app: &mut SheetApp, ui: &mut Ui) {
     let list = app.session.run("arrange.selectionPane", json!({})).unwrap_or(Json::Null);
     let items = list.as_array().cloned().unwrap_or_default();
@@ -162,13 +166,14 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
             if ui.small_button("▼").on_hover_text("Send Backward").clicked() {
                 app.run_or_alert("arrange.sendBackward", json!({"kind": kind, "id": id}));
             }
-            if ui.small_button("✕").on_hover_text("Delete").clicked() {
+            if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
             }
         });
     }
 }
 
+/// Draws the chart format pane: title, type, legend, elements/axis titles, series colors, palettes/layouts and size.
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_chart else {
         ui.label(egui::RichText::new("Select a chart to format it.").italics());
@@ -186,7 +191,7 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
     ui.collapsing(crate::widgets::tr(ui, "Chart Settings"), |ui| {
         ui.collapsing(crate::widgets::tr(ui, "Chart Title"), |ui| {
-            let field = egui::Id::new(("gridcraft.chart_title", id));
+            let field = egui::Id::unique(("gridcraft.chart_title", id));
             if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
             }
@@ -194,11 +199,19 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
         ui.collapsing(crate::widgets::tr(ui, "Chart Type"), |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (l, k, s) in [
-                    ("Column", "column", ""),
-                    ("Stacked", "column", "stacked"),
-                    ("Bar", "bar", ""),
-                    ("Line", "line", "markers"),
+                    ("Clustered Column", "column", ""),
+                    ("Stacked Column", "column", "stacked"),
+                    ("100% Stacked Column", "column", "stacked100"),
+                    ("Clustered Bar", "bar", ""),
+                    ("Stacked Bar", "bar", "stacked"),
+                    ("100% Stacked Bar", "bar", "stacked100"),
+                    ("Line with Markers", "line", "markers"),
+                    ("Stacked Line", "line", "stacked"),
+                    ("100% Stacked Line", "line", "stacked100"),
+                    ("100% Stacked Line with Markers", "line", "stacked100Markers"),
                     ("Area", "area", ""),
+                    ("Stacked Area", "area", "stacked"),
+                    ("100% Stacked Area", "area", "stacked100"),
                     ("Pie", "pie", ""),
                     ("Doughnut", "doughnut", ""),
                     ("Scatter", "scatter", ""),
@@ -231,14 +244,14 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
             }
             ui.horizontal(|ui| {
                 ui.label("Horizontal axis title:");
-                let field = egui::Id::new(("gridcraft.chart_x_title", id));
+                let field = egui::Id::unique(("gridcraft.chart_x_title", id));
                 if let Some(xt) = crate::widgets::committed_text(ui, field, chart.x_title.as_deref().unwrap_or(""), None) {
                     app.run_or_alert("chart.set", json!({"chart": id, "xTitle": if xt.is_empty() { Json::Null } else { json!(xt) }}));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Vertical axis title:");
-                let field = egui::Id::new(("gridcraft.chart_y_title", id));
+                let field = egui::Id::unique(("gridcraft.chart_y_title", id));
                 if let Some(yt) = crate::widgets::committed_text(ui, field, chart.y_title.as_deref().unwrap_or(""), None) {
                     app.run_or_alert("chart.set", json!({"chart": id, "yTitle": if yt.is_empty() { Json::Null } else { json!(yt) }}));
                 }
@@ -289,7 +302,7 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
     });
     chart_section(ui, "Size", |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
-        let draft = egui::Id::new(("gridcraft.chart_size_draft", id));
+        let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
         let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
         let a = ui.add(egui::DragValue::new(&mut w).prefix(format!("{} ", crate::widgets::tr(ui, "Width"))).range(40.0..=4000.0));
         let b = ui.add(egui::DragValue::new(&mut h).prefix(format!("{} ", crate::widgets::tr(ui, "Height"))).range(40.0..=4000.0));
@@ -312,7 +325,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
     use gridcraft_engine::model::ChartKind;
     let id = chart.id;
     let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_else(|| gridcraft_engine::model::Theme::default().colors);
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("chart_theme_colors"), colors));
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("chart_theme_colors"), colors));
     let names = app
         .session
         .active()
@@ -350,7 +363,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
         }
     });
     select_element(ui.ctx(), id, selected);
-    let page_id = ui.id().with(("chart_pane_page", id, selected));
+    let page_id = ui.scope_id().with(("chart_pane_page", id, selected));
     let mut page = ui
         .ctx()
         .data_mut(|d| d.get_temp::<u8>(page_id))
@@ -365,7 +378,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
             let response = ui.add(egui::Button::new("").selected(active).min_size(vec2(36.0, 30.0)));
             let accessible_label = crate::widgets::tr(ui, label);
             let enabled = ui.is_enabled();
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, accessible_label));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, accessible_label));
             let t = Tokens::get(ui.ctx());
             crate::icons::paint(
                 ui.painter(),
@@ -421,7 +434,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                 let numeric = if x { scatter || bars } else { !bars };
                 ui.label(crate::widgets::tr(ui, "Axis Title"));
                 let title = if x { chart.x_title.as_deref() } else { chart.y_title.as_deref() }.unwrap_or("");
-                if let Some(title) = crate::widgets::committed_text(ui, ui.id().with("axis_title"), title, None) {
+                if let Some(title) = crate::widgets::committed_text(ui, ui.scope_id().with("axis_title"), title, None) {
                     let key = if x { "xTitle" } else { "yTitle" };
                     let mut params = json!({"chart":id});
                     params[key] = if title.is_empty() { Json::Null } else { json!(title) };
@@ -498,9 +511,12 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                             }
                         });
                         ui.label(crate::widgets::tr(ui, "Number Format (blank = linked to source)"));
-                        if let Some(code) =
-                            crate::widgets::committed_text(ui, ui.id().with("axis_number_format"), axis.number_format.as_deref().unwrap_or(""), None)
-                        {
+                        if let Some(code) = crate::widgets::committed_text(
+                            ui,
+                            ui.scope_id().with("axis_number_format"),
+                            axis.number_format.as_deref().unwrap_or(""),
+                            None,
+                        ) {
                             axis.number_format = if code.trim().is_empty() { None } else { Some(code) };
                             changed = true;
                         }
@@ -554,7 +570,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                         | ChartKind::Combo
                 );
                 if page == 0 && lines {
-                    let marker_id = ui.id().with("line_or_marker");
+                    let marker_id = ui.scope_id().with("line_or_marker");
                     let mut marker = ui.ctx().data_mut(|d| d.get_temp::<bool>(marker_id)).unwrap_or(false);
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut marker, false, crate::widgets::tr(ui, "Chart|Line"));
@@ -663,7 +679,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
             }
             ChartElement::Title if page == 1 => {
                 ui.label(crate::widgets::tr(ui, "Title Text"));
-                if let Some(title) = crate::widgets::committed_text(ui, ui.id().with("title"), chart.title.as_deref().unwrap_or(""), None) {
+                if let Some(title) = crate::widgets::committed_text(ui, ui.scope_id().with("title"), chart.title.as_deref().unwrap_or(""), None) {
                     app.run_or_alert("chart.set", json!({"chart":id,"title":title}));
                 }
             }
@@ -685,7 +701,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
             }
             ChartElement::TrendlineText => {
                 if page == 1 {
-                    let key = ui.id().with(("trendline_series", id));
+                    let key = ui.scope_id().with(("trendline_series", id));
                     let mut i = ui.ctx().data_mut(|d| d.get_temp::<usize>(key)).unwrap_or(0).min(chart.series.len().saturating_sub(1));
                     egui::ComboBox::from_id_salt("trendline_series")
                         .selected_text(format!("{} {}", crate::widgets::tr(ui, "Chart|Series"), i + 1))
@@ -723,7 +739,7 @@ fn chart_trendline_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_e
         return;
     }
     ui.collapsing(crate::widgets::tr(ui, "Trendline"),|ui| {
-        let id=ui.id().with(("trendline_draft",chart.id,series));
+        let id=ui.scope_id().with(("trendline_draft",chart.id,series));
         let mut draft=ui.ctx().data_mut(|d|d.get_temp::<(String,u32,u32,bool,bool)>(id)).unwrap_or(("linear".into(),2,2,false,false));
         for (key,label) in [("linear","Linear"),("exponential","Exponential"),("logarithmic","Logarithmic"),("power","Power"),("polynomial","Polynomial"),("movingAverage","Moving Average")] {
             ui.radio_value(&mut draft.0,key.to_string(),crate::widgets::tr(ui,label));
@@ -847,7 +863,7 @@ fn chart_color(ui: &mut Ui, label: &str, value: &mut Option<[u8; 4]>) -> bool {
             ui.menu_button(egui::RichText::new("■  ▾").color(preview).size(18.0), |ui| {
                 let colors = ui
                     .ctx()
-                    .data_mut(|d| d.get_temp::<[u32; 12]>(egui::Id::new("chart_theme_colors")))
+                    .data_mut(|d| d.get_temp::<[u32; 12]>(egui::Id::unique("chart_theme_colors")))
                     .unwrap_or_else(|| gridcraft_engine::model::Theme::default().colors);
                 if let Some(color) = crate::widgets::color_palette(ui, &colors, crate::widgets::tr(ui, "Automatic")) {
                     *value = if color == "none" {
@@ -863,7 +879,7 @@ fn chart_color(ui: &mut Ui, label: &str, value: &mut Option<[u8; 4]>) -> bool {
                 ui.separator();
                 ui.label(crate::widgets::tr(ui, "HEX Color"));
                 let text = value.map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).unwrap_or_default();
-                if let Some(text) = crate::widgets::committed_text(ui, ui.id().with("hex"), &text, Some(120.0)) {
+                if let Some(text) = crate::widgets::committed_text(ui, ui.scope_id().with("hex"), &text, Some(120.0)) {
                     if text.trim().is_empty() {
                         *value = None;
                         changed = true;
@@ -877,7 +893,7 @@ fn chart_color(ui: &mut Ui, label: &str, value: &mut Option<[u8; 4]>) -> bool {
             .on_hover_text(crate::widgets::tr(ui, "Choose Color…"));
         });
         if let Some(mut c) = *value {
-            let slider_id = ui.id().with("transparency_draft");
+            let slider_id = ui.scope_id().with("transparency_draft");
             let mut percent = ui.ctx().data_mut(|d| d.get_temp::<f64>(slider_id)).unwrap_or((255 - c[3]) as f64 * 100.0 / 255.0);
             let response = ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%").text(crate::widgets::tr(ui, "Transparency")));
             let commit = response.drag_stopped() || (response.changed() && !ui.input(|i| i.pointer.any_down()));
@@ -916,7 +932,8 @@ fn chart_number(ui: &mut Ui, label: &str, value: &mut Option<f64>) -> bool {
                 },
             );
             let text = value.map(|v| v.to_string()).unwrap_or_default();
-            if let Some(draft) = crate::widgets::committed_text(ui, ui.id().with("value"), &text, Some(62.0)) {
+            let accessible_label = crate::widgets::tr(ui, short);
+            if let Some(draft) = crate::widgets::committed_text_labeled(ui, ui.scope_id().with("value"), &text, Some(62.0), accessible_label) {
                 let draft = draft.trim().replace(',', ".");
                 if draft.is_empty() {
                     *value = None;

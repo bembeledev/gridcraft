@@ -65,6 +65,11 @@ fn stroke(s: Option<(Rgba, f32)>) -> String {
         .unwrap_or_else(|| "stroke=\"none\"".into())
 }
 
+/// Exports the rendered chart as standalone SVG, without worksheet chrome.
+///
+/// `scale` multiplies the SVG's declared dimensions while its view box remains in chart units.
+/// Transparency clears the chart and plot area fills but leaves chart elements intact. Invalid
+/// anchors or scales outside `0.25..=8` return an error.
 pub fn export_svg(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale: f32, transparent: bool) -> Result<String, String> {
     let (w, h) = (chart.anchor.width, chart.anchor.height);
     if !w.is_finite() || !h.is_finite() || w < 1.0 || h < 1.0 || w > 1e5 || h > 1e5 || !scale.is_finite() || !(0.25..=8.0).contains(&scale) {
@@ -152,6 +157,10 @@ pub fn export_svg(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale:
     Ok(svg)
 }
 
+/// Rasterizes the standalone SVG chart into PNG pixels.
+///
+/// The scaled output is limited to 16 megapixels and 8192 pixels per side. Native builds use
+/// installed fonts; if none are available, PNG export returns an error while SVG remains usable.
 pub fn export_png(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale: f32, transparent: bool) -> Result<Vec<u8>, String> {
     let svg = export_svg(chart, data, measure, scale, transparent)?;
     let width = (chart.anchor.width * scale).ceil() as u32;

@@ -485,6 +485,7 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
     format.overlap = bar_chart.and_then(|group| group.child_val("overlap")).and_then(|s| s.parse().ok());
     merge_native_surface(&mut format.plot_area, plot.child("spPr"));
     merge_native_surface(&mut format.chart_area, root.child("spPr"));
+    sanitize_chart_format(&mut format);
     format
 }
 
@@ -629,6 +630,79 @@ mod native_merge_tests {
     }
 
     #[test]
+    fn native_reader_discards_chart_format_values_rejected_by_chart_set() {
+        let root = crate::xml::parse(b"<chartSpace><spPr><ln w=\"266700\"/></spPr></chartSpace>").unwrap();
+        let plot = crate::xml::parse(
+            b"<plotArea><barChart><barDir val=\"col\"/><grouping val=\"clustered\"/><ser><idx val=\"0\"/><order val=\"0\"/><spPr><ln w=\"inf\"/></spPr><marker><symbol val=\"circle\"/><size val=\"73\"/><spPr><ln w=\"266700\"/></spPr></marker></ser><gapWidth val=\"NaN\"/><overlap val=\"500\"/></barChart></plotArea>",
+        )
+        .unwrap();
+        let series = [gridcraft_model::Series::default()];
+
+        let loaded = read_format(&root, &plot, &series);
+
+        assert_eq!(loaded.gap_width, None);
+        assert_eq!(loaded.overlap, None);
+        assert_eq!(loaded.chart_area.border_width, None);
+        let series = loaded.series.get(&0).unwrap();
+        assert_eq!(series.border_width, None);
+        assert_eq!(series.marker_size, None);
+        assert_eq!(series.marker_border_width, None);
+    }
+
+    #[test]
+    fn custom_reader_discards_chart_format_values_rejected_by_chart_set() {
+        let custom = gridcraft_model::ChartFormat {
+            x_axis: gridcraft_model::ChartAxis {
+                minimum: Some(-1e101),
+                maximum: Some(8.0),
+                major_unit: Some(1e101),
+                minor_unit: Some(0.0),
+                number_format: Some("x".repeat(257)),
+                major_tick: Some("invalid".into()),
+                ..Default::default()
+            },
+            legend_position: Some([2.0, 0.5]),
+            gap_width: Some(501.0),
+            overlap: Some(101.0),
+            chart_area: gridcraft_model::ChartSurface { border_width: Some(21.0), ..Default::default() },
+            text: [("title".to_string(), gridcraft_model::ChartTextFormat { size: Some(145.0), name: Some("x".repeat(257)), ..Default::default() })]
+                .into_iter()
+                .collect(),
+            series: [(
+                0,
+                gridcraft_model::ChartSeriesFormat {
+                    line_width: Some(21.0),
+                    border_width: Some(f32::INFINITY),
+                    marker_size: Some(1.0),
+                    marker_border_width: Some(21.0),
+                    marker: Some("invalid".into()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let root_xml = format!("<chartSpace>{}</chartSpace>", format_extension(&custom, "c"));
+        let root = crate::xml::parse(root_xml.as_bytes()).unwrap();
+
+        let loaded = read_custom_format(&root).unwrap();
+
+        assert_eq!(loaded.x_axis.minimum, None);
+        assert_eq!(loaded.x_axis.maximum, Some(8.0));
+        assert_eq!(loaded.x_axis.major_unit, None);
+        assert_eq!(loaded.x_axis.minor_unit, None);
+        assert_eq!(loaded.x_axis.number_format, None);
+        assert_eq!(loaded.x_axis.major_tick, None);
+        assert_eq!(loaded.legend_position, None);
+        assert_eq!(loaded.gap_width, None);
+        assert_eq!(loaded.overlap, None);
+        assert_eq!(loaded.chart_area.border_width, None);
+        assert!(loaded.text.is_empty());
+        assert_eq!(loaded.series.get(&0), None);
+    }
+
+    #[test]
     fn native_surface_merges_only_components_present_in_xml() {
         let mut surface = gridcraft_model::ChartSurface { fill: Some([10, 20, 30, 255]), border: Some([40, 50, 60, 255]), border_width: Some(3.0) };
         let native = crate::xml::parse(b"<spPr><ln w=\"25400\"/></spPr>").unwrap();
@@ -653,18 +727,71 @@ mod native_merge_tests {
     }
 }
 
+fn sanitize_width(width: &mut Option<f32>) {
+    *width = width.filter(|value| value.is_finite() && (0.0..=20.0).contains(value));
+}
+
 fn sanitize_axis_values(axis: &mut gridcraft_model::ChartAxis) {
-    axis.minimum = axis.minimum.filter(|value| value.is_finite());
-    axis.maximum = axis.maximum.filter(|value| value.is_finite());
-    axis.major_unit = axis.major_unit.filter(|value| value.is_finite() && *value > 0.0);
-    axis.minor_unit = axis.minor_unit.filter(|value| value.is_finite() && *value > 0.0);
+    let bound_ok = |value: f64| value.is_finite() && value.abs() <= 1e100 && (!axis.logarithmic || value > 0.0);
+    axis.minimum = axis.minimum.filter(|value| bound_ok(*value));
+    axis.maximum = axis.maximum.filter(|value| bound_ok(*value));
+    if axis.minimum.zip(axis.maximum).is_some_and(|(minimum, maximum)| maximum <= minimum) {
+        axis.minimum = None;
+        axis.maximum = None;
+    }
+    axis.major_unit = axis.major_unit.filter(|value| value.is_finite() && *value > 0.0 && *value <= 1e100);
+    axis.minor_unit = axis.minor_unit.filter(|value| value.is_finite() && *value > 0.0 && *value <= 1e100);
+    axis.number_format = axis.number_format.take().filter(|value| value.len() <= 256);
+    axis.major_tick = axis.major_tick.take().filter(|value| matches!(value.as_str(), "none" | "in" | "out" | "cross"));
+    axis.minor_tick = axis.minor_tick.take().filter(|value| matches!(value.as_str(), "none" | "in" | "out" | "cross"));
+    sanitize_width(&mut axis.line.width);
+    sanitize_width(&mut axis.tick_line.width);
+}
+
+fn sanitize_chart_format(format: &mut gridcraft_model::ChartFormat) {
+    sanitize_axis_values(&mut format.x_axis);
+    sanitize_axis_values(&mut format.y_axis);
+    let position_ok = |position: [f32; 2]| position.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value));
+    format.legend_position = format.legend_position.filter(|position| position_ok(*position));
+    format.trendline_label_position = format.trendline_label_position.filter(|position| position_ok(*position));
+    sanitize_width(&mut format.horizontal_gridline.width);
+    sanitize_width(&mut format.vertical_gridline.width);
+    sanitize_width(&mut format.border_width);
+    sanitize_width(&mut format.chart_area.border_width);
+    sanitize_width(&mut format.plot_area.border_width);
+    format.gap_width = format.gap_width.filter(|value| value.is_finite() && (0.0..=500.0).contains(value));
+    format.overlap = format.overlap.filter(|value| value.is_finite() && (-100.0..=100.0).contains(value));
+
+    format.series.retain(|index, _| *index < 256);
+    for style in format.series.values_mut() {
+        sanitize_width(&mut style.line_width);
+        sanitize_width(&mut style.border_width);
+        sanitize_width(&mut style.marker_border_width);
+        style.marker_size = style.marker_size.filter(|value| value.is_finite() && (2.0..=72.0).contains(value));
+        style.marker = style
+            .marker
+            .take()
+            .filter(|marker| matches!(marker.as_str(), "none" | "circle" | "square" | "diamond" | "triangle" | "cross" | "plus" | "star" | "dash"));
+    }
+    format.series.retain(|_, style| *style != gridcraft_model::ChartSeriesFormat::default());
+
+    format.text.retain(|role, style| {
+        if !matches!(
+            role.as_str(),
+            "chart" | "title" | "legend" | "x_axis" | "y_axis" | "x_axis_title" | "y_axis_title" | "data_labels" | "trendline"
+        ) {
+            return false;
+        }
+        style.size = style.size.filter(|value| value.is_finite() && (1.0..=144.0).contains(value));
+        style.name = style.name.take().filter(|name| name.len() <= 256);
+        style.name.is_some() || style.size.is_some() || style.color.is_some() || style.bold.is_some() || style.italic.is_some()
+    });
 }
 
 pub(crate) fn read_custom_format(root: &El) -> Option<gridcraft_model::ChartFormat> {
     let ext = root.child("extLst")?.kids("ext").find(|e| e.attr("uri") == Some("{CE01AC23-6FC7-453A-BE98-475249444346}"))?.child("format")?;
     let mut format: gridcraft_model::ChartFormat = serde_json::from_str(&ext.text).ok()?;
-    sanitize_axis_values(&mut format.x_axis);
-    sanitize_axis_values(&mut format.y_axis);
+    sanitize_chart_format(&mut format);
     Some(format)
 }
 

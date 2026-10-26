@@ -1990,7 +1990,9 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
             let precision = 10f64.powi(14 - mag);
             let rounded = if !precision.is_finite() || precision == 0.0 { raw } else { (raw * precision).round() / precision };
             let value = Value::number(rounded);
-            gridcraft_engine::display::value_text_as(wb, &value, format)
+            let source_index = if forward { (step as usize - 1) % source.len() } else { source.len() - 1 - ((step as usize - 1) % source.len()) };
+            let target_format = wb.styles.get(sh.style_id(source[source_index])).num_fmt.as_str();
+            gridcraft_engine::display::value_text_as(wb, &value, target_format)
         })
         .collect::<Vec<_>>();
     Some(preview.join("\n"))

@@ -1730,13 +1730,22 @@ fn shortest_prefix(p: &[(char, bool)], t: &[char]) -> std::result::Result<usize,
 
 /// Replace every match of a `*`/`?` pattern, left to right and without overlaps, as Excel does:
 /// a `*` takes as few characters as it can, except a trailing `*`, which takes the rest of the
-/// text. Case folds one char to one char so match positions stay those of `text`. `None` when
+/// text. Case folds as `matches` does (a final Σ is ς) while that keeps one char per char, else
+/// one char to its first lowercase char, so match positions stay those of `text`. `None` when
 /// nothing matches.
 fn replace_wildcard(text: &str, what: &str, with: &str, case: bool) -> Option<String> {
-    let fold = |c: char| if case { c } else { c.to_lowercase().next().unwrap_or(c) };
     let t: Vec<char> = text.chars().collect();
-    let folded: Vec<char> = t.iter().map(|&c| fold(c)).collect();
-    let mut p: Vec<(char, bool)> = wildcard_tokens(what).into_iter().map(|(c, esc)| (fold(c), esc)).collect();
+    let (folded, mut p) = if case {
+        (t.clone(), wildcard_tokens(what))
+    } else {
+        let lower: Vec<char> = text.to_lowercase().chars().collect();
+        if lower.len() == t.len() {
+            (lower, wildcard_tokens(&what.to_lowercase()))
+        } else {
+            let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+            (t.iter().map(|&c| fold(c)).collect(), wildcard_tokens(what).into_iter().map(|(c, esc)| (fold(c), esc)).collect())
+        }
+    };
     let mut to_end = false;
     while p.last() == Some(&('*', false)) {
         p.pop();
@@ -2307,6 +2316,15 @@ mod tests {
         s.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
         let r = s.execute("edit.replace", params).unwrap();
         (r, s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)))
+    }
+
+    #[test]
+    fn replace_with_wildcards_folds_case_as_find_does() {
+        // Find lowercases the whole text, where a final Σ becomes ς. Replace folded char by char
+        // (Σ to σ), so it skipped a cell Find had found.
+        let (r, v) = replace_a1("ΚΑΛΟΣ", json!({"what": "λ?ς", "with": "X"}));
+        assert_eq!(r["replaced"], json!(1));
+        assert_eq!(v, Value::text("ΚΑX"));
     }
 
     #[test]

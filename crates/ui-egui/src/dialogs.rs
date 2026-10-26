@@ -3110,10 +3110,15 @@ fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut
         *confirm = false;
     }
     if *confirm && !url.trim().is_empty() {
-        let pick = d.values.get("pick").and_then(Json::as_u64).unwrap_or(0);
-        let table = tables.get(pick as usize).and_then(|t| t["name"].as_str()).map(String::from);
+        let pick = d.values.get("pick").and_then(Json::as_u64).unwrap_or(0) as usize;
+        let table = tables.get(pick).and_then(|t| t["name"].as_str()).map(String::from);
         let params = match table {
-            Some(t) => json!({"url": url.trim(), "table": t}),
+            Some(t) => {
+                // A page can hold duplicate table names: which one was picked is which one to
+                // import, and the connection saves it so refreshes keep importing the same.
+                let occurrence = tables.iter().take(pick).filter(|o| o["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&t))).count();
+                json!({"url": url.trim(), "table": t, "occurrence": occurrence})
+            }
             None => json!({"url": url.trim()}),
         };
         match app.run("data.fromWeb", params) {

@@ -67,7 +67,14 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     if !content_type.is_empty() && !content_type.contains("html") && !content_type.contains("xml") && !content_type.contains("text") {
         return Err(format!("The address serves {content_type}, not a web page."));
     }
+    // Read up to the cap, then check for one more byte: a truncated page can look complete
+    // (a whole table before the cutoff) and import wrong data in good conscience.
+    let mut reader = resp.into_body().into_reader();
     let mut bytes: Vec<u8> = Vec::new();
-    let _ = resp.into_body().into_reader().take(req.max_bytes as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    let _ = reader.by_ref().take(req.max_bytes as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    let mut extra = [0u8; 1];
+    if reader.read(&mut extra).map_err(|e| e.to_string())? != 0 {
+        return Err(format!("The page exceeds the {} byte limit.", req.max_bytes));
+    }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }

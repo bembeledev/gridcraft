@@ -435,7 +435,7 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
 }
 
 /// Writes the totals row cells (labels and SUBTOTAL formulas).
-fn write_totals(sh: &mut Sheet, ti: usize) {
+pub(crate) fn write_totals(sh: &mut Sheet, ti: usize) {
     let Some(t) = sh.tables.get(ti).cloned() else { return };
     if !t.totals_row {
         return;

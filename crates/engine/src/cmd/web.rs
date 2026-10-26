@@ -5,9 +5,11 @@
 use serde_json::{Value as Json, json};
 
 use super::analysis::OVERWRITE_ERROR;
+use super::insert::write_totals;
 use super::*;
 use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest, WebTable};
 use gridcraft_core::MAX_ROWS;
+use gridcraft_model::{TableColumn, TotalsFn};
 
 /// Preview rows and columns per table (the Navigator's preview pane).
 const PREVIEW_ROWS: usize = 10;
@@ -328,11 +330,14 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     };
     let new_range = RangeRef::new(old.start, CellRef::new(end_row, end_col));
     // A refresh only owns the old table's own rectangle: refuse before any change if the
-    // expanded destination would overwrite other content (a user formula, another table).
+    // expanded destination would overwrite other content (a user formula, another table). The
+    // totals row follows the resized table, so the row below the new data is checked too.
     if let Some(sh) = d.wb.sheet(sheet) {
-        let outside = new_range.height() > old.height() || new_range.width() > old.width();
+        let totals_row = sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname)).is_some_and(|t| t.totals_row);
+        let last_row = if totals_row { (new_range.end.row + 1).min(MAX_ROWS - 1) } else { new_range.end.row };
+        let outside = new_range.height() > old.height() || new_range.width() > old.width() || totals_row;
         let clash = outside
-            && (new_range.start.row..=new_range.end.row).any(|row| {
+            && (new_range.start.row..=last_row).any(|row| {
                 sh.cells.row(row, new_range.start.col, new_range.end.col).any(|(c, cell)| {
                     (row < old.start.row || row > old.end.row || c < old.start.col || c > old.end.col)
                         && (!cell.value.is_empty() || cell.formula.is_some())
@@ -348,21 +353,62 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     // The rewrite is one undo step over the table's own place: a failure mid-way rolls the
     // old table and its data back instead of leaving the sheet empty.
     s.grouped("Refresh Web Table", |s| {
-        // Clear the old range, then drop the table so a new one can take the new shape.
+        // Clear only the old table's rectangle and rewrite the data; the table itself stays:
+        // its style, totals row, calculated-column and XML-binding metadata, filters and flags
+        // are the user's settings, not the page's, and a refresh must not reset them.
         s.execute("edit.clearContents", json!({"range": old.a1(), "sheet": sheet}))?;
-        let remove = |s: &mut Session| {
-            edit(s, |cx| {
-                if let Some(sh) = cx.wb.sheet_mut(sheet) {
-                    sh.tables.retain(|t| !t.name.eq_ignore_ascii_case(&tname));
-                }
-                cx.structural = true;
-                Ok(())
-            })
-        };
-        remove(s)?;
         // Write at the table's own origin, not A1: a moved table refreshes where it is.
         s.execute("range.setValues", json!({"range": old.start.a1(), "sheet": sheet, "values": rows}))?;
-        s.execute("insert.table", json!({"range": new_range.a1(), "header": true, "name": tname}))?;
+        edit(s, |cx| {
+            let sh = cx.sheet_mut(sheet)?;
+            let Some(ti) = sh.tables.iter().position(|t| t.name.eq_ignore_ascii_case(&tname)) else { return Ok(()) };
+            // The columns follow the new header row: an unchanged name keeps its metadata
+            // (totals function and label, calculated-column formula, XML binding), a new one
+            // starts plain. sync_headers (run by `edit`) then renames the columns to match.
+            let old_cols = sh.tables[ti].columns.clone();
+            let headers: Vec<String> = (new_range.start.col..=new_range.end.col)
+                .map(|c| {
+                    let v = sh.value(CellRef::new(new_range.start.row, c));
+                    v.as_text()
+                        .map(str::to_string)
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| format!("Column{}", c - new_range.start.col + 1))
+                })
+                .collect();
+            let t = &mut sh.tables[ti];
+            t.columns = headers
+                .into_iter()
+                .map(|name| {
+                    old_cols.iter().find(|col| col.name.eq_ignore_ascii_case(&name)).cloned().unwrap_or(TableColumn {
+                        name,
+                        totals: TotalsFn::None,
+                        totals_label: None,
+                        formula: None,
+                        unique_name: None,
+                        xml: None,
+                    })
+                })
+                .collect();
+            t.range = new_range;
+            cx.structural = true;
+            Ok(())
+        })?;
+        // The totals row sits below the resized range: restore its SUBTOTAL formulas and
+        // labels, which clearContents took with the rest of the old rectangle.
+        let restore_totals = {
+            let d = s.doc()?;
+            d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname))).filter(|t| t.totals_row).is_some()
+        };
+        if restore_totals {
+            edit(s, |cx| {
+                let sh = cx.sheet_mut(sheet)?;
+                let Some(ti) = sh.tables.iter().position(|t| t.name.eq_ignore_ascii_case(&tname)) else { return Ok(()) };
+                sh.tables[ti].range.end.row = (sh.tables[ti].range.end.row + 1).min(MAX_ROWS - 1);
+                write_totals(sh, ti);
+                cx.structural = true;
+                Ok(())
+            })?;
+        }
         let synced = now_ms();
         edit(s, |cx| {
             if let Some(qq) = cx.wb.web_queries.iter_mut().find(|x| x.sheet.eq_ignore_ascii_case(&q.sheet) && x.name.eq_ignore_ascii_case(&q.name)) {
@@ -467,6 +513,47 @@ mod tests {
         assert_eq!(sh.tables[0].range.height(), 3);
         // The old range's leftovers are gone: nothing beyond the new table.
         assert!(sh.value(CellRef::parse("C1").unwrap()).is_empty());
+    }
+
+    #[test]
+    fn refresh_keeps_the_table_s_settings_and_totals_row() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The user restyles the table and adds a totals row.
+        s.execute("table.style", json!({"table": "prices", "style": "TableStyleMedium9"})).unwrap();
+        s.execute("table.totalRow", json!({"table": "prices", "on": true})).unwrap();
+        let id = {
+            let d = s.active().unwrap();
+            d.wb.active().unwrap().tables[0].id
+        };
+        assert_eq!(a1(&s, "B3"), "12.5");
+        // The source now serves a bigger table.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>A</td><td>1</td></tr><tr><td>B</td><td>2</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+        assert!(r["errors"].as_array().unwrap().is_empty());
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        // The table itself survived: same name, the user's style, the totals row with
+        // its SUBTOTAL function, and the resized range including the totals row.
+        assert_eq!(t.name, "prices");
+        assert_eq!(t.id, id);
+        assert_eq!(t.style, "TableStyleMedium9");
+        assert!(t.totals_row);
+        assert_eq!(t.range.height(), 4);
+        assert_eq!(t.columns[1].totals, gridcraft_model::TotalsFn::Sum);
+        // The refreshed data landed, and the totals row was rewritten below it.
+        assert_eq!(a1(&s, "B3"), "2");
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(sh.cell(CellRef::parse("B4").unwrap()).unwrap().formula.is_some());
     }
 
     #[test]

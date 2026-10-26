@@ -366,13 +366,18 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             // (totals function and label, calculated-column formula, XML binding), a new one
             // starts plain. sync_headers (run by `edit`) then renames the columns to match.
             let old_cols = sh.tables[ti].columns.clone();
-            let headers: Vec<String> = (new_range.start.col..=new_range.end.col)
-                .map(|c| {
-                    let v = sh.value(CellRef::new(new_range.start.row, c));
-                    v.as_text()
-                        .map(str::to_string)
-                        .filter(|t| !t.trim().is_empty())
-                        .unwrap_or_else(|| format!("Column{}", c - new_range.start.col + 1))
+            // The names come from the fetched header row, not the cells: a numeric header
+            // (`2024`) is a number in the cell, and reading it as text would miss the column
+            // and drop its settings on every refresh. sync_headers writes them back as text.
+            let headers: Vec<String> = (0..new_range.width() as usize)
+                .map(|i| {
+                    table
+                        .rows
+                        .first()
+                        .and_then(|row| row.get(i))
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| format!("Column{}", i + 1))
                 })
                 .collect();
             let t = &mut sh.tables[ti];
@@ -554,6 +559,26 @@ mod tests {
         let d = s.active().unwrap();
         let sh = d.wb.active().unwrap();
         assert!(sh.cell(CellRef::parse("B4").unwrap()).unwrap().formula.is_some());
+    }
+
+    #[test]
+    fn refresh_keeps_the_settings_of_a_numeric_header_column() {
+        // A numeric header (`2024`) lands in the cell as a number: the column lookup must use
+        // the fetched header text, or the column's settings are dropped on every refresh.
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let page = "<table id=\"years\"><tr><th>Item</th><th>2024</th></tr><tr><td>A</td><td>1</td></tr></table>";
+        s.web_source = Some(Arc::new(move |req: &WebRequest| Ok(crate::webquery::extract_tables(page, req.max_rows, req.max_cols))));
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // The user gives the numeric column a Sum totals function.
+        s.execute("table.totalFunction", json!({"table": "years", "column": "2024", "function": "sum"})).unwrap();
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        assert_eq!(t.columns[1].name, "2024");
+        assert_eq!(t.columns[1].totals, gridcraft_model::TotalsFn::Sum);
     }
 
     #[test]

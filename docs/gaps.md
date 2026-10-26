@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (§2: multi-threaded recalculation landed; previously minor: §2: defined names are static precedents; previously minor: §8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -25,13 +25,31 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
-### 2. Large workbooks don't open; recalc is single-threaded (P, H)
-- **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
-  100 ms (was ~0.4 s); whole-sheet operations bounded.
-- **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
+### 2. Large workbooks don't open (P, H)
+- **Missing:** streaming read for ~100 MB XLSX; 100k-dependent edit under 100 ms (was ~0.4 s);
+  whole-sheet operations bounded. Landed 2026-10-23: recalculation on every core (levels of
+  independent formulas on worker threads, each keeping copies of the blocks it reads twice; a
+  1M-cell, 51K-formula workbook opens in 2.2 s on 8 threads, 7.2 s on one). Still to do: the
+  same block copies for the single-threaded pass, a lookup index, a thread pool across levels,
+  and finer rules for a level in which an array is laid out differently from what the workbook
+  stores (in place, shape or values, or lost): the workers run again over the formulas after it,
+  and the rest of the level is finished on one thread after eight such passes, the simpler form
+  of threading, verified correct; keeping more of the threads on such a level means recording
+  what INDIRECT and OFFSET read during a calculation and ordering the chain by it, as Excel does,
+  a much larger piece of work. Also spill ranges read from the file, so the first calculation
+  after opening doesn't lay every array out anew, and one rule for a circular reference closed
+  through INDIRECT or OFFSET: which member shows `#CIRC!` and which the circular list names
+  follow the order the cells were reached in, and can differ from each other.
+- **Evidence:** #175; PR #152 (whole-sheet Fill/Remove Duplicates
+  out of memory), PR #151 (current region past 10,000 rows). Landed 2026-10-25: formulas
+  referencing defined names are static dependencies (were volatile: a 49K-cell column of LAMBDA
+  calls recalculated on every edit; each name is resolved once per graph build, so a definition
+  mentioning another name many times costs its size, not k^depth), names parsed once per pass,
+  `TEXT(n,"0")` fast path; a real 1M-cell workbook opens in 109 s instead of 447 s and edits in
+  ~1 s instead of ~10 s. Calculation was still single-threaded at that point; cached values are
+  still ignored on open.
 - **Impact:** finance and data users routinely have big workbooks.
-- **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
+- **Estimate:** 20–30 h for beta (30–50 h full). [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
@@ -181,8 +199,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | §2: names as static precedents, per-pass name parse cache, TEXT fast path; measured 447 s → 109 s open, ~10 s → ~1 s edit on a 1M-cell workbook |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
+| 2026-10-23 | minor | §2: multi-threaded recalculation landed; the entry keeps the streaming reader and the edit-latency target |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |

@@ -300,6 +300,81 @@ fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
     assert!(h.state().dialog.is_none());
 }
 
+fn press_dialog_key(h: &mut egui_kittest::Harness<'static, SheetApp>, key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::ViewportCommand> {
+    h.input_mut().events.push(egui::Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+    let cmds = step_commands(h);
+    h.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    cmds
+}
+
+#[test]
+fn save_changes_dialog_answers_with_single_key_shortcuts() {
+    // 1. Single-key 'N' discards changes and closes the window (#2572)
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.run_steps(2);
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    // Modified shortcuts (Ctrl+N, Alt+Y, Cmd+S) must be ignored and leave dialog open
+    let sent = press_dialog_key(&mut h, egui::Key::N, egui::Modifiers::CTRL);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "Ctrl+N must not answer the dialog");
+
+    let sent = press_dialog_key(&mut h, egui::Key::Y, egui::Modifiers::ALT);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "Alt+Y must not answer the dialog");
+
+    // Unmodified 'N' answers "Don't Save"
+    let sent = press_dialog_key(&mut h, egui::Key::N, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "single-key 'N' closes the window");
+    assert!(h.state().dialog.is_none());
+
+    // 2. Single-key 'Y' writes changes to an existing file and closes
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-changes-key-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "saved_with_y"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    let sent = press_dialog_key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "single-key 'Y' saves and closes");
+    assert!(h.state().dialog.is_none());
+
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(1, 1)), Value::text("saved_with_y"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // 3. Quitting multiple workbooks: single-key 'N' answers one workbook per key press
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "first"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "second"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(h.state().session.documents().len(), 2);
+
+    // First 'N' closes one workbook; the second workbook is now asked about
+    let sent = press_dialog_key(&mut h, egui::Key::N, egui::Modifiers::NONE);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    // Second 'D' closes the final workbook and closes window
+    let sent = press_dialog_key(&mut h, egui::Key::D, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none());
+}
+
 /// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).
 fn typing_in_book1_then_new(h: &mut egui_kittest::Harness<'static, SheetApp>) -> u64 {
     h.input_mut().events.push(egui::Event::Text("hello".into()));

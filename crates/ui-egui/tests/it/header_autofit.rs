@@ -187,7 +187,7 @@ fn table_filter_autofit_works_through_command_and_header_double_click() {
             // wherever the font is installed.
             let wb = &app.session.active().unwrap().wb;
             let table = sheet.table_at(cell).expect("A1 is the table's header");
-            let font = gridcraft_engine::tables::table_cell_style(wb, wb.active_sheet, table, cell).font;
+            let font = gridcraft_engine::tables::table_cell_style(wb, wb.active_sheet(), table, cell).font;
             assert!(font.bold, "the table style draws its header bold");
             let text_width = gridcraft_ui_egui::theme::cell_text_width(&h.ctx, "Quarterly Revenue", &font, true) * geo.z;
             assert!(rect.left() + text_width + 2.5 * geo.z < button.left(), "heading overlaps filter: zoom={zoom}, double_click={double_click}");

@@ -12,7 +12,7 @@
 # which repackages the prebuilt release binaries. Keep runtime-version and finish-args identical.
 id: ai.storyteller.gridcraft
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable

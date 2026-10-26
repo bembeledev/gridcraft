@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (bounded navigation caches and dependency reuse for filters) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -46,6 +46,15 @@ including tests, 2026-10-10.
    `#SPILL!`/cycles. Volatile functions are always dirty.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
+   Used cell bounds are cached per store (a new cell extends them; only removing a cell on
+   their edge drops them). Row/column geometry indexes are reused while a sheet's lines,
+   default sizes and outline summary side stay the same. Conditional-format statistics are
+   borrowed per cell and skipped for rules that need no range aggregates. Visibility-only
+   edits (filters, hidden rows and columns, outline detail and levels, AutoFilter off) reuse
+   the dependency graph while still evaluating every formula, once `commit` has checked that
+   formulas, names, tables and sheets are unchanged; a table header rewrite rebuilds it.
+   See [large-workbook-performance.md](large-workbook-performance.md) for measurements and
+   cache invalidation contracts.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
@@ -150,6 +159,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Bounded used-range/geometry caches, prepared filter predicates and graph reuse for visibility-only edits; reproducible large-workbook benchmarks. |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

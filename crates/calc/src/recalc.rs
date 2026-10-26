@@ -377,11 +377,14 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// How often `rebuild` ran. A commit that only changes row visibility keeps the graph, which
+    /// tests observe as an unchanged count.
+    pub graph_rebuilds: usize,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, graph_rebuilds: 0 }
     }
 }
 
@@ -1005,6 +1008,7 @@ impl Calc {
 
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        self.graph_rebuilds = self.graph_rebuilds.saturating_add(1);
         self.graph = Graph::default();
         let mut circ = Vec::new();
         for (si, sheet) in wb.sheets.iter().enumerate() {
@@ -1069,6 +1073,14 @@ impl Calc {
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
+        self.recalc_after_visibility_change(wb);
+    }
+
+    /// Re-evaluate all formulas using the existing graph after row visibility changes.
+    /// Caller must ensure formula positions, expressions, names and table references have
+    /// not changed. This preserves full evaluation (including volatile/visibility-sensitive
+    /// functions and spills), but avoids parsing and indexing unchanged dependencies.
+    pub fn recalc_after_visibility_change(&mut self, wb: &mut Workbook) {
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {

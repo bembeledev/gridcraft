@@ -6,6 +6,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod assets;
+mod bench;
 mod i18n_report;
 mod ico;
 mod keytips;
@@ -37,6 +38,10 @@ commands:
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
+  bench [--label L] [--repeats N] [--datasets A,B,..] [--input BOOK.xlsx] [--exe PATH]
+                  build the large-workbook benchmark examples in release and run them one at a time
+                  into target/perf/<label>: commit, compiler, hardware, SHA-256 of the executable and
+                  input, the examples' p50/p95/p99 and each process's peak memory
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -52,6 +57,7 @@ fn main() -> ExitCode {
         Some("test") => cmd_test().and_then(|()| cmd_doctest()),
         Some("ci") => cmd_ci(),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
+        Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),

@@ -332,6 +332,9 @@ pub struct Ctx<'a> {
     pub wb: Workbook,
     pub changed: Vec<Key>,
     pub structural: bool,
+    /// Only filter/row visibility changed, so the existing dependency graph is valid.
+    /// Table header synchronization clears it when it rewrites a header cell or renames a column.
+    pub visibility_only: bool,
     pub sel: &'a mut Selection,
     /// Rows whose automatic height should be recomputed (sheet, row).
     pub fit_rows: Vec<(usize, u32)>,
@@ -349,15 +352,47 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+/// Opt-in phase timing (`GRIDCRAFT_PROFILE`), printed to stderr by the caller. It reads the clock
+/// only when profiling, and never on wasm: there `Instant::now` traps (`RuntimeError:
+/// unreachable`), which broke every edit in the web app.
+pub(crate) struct Profile(Option<std::time::Instant>);
+
+impl Profile {
+    pub(crate) fn start() -> Profile {
+        #[allow(clippy::disallowed_methods)]
+        let now = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+        Profile(now)
+    }
+
+    /// Time since `start`, when profiling.
+    pub(crate) fn elapsed(&self) -> Option<std::time::Duration> {
+        self.0.map(|t| t.elapsed())
+    }
+
+    /// Time since `start` or the previous lap, when profiling; the next lap starts now.
+    pub(crate) fn lap(&mut self) -> Option<std::time::Duration> {
+        let elapsed = self.elapsed()?;
+        #[allow(clippy::disallowed_methods)]
+        let now = std::time::Instant::now();
+        self.0 = Some(now);
+        Some(elapsed)
+    }
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
-    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
-    #[allow(clippy::disallowed_methods)]
-    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+    let profile = Profile::start();
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
+    let mut ctx = Ctx {
+        wb: (*d.wb).clone(),
+        changed: Vec::new(),
+        structural: false,
+        visibility_only: false,
+        sel: &mut sel,
+        fit_rows: Vec::new(),
+        protection_checked: false,
+    };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, changed, structural, visibility_only, mut fit_rows, protection_checked, .. } = ctx;
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
@@ -367,28 +402,51 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
-    if let Some(t0) = t0 {
-        eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
+    if let Some(t) = profile.elapsed() {
+        eprintln!("commit: edit {t:?}, {} changed", changed.len());
     }
     if structural {
-        d.calc.recalc_all(&mut wb);
+        if visibility_only && changed.is_empty() && graph_inputs_unchanged(&d.wb, &wb) {
+            d.calc.recalc_after_visibility_change(&mut wb);
+        } else {
+            d.calc.recalc_all(&mut wb);
+        }
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
-    if let Some(t0) = t0 {
-        eprintln!("commit: + recalc {:?}", t0.elapsed());
+    if let Some(t) = profile.elapsed() {
+        eprintln!("commit: + recalc {t:?}");
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
     for (si, row) in fit_rows {
         auto_row_height(&mut wb, si, row);
     }
-    if let Some(t0) = t0 {
-        eprintln!("commit: + rows {:?}", t0.elapsed());
+    if let Some(t) = profile.elapsed() {
+        eprintln!("commit: + rows {t:?}");
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// Whether the dependency graph built for `old` still serves `new`: the same sheets in the same
+/// order, calculation settings, defined names, tables and formulas. A `visibility_only` commit
+/// that fails this check (a command that set the flag too eagerly) recalculates in full instead.
+/// Unchanged sheets are shared, and a changed one compares only the cell bands that differ.
+fn graph_inputs_unchanged(old: &Workbook, new: &Workbook) -> bool {
+    old.calc == new.calc
+        && old.names == new.names
+        && old.sheets.len() == new.sheets.len()
+        && old.sheets.iter().zip(&new.sheets).all(|(a, b)| {
+            std::sync::Arc::ptr_eq(a, b)
+                || (a.name == b.name
+                    && a.tables == b.tables
+                    && a.cells
+                        .diff(&b.cells)
+                        .into_iter()
+                        .all(|c| a.cell(c).and_then(|x| x.formula.as_ref()) == b.cell(c).and_then(|x| x.formula.as_ref())))
+        })
 }
 
 /// Excel's message for an edit of a locked cell on a protected sheet.

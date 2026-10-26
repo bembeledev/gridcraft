@@ -538,6 +538,7 @@ fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             cx.structural = true;
+            cx.visibility_only = true;
             Ok(json!({"filter": false}))
         });
     }
@@ -613,10 +614,25 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
         }
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
+        cx.visibility_only = true;
         Ok(Json::Null)
     })?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
     Ok(json!({"hiddenRows": hidden}))
+}
+
+/// Whether `cmp` satisfies a comparison operator; `None` for the operators that are not one
+/// (`beginsWith`, `contains`…).
+fn ordering_satisfies(op: &str, cmp: Option<Ordering>) -> Option<bool> {
+    Some(match op {
+        "=" => cmp == Some(Ordering::Equal),
+        "<>" => cmp != Some(Ordering::Equal),
+        ">" => cmp == Some(Ordering::Greater),
+        "<" => cmp == Some(Ordering::Less),
+        ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
+        "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
+        _ => return None,
+    })
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
@@ -630,29 +646,77 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     };
     let wild = || super::edit::wildcard(&text.to_lowercase(), &crit.to_lowercase());
     match op {
-        "=" => {
-            if crit.contains(['*', '?']) {
-                wild()
-            } else {
-                cmp == Some(Ordering::Equal)
-            }
-        }
-        "<>" => {
-            if crit.contains(['*', '?']) {
-                !wild()
-            } else {
-                cmp != Some(Ordering::Equal)
-            }
-        }
-        ">" => cmp == Some(Ordering::Greater),
-        "<" => cmp == Some(Ordering::Less),
-        ">=" => matches!(cmp, Some(Ordering::Greater | Ordering::Equal)),
-        "<=" => matches!(cmp, Some(Ordering::Less | Ordering::Equal)),
+        "=" if crit.contains(['*', '?']) => wild(),
+        "<>" if crit.contains(['*', '?']) => !wild(),
         "beginsWith" => text.to_lowercase().starts_with(&crit.to_lowercase()),
         "endsWith" => text.to_lowercase().ends_with(&crit.to_lowercase()),
         "contains" => text.to_lowercase().contains(&crit.to_lowercase()),
         "notContains" => !text.to_lowercase().contains(&crit.to_lowercase()),
-        _ => true,
+        _ => ordering_satisfies(op, cmp).unwrap_or(true),
+    }
+}
+
+/// `custom_ok` for a number against a numeric operand, without formatting the cell; `None`
+/// when the comparison needs the cell's text.
+fn numeric_comparison(v: &Value, number: Option<f64>, op: &str) -> Option<bool> {
+    ordering_satisfies(op, v.as_f64()?.partial_cmp(&number?))
+}
+
+/// One side of a custom filter, its operand parsed as a number once per filter.
+struct Comparison<'a> {
+    op: &'a str,
+    operand: &'a str,
+    number: Option<f64>,
+}
+
+impl<'a> Comparison<'a> {
+    fn new((op, operand): &'a (String, String)) -> Self {
+        Comparison { op: op.as_str(), operand: operand.as_str(), number: gridcraft_core::parse::parse_number_text(operand) }
+    }
+}
+
+/// A filter criterion with what it compares against worked out once per filter, not per row.
+enum Prepared<'a> {
+    /// The listed values, ASCII-lowercased (matching stays ASCII-only), and whether (Blanks) is
+    /// ticked.
+    Values(std::collections::HashSet<String>, bool),
+    /// One or two comparisons, and whether both must pass.
+    Custom(Comparison<'a>, Option<Comparison<'a>>, bool),
+    /// The value a cell must reach (none when the column holds no numbers), from which end.
+    Top10 {
+        bottom: bool,
+        threshold: Option<f64>,
+    },
+    AboveAverage {
+        above: bool,
+        average: f64,
+    },
+    FillColor(&'a Color),
+    FontColor(&'a Color),
+    Icon,
+}
+
+fn prepare<'a>(sh: &Sheet, r: RangeRef, col: u32, criterion: &'a FilterCriterion) -> Prepared<'a> {
+    let numbers =
+        || -> Vec<f64> { (r.start.row + 1..=r.end.row).filter_map(|row| sh.value_ref(CellRef::new(row, col)).and_then(Value::as_f64)).collect() };
+    match criterion {
+        FilterCriterion::Values { values, blanks } => Prepared::Values(values.iter().map(|s| s.to_ascii_lowercase()).collect(), *blanks),
+        FilterCriterion::Custom { a, b, and } => Prepared::Custom(Comparison::new(a), b.as_ref().map(Comparison::new), *and),
+        FilterCriterion::Top10 { bottom, percent, count } => {
+            let mut nums = numbers();
+            nums.sort_by(|a, b| if *bottom { a.partial_cmp(b) } else { b.partial_cmp(a) }.unwrap_or(Ordering::Equal));
+            let k = if *percent { ((nums.len() as f64) * (*count as f64) / 100.0).ceil() as usize } else { *count as usize };
+            let k = k.clamp(1, nums.len().max(1));
+            Prepared::Top10 { bottom: *bottom, threshold: nums.get(k - 1).copied() }
+        }
+        FilterCriterion::AboveAverage(above) => {
+            let nums = numbers();
+            let average = if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 };
+            Prepared::AboveAverage { above: *above, average }
+        }
+        FilterCriterion::FillColor(color) => Prepared::FillColor(color),
+        FilterCriterion::FontColor(color) => Prepared::FontColor(color),
+        FilterCriterion::Icon { .. } => Prepared::Icon,
     }
 }
 
@@ -681,81 +745,66 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
+    let mut profile = super::Profile::start();
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
     let r = af.range;
-    let mut hide = Vec::new();
-    // Precompute per-criterion top10 threshold and average once, not per row.
-    let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
-    for (i, (off, c)) in af.criteria.iter().enumerate() {
-        if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
-            let col = r.start.col + off;
-            let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
-            let avg = if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 };
-            let thr = match c {
-                FilterCriterion::Top10 { bottom, percent, count } => {
-                    nums.sort_by(|a, b| if *bottom { a.partial_cmp(b) } else { b.partial_cmp(a) }.unwrap_or(Ordering::Equal));
-                    let k = if *percent { ((nums.len() as f64) * (*count as f64) / 100.0).ceil() as usize } else { *count as usize };
-                    let k = k.clamp(1, nums.len().max(1));
-                    nums.get(k - 1).copied()
-                }
-                _ => None,
-            };
-            col_stats.insert(i, (thr, avg));
-        }
+    let criteria: Vec<(u32, Prepared)> = af
+        .criteria
+        .iter()
+        .map(|(off, c)| {
+            let col = r.start.col.saturating_add(*off);
+            (col, prepare(sh, r, col, c))
+        })
+        .collect();
+    if let Some(t) = profile.lap() {
+        eprintln!("filter: prepare/statistics {t:?}, {} criteria", criteria.len());
     }
+    let mut hide = Vec::new();
     for row in r.start.row + 1..=r.end.row {
-        let mut visible = true;
-        for (i, (off, crit)) in af.criteria.iter().enumerate() {
-            let c = CellRef::new(row, r.start.col + off);
-            let v = sh.value(c);
-            let text = crate::display::cell_text(wb, sh, c);
-            let ok = match crit {
-                FilterCriterion::Values { values, blanks } => {
-                    if filter_blank(&v) {
+        let visible = criteria.iter().all(|(col, criterion)| {
+            let c = CellRef::new(row, *col);
+            let v = sh.value_ref(c).unwrap_or(&Value::Empty);
+            match criterion {
+                Prepared::Values(set, blanks) => {
+                    if filter_blank(v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        set.contains(&v.display().to_ascii_lowercase()) || set.contains(&crate::display::cell_text(wb, sh, c).to_ascii_lowercase())
                     }
                 }
-                FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
+                Prepared::Custom(a, b, and) => {
+                    // Display text is only needed for textual/wildcard comparisons. Numeric
+                    // comparisons keep the same partial-order behaviour, including NaN.
+                    let mut text = None;
+                    let mut passes = |x: &Comparison| {
+                        numeric_comparison(v, x.number, x.op)
+                            .unwrap_or_else(|| custom_ok(v, text.get_or_insert_with(|| crate::display::cell_text(wb, sh, c)), x.op, x.operand))
+                    };
+                    let x = passes(a);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
+                            let y = passes(b);
                             if *and { x && y } else { x || y }
                         }
                         None => x,
                     }
                 }
-                FilterCriterion::Top10 { bottom, .. } => match (v.as_f64(), col_stats.get(&i)) {
-                    (Some(n), Some((thr, _))) => {
-                        let thr = thr.unwrap_or(n);
-                        if *bottom { n <= thr } else { n >= thr }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::AboveAverage(above) => match (v.as_f64(), col_stats.get(&i)) {
-                    (Some(n), Some((_, avg))) => {
-                        if *above {
-                            n > *avg
-                        } else {
-                            n < *avg
-                        }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.fg == *col,
-                FilterCriterion::FontColor(col) => wb.styles.get(sh.style_id(c)).font.color == *col,
+                Prepared::Top10 { bottom, threshold } => v.as_f64().is_some_and(|n| {
+                    let threshold = threshold.unwrap_or(n);
+                    if *bottom { n <= threshold } else { n >= threshold }
+                }),
+                Prepared::AboveAverage { above, average } => v.as_f64().is_some_and(|n| if *above { n > *average } else { n < *average }),
+                Prepared::FillColor(color) => wb.styles.get(sh.style_id(c)).fill.fg == **color,
+                Prepared::FontColor(color) => wb.styles.get(sh.style_id(c)).font.color == **color,
                 // Icons are not evaluated here: the row keeps its current visibility.
-                FilterCriterion::Icon { .. } => !sh.is_row_hidden(row),
-            };
-            if !ok {
-                visible = false;
-                break;
+                Prepared::Icon => !sh.is_row_hidden(row),
             }
-        }
+        });
         hide.push((row, !visible));
+    }
+    if let Some(t) = profile.lap() {
+        eprintln!("filter: predicates {t:?}, {} rows", hide.len());
     }
     let Some(shm) = wb.sheet_mut(sheet) else { return };
     for (row, h) in hide {
@@ -764,6 +813,9 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
         } else if let Some(e) = shm.rows.get_mut(&row) {
             e.hidden = false;
         }
+    }
+    if let Some(t) = profile.lap() {
+        eprintln!("filter: visibility {t:?}");
     }
 }
 
@@ -776,6 +828,7 @@ fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
         }
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
+        cx.visibility_only = true;
         Ok(Json::Null)
     })
 }
@@ -785,6 +838,7 @@ fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
+        cx.visibility_only = true;
         Ok(Json::Null)
     })
 }
@@ -1406,6 +1460,7 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
             }
         }
         cx.structural = true;
+        cx.visibility_only = true;
         Ok(Json::Null)
     })
 }
@@ -1448,6 +1503,7 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.structural = true;
+        cx.visibility_only = true;
         Ok(Json::Null)
     })
 }
@@ -1580,6 +1636,234 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs `command`, checks the workbook equals a full recalculation of itself and returns
+    /// whether the commit rebuilt the dependency graph.
+    fn rebuilt_and_matches_full_recalc(s: &mut Session, command: &str, params: Json) -> bool {
+        let before = s.doc().unwrap().calc.graph_rebuilds;
+        s.execute(command, params).unwrap();
+        let d = s.doc().unwrap();
+        let mut reference = (*d.wb).clone();
+        let mut calc = d.calc.clone();
+        calc.recalc_all(&mut reference);
+        assert_eq!(*d.wb, reference, "{command}");
+        d.calc.graph_rebuilds != before
+    }
+
+    #[test]
+    fn filters_reusing_graph_match_full_recalc_after_edits_and_undo() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Qty"],[1],[2],[3],[4]]})).unwrap();
+        for (cell, formula) in [("C1", "=SUBTOTAL(9,A2:A5)"), ("C2", "=AGGREGATE(9,5,A2:A5)"), ("C3", "=C1+C2"), ("E1", "=SEQUENCE(2,1,C1)")] {
+            s.execute("cell.set", json!({"cell":cell,"input":formula})).unwrap();
+        }
+        s.execute("data.filter", json!({"range":"A1:A5"})).unwrap();
+        // (command, params, whether it rebuilds the graph): filters keep it, undo and redo rebuild it.
+        for (command, params, rebuilds) in [
+            ("data.filterBy", json!({"column":"A","custom":{"op":">","value":2}}), false),
+            ("cell.set", json!({"cell":"A2","input":"5"}), false),
+            ("data.reapply", json!({}), false),
+            ("data.clearFilter", json!({}), false),
+            ("edit.undo", json!({}), true),
+            ("edit.redo", json!({}), true),
+            // The graph rebuilt by undo/redo serves the next filters.
+            ("data.filterBy", json!({"column":"A","custom":{"op":"<","value":4}}), false),
+            ("edit.undo", json!({}), true),
+            ("data.reapply", json!({}), false),
+        ] {
+            assert_eq!(rebuilt_and_matches_full_recalc(&mut s, command, params), rebuilds, "{command}");
+        }
+    }
+
+    #[test]
+    fn filters_in_a_table_reuse_the_graph_while_its_headers_stay() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Qty","Price"],[1,10],[2,20],[3,30],[4,40]]})).unwrap();
+        s.execute("insert.table", json!({"range":"A1:B5","header":true})).unwrap();
+        for (cell, formula) in [("D1", "=SUBTOTAL(109,Table1[Qty])"), ("D2", "=SUM(Table1[Price])"), ("D3", "=D1+D2")] {
+            s.execute("cell.set", json!({"cell":cell,"input":formula})).unwrap();
+        }
+        s.execute("selection.set", json!({"cell":"A1"})).unwrap();
+        assert!(!rebuilt_and_matches_full_recalc(&mut s, "data.filterBy", json!({"column":"A","custom":{"op":">","value":2}})));
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 3)), Value::Number(7.0));
+        for command in ["data.reapply", "data.clearFilter"] {
+            assert!(!rebuilt_and_matches_full_recalc(&mut s, command, json!({})), "{command}");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 3)), Value::Number(10.0));
+    }
+
+    #[test]
+    fn filters_that_rename_a_table_column_rebuild_the_graph() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Qty","Price"],[1,10],[2,20],[3,30],[4,40]]})).unwrap();
+        s.execute("insert.table", json!({"range":"A1:B5","header":true})).unwrap();
+        // As a file can hold it: the header cell says Price while the table calls the column Cost.
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.tables[0].columns[1].name = "Cost".into();
+        sh.set_cell(CellRef::new(0, 3), Cell::formula(gridcraft_model::Formula::new("=SUM(Table1[Cost])")));
+        d.calc.recalc_all(&mut wb);
+        d.wb = std::sync::Arc::new(wb);
+        s.execute("selection.set", json!({"cell":"A1"})).unwrap();
+        // The filter's header check renames the column and rewrites the formula: the graph is rebuilt.
+        assert!(rebuilt_and_matches_full_recalc(&mut s, "data.filterBy", json!({"column":"A","custom":{"op":">","value":2}})));
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.tables[0].columns[1].name, "Price");
+        assert_eq!(sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("SUM(Table1[Price])"));
+    }
+
+    #[test]
+    fn hiding_rows_outline_levels_and_removing_the_filter_reuse_the_graph() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Qty"],[1],[2],[3],[4]]})).unwrap();
+        for (cell, formula) in [("C1", "=SUBTOTAL(109,A2:A5)"), ("C2", "=AGGREGATE(9,5,A2:A5)"), ("C3", "=C1+C2")] {
+            s.execute("cell.set", json!({"cell":cell,"input":formula})).unwrap();
+        }
+        s.execute("data.group", json!({"rows":"2:5"})).unwrap();
+        s.execute("data.filter", json!({"range":"A1:A5"})).unwrap();
+        for (command, params) in [
+            ("home.hideRows", json!({"rows":"3:3"})),
+            ("home.unhideRows", json!({"rows":"3:3"})),
+            ("data.filterBy", json!({"column":"A","custom":{"op":">","value":2}})),
+            // A second data.filter turns the AutoFilter off and shows the rows it hid.
+            ("data.filter", json!({"range":"A1:A5"})),
+            ("data.hideDetail", json!({"rows":"2:5"})),
+            ("data.showDetail", json!({"rows":"2:5"})),
+            ("data.showLevels", json!({"rows":1})),
+        ] {
+            assert!(!rebuilt_and_matches_full_recalc(&mut s, command, params), "{command}");
+        }
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.autofilter.is_none());
+        assert!(sh.is_row_hidden(1), "level 1 hides the detail");
+        assert_eq!(sh.value(CellRef::new(0, 2)), Value::Number(0.0));
+    }
+
+    #[test]
+    fn visibility_only_commits_that_change_graph_inputs_rebuild_it() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[[1],[2]]})).unwrap();
+        s.execute("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+        s.execute("range.setValues", json!({"range":"E1","values":[["H"],["x"]]})).unwrap();
+        s.execute("insert.table", json!({"range":"E1:E2","header":true})).unwrap();
+        // Commands that wrongly flag edits as visibility-only: a new formula the graph does not
+        // know, a defined name, a renamed table.
+        let edits: [fn(&mut Ctx) -> Result<()>; 3] = [
+            |cx| {
+                cx.sheet_mut(0)?.set_cell(CellRef::new(0, 2), Cell::formula(gridcraft_model::Formula::new("=A1+10")));
+                Ok(())
+            },
+            |cx| {
+                let name = DefinedName { name: "Two".into(), scope: None, formula: "Sheet1!$A$2".into(), comment: String::new(), hidden: false };
+                cx.wb.names.push(name);
+                Ok(())
+            },
+            |cx| {
+                if let Some(t) = cx.sheet_mut(0)?.tables.first_mut() {
+                    t.name = "Renamed".into();
+                }
+                Ok(())
+            },
+        ];
+        for (i, edit) in edits.into_iter().enumerate() {
+            let d = s.doc_mut().unwrap();
+            let before = d.calc.graph_rebuilds;
+            commit(d, |cx| {
+                edit(cx)?;
+                cx.structural = true;
+                cx.visibility_only = true;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(d.calc.graph_rebuilds, before + 1, "edit {i}");
+            let mut reference = (*d.wb).clone();
+            d.calc.clone().recalc_all(&mut reference);
+            assert_eq!(*d.wb, reference, "edit {i}");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 2)), Value::Number(11.0));
+    }
+
+    #[test]
+    fn prepared_filters_match_legacy_predicates_on_mixed_cells() {
+        let mut wb = Workbook::new();
+        let style = wb.styles.intern(Style { num_fmt: NumFmt::new("yyyy-mm-dd"), ..Default::default() });
+        let values = [
+            Value::Empty,
+            Value::from("Alpha"),
+            Value::from("ALPHA"),
+            Value::from("Ä"),
+            Value::from("ä"),
+            Value::Number(45000.0),
+            Value::Number(10.0),
+            Value::Bool(true),
+            Value::Error(gridcraft_core::CellError::NA),
+        ];
+        let sh = wb.sheet_mut(0).unwrap();
+        for (i, v) in values.iter().enumerate() {
+            let mut cell = Cell::value(v.clone());
+            if i == 5 {
+                cell.style = style;
+            }
+            sh.set_cell(CellRef::new(i as u32 + 1, 0), cell);
+        }
+        sh.rows.entry(2).or_default().hidden = true;
+        let mut criteria = vec![FilterCriterion::Values { values: vec!["alpha".into(), "Ä".into(), "45000".into(), "#N/A".into()], blanks: true }];
+        for op in ["=", "<>", ">", "<", ">=", "<=", "beginsWith", "endsWith", "contains", "notContains"] {
+            for value in ["10", "ALPHA", "*ph*", "2023-03-15", "Ä"] {
+                criteria.push(FilterCriterion::Custom { a: (op.into(), value.into()), b: Some(("<>".into(), "0".into())), and: true });
+                criteria.push(FilterCriterion::Custom { a: (op.into(), value.into()), b: Some(("=".into(), "10".into())), and: false });
+            }
+        }
+        for criterion in criteria {
+            let sh = wb.sheet(0).unwrap();
+            let expected: Vec<bool> = (1..=values.len() as u32)
+                .map(|row| {
+                    let c = CellRef::new(row, 0);
+                    let v = sh.value(c);
+                    let text = crate::display::cell_text(&wb, sh, c);
+                    match &criterion {
+                        FilterCriterion::Values { values, blanks } => {
+                            if filter_blank(&v) {
+                                *blanks
+                            } else {
+                                values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                            }
+                        }
+                        FilterCriterion::Custom { a, b, and } => {
+                            let x = custom_ok(&v, &text, &a.0, &a.1);
+                            let y = b.as_ref().map(|b| custom_ok(&v, &text, &b.0, &b.1)).unwrap_or(x);
+                            if *and { x && y } else { x || y }
+                        }
+                        _ => false,
+                    }
+                })
+                .collect();
+            wb.sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+                range: RangeRef::new(CellRef::new(0, 0), CellRef::new(values.len() as u32, 0)),
+                criteria: vec![(0, criterion.clone())],
+            });
+            apply_filter(&mut wb, 0);
+            for (i, visible) in expected.iter().enumerate() {
+                assert_eq!(!wb.sheet(0).unwrap().is_row_hidden(i as u32 + 1), *visible, "{criterion:?}, row {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_fast_path_preserves_unordered_comparisons() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 10.0] {
+            let v = Value::Number(value);
+            for op in ["=", "<>", ">", "<", ">=", "<="] {
+                assert_eq!(numeric_comparison(&v, Some(10.0), op), Some(custom_ok(&v, &v.display(), op, "10")));
+            }
+        }
+    }
 
     #[test]
     fn filter_blanks_include_empty_text_and_formula_results() {

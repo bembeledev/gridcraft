@@ -4,7 +4,7 @@
 //! copies only the band pointers; editing a cell copies just its band.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use gridcraft_core::{CellRef, RangeRef};
 use serde::{Deserialize, Serialize};
@@ -17,16 +17,30 @@ fn has_value(cell: &Cell) -> bool {
     !cell.value.is_empty() || cell.formula.is_some()
 }
 
+/// `c` lies on the first or last row or column of `r`.
+fn on_edge(r: RangeRef, c: CellRef) -> bool {
+    c.row == r.start.row || c.row == r.end.row || c.col == r.start.col || c.col == r.end.col
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Band {
     /// row → (col → cell)
     rows: BTreeMap<u32, BTreeMap<u32, Cell>>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CellStore {
     bands: BTreeMap<u32, Arc<Band>>,
     len: usize,
+    /// One fixed-size entry; never serialized and independent in copy-on-write snapshots.
+    #[serde(skip)]
+    bounds: OnceLock<Option<RangeRef>>,
+}
+
+impl PartialEq for CellStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.bands == other.bands
+    }
 }
 
 impl CellStore {
@@ -58,6 +72,10 @@ impl CellStore {
         }
         let band = Arc::make_mut(self.bands.entry(c.row / BAND).or_default());
         if band.rows.entry(c.row).or_default().insert(c.col, cell).is_none() {
+            // A new cell can only grow the bounds: extend a warm cache instead of dropping it.
+            if let Some(bounds) = self.bounds.get_mut() {
+                *bounds = Some(bounds.map_or(RangeRef::cell(c), |r| r.union(&RangeRef::cell(c))));
+            }
             self.len += 1;
         }
     }
@@ -88,6 +106,11 @@ impl CellStore {
         let band = self.bands.get_mut(&key)?;
         if !band.rows.get(&c.row).is_some_and(|r| r.contains_key(&c.col)) {
             return None;
+        }
+        // Each edge of the bounds holds a stored cell, so removing a cell inside them leaves them
+        // as they are; only a cell on an edge can shrink them.
+        if self.bounds.get().is_some_and(|b| b.is_none_or(|r| on_edge(r, c))) {
+            self.bounds.take();
         }
         let b = Arc::make_mut(band);
         let row = b.rows.get_mut(&c.row)?;
@@ -123,6 +146,10 @@ impl CellStore {
     }
     /// Smallest range containing every stored cell, `None` when empty.
     pub fn used_range(&self) -> Option<RangeRef> {
+        *self.bounds.get_or_init(|| self.compute_used_range())
+    }
+
+    fn compute_used_range(&self) -> Option<RangeRef> {
         let first_band = self.bands.values().next()?;
         let last_band = self.bands.values().next_back()?;
         let r0 = *first_band.rows.keys().next()?;
@@ -327,6 +354,146 @@ mod tests {
 
     fn c(r: u32, col: u32) -> CellRef {
         CellRef::new(r, col)
+    }
+
+    fn assert_bounds(s: &CellStore) {
+        let expected = s.iter().map(|(c, _)| RangeRef::cell(c)).reduce(|a, b| a.union(&b));
+        assert_eq!(s.used_range(), expected);
+        assert_eq!(s.used_range(), expected, "warm query");
+    }
+
+    #[test]
+    fn bounds_cache_tracks_mutations_and_independent_snapshots() {
+        let mut s = CellStore::new();
+        assert_bounds(&s);
+        for (row, col) in [(64, 5), (1000, 10), (0, 2), (65, 0)] {
+            s.set(c(row, col), Cell::value(1.0.into()));
+            assert_bounds(&s);
+        }
+        let snapshot = s.clone();
+        // Mutable values/styles cannot change the coordinates of stored cells.
+        s.get_mut(c(64, 5)).unwrap().value = Value::Empty;
+        assert_bounds(&s);
+        s.set(c(1000, 10), Cell::default());
+        assert_bounds(&s);
+        s.shift_rows(64, 100);
+        assert_bounds(&s);
+        s.shift_cols(0, 3);
+        assert_bounds(&s);
+        s.take_range(RangeRef::new(c(0, 0), c(10000, 100)));
+        assert_bounds(&s);
+        assert_bounds(&snapshot);
+        assert_eq!(snapshot.used_range(), Some(RangeRef::new(c(0, 0), c(1000, 10))));
+    }
+
+    /// Each mutator runs on a warm cache and must leave `used_range` equal to a fresh scan.
+    #[test]
+    fn every_mutator_keeps_cached_bounds_equal_to_a_fresh_scan() {
+        fn check(s: &CellStore, what: &str) {
+            assert_eq!(s.used_range(), s.compute_used_range(), "{what}");
+        }
+        let one = || Cell::value(1.0.into());
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = |n: u32| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % u64::from(n)) as u32
+        };
+        let mut s = CellStore::new();
+        for step in 0..3000 {
+            s.used_range();
+            let (r, col) = (next(300), next(40));
+            let what = match next(13) {
+                0..=3 => {
+                    s.set(c(r, col), one());
+                    "set"
+                }
+                4 => {
+                    s.set(c(r, col), Cell::default());
+                    "set blank"
+                }
+                5 | 6 => {
+                    s.remove(c(r, col));
+                    "remove"
+                }
+                7 => {
+                    if let Some(x) = s.get_mut(c(r, col)) {
+                        x.value = Value::Empty;
+                    }
+                    "get_mut"
+                }
+                8 => {
+                    s.take_range(RangeRef::new(c(r, col), c(r + next(20), col + next(5))));
+                    "take_range"
+                }
+                9 => {
+                    s.shift_rows(r, i64::from(next(7)) - 3);
+                    "shift_rows"
+                }
+                10 => {
+                    s.shift_cols(col, i64::from(next(7)) - 3);
+                    "shift_cols"
+                }
+                11 => {
+                    s.shift_cols_in_rows(r, r + next(30), col, i64::from(next(7)) - 3);
+                    "shift_cols_in_rows"
+                }
+                _ => {
+                    s.shift_rows_in_cols(col, col + next(5), r, i64::from(next(7)) - 3);
+                    "shift_rows_in_cols"
+                }
+            };
+            check(&s, &format!("{what} at step {step}"));
+        }
+        s.used_range();
+        s.rebuild();
+        check(&s, "rebuild");
+        let restored: CellStore = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        check(&restored, "deserialized");
+    }
+
+    #[test]
+    fn inserts_and_interior_removals_keep_the_bounds_cache_warm() {
+        let mut s = CellStore::new();
+        for (row, col) in [(0, 0), (10, 10), (5, 5)] {
+            s.set(c(row, col), Cell::value(1.0.into()));
+        }
+        assert_eq!(s.used_range(), Some(RangeRef::new(c(0, 0), c(10, 10))));
+        s.set(c(20, 3), Cell::value(1.0.into()));
+        assert!(s.bounds.get().is_some(), "a new cell extends the cached bounds");
+        assert_eq!(s.used_range(), Some(RangeRef::new(c(0, 0), c(20, 10))));
+        s.remove(c(5, 5));
+        assert!(s.bounds.get().is_some(), "removing an interior cell keeps them");
+        s.remove(c(20, 3));
+        assert!(s.bounds.get().is_none(), "removing a cell on an edge drops them");
+        assert_eq!(s.used_range(), Some(RangeRef::new(c(0, 0), c(10, 10))));
+    }
+
+    #[test]
+    fn warming_bounds_does_not_change_equality() {
+        let mut s = CellStore::new();
+        s.set(c(64, 2), Cell::value(1.0.into()));
+        let cold = s.clone();
+        assert_bounds(&s);
+        assert_eq!(s, cold);
+    }
+
+    #[test]
+    fn bounds_are_not_serialized_and_restore_after_json_roundtrip() {
+        let mut s = CellStore::new();
+        s.set(c(100, 3), Cell::value(1.0.into()));
+        assert_bounds(&s);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("bounds"));
+        let mut restored: CellStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, restored);
+        assert_bounds(&restored);
+        restored.set(c(100, 3), Cell::value(2.0.into()));
+        assert!(restored.bounds.get().is_some(), "replacing a value preserves bounds");
+        restored.set(c(2, 20), Cell::value(2.0.into()));
+        assert_bounds(&restored);
+        assert_bounds(&s);
     }
 
     #[test]

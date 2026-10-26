@@ -1238,6 +1238,7 @@ fn hide(s: &mut Session, p: &Json, rows: bool, on: bool) -> Result<Json> {
             }
         }
         cx.structural = true; // SUBTOTAL(10x) depends on hidden rows
+        cx.visibility_only = true;
         Ok(Json::Null)
     })
 }

@@ -26,7 +26,7 @@ pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct RuleStats {
     sorted: Vec<f64>,
     avg: f64,
@@ -45,12 +45,23 @@ enum StatsNeed {
 }
 
 fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
+    // Exhaustive on purpose: a new rule kind must decide whether it reads range statistics.
     match rule {
         CfRule::Duplicate { .. } | CfRule::Unique { .. } => Some(StatsNeed::Counts),
         CfRule::Top10 { .. } | CfRule::AboveAverage { .. } | CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => {
             Some(StatsNeed::Numbers)
         }
-        _ => None,
+        CfRule::CellIs { .. }
+        | CfRule::Expression { .. }
+        | CfRule::ContainsText { .. }
+        | CfRule::NotContainsText { .. }
+        | CfRule::BeginsWith { .. }
+        | CfRule::EndsWith { .. }
+        | CfRule::Blanks { .. }
+        | CfRule::NoBlanks { .. }
+        | CfRule::Errors { .. }
+        | CfRule::NoErrors { .. }
+        | CfRule::TimePeriod { .. } => None,
     }
 }
 
@@ -398,6 +409,91 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn cell_rules_do_not_scan_ranges_for_unused_statistics() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_cell(CellRef::new(0, 0), gridcraft_model::Cell::value(10.0.into()));
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::parse("A1:A100000").unwrap()],
+            rule: CfRule::CellIs { op: CfOperator::Greater, a: "5".into(), b: None, style: Box::default() },
+            priority: 1,
+            stop_if_true: false,
+        });
+        let mut cache = CfCache::new();
+        assert!(cache.look(&wb, 0, CellRef::new(0, 0)).is_some());
+        assert!(cache.stats.is_empty(), "cell-local rule needs no range statistics");
+    }
+
+    #[test]
+    fn statistics_of_a_filtered_range_still_count_its_hidden_cells() {
+        // As in Excel: with A2:A11 = 1..10 filtered to A>5, "above average" still compares with
+        // 5.5 (not 8) and "bottom 2" still marks the hidden 1 and 2.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values: Vec<_> = std::iter::once(json!(["N"])).chain((1..=10).map(|n| json!([n]))).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        let (mut bold, mut italic) = (Style::default(), Style::default());
+        bold.font.bold = true;
+        italic.font.italic = true;
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        let sh = wb.sheet_mut(0).unwrap();
+        let range = RangeRef::parse("A2:A11").unwrap();
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![range],
+            rule: CfRule::AboveAverage { below: false, equal: false, std_dev: 0, style: Box::new(bold) },
+            priority: 1,
+            stop_if_true: false,
+        });
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![range],
+            rule: CfRule::Top10 { bottom: true, percent: false, rank: 2, style: Box::new(italic) },
+            priority: 2,
+            stop_if_true: false,
+        });
+        d.wb = std::sync::Arc::new(wb);
+        let looks = |s: &crate::Session| -> Vec<(bool, bool)> {
+            let mut cache = CfCache::new();
+            let wb = &s.doc().unwrap().wb;
+            (1..=10)
+                .map(|row| {
+                    let style = cache.look(wb, 0, CellRef::new(row, 0)).and_then(|l| l.style).unwrap_or_default();
+                    (style.font.bold, style.font.italic)
+                })
+                .collect()
+        };
+        let unfiltered = looks(&s);
+        let expected: Vec<(bool, bool)> = (1..=10).map(|n| (n > 5, n <= 2)).collect();
+        assert_eq!(unfiltered, expected);
+        s.execute("data.filter", json!({"range": "A1:A11"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "custom": {"op": ">", "value": 5}})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!((1..=5).all(|row| sh.is_row_hidden(row)) && (6..=10).all(|row| !sh.is_row_hidden(row)));
+        assert_eq!(looks(&s), unfiltered, "hidden cells still count in the statistics");
+    }
+
+    #[test]
+    fn statistical_rules_share_stats_and_preserve_duplicate_matching() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        for (row, value) in ["X", "x", "Y"].into_iter().enumerate() {
+            sh.set_cell(CellRef::new(row as u32, 0), gridcraft_model::Cell::value(value.into()));
+        }
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::parse("A1:A3").unwrap()],
+            rule: CfRule::Duplicate { style: Box::default() },
+            priority: 1,
+            stop_if_true: false,
+        });
+        let mut cache = CfCache::new();
+        for (row, expected) in [(0, true), (1, true), (2, false)] {
+            assert_eq!(cache.look(&wb, 0, CellRef::new(row, 0)).is_some(), expected);
+            assert_eq!(cache.stats.len(), 1);
+        }
+        assert_eq!(cache.stats.get(&0).unwrap().counts.get("x"), Some(&2));
+    }
 
     #[test]
     fn every_matching_rule_applies() {

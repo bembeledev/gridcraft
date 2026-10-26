@@ -199,6 +199,8 @@ pub struct GridState {
     pub hf_start: bool,
     /// The grid geometry of the last frame (hit-testing for agents and tests).
     pub geo: Option<Geo>,
+    /// One sheet's dimension/outline indexes; scrolling does not rebuild them.
+    pub geometry: GeometryCache,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
     /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
@@ -269,21 +271,101 @@ pub struct Geo {
     pub paper: Option<Arc<gridcraft_engine::paper::PageGrid>>,
 }
 
+#[derive(Clone)]
+struct Axes {
+    ri: Arc<LineIndex>,
+    ci: Arc<LineIndex>,
+    rows: Arc<crate::outline::Axis>,
+    cols: Arc<crate::outline::Axis>,
+}
+
+impl Axes {
+    fn new(sh: &Sheet) -> Self {
+        Self {
+            ri: Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS)),
+            ci: Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS)),
+            rows: Arc::new(crate::outline::Axis::of(sh, true)),
+            cols: Arc::new(crate::outline::Axis::of(sh, false)),
+        }
+    }
+}
+
+/// What `Axes` are built from. A sheet edit that keeps all of it (a cell, the zoom, the view)
+/// reuses the indexes.
+#[derive(PartialEq)]
+struct AxesKey {
+    rows: std::collections::BTreeMap<u32, gridcraft_engine::model::LineInfo>,
+    cols: std::collections::BTreeMap<u32, gridcraft_engine::model::LineInfo>,
+    default_row_height: f32,
+    default_col_width: f32,
+    summary_below: bool,
+    summary_right: bool,
+}
+
+impl AxesKey {
+    fn of(sh: &Sheet) -> Self {
+        Self {
+            rows: sh.rows.clone(),
+            cols: sh.cols.clone(),
+            default_row_height: sh.default_row_height,
+            default_col_width: sh.default_col_width,
+            summary_below: sh.summary_below,
+            summary_right: sh.summary_right,
+        }
+    }
+
+    fn matches(&self, sh: &Sheet) -> bool {
+        self.default_row_height == sh.default_row_height
+            && self.default_col_width == sh.default_col_width
+            && self.summary_below == sh.summary_below
+            && self.summary_right == sh.summary_right
+            && self.rows == sh.rows
+            && self.cols == sh.cols
+    }
+}
+
+/// Bounded to one sheet. The weak identity of the last sheet snapshot (which retains neither its
+/// cells nor an undo snapshot) skips the key comparison while the sheet is unchanged; `make_mut`
+/// detaches weak pointers even with a single strong owner, so any edit compares the key, and only
+/// a change to the lines, their default sizes or the outline's summary side rebuilds the axes.
+#[derive(Default)]
+pub struct GeometryCache {
+    source: std::sync::Weak<Sheet>,
+    axes: Option<(AxesKey, Axes)>,
+}
+
+impl GeometryCache {
+    pub fn geometry(&mut self, sh: &Arc<Sheet>, rect: Rect, scroll: egui::Vec2) -> Geo {
+        let source = Arc::downgrade(sh);
+        let axes = match &self.axes {
+            Some((key, axes)) if self.source.ptr_eq(&source) || key.matches(sh) => axes.clone(),
+            _ => {
+                let axes = Axes::new(sh);
+                self.axes = Some((AxesKey::of(sh), axes.clone()));
+                axes
+            }
+        };
+        self.source = source;
+        Geo::with_axes(sh, rect, scroll, axes)
+    }
+}
+
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
+        Self::with_axes(sh, rect, scroll, Axes::new(sh))
+    }
+
+    fn with_axes(sh: &Sheet, rect: Rect, scroll: egui::Vec2, axes: Axes) -> Geo {
+        let Axes { ri, ci, rows: row_outline, cols: col_outline } = axes;
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
         let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
-        let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
-        let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
         let digits = (last_row as f32).log10().floor() as i32 + 1;
         let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round() } else { 0.0 };
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
-        let row_outline = Arc::new(crate::outline::Axis::of(sh, true));
-        let col_outline = Arc::new(crate::outline::Axis::of(sh, false));
         // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
         let symbols = sh.show_outline_symbols;
         let mut band_w = if symbols { crate::outline::band(row_outline.levels, zoom) } else { 0.0 };
@@ -327,13 +409,12 @@ impl Geo {
     }
     /// Page Layout view geometry: `rect` excludes the rulers; cells are drawn at the print scale
     /// on pages laid out by `grid`; frozen panes don't apply (as in Excel).
-    pub fn paged(sh: &Sheet, rect: Rect, scroll: egui::Vec2, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
-        let mut g = Geo::new(sh, rect, scroll);
+    fn on_page(mut self, sh: &Sheet, grid: Arc<gridcraft_engine::paper::PageGrid>) -> Geo {
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
-        g.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
-        (g.fr, g.fc, g.frozen_w, g.frozen_h) = (0, 0, 0.0, 0.0);
-        g.paper = Some(grid);
-        g
+        self.z = zoom * DISPLAY_SCALE * grid.scale.clamp(0.1, 4.0);
+        (self.fr, self.fc, self.frozen_w, self.frozen_h) = (0, 0, 0.0, 0.0);
+        self.paper = Some(grid);
+        self
     }
     /// The point is over cells (in Page Layout view: on a page, inside its margins).
     pub fn in_cells(&self, p: Pos2) -> bool {
@@ -615,7 +696,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
     let si = wb.active_sheet();
-    let Some(sh) = wb.sheet(si) else { return };
+    let Some(sh) = wb.sheets.get(si) else { return };
     let sel = d.selection.clone();
     let place = (d.uid, si);
     let mut view = app.view();
@@ -630,13 +711,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     let make_geo = |app: &mut SheetApp, scroll: egui::Vec2| -> Geo {
         if paper {
-            let probe = Geo::new(sh, grid_rect, scroll);
+            let probe = app.grid.geometry.geometry(sh, grid_rect, scroll);
             if let Some(g) = crate::paper_view::grid_for(app, &wb, si, sh, probe.cells.size(), scroll) {
                 let g = crate::paper_view::with_dragged_margin(app, &wb, si, g);
-                return Geo::paged(sh, grid_rect, scroll, g);
+                return probe.on_page(sh, g);
             }
         }
-        Geo::new(sh, rect, scroll)
+        app.grid.geometry.geometry(sh, rect, scroll)
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
@@ -4202,6 +4283,67 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn geometry_cache_reuses_indexes_and_invalidates_on_cow_edits() {
+        use super::*;
+        use gridcraft_engine::model::LineInfo;
+        let mut sh = Arc::new(Sheet::new("Test"));
+        Arc::make_mut(&mut sh).rows.insert(100, LineInfo { size: Some(40.0), outline: 1, ..Default::default() });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut cache = GeometryCache::default();
+        let a = cache.geometry(&sh, rect, vec2(0.0, 0.0));
+        let b = cache.geometry(&sh, rect, vec2(50.0, 1500.0));
+        assert!(Arc::ptr_eq(&a.ri, &b.ri));
+        assert!(Arc::ptr_eq(&a.row_outline, &b.row_outline));
+        assert_eq!(b.ri.start(101), Geo::new(&sh, rect, b.scroll).ri.start(101));
+        let snapshot = sh.clone();
+        Arc::make_mut(&mut sh).rows.get_mut(&100).unwrap().hidden = true;
+        let hidden = cache.geometry(&sh, rect, b.scroll);
+        assert!(!Arc::ptr_eq(&b.ri, &hidden.ri));
+        assert_eq!(hidden.ri.start(101), Geo::new(&sh, rect, b.scroll).ri.start(101));
+        let undo = cache.geometry(&snapshot, rect, b.scroll);
+        assert_eq!(undo.ri.start(101), b.ri.start(101));
+        // With a single strong owner, `make_mut` must still detach the cache's weak pointer, so
+        // the cache points at `sh` itself before the edit.
+        drop(snapshot);
+        let current = cache.geometry(&sh, rect, b.scroll);
+        let before = Arc::as_ptr(&sh);
+        Arc::make_mut(&mut sh).default_row_height = 30.0;
+        assert_ne!(Arc::as_ptr(&sh), before, "the weak pointer moves the edited sheet");
+        Arc::make_mut(&mut sh).cols.insert(2, LineInfo { hidden: true, ..Default::default() });
+        let changed = cache.geometry(&sh, rect, b.scroll);
+        let fresh = Geo::new(&sh, rect, b.scroll);
+        assert_eq!(changed.ri.start(101), fresh.ri.start(101));
+        assert_eq!(changed.ci.start(3), fresh.ci.start(3));
+        assert!(!Arc::ptr_eq(&current.ri, &changed.ri));
+        drop(sh);
+        assert!(cache.source.upgrade().is_none(), "cache must not retain the sheet");
+    }
+
+    #[test]
+    fn geometry_cache_keeps_indexes_across_zoom_and_cell_edits() {
+        use super::*;
+        use gridcraft_engine::model::{Cell, LineInfo};
+        let mut sh = Arc::new(Sheet::new("Test"));
+        Arc::make_mut(&mut sh).rows.insert(100, LineInfo { size: Some(40.0), outline: 1, ..Default::default() });
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut cache = GeometryCache::default();
+        let first = cache.geometry(&sh, rect, vec2(0.0, 0.0));
+        // Neither the zoom nor a cell feeds the indexes: the same ones serve the new zoom.
+        Arc::make_mut(&mut sh).zoom = 200;
+        Arc::make_mut(&mut sh).set_cell(CellRef::new(5, 5), Cell::value(1.0.into()));
+        let zoomed = cache.geometry(&sh, rect, vec2(0.0, 0.0));
+        assert!(Arc::ptr_eq(&first.ri, &zoomed.ri));
+        assert!(Arc::ptr_eq(&first.ci, &zoomed.ci));
+        assert!(Arc::ptr_eq(&first.row_outline, &zoomed.row_outline));
+        assert!((zoomed.z / first.z - 2.0).abs() < 1e-6, "the geometry follows the zoom");
+        // The summary side does feed the outline: it rebuilds the axes.
+        let below = sh.summary_below;
+        Arc::make_mut(&mut sh).summary_below = !below;
+        let moved = cache.geometry(&sh, rect, vec2(0.0, 0.0));
+        assert!(!Arc::ptr_eq(&zoomed.row_outline, &moved.row_outline));
+        assert_eq!(moved.row_outline.groups, Geo::new(&sh, rect, vec2(0.0, 0.0)).row_outline.groups);
+    }
 
     #[test]
     fn editor_matches_the_cell_while_the_text_fits() {

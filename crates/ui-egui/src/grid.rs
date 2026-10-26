@@ -3374,7 +3374,8 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
+            // Searches what the list shows: "(Blanks)" in the interface language.
+            let matches = |v: &str| needle.is_empty() || (if v == "(Blanks)" { lang.tr(v) } else { v }).to_lowercase().contains(&needle);
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };

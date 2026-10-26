@@ -25,6 +25,14 @@ impl T {
         self.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
         self.calc.cells_changed(&mut self.wb, &[(0, c(at))]);
     }
+    /// A formula read from a file without dynamic-array metadata: Excel calculates it with
+    /// implicit intersection.
+    fn set_legacy(&mut self, at: &str, input: &str) {
+        let mut f = Formula::new(input);
+        f.implicit = true;
+        self.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(f));
+        self.calc.cells_changed(&mut self.wb, &[(0, c(at))]);
+    }
     fn get(&self, at: &str) -> Value {
         self.wb.sheet(0).unwrap().value(c(at))
     }
@@ -2273,4 +2281,36 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// A formula imported from a file that predates dynamic arrays is calculated with implicit
+/// intersection: a reference used as one value gives the cell on the formula's row, not a spill.
+#[test]
+fn legacy_formulas_intersect_instead_of_spilling() {
+    let mut t = T::new();
+    for (at, n) in [("A1", 1.0), ("A2", 2.0), ("A3", 3.0), ("B1", 10.0), ("B2", 20.0), ("B3", 30.0)] {
+        t.set(at, &n.to_string());
+    }
+    // One reference: the cell on the formula's row (`A2`). Two: each intersects, then multiply.
+    t.set_legacy("D2", "=A1:A3");
+    t.set_legacy("E2", "=A1:A3*B1:B3");
+    assert_eq!((t.get("D2"), t.get("E2")), (Value::Number(2.0), Value::Number(40.0)));
+    // Nothing spilled: the cells below and to the right are untouched.
+    for at in ["D3", "D4", "E3", "E4"] {
+        assert_eq!(t.get(at), Value::Empty, "{at}");
+    }
+    // A reference used whole by an aggregating function keeps its cells.
+    t.set_legacy("F2", "=SUM(A1:A3)");
+    t.set_legacy("G2", "=SUM(A1:A3*B1:B3)");
+    assert_eq!((t.num("F2"), t.num("G2")), (6.0, 40.0));
+    // A function returning a range intersects its result (`INDEX` here picks A2 anyway).
+    t.set_legacy("H2", "=INDEX(A1:A3,2)");
+    assert_eq!(t.num("H2"), 2.0);
+    // A value parameter rejects a multi-cell reference in a legacy formula too, instead of
+    // intersecting it.
+    t.set_legacy("I2", "=EOMONTH(A1:A3,0)");
+    assert_eq!(t.get("I2"), Value::Error(CellError::Value));
+    // The same formula typed in GridCraft is a dynamic array and spills.
+    t.set("J2", "=A1:A3*B1:B3");
+    assert_eq!((t.num("J2"), t.num("J3"), t.num("J4")), (10.0, 40.0, 90.0));
 }

@@ -156,8 +156,12 @@ impl Ctx for FnCtx<'_, '_> {
     fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
-        let expr = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?.expr_arc()?;
+        let formula = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?;
+        let expr = formula.expr_arc()?;
+        let implicit = formula.implicit && formula.array.is_none();
         let shifted = gridcraft_formula::adjust::shift_relative((*expr).clone(), record as i64 - 1, 0);
+        // A legacy formula intersects its references, as it does in its own cell.
+        let shifted = if implicit { crate::implicit::scalarize(&shifted) } else { shifted };
         let env = (0..db.cols)
             .filter_map(|c| match db.get(0, c) {
                 Some(Value::Text(t)) if !t.trim().is_empty() => {

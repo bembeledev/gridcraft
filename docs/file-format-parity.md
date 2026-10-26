@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (.xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (XLSX formulas read without dynamic-array metadata calculate with implicit intersection and are saved plain, so legacy workbooks no longer show `#SPILL!`; earlier: .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -38,6 +38,17 @@ value in Excel. Moving the formula, inserting or deleting rows and columns, and 
 names keep the mark; retyping the formula drops it, and the writer then decides from the
 formula's shape. Rich-value metadata other than cell pictures (data types, `#SPILL!` error
 values) is still dropped.
+
+A plain formula read without that metadata, and not a legacy CSE array, is calculated the way
+Excel calculates it: with implicit intersection. The model marks it `implicit`, the evaluator
+rewrites its scalar positions with `@` when it recalculates, and the writer saves it plain, so a
+file from Excel 2019 (or any writer that leaves out `cm`) opens with the values it had instead of
+`#SPILL!` (`fixtures.rs`, engine `legacyimplicit.rs`). `.xls` (BIFF) has no dynamic arrays, so
+every non-CSE `.xls` formula is marked the same way (`xls_tests.rs`). Formulas using dynamic-array-only
+functions (`FILTER`, `SEQUENCE`, `LET`, …) are treated as dynamic even without the mark, and a
+formula typed in GridCraft is always a dynamic array. Undo/redo, row and column insert/delete,
+cut/copy/paste, fills and sheet, table or name renames keep the mark; a defined name whose own
+definition is a legacy calculation is not rewritten yet.
 
 | Format | Excel | GridCraft read | GridCraft write | Fidelity / notes | Tests |
 |---|---|---|---|---|---|
@@ -110,6 +121,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | XLSX formulas read without dynamic-array metadata (`cm`), and every `.xls` formula, calculate with implicit intersection as Excel does and are saved plain: a legacy workbook's formulas show their values instead of `#SPILL!`. Dynamic-array-only functions still mark a formula dynamic, and typing a formula makes it one; moves, fills and renames keep the legacy mark (`fixtures.rs`, `xls_tests.rs`, engine `legacyimplicit.rs`) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |

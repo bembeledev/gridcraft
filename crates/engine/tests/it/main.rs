@@ -15,6 +15,7 @@ mod font_scheme_minor;
 mod format_as_table_restyle;
 mod hidden_sheet_navigation;
 mod ink_roundtrip;
+mod legacyimplicit;
 mod line_count_overflow;
 mod long_operator_chains;
 mod offset_overflow;

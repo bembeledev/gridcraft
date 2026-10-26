@@ -724,3 +724,42 @@ fn every_skipped_drawing_object_is_reported() {
         assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
     }
 }
+
+/// A plain formula from a file without dynamic-array metadata is one Excel calculated with
+/// implicit intersection, so GridCraft imports it that way and saves it plain. A legacy CSE
+/// array, a dynamic-array formula and a third-party formula that uses dynamic-array-only
+/// functions keep array evaluation.
+#[test]
+fn legacy_formulas_keep_implicit_intersection_through_a_save() {
+    let body = r#"<sheetData>
+        <row r="1"><c r="A1"><v>1</v></c><c r="B1"><f>A1:A3*2</f><v>2</v></c><c r="C1"><f t="array" ref="C1:C3">A1:A3*2</f><v>2</v></c><c r="D1" cm="1"><f t="array" ref="D1">_xlfn.SEQUENCE(1)</f><v>1</v></c><c r="E1"><f>FILTER(A1:A3,A1:A3&gt;0)</f><v>1</v></c><c r="F1"><f>SUM(A1:A3)</f><v>6</v></c></row>
+        <row r="2"><c r="A2"><v>2</v></c><c r="C2"><v>4</v></c></row>
+        <row r="3"><c r="A3"><v>3</v></c><c r="C3"><v>6</v></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let formula = |address: &str| s.cell(at(address)).and_then(|c| c.formula.clone()).unwrap();
+    let plain = formula("B1");
+    assert!(plain.implicit && !plain.dynamic && plain.array.is_none(), "a plain formula is legacy");
+    assert!(formula("F1").implicit, "SUM keeps its range argument, but the formula is still legacy");
+    assert!(!formula("C1").implicit, "a legacy CSE array is array-evaluated");
+    assert!(!formula("D1").implicit, "a formula with dynamic-array metadata is not legacy");
+    assert!(!formula("E1").implicit, "a formula using FILTER is dynamic even without the metadata");
+
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let cell =
+        |address: &str| sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some(address)).unwrap();
+    for address in ["B1", "F1"] {
+        assert_eq!(cell(address).attr("cm"), None, "{address} stays plain");
+        let f = cell(address).child("f").unwrap();
+        assert_eq!((f.attr("t"), f.attr("ref")), (None, None), "{address} stays a scalar formula");
+        assert!(!f.text.contains('@') && !f.text.contains("SINGLE"), "{address}: {}", f.text);
+    }
+    assert_eq!(cell("B1").child("f").unwrap().text, "A1:A3*2");
+    assert_eq!(cell("F1").child("f").unwrap().text, "SUM(A1:A3)");
+    let cse = cell("C1").child("f").unwrap();
+    assert_eq!((cse.attr("t"), cse.attr("ref")), (Some("array"), Some("C1:C3")));
+    assert_eq!(cell("D1").attr("cm"), Some("1"));
+}

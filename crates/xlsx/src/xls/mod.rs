@@ -469,6 +469,9 @@ impl SheetState<'_> {
                     return;
                 }
                 f.array = array.filter(|r| !r.is_single());
+                // BIFF predates dynamic arrays: every other formula is a legacy one, calculated
+                // with implicit intersection, and is saved as a plain formula.
+                f.implicit = f.array.is_none();
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));
                 } else {

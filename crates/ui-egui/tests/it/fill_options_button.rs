@@ -159,6 +159,23 @@ fn a_number_drag_offers_no_date_fills() {
     assert!(h.query_by_label("Fill Days").is_none());
 }
 
+#[test]
+fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [3]]})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "B3"), center(&h, "B6"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+
+    assert_eq!(values(&h, &["B4", "B5", "B6"]), [Value::Empty, Value::Empty, Value::Empty], "previewing does not mutate the sheet");
+    assert!(h.query_by_label("4\n5\n6").is_some(), "the cursor tooltip previews the values to be filled");
+
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B4", "B5", "B6"]), [n(4.0), n(5.0), n(6.0)]);
+}
+
 fn formatted(s: &mut Session) {
     s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [null], [9]]})).unwrap();
     s.execute("home.bold", json!({"range": "B1:B2", "on": true})).unwrap();

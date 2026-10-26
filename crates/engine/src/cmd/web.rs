@@ -4,10 +4,10 @@
 
 use serde_json::{Value as Json, json};
 
+use super::analysis::OVERWRITE_ERROR;
 use super::*;
 use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest, WebTable};
 use gridcraft_core::MAX_ROWS;
-use super::analysis::OVERWRITE_ERROR;
 
 /// Preview rows and columns per table (the Navigator's preview pane).
 const PREVIEW_ROWS: usize = 10;
@@ -61,9 +61,7 @@ fn now_ms() -> u64 {
     }
 }
 
-/// A page request from the command params, with the caps clamped.
-/// A page request from the command params, with the caps clamped (shared by the three
-/// commands).
+/// A page request from the command params, with the caps clamped (shared by the three commands).
 fn request(p: &Json) -> Result<WebRequest> {
     const ID: &str = "data.fromWeb";
     let url = str_param(p, "url").map(str::trim).filter(|u| u.starts_with("http")).ok_or_else(|| bad(ID, "missing `url`"))?;
@@ -153,7 +151,7 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
     }
     s.execute("home.insertSheet", json!({"name": sheet_name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
     let r = s.doc()?;
-    let sheet = r.wb.active_sheet;
+    let sheet = r.wb.active_sheet.get();
     let sheet_name = r.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
     s.execute("range.setValues", json!({"range": "A1", "sheet": sheet, "values": rows}))?;
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
@@ -238,9 +236,6 @@ fn json_rows(table: &WebTable) -> Vec<Vec<Json>> {
 /// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
 /// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
 /// `input_to_cell` (cmd/edit.rs).
-/// True when typed-input parsing would make `c` a formula: `=` always, and `+`/`-`/`@` only
-/// in the forms that start one (a plain `-5` stays the number it is). Mirrors the check in
-/// `input_to_cell` (cmd/edit.rs).
 fn would_be_formula(c: &str) -> bool {
     c.starts_with('=')
         || (c.len() > 1
@@ -271,7 +266,6 @@ fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
 /// `data.webRefresh`: re-fetch and rewrite the saved connections the params select (all by
 /// default), reporting per-connection errors instead of failing the batch.
 fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
-    const ID: &str = "data.webRefresh";
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty());
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
     let Some(source) = s.web_source.clone() else {
@@ -296,38 +290,28 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
             let table = pick_table(&tables, Some(&q.table), q.occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
             rewrite_table(s, &q, table)
         }) {
-            Ok((rows, cols)) => {
+            Ok((rows, _cols)) => {
                 refreshed += 1;
                 log::debug!("webRefresh {}: {} rows", q.name, rows);
-                let _ = cols;
             }
             Err(e) => errors.push(json!({"table": q.name, "error": e.to_string()})),
         }
     }
-    let _ = ID;
     Ok(json!({"refreshed": refreshed, "errors": errors}))
 }
 
-/// Re-fetch result over the sheet range the connection's table holds: clear the old range,
-/// write the new rows, and resize the table. Formulas and formatting outside the range are kept.
 /// Re-fetch result over the connection's table: clear its range, write the new rows and
-/// resize the table, as one undo step, at the table's own place.
+/// resize the table, as one undo step, at the table's own place. Formulas and formatting
+/// outside the range are kept.
 fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTable) -> Result<(usize, usize)> {
     let d = s.doc()?;
-    // Only the connection's own table: a name match anywhere, else the same name on the
-    // connection's sheet. Never the first unrelated table that happens to be there.
+    // Only the connection's own table: the same name on the connection's sheet, else a name
+    // match anywhere. Never the first unrelated table that happens to be there.
     let Some((sheet, tname, old)) =
         d.wb.sheets
             .iter()
             .enumerate()
             .find_map(|(si, sh)| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&q.name)).map(|t| (si, t.name.clone(), t.range)))
-            .or_else(|| {
-                d.wb.sheets.iter().enumerate().find_map(|(si, sh)| {
-                    (sh.name.eq_ignore_ascii_case(&q.sheet) && sh.tables.iter().any(|t| t.name.eq_ignore_ascii_case(&q.name)))
-                        .then(|| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&q.name)).map(|t| (si, t.name.clone(), t.range)))
-                        .flatten()
-                })
-            })
     else {
         return Err(EngineError::Other(format!("The sheet or table of the connection `{}` is gone.", q.name)));
     };
@@ -349,12 +333,10 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         let outside = new_range.height() > old.height() || new_range.width() > old.width();
         let clash = outside
             && (new_range.start.row..=new_range.end.row).any(|row| {
-                sh.cells
-                    .row(row, new_range.start.col, new_range.end.col)
-                    .any(|(c, cell)| {
-                        (row < old.start.row || row > old.end.row || c < old.start.col || c > old.end.col)
-                            && (!cell.value.is_empty() || cell.formula.is_some())
-                    })
+                sh.cells.row(row, new_range.start.col, new_range.end.col).any(|(c, cell)| {
+                    (row < old.start.row || row > old.end.row || c < old.start.col || c > old.end.col)
+                        && (!cell.value.is_empty() || cell.formula.is_some())
+                })
             });
         if clash {
             return Err(EngineError::Other(format!(

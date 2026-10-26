@@ -2245,7 +2245,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("queriesConnections", json!({}));
         }
         let ra = small_button(ui, Icon::Redo, "", "Refresh All (re-sync every saved web table)", false);
-        control_keytip(app, ui, &ra, "data.refreshAll");
+        control_keytip(app, ui, &ra, "data.webRefresh");
         if ra.clicked() {
             act(app, "data.webRefresh", json!({}));
         }

@@ -128,6 +128,7 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
 }
 
 #[test]
+/// The Protect Workbook text remains above the centerline of its tall action button.
 fn protect_workbook_info_text_is_aligned_with_its_button() {
     let mut h = harness(Services::default());
     h.state_mut().run("ui.backstage", serde_json::json!({"page": "info"})).unwrap();

@@ -197,7 +197,7 @@ fn insert_word_art(s: &mut Session, p: &Json) -> Result<Json> {
     let height = f64_param(p, "height").unwrap_or(lines * pt * 1.35 * 96.0 / 72.0 + 12.0).clamp(8.0, MAX_SIDE);
     shape.anchor.width = width as f32;
     shape.anchor.height = height as f32;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.shapes.push(shape);
         Ok(json!({"shape": id}))
@@ -209,7 +209,7 @@ fn set_word_art(s: &mut Session, p: &Json) -> Result<Json> {
     let style = style_param("wordArt.set", p)?;
     let text = text_param("wordArt.set", p)?;
     let d = s.doc()?;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.active().ok_or_else(|| bad("wordArt.set", "no such WordArt"))?;
     let current = sh.shapes.iter().find(|x| x.id == id).ok_or_else(|| bad("wordArt.set", "no such WordArt"))?;
     if current.kind != ShapeKind::WordArt {

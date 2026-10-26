@@ -303,9 +303,9 @@ fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
 fn press_dialog_key(h: &mut egui_kittest::Harness<'static, SheetApp>, key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::ViewportCommand> {
     h.input_mut().events.push(egui::Event::ModifiersChanged(modifiers));
     h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
-    let cmds = step_commands(h);
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers });
     h.input_mut().events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    cmds
+    step_commands(h)
 }
 
 #[test]
@@ -363,13 +363,43 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
     assert_eq!(h.state().session.documents().len(), 2);
 
-    // First 'N' closes one workbook; the second workbook is now asked about
-    let sent = press_dialog_key(&mut h, egui::Key::N, egui::Modifiers::NONE);
+    // User presses 'N' to discard the first workbook without releasing the key yet
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: Some(egui::Key::N),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let sent = step_commands(&mut h);
     assert!(!sent.contains(&egui::ViewportCommand::Close));
     assert_eq!(h.state().session.documents().len(), 1);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
 
-    // Second 'D' closes the final workbook and closes window
+    // While 'N' remains held down, OS auto-repeat events must NOT dismiss the second dialog
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: Some(egui::Key::N),
+        pressed: true,
+        repeat: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close));
+    assert_eq!(h.state().session.documents().len(), 1, "held-key repeat must not close the workbook");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "dialog must stay open");
+
+    // The user releases 'N'
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::N,
+        physical_key: Some(egui::Key::N),
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    step_commands(&mut h);
+
+    // Fresh 'D' closes the final workbook and closes window
     let sent = press_dialog_key(&mut h, egui::Key::D, egui::Modifiers::NONE);
     assert!(sent.contains(&egui::ViewportCommand::Close));
     assert!(h.state().dialog.is_none());

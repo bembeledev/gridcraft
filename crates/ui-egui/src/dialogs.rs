@@ -1468,13 +1468,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     if chosen.is_none() {
                         chosen = ui.input_mut(|i| {
                             if i.modifiers.is_none() {
-                                if i.consume_key(egui::Modifiers::NONE, egui::Key::Y)
-                                    || i.consume_key(egui::Modifiers::NONE, egui::Key::S)
-                                    || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                                if consume_fresh_key(i, egui::Key::Y)
+                                    || consume_fresh_key(i, egui::Key::S)
+                                    || consume_fresh_key(i, egui::Key::Enter)
                                 {
                                     Some(crate::SaveAnswer::Save)
-                                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::N)
-                                    || i.consume_key(egui::Modifiers::NONE, egui::Key::D)
+                                } else if consume_fresh_key(i, egui::Key::N)
+                                    || consume_fresh_key(i, egui::Key::D)
                                 {
                                     Some(crate::SaveAnswer::DontSave)
                                 } else {
@@ -1733,6 +1733,19 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
             _ => true,
         });
     });
+}
+
+/// Consumes one fresh, unmodified press of `key`. Held-key repeats stay queued.
+fn consume_fresh_key(input: &mut egui::InputState, key: egui::Key) -> bool {
+    let before = input.events.len();
+    input.events.retain(|event| {
+        !matches!(
+            event,
+            egui::Event::Key { key: ev_key, modifiers, pressed: true, repeat: false, .. }
+                if *ev_key == key && modifiers.is_none()
+        )
+    });
+    input.events.len() != before
 }
 
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {

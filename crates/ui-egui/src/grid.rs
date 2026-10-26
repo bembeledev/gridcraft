@@ -1917,7 +1917,14 @@ pub(crate) fn paint_selection(
 /// Numeric series preview for the fill-handle tooltip. Keep this deliberately read-only: the
 /// actual fill command remains the single source of workbook mutations on pointer release.
 fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef) -> Option<String> {
-    let vertical = src.height() > 1 || src.width() == 1;
+    // A single-cell source has no intrinsic direction; infer it from the expanded target.
+    let vertical = if src.height() > 1 {
+        true
+    } else if src.width() > 1 {
+        false
+    } else {
+        target.height() > 1
+    };
     if (vertical && src.width() != 1) || (!vertical && src.height() != 1) {
         return None;
     }
@@ -1936,6 +1943,16 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
             stored.value.as_f64()
         })
         .collect::<Option<_>>()?;
+    let style_cell = *source.first()?;
+    let format = wb.styles.get(sh.style_id(style_cell)).num_fmt.as_str();
+    if matches!(
+        gridcraft_engine::numfmt::NumberFormat::parse(format).kind(),
+        gridcraft_engine::numfmt::FormatKind::Date | gridcraft_engine::numfmt::FormatKind::Time
+    ) {
+        // The fill engine applies calendar/time-specific rules. Do not show a numeric guess that
+        // would disagree with the values committed when the drag ends.
+        return None;
+    }
     let (forward, steps) = if vertical {
         let forward = target.end.row > src.end.row;
         let steps = if forward { target.end.row - src.end.row } else { src.start.row.saturating_sub(target.start.row) };
@@ -1949,8 +1966,8 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
         return None;
     }
     // Match the engine's linear-series least-squares step, including flat numeric sequences.
-    let slope = if numbers.len() == 1 {
-        0.0 // a lone ordinary number is copied by the default fill operation
+    let (slope, fitted_first, fitted_last) = if numbers.len() == 1 {
+        (0.0, numbers[0], numbers[0]) // a lone ordinary number is copied by the default fill operation
     } else {
         let n = numbers.len() as f64;
         let mean_x = (n - 1.0) / 2.0;
@@ -1959,11 +1976,12 @@ fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef)
             .iter()
             .enumerate()
             .fold((0.0, 0.0), |(num, den), (i, y)| (num + (i as f64 - mean_x) * (y - mean_y), den + (i as f64 - mean_x).powi(2)));
-        if denominator == 0.0 { 0.0 } else { numerator / denominator }
+        let slope = if denominator == 0.0 { 0.0 } else { numerator / denominator };
+        let fitted_first = mean_y - slope * mean_x;
+        let fitted_last = mean_y + slope * (n - 1.0 - mean_x);
+        (slope, fitted_first, fitted_last)
     };
-    let base = if forward { *numbers.last()? } else { *numbers.first()? };
-    let style_cell = *source.first()?;
-    let format = wb.styles.get(sh.style_id(style_cell)).num_fmt.as_str();
+    let base = if forward { fitted_last } else { fitted_first };
     let preview = (1..=steps.min(5))
         .map(|step| {
             let sign = if forward { 1.0 } else { -1.0 };

@@ -3,7 +3,7 @@
 //! Days, Fill Weekdays, Fill Months or Fill Years.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
@@ -160,6 +160,7 @@ fn a_number_drag_offers_no_date_fills() {
 }
 
 #[test]
+/// The preview follows the source direction and agrees with the values committed on release.
 fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
     let mut h = harness(|s| {
         s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [3]]})).unwrap();
@@ -170,10 +171,49 @@ fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
     move_to(&mut h, start, end);
 
     assert_eq!(values(&h, &["B4", "B5", "B6"]), [Value::Empty, Value::Empty, Value::Empty], "previewing does not mutate the sheet");
-    assert!(h.query_by_label("4\n5\n6").is_some(), "the cursor tooltip previews the values to be filled");
+    let preview = h.get_by_label("4\n5\n6").accesskit_node().value().unwrap();
 
     release(&mut h, end, PointerButton::Primary);
     assert_eq!(values(&h, &["B4", "B5", "B6"]), [n(4.0), n(5.0), n(6.0)]);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    let committed = ["B4", "B5", "B6"]
+        .map(|cell| gridcraft_engine::display::value_text(&h.state().session.active().unwrap().wb, sh, CellRef::parse(cell).unwrap()))
+        .join("\n");
+    assert_eq!(preview, committed, "the displayed preview matches the fill result");
+}
+
+#[test]
+/// A horizontal fill from one numeric cell uses the target's direction to calculate the preview.
+fn one_cell_horizontal_fill_shows_a_preview() {
+    let mut h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "C1", "input": "5"})).unwrap();
+        s.execute("selection.set", json!({"cell": "C1"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "C1"), center(&h, "E1"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("5\n5").is_some(), "the tooltip follows the horizontal target range");
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["D1", "E1"]), [n(5.0), n(5.0)]);
+}
+
+#[test]
+/// Extrapolated numeric sequences use the same fitted endpoint as the fill engine.
+fn irregular_series_preview_matches_the_committed_values() {
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [4]]})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "B3"), center(&h, "B5"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    let preview = h.get_all_by_label_contains("\n").next().unwrap().accesskit_node().value().unwrap();
+
+    release(&mut h, end, PointerButton::Primary);
+    let document = h.state().session.active().unwrap();
+    let sheet = document.wb.active().unwrap();
+    let committed = ["B4", "B5"].map(|cell| gridcraft_engine::display::value_text(&document.wb, sheet, CellRef::parse(cell).unwrap())).join("\n");
+    assert_eq!(preview, committed);
 }
 
 fn formatted(s: &mut Session) {

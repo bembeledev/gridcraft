@@ -2,6 +2,7 @@
 //! an item, presses Escape or clicks elsewhere.
 
 use egui::{Event, Modifiers, PointerButton, Pos2};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::{SheetApp, grid};
@@ -99,4 +100,19 @@ fn a_quick_right_click_between_pixels_keeps_the_menu_open_on_retina() {
     button(&mut h, pos, false);
     h.run_steps(4);
     assert!(h.state().grid.context_menu.is_some(), "the menu stays open");
+}
+
+#[test]
+fn hovering_a_long_context_item_does_not_resize_the_menu() {
+    let mut h = harness();
+    quick_right_click(&mut h, "C5");
+    let item = h.get_by_label("Filter by Selected Cell's Value").rect();
+    let menu = h.state().grid.context_menu.unwrap();
+    h.input_mut().events.push(Event::PointerMoved(item.center()));
+    h.run_steps(2);
+
+    let hovered_item = h.get_by_label("Filter by Selected Cell's Value").rect();
+    assert_eq!(hovered_item.size(), item.size(), "hovering keeps the command's dimensions fixed");
+    let menu_after = h.state().grid.context_menu.unwrap();
+    assert_eq!(menu_after, menu, "hovering does not move the menu anchor");
 }

@@ -303,7 +303,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
-    wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
+    wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
     // PivotChart series whose references don't hold their cached points plot the cache.
     crate::chart::plot_pivot_caches(&mut wb, &cx.pivot_charts);
 

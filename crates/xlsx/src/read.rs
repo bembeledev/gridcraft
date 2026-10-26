@@ -242,7 +242,16 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             wb.calc.set_max_change(d);
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
-        wb.calc.multi_threaded = c.flag("concurrentCalc", true);
+        wb.calc.multi_threaded = match c.attr("concurrentCalc") {
+            None => true,
+            Some(v) => match c.attr_bool("concurrentCalc") {
+                Some(b) => b,
+                None => {
+                    cx.warn(format!("calcPr: concurrentCalc {v:?} is not a boolean; multi-threaded calculation stays on"));
+                    true
+                }
+            },
+        };
         wb.calc.threads = match c.attr("concurrentManualCount").map(str::trim) {
             None => 0,
             Some(v) => match v.parse::<u64>() {

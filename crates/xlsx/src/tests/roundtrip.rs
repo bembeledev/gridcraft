@@ -717,11 +717,12 @@ fn iterative_calculation_settings_roundtrip() {
         assert!(calc.iterative, "{attrs}");
         assert_eq!((calc.max_iterations, calc.max_change), (count, change), "{attrs}");
     }
-    // The calculation-thread attributes: anything but a boolean keeps the default (on); a count
-    // that isn't a non-negative integer is "every processor" and a large one saturates, each with
-    // a warning naming the value, while a count at the limit is kept as it is.
+    // The calculation-thread attributes: anything but a boolean keeps the default (on) with a
+    // warning naming the value; a count that isn't a non-negative integer is "every processor"
+    // and a large one saturates, each with a warning naming the value, while a count at the
+    // limit is kept as it is.
     for (attrs, multi, threads, warning) in [
-        (r#"concurrentCalc="2""#, true, 0, None),
+        (r#"concurrentCalc="2""#, true, 0, Some(r#"concurrentCalc "2" is not a boolean"#)),
         (r#"concurrentCalc="0" concurrentManualCount="-1""#, false, 0, Some(r#""-1" is not a count"#)),
         (r#"concurrentCalc="false" concurrentManualCount="7""#, false, 7, None),
         (r#"concurrentManualCount="1024""#, true, 1024, None),
@@ -742,7 +743,7 @@ fn iterative_calculation_settings_roundtrip() {
         ]);
         let (wb, report) = read_xlsx(&bytes).unwrap();
         assert_eq!((wb.calc.multi_threaded, wb.calc.threads), (multi, threads), "{attrs}");
-        let about_count: Vec<&String> = report.warnings.iter().filter(|w| w.contains("concurrentManualCount")).collect();
+        let about_count: Vec<&String> = report.warnings.iter().filter(|w| w.contains("concurrent")).collect();
         match warning {
             Some(text) => assert!(about_count.len() == 1 && about_count[0].contains(text), "{attrs}: {about_count:?}"),
             None => assert!(about_count.is_empty(), "{attrs}: {about_count:?}"),

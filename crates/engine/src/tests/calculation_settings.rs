@@ -19,6 +19,12 @@ fn calculation_options_set_the_thread_count() {
         assert!(e.to_string().contains("non-negative integer"), "{bad}: {e}");
     }
     assert_eq!(s.doc().unwrap().wb.calc.threads, 0);
+    // So is a multi-threaded flag that isn't a boolean.
+    for bad in [json!("yes"), json!(2.5), json!(null)] {
+        let e = s.execute("formulas.calculationOptions", json!({"multiThreaded": bad})).unwrap_err();
+        assert!(e.to_string().contains("boolean"), "{bad}: {e}");
+    }
+    assert!(s.doc().unwrap().wb.calc.multi_threaded);
 }
 
 #[test]

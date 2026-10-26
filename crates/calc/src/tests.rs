@@ -2274,3 +2274,32 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+#[test]
+fn many_spills_are_read_and_blocked_by_a_paste() {
+    let mut t = T::new();
+    // 40 arrays of 3 rows side by side in rows 1-3, and a reader of a range over two of them.
+    for i in 0..40u32 {
+        let anchor = CellRef::new(0, 2 * i);
+        t.wb.sheet_mut(0).unwrap().cells.set(anchor, Cell::formula(Formula::new(&format!("=SEQUENCE(3,1,{})", 10 * i))));
+    }
+    t.set("A10", "=SUM(C1:F3)");
+    t.set("A12", "=COUNT(C1:F3)");
+    t.set("A11", "=C2*1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A10"), (10 + 11 + 12 + 20 + 21 + 22) as f64);
+    assert_eq!(t.num("A11"), 11.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // Pasting 20 cells (more than one spill's width worth, so the changed set is indexed) over
+    // the second row of every other array blocks those arrays; the rest are unchanged.
+    let changed: Vec<(usize, CellRef)> = (0..20u32).map(|i| (0, CellRef::new(1, 4 * i))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C1"), Value::Number(10.0));
+    assert_eq!(t.get("G2"), Value::Number(31.0));
+    assert_eq!(t.get("A10"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("A12"), 4.0);
+}

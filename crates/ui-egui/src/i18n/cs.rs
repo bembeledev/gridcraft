@@ -150,6 +150,24 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This version of GridCraft stores Python code but does not run it." => "Tato verze GridCraftu ukládá kód Pythonu, ale nespouští ho.",
         "Insert\nPython" => "Vložit\nPython",
         "Insert Python (Ctrl+Alt+Shift+P)" => "Vložit Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Editor Pythonu",
+        "Edit in Python Editor" => "Upravit v editoru Pythonu",
+        "Unsaved changes" => "Neuložené změny",
+        "The code for {cell} has unsaved changes." => "Kód pro {cell} obsahuje neuložené změny.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Kód pro {cell} v sešitu {workbook} obsahuje neuložené změny.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kód nemůže být delší: buňka Pythonu pojme {max} znaků počítaných jako vzorec PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Buňka {cell} se změnila, zatímco byla otevřená v editoru Pythonu. Zkopírujte kód, nebo editor zavřete a otevřete ho na buňce znovu."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Buňka {cell} se změnila, zatímco byla otevřená v editoru Pythonu, takže kód nebyl použit. Zkopírujte kód, nebo editor zavřete a otevřete ho na buňce znovu."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} použije kód. Esc zavře editor.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Neuložený kód z editoru Pythonu byl zkopírován do schránky.",
+        "Apply" => "Použít",
+        "Discard" => "Zahodit",
         "Evaluate Formula" => "Vyhodnotit vzorec",
         "Watch Window" => "Okno sledování",
         "Calculation\nOptions" => "Možnosti\nvýpočtu",

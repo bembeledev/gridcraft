@@ -30,6 +30,11 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
+/// bound their product: 255 series of 20,000 categories would be millions of wedges. Every drawable
+/// ring shares this budget, so the innermost ring keeps its largest slices and the outer rings are
+/// capped instead of the chart dropping rings wholesale.
+pub(crate) const MAX_WEDGES: usize = 2_048;
 
 #[derive(Clone, Copy, Debug)]
 struct Bx {
@@ -147,7 +152,13 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         return vec![];
     }
     match chart.kind {
-        ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
+        ChartKind::Pie | ChartKind::Treemap | ChartKind::Sunburst => {
+            let n = first_len(data).min(MAX_CATS);
+            (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
+        }
+        // Excel's doughnut default varies colours by category, even with several series: every
+        // ring repeats the same category colours, so the legend names categories, not series.
+        ChartKind::Doughnut => {
             let n = first_len(data).min(MAX_CATS);
             (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
         }
@@ -253,7 +264,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     use ChartKind::*;
     match chart.kind {
         Pie => pie(ctx, chart, data, area, 0.0, false),
-        Doughnut => pie(ctx, chart, data, area, 0.5, false),
+        Doughnut => doughnut(ctx, chart, data, area),
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
         Funnel => funnel(ctx, chart, data, area),
@@ -1440,6 +1451,56 @@ fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- pie, doughnut, sunburst
 
+/// At most `cap` of the largest values, in category order. When a ring has more categories than
+/// its share of the wedge budget allows, the big slices survive rather than the first ones.
+fn largest_slices(vals: &[f64], cap: usize) -> Vec<(usize, f64)> {
+    let mut idx: Vec<usize> = (0..vals.len()).collect();
+    if idx.len() > cap {
+        // Partition descends by value, so the first `cap` entries are the largest ones.
+        idx.select_nth_unstable_by(cap - 1, |a, b| vals[*b].total_cmp(&vals[*a]));
+        idx.truncate(cap);
+        idx.sort_unstable();
+    }
+    idx.into_iter().map(|j| (j, vals[j])).collect()
+}
+
+/// A wedge, split at 12 o'clock when it crosses the end of the circle.
+fn wedge(ctx: &mut Ctx, cx: f32, cy: f32, r_outer: f32, r_inner: f32, a0: f32, sweep: f32, fill: Rgba, stroke: Option<(Rgba, f32)>) {
+    if sweep <= 1e-4 {
+        return;
+    }
+    // A slice that starts past 12 o'clock still has to be split against 12 o'clock, not against
+    // its unwrapped start: otherwise the half after TAU is drawn from 0 over its neighbours.
+    let a0 = a0.rem_euclid(TAU);
+    let a1 = a0 + sweep;
+    if a1 <= TAU {
+        ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0, a1, fill, stroke });
+        return;
+    }
+    // The halves are filled without a stroke: each would outline its own radial edge at 12
+    // o'clock, painting the white separator straight through the slice.
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0, a1: TAU, fill, stroke: None });
+    ctx.out.push(Prim::Wedge { cx, cy, r_outer, r_inner, a0: 0.0, a1: a1 - TAU, fill, stroke: None });
+    if let Some((color, width)) = stroke {
+        // One outline for the whole slice: the outer and inner arcs run through 12 o'clock, and
+        // the two radial edges at the slice's own start and end close the path.
+        let arc = |r: f32, from: f32, to: f32| -> Vec<[f32; 2]> {
+            let steps = ((r.abs() * (to - from).abs() / 2.0).ceil() as usize).clamp(4, 512);
+            let at = |a: f32| [cx + r * a.sin(), cy - r * a.cos()];
+            (0..=steps).map(|k| at(from + (to - from) * k as f32 / steps as f32)).collect()
+        };
+        let mut pts = arc(r_outer, a0, a1);
+        if r_inner > 0.0 {
+            pts.extend(arc(r_inner, a1, a0));
+        } else {
+            pts.push([cx, cy]);
+        }
+        let start = pts[0];
+        pts.push(start);
+        ctx.out.push(Prim::Line { pts, color, width, dash: false });
+    }
+}
+
 fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, names: bool) {
     let Some(s) = data.series.first() else { return };
     let vals: Vec<f64> = s.values.iter().take(MAX_CATS).map(|v| v.map(f64::abs).unwrap_or(0.0)).collect();
@@ -1454,13 +1515,13 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
     }
     let ri = r * inner;
     let f = Fmt::new(&s.number_format);
-    let mut a = 0.0f32;
+    let mut a = (chart.first_slice_angle % 360) as f32 * TAU / 360.0;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {
         let sweep = (*v / total) as f32 * TAU;
         if sweep > 1e-4 {
             let fill = point_color(data, j);
-            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some((WHITE, 1.5)) });
+            wedge(ctx, cx, cy, r, ri, a, sweep, fill, Some((WHITE, 1.5)));
             if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
                 let mid = a + sweep / 2.0;
@@ -1472,6 +1533,81 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
             }
         }
         a += sweep;
+    }
+    for (x, y, t, c) in labels {
+        ctx.text(x, y, &t, LABEL_SIZE, c, HAlign::Center, VAlign::Middle);
+    }
+}
+
+/// Excel's doughnut: every series is one concentric ring, the first series innermost (measured in
+/// Excel: ring outer radii ≈0.83, 0.92 and 1.0 of the plot radius for series 1, 2 and 3). The hole
+/// size and first slice angle come from the chart; each ring is scaled to its own total.
+fn doughnut(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let nser = data.series.len().min(MAX_SERIES);
+    if nser == 0 {
+        return;
+    }
+    let (cx, cy) = (area.cx(), area.cy());
+    let r = area.w.min(area.h) / 2.0 * 0.92;
+    if r < 2.0 {
+        return;
+    }
+    let hole = f32::from(chart.hole_size.clamp(10, 90)) / 100.0;
+    let ri = r * hole;
+    let thick = (r - ri) / nser as f32;
+    // A ring thinner than a pixel would vanish. Rather than suppressing the whole chart when there
+    // are more series than the annulus has pixels, keep the outer rings at one pixel each and drop
+    // the innermost series that no longer fit: Excel's order makes the first series the innermost,
+    // so the outermost rings are the ones worth keeping.
+    let band = thick.max(1.0);
+    let start = (chart.first_slice_angle % 360) as f32 * TAU / 360.0;
+    // Only rings with a pixel of band are drawn, and the wedge budget is shared across them in
+    // drawing order: the innermost ring (the first series) gets its slices first, and the outer
+    // rings are capped instead of the series × category product growing without bound.
+    let rings: Vec<(&SeriesData, f32, f32)> = data
+        .series
+        .iter()
+        .take(nser)
+        .enumerate()
+        .filter_map(|(si, s)| {
+            let outer = (r - (nser - 1 - si) as f32 * band).min(r);
+            let inner = (r - (nser - si) as f32 * band).max(ri);
+            (outer - inner >= 1.0).then_some((s, outer, inner))
+        })
+        .collect();
+    let mut budget = MAX_WEDGES;
+    let mut labels = Vec::new();
+    for (k, (s, outer, inner)) in rings.iter().enumerate() {
+        // The white separator is 1.5 units wide, wider than a one-pixel band: on a thin ring it
+        // would paint over the fill of this ring and its neighbour, so such rings keep only fill.
+        let stroke = if outer - inner > 1.0 { Some((WHITE, 1.5)) } else { None };
+        let vals: Vec<f64> = s.values.iter().take(MAX_CATS).map(|v| v.map(f64::abs).unwrap_or(0.0)).collect();
+        let cap = (budget / (rings.len() - k)).max(1);
+        let slices = largest_slices(&vals, cap);
+        let total: f64 = slices.iter().map(|(_, v)| *v).sum();
+        if !(total.is_finite() && total > 0.0) {
+            continue;
+        }
+        let n = slices.len();
+        budget = budget.saturating_sub(n);
+        let f = Fmt::new(&s.number_format);
+        let mut a = start;
+        for (j, v) in slices {
+            let sweep = (v / total) as f32 * TAU;
+            if sweep > 1e-4 {
+                let fill = point_color(data, j);
+                wedge(ctx, cx, cy, *outer, *inner, a, sweep, fill, stroke);
+                if chart.data_labels && n <= MAX_LABELS {
+                    let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
+                    let mid = a + sweep / 2.0;
+                    let rr = (outer + inner) / 2.0;
+                    if ctx.tw(&t, LABEL_SIZE) <= (sweep * rr).max(outer - inner) && sweep * rr >= LABEL_SIZE {
+                        labels.push((cx + rr * mid.sin(), cy - rr * mid.cos(), t, on(fill)));
+                    }
+                }
+            }
+            a += sweep;
+        }
     }
     for (x, y, t, c) in labels {
         ctx.text(x, y, &t, LABEL_SIZE, c, HAlign::Center, VAlign::Middle);

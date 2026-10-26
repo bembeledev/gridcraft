@@ -14,7 +14,7 @@ const MIN_SIDE: f32 = 256.0;
 /// Horizontal strips per pixel row for anti-aliasing.
 const STRIPS: usize = 4;
 /// Units of raster work (an edge tested against a strip, a pixel blended) a picture may cost.
-const RASTER_BUDGET: usize = 300_000_000;
+pub(super) const RASTER_BUDGET: usize = 300_000_000;
 /// Segments a Bézier curve is cut into.
 const BEZIER_STEPS: usize = 12;
 
@@ -70,9 +70,11 @@ fn colorref(v: u32) -> Rgb {
     [v as u8, (v >> 8) as u8, (v >> 16) as u8]
 }
 
-/// Renders the EMF as a PNG (transparent background), or `None` when it can't be read or draws nothing.
-pub(super) fn render_png(emf: &[u8]) -> Option<Vec<u8>> {
-    if u32_at(emf, 0)? != 1 {
+/// Renders the EMF as a PNG (transparent background), or `None` when it can't be read or draws
+/// nothing. `budget` is the raster work left to spend; it is reduced by what this picture costs,
+/// so a workbook of many pictures shares one budget.
+pub(super) fn render_png(emf: &[u8], budget: &mut usize) -> Option<Vec<u8>> {
+    if *budget == 0 || u32_at(emf, 0)? != 1 {
         return None;
     }
     let (l, t, r, b) = (i32_at(emf, 8)?, i32_at(emf, 12)?, i32_at(emf, 16)?, i32_at(emf, 20)?);
@@ -88,7 +90,7 @@ pub(super) fn render_png(emf: &[u8]) -> Option<Vec<u8>> {
     // nHandles is a 16-bit count; writers that undercount it still reference their objects.
     let handles = ((u32_at(emf, 56).unwrap_or(1) & 0xFFFF) as usize).clamp(1024, MAX_HANDLES);
     let mut rd = Renderer {
-        canvas: Canvas { w, h, px: vec![[0.0; 4]; w * h], budget: RASTER_BUDGET, exhausted: false },
+        canvas: Canvas { w, h, px: vec![[0.0; 4]; w * h], budget: *budget, exhausted: false },
         left: l as f32,
         top: t as f32,
         scale,
@@ -107,6 +109,7 @@ pub(super) fn render_png(emf: &[u8]) -> Option<Vec<u8>> {
         edges: 0,
     };
     rd.run(emf);
+    *budget = rd.canvas.budget;
     rd.finish()
 }
 
@@ -563,6 +566,11 @@ impl Canvas {
 mod tests {
     use super::*;
 
+    fn render(emf: &[u8]) -> Option<Vec<u8>> {
+        let mut budget = RASTER_BUDGET;
+        render_png(emf, &mut budget)
+    }
+
     fn rec(ty: u32, body: &[u8]) -> Vec<u8> {
         let mut v = ty.to_le_bytes().to_vec();
         v.extend_from_slice(&((body.len() + 8) as u32).to_le_bytes());
@@ -589,7 +597,7 @@ mod tests {
 
     #[test]
     fn a_filled_rectangle_is_drawn_and_the_rest_is_transparent() {
-        let png = render_png(&red_half()).unwrap();
+        let png = render(&red_half()).unwrap();
         let img = image::load_from_memory(&png).unwrap().to_rgba8();
         assert!(img.width() >= 20);
         let (w, h) = (img.width(), img.height());
@@ -601,14 +609,14 @@ mod tests {
 
     #[test]
     fn broken_input_is_refused_not_a_crash() {
-        assert!(render_png(&[]).is_none());
-        assert!(render_png(&[1, 0, 0, 0, 8, 0, 0, 0]).is_none());
+        assert!(render(&[]).is_none());
+        assert!(render(&[1, 0, 0, 0, 8, 0, 0, 0]).is_none());
         let mut bad = red_half();
         bad.truncate(bad.len() - 30);
-        let _ = render_png(&bad);
+        let _ = render(&bad);
         let mut huge = red_half();
         huge[16..20].copy_from_slice(&i32::MAX.to_le_bytes());
-        let _ = render_png(&huge);
+        let _ = render(&huge);
     }
 
     #[test]
@@ -628,6 +636,16 @@ mod tests {
             out.extend(rec(54, &i32s(&[1023 - i % 1000, 1023])));
         }
         out.extend(rec(14, &[0; 12]));
-        assert!(render_png(&out).is_some());
+        assert!(render(&out).is_some());
+    }
+
+    #[test]
+    fn pictures_share_one_raster_budget() {
+        let mut budget = RASTER_BUDGET;
+        assert!(render_png(&red_half(), &mut budget).is_some());
+        assert!(budget < RASTER_BUDGET, "drawing cost nothing");
+        // With nothing left, no picture is drawn.
+        let mut none = 0;
+        assert!(render_png(&red_half(), &mut none).is_none());
     }
 }

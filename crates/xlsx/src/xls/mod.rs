@@ -682,7 +682,7 @@ fn pictures(st: &mut SheetState<'_>, report: &mut ReadReport) {
             skipped += 1;
             continue;
         };
-        st.sheet.images.push(Image { id: 0, anchor, data: Arc::new(blip.data.clone()), mime: blip.mime.to_string(), alt: String::new() });
+        st.sheet.images.push(Image { id: 0, anchor, data: Arc::clone(&blip.data), mime: blip.mime.to_string(), alt: String::new() });
     }
     if skipped > 0 {
         report.warn("Some pictures in .xls files are in a format GridCraft can't show (such as WMF) and are not imported yet.");

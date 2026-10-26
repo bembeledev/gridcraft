@@ -795,3 +795,14 @@ fn a_drawing_group_split_across_records_is_read_whole() {
     assert_eq!(images.len(), 1, "{:?}", report.warnings);
     assert_eq!(images[0].mime, "image/jpeg");
 }
+
+#[test]
+fn shapes_showing_one_picture_share_its_bytes() {
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nxyz";
+    let globals = drawing_group(&[(6, 0x6E0, 0xF01E, png)]);
+    let sheet = sheet_drawing(&[(1, [0, 0, 0, 0, 0, 1, 0, 1, 0]), (1, [0, 2, 0, 2, 0, 3, 0, 3, 0]), (1, [0, 4, 0, 4, 0, 5, 0, 5, 0])]);
+    let (wb, _) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
+    let images = &wb.sheets[0].images;
+    assert_eq!(images.len(), 3);
+    assert!(std::sync::Arc::ptr_eq(&images[0].data, &images[1].data) && std::sync::Arc::ptr_eq(&images[1].data, &images[2].data));
+}

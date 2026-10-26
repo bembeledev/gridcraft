@@ -9,6 +9,8 @@
 //! metafiles are drawn to a PNG ([`super::emf`]), since GridCraft shows PNG and JPEG. Other
 //! formats (WMF, PICT, TIFF) are reported as not imported.
 
+use std::sync::Arc;
+
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 
 use super::{emf, png};
@@ -19,13 +21,16 @@ const MAX_RECORDS: usize = 1_000_000;
 const MAX_DEPTH: usize = 16;
 /// Largest picture kept after decompression or conversion.
 const MAX_PICTURE: usize = 64 * 1024 * 1024;
+/// Bytes of pictures (decompressed or converted) a whole workbook's store may hold.
+const MAX_STORE_BYTES: usize = 256 * 1024 * 1024;
 /// Most pictures kept for a workbook or a sheet.
 pub(super) const MAX_PICTURES: usize = 10_000;
 
 /// A picture of the workbook's store, ready to place on a sheet.
 #[derive(Clone, Debug)]
 pub(super) struct Blip {
-    pub data: Vec<u8>,
+    /// Shared by every shape that shows the picture.
+    pub data: Arc<Vec<u8>>,
     pub mime: &'static str,
 }
 
@@ -93,41 +98,71 @@ fn walk(d: &[u8], depth: usize, count: &mut usize, leaf: &mut dyn FnMut(&Header,
 /// The picture store of a drawing group (the concatenated MsoDrawingGroup data).
 pub(super) fn read_store(group: &[u8]) -> Vec<Stored> {
     let mut out: Vec<Stored> = vec![];
+    let mut work = Work { raster: emf::RASTER_BUDGET, bytes: MAX_STORE_BYTES };
     let mut count = 0;
     walk(group, 0, &mut count, &mut |h, body| {
         // BSE: btWin32, btMacOS, uid(16), tag, size, cRef, foDelay, unused, cbName, unused×2, name, blip.
         if h.ty == 0xF007 && out.len() < MAX_PICTURES {
-            out.push(read_bse(body));
+            out.push(read_bse(body, &mut work));
         }
     });
     out
 }
 
-fn read_bse(body: &[u8]) -> Stored {
+/// What decoding the whole picture store may still cost: every entry is decoded, whether or not a
+/// sheet shows it, so the limits are for the store and not for each entry.
+struct Work {
+    raster: usize,
+    bytes: usize,
+}
+
+impl Work {
+    /// Takes `n` bytes from the store's allowance, or `None` when it is used up.
+    fn charge(&mut self, n: usize) -> Option<()> {
+        self.bytes = self.bytes.checked_sub(n)?;
+        Some(())
+    }
+}
+
+fn read_bse(body: &[u8], work: &mut Work) -> Stored {
     const BSE_HEADER: usize = 36;
     let cb_name = usize::from(body.get(33).copied().unwrap_or(0));
     let Some(rest) = body.get(BSE_HEADER + cb_name..) else { return Stored::Unsupported };
     let Some(h) = header(rest, 0) else { return Stored::Unsupported };
     let Some(blip) = rest.get(8..8usize.saturating_add(h.len).min(rest.len())) else { return Stored::Unsupported };
-    decode_blip(&h, blip).map_or(Stored::Unsupported, Stored::Picture)
+    decode_blip(&h, blip, work).map_or(Stored::Unsupported, Stored::Picture)
 }
 
-fn decode_blip(h: &Header, body: &[u8]) -> Option<Blip> {
+fn decode_blip(h: &Header, body: &[u8], work: &mut Work) -> Option<Blip> {
     // A second UID follows the first when the record instance is odd.
     let uids = if h.inst & 1 == 1 { 32 } else { 16 };
     match h.ty {
         // JPEG (and CMYK JPEG), PNG: one tag byte, then the file.
-        0xF01D | 0xF02A => Some(Blip { data: body.get(uids + 1..)?.to_vec(), mime: "image/jpeg" }),
-        0xF01E => Some(Blip { data: body.get(uids + 1..)?.to_vec(), mime: "image/png" }),
-        0xF01F => Some(Blip { data: dib_to_png(body.get(uids + 1..)?)?, mime: "image/png" }),
+        0xF01D | 0xF02A | 0xF01E => {
+            let file = body.get(uids + 1..)?;
+            work.charge(file.len())?;
+            Some(Blip { data: Arc::new(file.to_vec()), mime: if h.ty == 0xF01E { "image/png" } else { "image/jpeg" } })
+        }
+        0xF01F => {
+            let png = dib_to_png(body.get(uids + 1..)?)?;
+            work.charge(png.len())?;
+            Some(Blip { data: Arc::new(png), mime: "image/png" })
+        }
         0xF01A => {
             // Metafile header: cbSize, bounds(16), size(8), cbSave, compression, filter.
             let head = body.get(uids..uids + 34)?;
             let cb_size = u32::from_le_bytes([head[0], head[1], head[2], head[3]]) as usize;
             let cb_save = u32::from_le_bytes([head[28], head[29], head[30], head[31]]) as usize;
             let data = body.get(uids + 34..)?.get(..cb_save.min(body.len()))?;
-            let raw = if head[32] == 0 { decompress_to_vec_zlib_with_limit(data, cb_size.clamp(1, MAX_PICTURE)).ok()? } else { data.to_vec() };
-            Some(Blip { data: emf::render_png(&raw)?, mime: "image/png" })
+            let raw = if head[32] == 0 {
+                decompress_to_vec_zlib_with_limit(data, cb_size.clamp(1, MAX_PICTURE).min(work.bytes)).ok()?
+            } else {
+                data.to_vec()
+            };
+            work.charge(raw.len())?;
+            let png = emf::render_png(&raw, &mut work.raster)?;
+            work.charge(png.len())?;
+            Some(Blip { data: Arc::new(png), mime: "image/png" })
         }
         _ => None,
     }

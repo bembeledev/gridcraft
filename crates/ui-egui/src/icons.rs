@@ -86,8 +86,12 @@ pub enum Icon {
     Sparkline,
     Checkbox,
     Function,
+    Logic,
+    Lookup,
     Name,
     Trace,
+    TracePrecedents,
+    TraceDependents,
     Calc,
     Filter,
     SortAsc,
@@ -568,6 +572,24 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         }
         Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, false, false),
         Icon::Function => g.text(8.0, 8.0, "fx", 11.0, c, false, true),
+        Icon::Logic => {
+            g.rect(6.0, 3.5, 6.0, 9.0, Some(pal.wash(Cat::Teal)), Some(blue));
+            g.stroke(&[(2.0, 5.5), (6.0, 5.5)], blue);
+            g.stroke(&[(2.0, 10.5), (6.0, 10.5)], blue);
+            g.stroke(&[(12.0, 8.0), (14.0, 8.0)], blue);
+            g.circle(2.0, 5.5, 0.7, Some(green), None);
+            g.circle(2.0, 10.5, 0.7, Some(green), None);
+            g.circle(14.0, 8.0, 0.7, Some(green), None);
+            g.text(9.0, 8.0, "&", 6.0, c, true, false);
+        }
+        Icon::Lookup => {
+            g.rect(1.5, 2.0, 10.0, 9.0, Some(paper), Some(blue));
+            g.stroke(&[(1.5, 5.0), (11.5, 5.0)], light);
+            g.stroke(&[(1.5, 8.0), (8.5, 8.0)], light);
+            g.stroke(&[(5.0, 2.0), (5.0, 11.0)], light);
+            g.circle(10.0, 10.0, 3.0, Some(paper), Some(green));
+            g.line(&[(12.0, 12.0), (14.5, 14.5)], green, 1.5);
+        }
         Icon::Name => {
             g.rect(1.5, 4.0, 13.0, 8.0, None, Some(c));
             g.text(8.0, 8.0, "ab", 8.0, c, false, false);
@@ -577,6 +599,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.circle(12.0, 4.0, 1.6, Some(blue), None);
             g.line(&[(5.0, 11.0), (11.0, 5.0)], blue, 1.2);
             g.poly(&[(12.5, 3.5), (9.0, 4.5), (11.5, 7.0)], blue);
+        }
+        Icon::TracePrecedents | Icon::TraceDependents => {
+            let precedents = icon == Icon::TracePrecedents;
+            if precedents {
+                g.line(&[(11.0, 5.0), (7.4, 8.6)], blue, 1.2);
+                g.poly(&[(5.6, 10.4), (6.3, 7.9), (8.1, 9.7)], blue);
+            } else {
+                g.line(&[(5.0, 11.0), (8.6, 7.4)], blue, 1.2);
+                g.poly(&[(10.4, 5.6), (7.9, 6.3), (9.7, 8.1)], blue);
+            }
+            g.circle(4.0, 12.0, 2.2, Some(blue), None);
+            g.circle(12.0, 4.0, 1.4, Some(green), None);
         }
         Icon::Calc => {
             g.rect(3.0, 1.5, 10.0, 13.0, None, Some(c));
@@ -792,6 +826,10 @@ pub const LIBRARY: &[(&str, Icon)] = &[
     ("shapes", Icon::Shapes),
     ("text", Icon::TextBox),
     ("trace", Icon::Trace),
+    ("trace precedents", Icon::TracePrecedents),
+    ("trace dependents", Icon::TraceDependents),
+    ("logic", Icon::Logic),
+    ("lookup", Icon::Lookup),
     ("validation", Icon::Validation),
 ];
 

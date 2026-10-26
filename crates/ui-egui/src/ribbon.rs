@@ -2059,16 +2059,16 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "formulas.autoSum", json!({}));
     }
     egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
-    for (label, cat, cid) in [
-        ("Financial", "Financial", "formulas.financial"),
-        ("Logical", "Logical", "formulas.logical"),
-        ("Text", "Text", "formulas.text"),
-        ("Date &\nTime", "DateTime", "formulas.dateTime"),
-        ("Lookup &\nReference", "Lookup", "formulas.lookup"),
-        ("Math &\nTrig", "MathTrig", "formulas.mathTrig"),
-        ("More\nFunctions", "Statistical", "formulas.moreFunctions"),
+    for (label, cat, cid, icon) in [
+        ("Financial", "Financial", "formulas.financial", Icon::Currency),
+        ("Logical", "Logical", "formulas.logical", Icon::Logic),
+        ("Text", "Text", "formulas.text", Icon::TextBox),
+        ("Date &\nTime", "DateTime", "formulas.dateTime", Icon::Calendar),
+        ("Lookup &\nReference", "Lookup", "formulas.lookup", Icon::Lookup),
+        ("Math &\nTrig", "MathTrig", "formulas.mathTrig", Icon::Sum),
+        ("More\nFunctions", "Statistical", "formulas.moreFunctions", Icon::More),
     ] {
-        let r = big_button(ui, Icon::Book, label, label, true);
+        let r = big_button(ui, icon, label, label, true);
         control_keytip(app, ui, &r, cid);
         let forced_c = invoke(app, cid);
         egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
@@ -2144,12 +2144,12 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     ui.vertical(|ui| {
-        if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
+        if small_button(ui, Icon::TracePrecedents, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
             app.grid.trace = crate::grid::Trace::new(app, r);
         }
-        if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
+        if small_button(ui, Icon::TraceDependents, "Trace Dependents", "Trace Dependents", false).clicked()
             && let Ok(r) = app.run("formulas.traceDependents", json!({}))
         {
             app.grid.trace = crate::grid::Trace::new(app, r);

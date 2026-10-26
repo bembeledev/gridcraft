@@ -56,6 +56,7 @@ fn a_text_file_opens_through_text_import_with_what_detection_found() {
     h.run_steps(3);
     assert_eq!(dialog(&h).as_deref(), Some("textImport"));
     assert_eq!(h.state().session.documents().len(), before, "nothing opens before OK");
+    h.check_accessibility();
     let f = found(&h);
     assert_eq!(f["delimiters"], json!([";"]));
     assert_eq!((f["startRow"].as_u64(), f["decimal"].as_str()), (Some(3), Some(",")));
@@ -91,6 +92,7 @@ fn delimited_starts_from_what_detection_found_and_the_settings_reach_file_open()
     let values = h.state().dialog.as_ref().map(|d| d.values.clone()).unwrap_or_default();
     assert_eq!((values["mode"].as_str(), values["semicolon"].as_bool(), values["tab"].as_bool()), (Some("delimited"), Some(true), Some(false)));
     assert_eq!(values["startRow"], json!(3), "the detected start row is kept");
+    h.check_accessibility();
     // Keep every field as text: the amount stays the text the file holds.
     h.state_mut().dialog.as_mut().unwrap().values.insert("asText".into(), json!(true));
     h.run_steps(2);
@@ -133,6 +135,11 @@ fn a_text_file_picked_on_the_web_opens_through_text_import_too() {
     assert_eq!(dialog(&h).as_deref(), Some("textImport"));
     assert!(h.state().dialog.as_ref().is_some_and(|d| d.values.contains_key("base64")));
     assert_eq!(found(&h)["fixedWidths"], json!([10, 20]));
+    // Fixed width starts from the widths detection found.
+    h.get_by_label("Fixed width").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.values["fixedWidths"].clone()), Some(json!("10, 20")));
+    h.check_accessibility();
     h.get_by_label("   OK   ").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);

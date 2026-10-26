@@ -102,7 +102,7 @@ pub(super) fn text_import(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
 
     let source = text(d, "path");
     let source = if source.is_empty() { text(d, "name") } else { source };
-    let file = std::path::Path::new(&source).file_name().and_then(|n| n.to_str()).unwrap_or(&source).to_string();
+    let file = std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(&source).to_string();
     ui.label(egui::RichText::new(file).strong());
     ui.add_space(4.0);
 
@@ -133,11 +133,12 @@ pub(super) fn text_import(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
                     }
                 }
                 let mut on = flag(d, "otherOn");
-                if ui.checkbox(&mut on, lang.tr("Other:")).changed() {
+                let other_box = ui.checkbox(&mut on, lang.tr("Other:"));
+                if other_box.changed() {
                     d.values.insert("otherOn".into(), json!(on));
                 }
                 let mut other = text(d, "other");
-                if ui.add(egui::TextEdit::singleline(&mut other).desired_width(48.0)).changed() {
+                if ui.add(egui::TextEdit::singleline(&mut other).desired_width(48.0)).labelled_by(other_box.id).changed() {
                     d.values.insert("otherOn".into(), json!(!other.is_empty()));
                     d.values.insert("other".into(), json!(other));
                 }
@@ -149,9 +150,9 @@ pub(super) fn text_import(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
         }
         "fixed" => {
             ui.horizontal(|ui| {
-                ui.label(lang.tr("Fields start at character:"));
+                let label = ui.label(lang.tr("Fields start at character:"));
                 let mut starts = text(d, "fixedWidths");
-                if ui.add(egui::TextEdit::singleline(&mut starts).hint_text("10, 20").desired_width(180.0)).changed() {
+                if ui.add(egui::TextEdit::singleline(&mut starts).hint_text("10, 20").desired_width(180.0)).labelled_by(label.id).changed() {
                     d.values.insert("fixedWidths".into(), json!(starts));
                 }
             });
@@ -160,37 +161,45 @@ pub(super) fn text_import(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
     }
     ui.horizontal(|ui| {
         if chosen != "fixed" {
-            ui.label(lang.tr("Text qualifier:"));
+            let label = ui.label(lang.tr("Text qualifier:"));
             let qualifier = text(d, "qualifier");
             let shown = |q: &str| if q.is_empty() { lang.tr("{none}").to_string() } else { q.to_string() };
             let mut picked = qualifier.clone();
-            egui::ComboBox::from_id_salt("textImportQualifier").selected_text(shown(&qualifier)).show_ui(ui, |ui| {
-                for q in ["\"", "'", ""] {
-                    ui.selectable_value(&mut picked, q.to_string(), shown(q));
-                }
-            });
+            egui::ComboBox::from_id_salt("textImportQualifier")
+                .selected_text(shown(&qualifier))
+                .show_ui(ui, |ui| {
+                    for q in ["\"", "'", ""] {
+                        ui.selectable_value(&mut picked, q.to_string(), shown(q));
+                    }
+                })
+                .response
+                .labelled_by(label.id);
             if picked != qualifier {
                 d.values.insert("qualifier".into(), json!(picked));
             }
             ui.add_space(12.0);
         }
-        ui.label(lang.tr("Decimal separator:"));
+        let label = ui.label(lang.tr("Decimal separator:"));
         let decimal = text(d, "decimal");
         let shown = |x: &str| if x == "auto" { lang.tr("Detect").to_string() } else { x.to_string() };
         let mut picked = decimal.clone();
-        egui::ComboBox::from_id_salt("textImportDecimal").selected_text(shown(&decimal)).show_ui(ui, |ui| {
-            for x in ["auto", ".", ","] {
-                ui.selectable_value(&mut picked, x.to_string(), shown(x));
-            }
-        });
+        egui::ComboBox::from_id_salt("textImportDecimal")
+            .selected_text(shown(&decimal))
+            .show_ui(ui, |ui| {
+                for x in ["auto", ".", ","] {
+                    ui.selectable_value(&mut picked, x.to_string(), shown(x));
+                }
+            })
+            .response
+            .labelled_by(label.id);
         if picked != decimal {
             d.values.insert("decimal".into(), json!(picked));
         }
     });
     ui.horizontal(|ui| {
-        ui.label(lang.tr("Start import at row:"));
+        let label = ui.label(lang.tr("Start import at row:"));
         let mut row = d.values.get("startRow").and_then(Json::as_u64).or(found["startRow"].as_u64()).unwrap_or(1);
-        if ui.add(egui::DragValue::new(&mut row).range(1..=1_048_576).speed(0.2)).changed() {
+        if ui.add(egui::DragValue::new(&mut row).range(1..=1_048_576).speed(0.2)).labelled_by(label.id).changed() {
             d.values.insert("startRow".into(), json!(row));
         }
         ui.add_space(12.0);

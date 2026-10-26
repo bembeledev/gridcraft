@@ -33,6 +33,7 @@ pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
 pub mod python_card;
+pub mod python_window;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -289,6 +290,8 @@ pub struct SheetApp {
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
+    /// The Python editor window, when open (one at a time, for one cell of one workbook).
+    pub py_window: Option<python_window::PyWindow>,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
@@ -392,6 +395,7 @@ impl SheetApp {
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
+            py_window: None,
             dialog: None,
             backstage: None,
             message: None,
@@ -509,6 +513,11 @@ impl SheetApp {
     }
 
     fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // Closing the workbook would lose the Python editor's unsaved code. The interface asks
+        // first (see `run_or_alert`); a programmatic call is refused.
+        if (id == "file.close" && python_window::blocks_close(self)) || (id == "window.close" && python_window::blocks_window_close(self, &params)) {
+            return Err("The Python editor has unsaved changes for this workbook. Apply or discard them first (ui.pythonEditor with on: false and force: true discards them).".into());
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -665,6 +674,14 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // File › Close (or Ctrl+W) with unsaved code in the Python editor: the editor asks first.
+        if id == "file.close" && python_window::blocks_close(self) {
+            return python_window::ask(self, python_window::Pending::CloseWorkbook(params));
+        }
+        // The close button of the workbook's last window (a native window) asks the same way.
+        if id == "window.close" && python_window::blocks_window_close(self, &params) {
+            return python_window::ask(self, python_window::Pending::CloseWindow(params));
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -872,6 +889,7 @@ impl SheetApp {
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }
             "ui.pythonCard" => python_card::command(self, p),
+            "ui.pythonEditor" => python_window::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -1466,6 +1484,11 @@ impl SheetApp {
         if self.native_windows || self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        // Unsaved code in the Python editor: the editor asks first, and the quit goes on after.
+        if python_window::ask_before_quit(self) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         // A cell still being edited is part of the workbook, as for File › Close.
         if !self.commit_edit(0, 0, false, false) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1532,10 +1555,14 @@ impl SheetApp {
         true
     }
 
-    /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, then asks
-    /// about each unsaved workbook in its window; Cancel on any of them stops the quit. A draft its
-    /// workbook refuses stops the quit too, with its window in front and the reason shown.
+    /// Quit (the macOS app menu, ⌘Q): asks about unsaved code in the Python editor first, then
+    /// commits every window's cell draft as Enter would, then asks about each unsaved workbook in
+    /// its window; Cancel on any of them stops the quit. A draft its workbook refuses stops the
+    /// quit too, with its window in front and the reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        if python_window::ask_before_quit(self) {
+            return;
+        }
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
@@ -1856,6 +1883,7 @@ impl SheetApp {
         if self.draft_elsewhere() {
             self.commit_edit(0, 0, false, false);
         }
+        python_window::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         #[cfg(not(target_arch = "wasm32"))]
@@ -1895,6 +1923,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

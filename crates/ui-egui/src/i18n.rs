@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod fr_functions;
 mod it;
 mod ja;
 mod ko;
@@ -186,15 +187,26 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        use gridcraft_engine::formula::FormulaLocale;
+        match self {
+            Self::Es => FormulaLocale::Es,
+            Self::Fr => FormulaLocale::Fr,
+            _ => FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
     ///
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
-    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
+    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`, and a
+    /// catalog without the context key uses its plain `label` translation.
     pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+        let label = text.rsplit_once('|').map_or(text, |(_, label)| label);
+        self.lookup(text).or_else(|| self.lookup(label)).unwrap_or(label)
+    }
+
+    fn lookup(self, text: &str) -> Option<&str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
@@ -214,8 +226,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        }
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
@@ -224,7 +235,23 @@ impl Language {
         let translated = self.tr(&message);
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
 
-        if translated == fallback { message } else { translated.to_owned() }
+        if translated != fallback {
+            return translated.to_owned();
+        }
+        // Messages built with `format!`: the template with the most literal text wins.
+        self.error_templates()
+            .iter()
+            .filter_map(|(english, local)| Some((literal_len(english), fill_template(english, &message, local)?)))
+            .max_by_key(|(len, _)| *len)
+            .map_or(message, |(_, filled)| filled)
+    }
+
+    /// The templates of engine messages built with `format!`, for the languages that have them.
+    fn error_templates(self) -> HelpTable {
+        match self {
+            Self::Fr => fr::ERROR_TEMPLATES,
+            _ => &[],
+        }
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -243,6 +270,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Fr => Some((fr_functions::DESCRIPTIONS, fr_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -255,6 +283,55 @@ type HelpTable = &'static [(&'static str, &'static str)];
 fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
     let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
     table.get(i).map(|(_, translated)| *translated)
+}
+
+/// A `{name}` template split into its literal texts and placeholder names; there is always one
+/// more literal than names (empty at the ends when a placeholder starts or ends the template).
+fn template_parts(template: &str) -> Option<(Vec<&str>, Vec<&str>)> {
+    let (mut literals, mut names) = (Vec::new(), Vec::new());
+    let mut rest = template;
+    while let Some((literal, tail)) = rest.split_once('{') {
+        let (name, tail) = tail.split_once('}')?;
+        literals.push(literal);
+        names.push(name);
+        rest = tail;
+    }
+    literals.push(rest);
+    Some((literals, names))
+}
+
+/// How much literal text a template holds: a match on more of it is a closer match.
+fn literal_len(template: &str) -> usize {
+    template_parts(template).map_or(0, |(literals, _)| literals.iter().map(|l| l.chars().count()).sum())
+}
+
+/// `translated` with its placeholders filled from `message`, if `message` matches `template`.
+/// Each placeholder captures the (non-empty) text up to the next literal; captures stay untranslated.
+fn fill_template(template: &str, message: &str, translated: &str) -> Option<String> {
+    let (literals, names) = template_parts(template)?;
+    let (first, rest) = literals.split_first()?;
+    let (last, middle) = rest.split_last()?;
+    let mut body = message.strip_prefix(first)?.strip_suffix(last)?;
+    let mut captures = Vec::new();
+    for literal in middle {
+        let (capture, tail) = body.split_once(literal)?;
+        captures.push(capture);
+        body = tail;
+    }
+    captures.push(body);
+    if captures.iter().any(|c| c.is_empty()) {
+        return None;
+    }
+    // One pass over `translated`, so a capture that contains `{…}` is never substituted again.
+    let (pieces, slots) = template_parts(translated)?;
+    let mut out = String::new();
+    for (piece, slot) in pieces.iter().zip(slots.iter().map(Some).chain([None])) {
+        out.push_str(piece);
+        if let Some(slot) = slot {
+            out.push_str(names.iter().position(|n| n == slot).and_then(|i| captures.get(i))?);
+        }
+    }
+    Some(out)
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
@@ -321,6 +398,15 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A context key wins where the catalog has it, else falls back to the plain label's translation.
+    #[test]
+    fn context_keys_fall_back_to_the_plain_label() {
+        assert_eq!(Language::Fr.tr("border|Outline"), "Contour");
+        assert_eq!(Language::Fr.tr("Outline"), "Plan");
+        assert_eq!(Language::Es.tr("delimiter|Comma"), Language::Es.tr("Comma"));
+        assert_eq!(Language::En.tr("delimiter|Comma"), "Comma");
+    }
+
     /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
     fn function_help_tables_are_sorted_and_unique() {
@@ -357,10 +443,12 @@ mod tests {
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
     /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
+    fn placeholders(s: &str) -> Vec<String> {
+        s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect()
+    }
+
     #[test]
     fn translations_keep_the_shape_of_their_english() {
-        let placeholders =
-            |s: &str| s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
         for language in Language::ALL {
             for (english, _) in ja::CORE {
                 let label = english.rsplit_once('|').map_or(*english, |(_, label)| label);
@@ -371,6 +459,72 @@ mod tests {
                     assert!(!text.contains('\n'), "{language:?}: one-line {english:?} => {text:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn error_templates_keep_their_placeholders() {
+        for language in Language::ALL {
+            let table = language.error_templates();
+            for (i, (english, translated)) in table.iter().enumerate() {
+                let mut names = placeholders(english);
+                assert!(!names.is_empty(), "{language:?}: no placeholder in {english:?}");
+                assert!(!english.contains("}{"), "{language:?}: adjacent placeholders in {english:?}");
+                assert!(literal_len(english) >= 8, "{language:?}: too little literal text in {english:?}");
+                let mut local = placeholders(translated);
+                names.sort();
+                local.sort();
+                assert_eq!(names, local, "{language:?}: {english:?} => {translated:?}");
+                assert!(table.iter().skip(i + 1).all(|(other, _)| other != english), "{language:?}: duplicate {english:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn formatted_engine_messages_translate_by_template() {
+        // As shown: `clean_error` drops `invalid parameters for `cmd`: ` before the dialog translates.
+        let shown = crate::clean_error("invalid parameters for `data.scenarioShow`: no scenario named `Best case`");
+        assert_eq!(Language::Fr.tr_error(&shown), "aucun scénario nommé « Best case »");
+        assert_eq!(Language::Fr.tr_error("command `x`: no sheet named `Q1`"), "aucune feuille nommée « Q1 »");
+        assert_eq!(Language::En.tr_error(&shown), shown);
+        assert_eq!(Language::Fr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
+        assert_eq!(Language::Fr.tr_error("no sheet named ``"), "no sheet named ``", "an empty capture is no match");
+        // The template with the most literal text wins over a looser one that also matches.
+        assert_eq!(Language::Fr.tr_error("`Region` isn't in the values area"), "« Region » ne figure pas dans la zone Valeurs");
+        assert_eq!(Language::Fr.tr_error("Too many constraints (at most 100 cells)."), "Trop de contraintes (100 cellules au maximum).");
+        assert_eq!(Language::Fr.tr_error("Too many constraints (at most 100)."), "Trop de contraintes (100 au maximum).");
+    }
+
+    /// Real engine errors stay matched by the templates, so a reworded engine message shows up here.
+    #[test]
+    fn real_engine_errors_translate_to_french() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        for (id, params) in [
+            ("cell.set", serde_json::json!({"cell": "A1", "input": "=SUM()"})),
+            ("sheet.activate", serde_json::json!({"sheet": "Nope"})),
+            ("cell.set", serde_json::json!({"cell": "A1", "input": "=ABS(1,2)"})),
+            ("home.cellStyle", serde_json::json!({"name": "Nope"})),
+            ("pageLayout.theme", serde_json::json!({"name": "Nope"})),
+            ("data.scenarioShow", serde_json::json!({"name": "Nope"})),
+            ("formulas.selectPrecedents", serde_json::json!({"cell": "B9"})),
+        ] {
+            let err = crate::clean_error(&session.execute(id, params).unwrap_err().to_string());
+            assert_ne!(Language::Fr.tr_error(&err), err, "{id}: {err}");
+        }
+    }
+
+    #[test]
+    fn fixed_engine_errors_translate_to_french() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        for (id, params, french) in [
+            ("draw.inkToShape", serde_json::json!({}), "Aucun trait d'encre à convertir."),
+            ("view.zoom", serde_json::json!({}), "`percent` manquant."),
+            ("edit.undo", serde_json::json!({}), "Rien à annuler."),
+        ] {
+            let err = crate::clean_error(&session.execute(id, params).unwrap_err().to_string());
+            assert_eq!(Language::Fr.tr_error(&err), french, "{id}: {err}");
         }
     }
 

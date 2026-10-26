@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn render(bytes: Arc<Vec<u8>>, index: usize) -> Result<egui::ColorImage, String> {
-    let chinese = crate::theme::chinese_preview_font().map(|face| (Arc::new(face.font) as FontData, face.index));
+    let chinese = crate::theme::chinese_preview_font().map(|face| (face.font, face.index));
     render_with_font(bytes, index, chinese)
 }
 
@@ -32,7 +32,7 @@ fn render_with_font(bytes: Arc<Vec<u8>>, index: usize, chinese: Option<(FontData
         let interpreter = InterpreterSettings {
             font_resolver: Arc::new(move |query| {
                 // #1912 exports Chinese with a non-embedded GB1 CID font. Resolve it
-                // with the UI's installed face instead of silently losing the glyphs.
+                // with an existing UI font instead of silently losing the glyphs.
                 if matches!(query, FontQuery::Fallback(f) if f.character_collection.as_ref().is_some_and(|c| c.family == CidFamily::AdobeGB1)) {
                     if chinese.is_none() {
                         missing.store(true, Ordering::Relaxed);
@@ -82,14 +82,11 @@ mod tests {
         session.run("home.fontColor", json!({"range":"A1","color":"#FF0000"})).unwrap();
         let data = session.run("file.print", json!({"sheets":"active"})).unwrap();
         let bytes = gridcraft_engine::io::base64_decode(data["base64"].as_str().unwrap()).unwrap();
-        // Prefer the pinned OFL build input so this test does not depend on a system font.
-        let chinese = std::env::var_os("CRAFT_FONTS_DIR")
-            .map(|dir| {
-                let path = std::path::PathBuf::from(dir).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf");
-                (Arc::new(std::fs::read(path).unwrap()) as FontData, 0)
-            })
-            .or_else(|| crate::theme::chinese_preview_font().map(|f| (Arc::new(f.font) as FontData, f.index)));
+        // Acceptance builds use the same pinned OFL Chinese face as the UI, without
+        // depending on a system font or reintroducing the barred Noto CJK input.
+        let chinese = crate::theme::chinese_preview_font().map(|f| (f.font, f.index));
         let Some(chinese) = chinese else {
+            assert!(!crate::theme::craft_fonts_required(), "required Chinese preview font is absent");
             eprintln!("CJK preview regression skipped: no craft-fonts input or installed Chinese face");
             return;
         };

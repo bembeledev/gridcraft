@@ -630,7 +630,9 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
                 border,
             );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(tr(ui, &notice.text)).font(theme::ui_font(12.5)).color(t.text));
+            // `tr_error`, not `tr`: a reader warning is dynamic text (a file name may hold a `|`).
+            let text = i18n::current(ui.ctx()).tr_error(&notice.text);
+            ui.label(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
                     dismiss = true;

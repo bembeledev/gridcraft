@@ -514,6 +514,17 @@ mod tests {
         }
     }
 
+    /// Open-time notices are dynamic text: a `|` in a file name is not a context separator.
+    #[test]
+    fn notice_text_keeps_literal_pipes() {
+        let warning = "could not read draft|final.json";
+        for lang in [Language::En, Language::Fr, Language::Es] {
+            assert_eq!(lang.tr_error(warning), warning, "{lang:?}");
+        }
+        let vba = "This workbook contains VBA macros. GridCraft keeps them when you save as .xlsm, but does not run them.";
+        assert_ne!(Language::Fr.tr_error(vba), vba);
+    }
+
     #[test]
     fn fixed_engine_errors_translate_to_french() {
         let mut session = gridcraft_engine::Session::new();

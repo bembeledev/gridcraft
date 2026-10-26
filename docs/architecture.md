@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Python cells in the interface; earlier: Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (the Python editor window; earlier: Python cells in the interface; earlier: Python cells as data; earlier: engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -150,7 +150,15 @@ the formula bar only, through `code_editor::code_field`: the code editor's in-or
 of a Python edit runs `python.set`, except that committing empty code clears the cell through
 `cell.set`. `python_card.rs` holds the PY tag (painted in the grid's
 logical coordinates, so the grid's mirroring places it on right-to-left sheets), the card
-(`ui.pythonCard`) and the cell menu's return-type items.
+(`ui.pythonCard`) and the cell menu's return-type items. `python_window.rs` is the Python editor
+window: its own copy of one cell's code (by workbook uid, sheet and address) in `code_field`
+with the line-number gutter (painted for the rows in view) and an `accept` check that refuses an
+edit past `PyCode::fits` as it is typed or pasted. Apply runs `python.set` in the window's
+workbook. The questions about unsaved code are a state of the window (`Pending`), so a
+programmatic `ui.pythonEditor` never opens one; it refuses, or discards with `force`. With native
+windows, where each window draws the app with its own workbook active, the editor is drawn only in
+its workbook's window (`PyWindow::window`), and a question or an opening brings that window
+forward.
 
 ## Agent control
 
@@ -177,6 +185,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | The Python editor window (`python_window.rs`): the code field's gutter and `accept` check, and the window's questions as state |
 | 2026-10-26 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output` |
 | 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |

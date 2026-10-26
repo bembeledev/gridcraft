@@ -1010,7 +1010,7 @@ impl Calc {
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if let Some(f) = &cell.formula
-                    && let Some(e) = f.expr()
+                    && let Some(e) = f.expr_arc()
                 {
                     let (areas, dynamic) = precedents(wb, si, &e);
                     self.graph.insert((si, c), Node { areas, dynamic });
@@ -1088,7 +1088,7 @@ impl Calc {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
-            match formula.and_then(|f| f.expr()) {
+            match formula.and_then(|f| f.expr_arc()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });

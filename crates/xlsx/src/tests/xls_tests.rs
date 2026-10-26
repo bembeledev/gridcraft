@@ -636,3 +636,146 @@ fn xls_short_window2_is_ignored() {
         assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
     }
 }
+
+#[test]
+fn feature_gap_warnings_are_told_apart_from_real_problems() {
+    assert!(crate::xls_is_feature_gap(crate::XLS_IMPORT_NOTICE));
+    assert!(crate::xls_is_feature_gap("Pictures, charts and shapes in .xls files are not imported yet."));
+    assert!(crate::xls_is_feature_gap("PivotTables in .xls files are not imported yet; their values were kept."));
+    assert!(!crate::xls_is_feature_gap("3 cells outside the grid were skipped."));
+    assert!(!crate::xls_is_feature_gap("Dialog sheets and unreadable sheets were skipped."));
+}
+
+/// One workbook with the given globals records (fonts, XFs, palette…) and sheet records.
+fn workbook_with(globals_records: &[u8], sheet_records: &[u8]) -> Vec<u8> {
+    let globals = |pos: u32| cat(&[&bof(0x0005), globals_records, &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
+    let sheet = cat(&[&bof(0x0010), sheet_records, &eof()]);
+    compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))
+}
+
+fn font_rec(height_twips: u16, flags: u16, icv: u16, weight: u16, name: &str) -> Vec<u8> {
+    rec(0x0031, &cat(&[&u16s(&[height_twips, flags, icv, weight, 0]), &[0, 0, 0, 0, name.len() as u8, 0], name.as_bytes()]))
+}
+
+#[test]
+fn reads_fonts_fills_borders_alignment_and_the_palette() {
+    use gridcraft_model::{BorderStyle, Color, HAlign, PatternType, VAlign};
+    // Fonts 0 to 3, then font 5 (index 4 is never written): the fifth record is XF font 5.
+    let mut globals: Vec<u8> = (0..4).flat_map(|_| font_rec(200, 0, 0x7FFF, 400, "Arial")).collect();
+    globals.extend(font_rec(240, 0x0002, 10, 700, "Verdana"));
+    // Palette: entry 8 becomes 0x112233.
+    globals.extend(rec(0x0092, &cat(&[&1u16.to_le_bytes(), &[0x11, 0x22, 0x33, 0]])));
+    let zero_xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 1]), &[0; 14]]));
+    for _ in 0..5 {
+        globals.extend(&zero_xf);
+    }
+    // XF 5: font 5, centred both ways with wrapping, left thin border (red), top medium border
+    // (palette 8), yellow solid fill.
+    let b1: u16 = 1 | (2 << 8);
+    let b2: u16 = 10;
+    let b3: u32 = 8 | (1 << 26);
+    let fill: u16 = 13 | (64 << 7);
+    globals.extend(rec(
+        0x00E0,
+        &cat(&[&u16s(&[5, 0, 1]), &[0x02 | 0x08 | (1 << 4), 0, 0, 0], &b1.to_le_bytes(), &b2.to_le_bytes(), &b3.to_le_bytes(), &fill.to_le_bytes()]),
+    ));
+    let sheet = cat(&[
+        &rec(0x0203, &cat(&[&cell(0, 0, 5), &1.0f64.to_le_bytes()])),
+        &rec(0x0201, &cat(&[&cell(0, 1, 5)])),
+        &rec(0x0201, &cat(&[&cell(0, 2, 4)])),
+    ]);
+    let (wb, _) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
+    let sh = &wb.sheets[0];
+    let st = |a1: &str| wb.styles.get(sh.style_id(CellRef::parse(a1).unwrap())).clone();
+    let s = st("A1");
+    assert_eq!((s.font.name.as_str(), s.font.size, s.font.bold, s.font.italic), ("Verdana", 12.0, true, true));
+    assert_eq!(s.font.color, Color::Rgb(0xFF0000));
+    assert_eq!(s.fill.pattern, PatternType::Solid);
+    assert_eq!(s.fill.fg, Color::Rgb(0xFFFF00));
+    assert_eq!((s.borders.left.style, s.borders.left.color), (BorderStyle::Thin, Color::Rgb(0xFF0000)));
+    assert_eq!((s.borders.top.style, s.borders.top.color), (BorderStyle::Medium, Color::Rgb(0x112233)));
+    assert!(s.borders.right.is_none() && s.borders.bottom.is_none());
+    assert_eq!((s.align.h, s.align.v, s.align.wrap), (HAlign::Center, VAlign::Center, true));
+    // A blank cell keeps its fill; one with a plain format isn't stored.
+    assert_eq!(st("B1").fill.fg, Color::Rgb(0xFFFF00));
+    assert!(sh.cell(CellRef::parse("B1").unwrap()).is_some());
+    assert!(sh.cell(CellRef::parse("C1").unwrap()).is_none());
+}
+
+fn escher(ver: u16, inst: u16, ty: u16, body: &[u8]) -> Vec<u8> {
+    cat(&[&((inst << 4) | ver).to_le_bytes(), &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body])
+}
+
+/// A drawing group holding the given blips (type, record instance, blip bytes after the UID and tag).
+fn drawing_group(blips: &[(u8, u16, u16, &[u8])]) -> Vec<u8> {
+    let bses: Vec<Vec<u8>> = blips
+        .iter()
+        .map(|(bt, inst, ty, data)| {
+            let blip = escher(0, *inst, *ty, &cat(&[&[0u8; 16], &[0xFF], data]));
+            escher(2, u16::from(*bt), 0xF007, &cat(&[&[*bt, *bt], &[0; 16], &[0; 2], &[0; 12], &[0, 0, 0, 0], &blip]))
+        })
+        .collect();
+    let store = escher(0xF, blips.len() as u16, 0xF001, &bses.concat());
+    rec(0x00EB, &escher(0xF, 0, 0xF000, &store))
+}
+
+/// A sheet drawing with one shape per `(pib, anchor)`; `pib` 0 is a shape that is not a picture.
+fn sheet_drawing(shapes: &[(u32, [u16; 9])]) -> Vec<u8> {
+    let group =
+        escher(0xF, 0, 0xF004, &cat(&[&escher(1, 0, 0xF009, &[0; 16]), &escher(2, 0, 0xF00A, &cat(&[&1u32.to_le_bytes(), &5u32.to_le_bytes()]))]));
+    let mut all = vec![group];
+    for (pib, anchor) in shapes {
+        let mut parts = vec![escher(2, 75, 0xF00A, &cat(&[&2u32.to_le_bytes(), &0xA00u32.to_le_bytes()]))];
+        if *pib > 0 {
+            parts.push(escher(3, 1, 0xF00B, &cat(&[&0x4104u16.to_le_bytes(), &pib.to_le_bytes()])));
+        }
+        parts.push(escher(0, 0, 0xF010, &u16s(anchor)));
+        parts.push(escher(0, 0, 0xF011, &[]));
+        all.push(escher(0xF, 0, 0xF004, &parts.concat()));
+    }
+    let spgr = escher(0xF, 0, 0xF003, &all.concat());
+    rec(0x00EC, &escher(0xF, 0, 0xF002, &cat(&[&escher(0, 1, 0xF008, &[0; 8]), &spgr])))
+}
+
+#[test]
+fn reads_png_and_jpeg_pictures_with_their_cells() {
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nxyz";
+    let jpg: &[u8] = b"\xFF\xD8\xFF\xE0abc";
+    let globals = drawing_group(&[(6, 0x6E0, 0xF01E, png), (5, 0x46A, 0xF01D, jpg)]);
+    // A picture over B2:C4 (the second store entry) and one at A1 (the first).
+    let sheet = sheet_drawing(&[(2, [0, 1, 0, 1, 0, 3, 512, 4, 128]), (1, [2, 0, 0, 0, 0, 1, 0, 1, 0])]);
+    let (wb, report) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
+    let images = &wb.sheets[0].images;
+    assert_eq!(images.len(), 2, "{:?}", report.warnings);
+    assert_eq!((images[0].mime.as_str(), images[0].data.as_slice()), ("image/jpeg", jpg));
+    assert_eq!((images[1].mime.as_str(), images[1].data.as_slice()), ("image/png", png));
+    assert_eq!((images[0].anchor.cell.row, images[0].anchor.cell.col), (1, 1));
+    assert!(images[0].anchor.width > 0.0 && images[0].anchor.height > 0.0);
+    assert_ne!(images[0].id, images[1].id);
+    assert!(!report.warnings.iter().any(|w| w.contains("Pictures, charts")), "{:?}", report.warnings);
+}
+
+#[test]
+fn pictures_that_cant_be_shown_and_other_shapes_are_reported() {
+    // A WMF picture (not drawn by GridCraft) and a shape with no picture.
+    let globals = drawing_group(&[(3, 0x216, 0xF01B, b"wmf")]);
+    let sheet = sheet_drawing(&[(1, [0, 0, 0, 0, 0, 1, 0, 1, 0]), (0, [0, 2, 0, 2, 0, 3, 0, 3, 0])]);
+    let (wb, report) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
+    assert!(wb.sheets[0].images.is_empty());
+    assert!(report.warnings.iter().any(|w| w.contains("format GridCraft can't show")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("other shapes")), "{:?}", report.warnings);
+}
+
+#[test]
+fn hostile_drawing_records_never_panic() {
+    for junk in [vec![0xFF; 40], vec![0, 0, 0, 0xF0, 0xFF, 0xFF, 0xFF, 0x7F], vec![0x0F, 0, 0x04, 0xF0, 8, 0, 0, 0], vec![]] {
+        let sheet = rec(0x00EC, &junk);
+        let globals = rec(0x00EB, &junk);
+        let _ = read_xls(&workbook_with(&globals, &sheet));
+    }
+    // A picture index far past the store, and a store entry that is cut short.
+    let globals = rec(0x00EB, &escher(0xF, 0, 0xF000, &escher(0xF, 1, 0xF001, &escher(2, 6, 0xF007, &[0; 10]))));
+    let sheet = sheet_drawing(&[(9999, [0, 0, 0, 0, 0, 1, 0, 1, 0])]);
+    let (wb, _) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
+    assert!(wb.sheets[0].images.is_empty());
+}

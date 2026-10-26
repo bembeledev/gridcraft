@@ -89,17 +89,28 @@ fn numbers_become_numbers_but_codes_and_keys_stay_text() {
 }
 
 #[test]
-fn independent_repeated_elements_combine() {
+fn independent_repeated_elements_stack_one_after_the_other() {
+    // As in Excel: a's rows, then b's rows, with blanks where the other group has its values.
     let xml = "<r><a>1</a><a>2</a><b>x</b><b>y</b><b>z</b></r>";
     let (wb, _) = read_xml_table(xml.as_bytes()).unwrap();
     let sh = wb.sheet(0).unwrap();
     assert_eq!(header(&wb), ["a", "b"]);
-    // 2 x 3 pairings.
-    assert_eq!(sh.tables[0].range.end.row, 6);
-    assert_eq!(v(&wb, 1, 0), Value::Number(1.0));
-    assert_eq!(v(&wb, 1, 1), Value::text("x"));
-    assert_eq!(v(&wb, 6, 0), Value::Number(2.0));
-    assert_eq!(v(&wb, 6, 1), Value::text("z"));
+    assert_eq!(sh.tables[0].range.end.row, 5);
+    assert_eq!((v(&wb, 1, 0), v(&wb, 1, 1)), (Value::Number(1.0), Value::Empty));
+    assert_eq!((v(&wb, 2, 0), v(&wb, 2, 1)), (Value::Number(2.0), Value::Empty));
+    assert_eq!((v(&wb, 3, 0), v(&wb, 3, 1)), (Value::Empty, Value::text("x")));
+    assert_eq!((v(&wb, 5, 0), v(&wb, 5, 1)), (Value::Empty, Value::text("z")));
+}
+
+#[test]
+fn single_values_go_on_every_row_of_the_stacked_groups() {
+    let xml = "<r><id>7</id><a>1</a><a>2</a><b>x</b><b>y</b></r>";
+    let (wb, _) = read_xml_table(xml.as_bytes()).unwrap();
+    assert_eq!(header(&wb), ["id", "a", "b"]);
+    assert_eq!(wb.sheet(0).unwrap().tables[0].range.end.row, 4);
+    for r in 1..=4 {
+        assert_eq!(v(&wb, r, 0), Value::Number(7.0), "row {r}");
+    }
 }
 
 #[test]
@@ -127,8 +138,8 @@ fn utf16_and_latin1_documents_are_read() {
 }
 
 #[test]
-fn a_document_without_values_is_refused() {
-    // An element with nothing in it still names a column; a file with no element at all does not.
+fn a_file_that_is_not_xml_is_refused() {
+    // Not well formed, or not XML at all: refused.
     assert!(matches!(read_xml_table(b"not xml at all"), Err(IoError::Xml(_))));
     assert!(matches!(read_xml_table(b""), Err(IoError::Xml(_))));
 }
@@ -140,16 +151,8 @@ fn hostile_nesting_is_an_error_not_a_crash() {
 }
 
 #[test]
-fn a_huge_cross_product_is_cut_with_a_warning() {
-    // 1500 x 1500 pairings would be 2.25 million rows: past a sheet's rows.
-    let mut xml = String::from("<r>");
-    for i in 0..1500 {
-        xml.push_str(&format!("<a>{i}</a>"));
-    }
-    for i in 0..1500 {
-        xml.push_str(&format!("<b>{i}</b>"));
-    }
-    xml.push_str("</r>");
+fn a_list_longer_than_a_sheet_is_cut_with_a_warning() {
+    let xml = format!("<r>{}</r>", "<a>1</a>".repeat(gridcraft_core::MAX_ROWS as usize + 10));
     let (wb, report) = read_xml_table(xml.as_bytes()).unwrap();
     assert!(!report.warnings.is_empty());
     assert!(wb.sheet(0).unwrap().tables[0].range.end.row < gridcraft_core::MAX_ROWS);
@@ -172,11 +175,67 @@ fn a_long_list_of_nested_records_is_not_cut() {
 }
 
 #[test]
-fn many_occurrences_with_many_rows_each_are_cut_with_a_warning() {
-    // 40 <g> each holding 1000 x 1000 pairings: 40 million rows if nothing bounded the group.
-    let inner: String = format!("<g>{}{}</g>", "<a>1</a>".repeat(1000), "<b>2</b>".repeat(1000));
-    let xml = format!("<r>{}</r>", inner.repeat(40));
-    let (wb, report) = read_xml_table(xml.as_bytes()).unwrap();
-    assert!(!report.warnings.is_empty());
-    assert!(wb.sheet(0).unwrap().tables[0].range.end.row < gridcraft_core::MAX_ROWS);
+fn each_record_stacks_its_own_repeated_children() {
+    let rec = |id: u32| format!("<o><id>{id}</id><a>1</a><a>2</a><b>x</b><b>y</b></o>");
+    let xml = format!("<r>{}{}</r>", rec(1), rec(2));
+    let (wb, _) = read_xml_table(xml.as_bytes()).unwrap();
+    // Two rows of a and two of b for each of the two records.
+    assert_eq!(wb.sheet(0).unwrap().tables[0].range.end.row, 8);
+    assert_eq!(
+        (v(&wb, 1, 0), v(&wb, 4, 0), v(&wb, 5, 0), v(&wb, 8, 0)),
+        (Value::Number(1.0), Value::Number(1.0), Value::Number(2.0), Value::Number(2.0))
+    );
+}
+
+#[test]
+fn a_document_with_no_values_opens_as_a_blank_sheet() {
+    for xml in ["<root/>", "<root></root>", "<a><b/><c></c></a>"] {
+        let (wb, report) = read_xml_table(xml.as_bytes()).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        assert!(sh.tables.is_empty() && sh.used_range().is_none(), "{xml}");
+        assert!(report.warnings.is_empty(), "{xml}");
+    }
+}
+
+#[test]
+fn a_column_is_numeric_only_when_all_of_its_values_are_numbers() {
+    let xml = "<r><i><n>2.50</n><m>2.50</m><k>1e3</k></i><i><n>3</n><m>x</m><k>-4</k></i><i><n></n><m>1</m><k>5%</k></i></r>";
+    let (wb, _) = read_xml_table(xml.as_bytes()).unwrap();
+    // n has an empty element (text, every cell); m has a word; k has 5% and 1,5-like text.
+    assert_eq!(v(&wb, 1, 0), Value::text("2.50"));
+    assert_eq!(v(&wb, 2, 0), Value::text("3"));
+    assert_eq!(v(&wb, 1, 1), Value::text("2.50"));
+    assert_eq!(v(&wb, 1, 2), Value::text("1e3"));
+    let (wb, _) = read_xml_table(b"<r><i><k>1e3</k><p>1,5</p></i><i><k>-4</k><p>.5</p></i></r>").unwrap();
+    assert_eq!((v(&wb, 1, 0), v(&wb, 2, 0)), (Value::Number(1000.0), Value::Number(-4.0)));
+    assert_eq!((v(&wb, 1, 1), v(&wb, 2, 1)), (Value::text("1,5"), Value::text(".5")));
+}
+
+#[test]
+fn text_columns_are_formatted_as_text() {
+    let (wb, _) = read_xml_table(b"<r><i><c>007</c><n>1</n></i><i><c>008</c><n>2</n></i></r>").unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let fmt = |r: u32, c: u32| wb.styles.get(sh.style_id(CellRef::new(r, c))).num_fmt.as_str().to_string();
+    assert_eq!(fmt(1, 0), "@");
+    assert_eq!(fmt(1, 1), "General");
+    assert_eq!(v(&wb, 1, 0), Value::text("007"));
+}
+
+#[test]
+fn logical_and_date_columns_are_typed() {
+    let xml = "<r><i><b>true</b><d>2024-03-05</d><t>2024-03-05T10:30:00</t><z>2024-03-05T10:30:00-03:00</z></i><i><b>false</b><d>2024-03-06</d><t>2024-03-05T12:00:00</t><z>2024-03-06</z></i></r>";
+    let (wb, _) = read_xml_table(xml.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let fmt = |r: u32, c: u32| wb.styles.get(sh.style_id(CellRef::new(r, c))).num_fmt.as_str().to_string();
+    assert_eq!((v(&wb, 1, 0), v(&wb, 2, 0)), (Value::Bool(true), Value::Bool(false)));
+    // 2024-03-05 is serial 45356; the time of day is a fraction of a day.
+    assert_eq!((v(&wb, 1, 1), v(&wb, 2, 1)), (Value::Number(45356.0), Value::Number(45357.0)));
+    assert_eq!(fmt(1, 1), "m/d/yyyy");
+    assert_eq!(v(&wb, 1, 2), Value::Number(45356.0 + 10.5 / 24.0));
+    assert_eq!(fmt(1, 2), "m/d/yyyy h:mm");
+    // A time zone, or a column mixing forms Excel doesn't read, stays text.
+    assert_eq!(v(&wb, 1, 3), Value::text("2024-03-05T10:30:00-03:00"));
+    // An impossible day is not a date.
+    let (wb, _) = read_xml_table(b"<r><i><d>2024-02-30</d></i><i><d>2024-03-01</d></i></r>").unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::text("2024-02-30"));
 }

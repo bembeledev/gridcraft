@@ -5,19 +5,26 @@
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
 //! shared and array formulas), number formats, the 1904 date system, merged cells, column
 //! widths, row heights, defined names, print areas, print titles and the calculation settings
-//! (mode, iteration, precision as displayed). Everything else (fonts, fills, borders, charts,
-//! pictures, comments, conditional formats, validation, macros) is skipped with a warning.
+//! (mode, iteration, precision as displayed), and the formatting of cells, rows and columns
+//! (fonts, fills, borders, alignment, protection). Everything else (charts, shapes, comments,
+//! conditional formats, validation, macros) is skipped with a warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
+mod emf;
+mod escher;
 mod formula;
 mod ftab;
+mod png;
 mod records;
+mod styles;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, NumFmt, Sheet, Style, StyleId, Visibility, Workbook};
+use gridcraft_model::{
+    Anchor, AnchorMode, CalcMode, CalcSettings, Cell, DefinedName, Formula, Image, LineInfo, Sheet, Style, StyleId, Visibility, Workbook,
+};
 
 use crate::cfb::Compound;
 use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
@@ -31,6 +38,9 @@ const MAX_TEXT: usize = 256 * 1024 * 1024;
 const MAX_SHEETS: usize = 4096;
 const MAX_NAMES: usize = 65_536;
 const MAX_XFS: usize = 65_536;
+const MAX_FONTS: usize = 65_536;
+/// Bytes of drawing records kept per sheet.
+const MAX_DRAWING: usize = 64 * 1024 * 1024;
 const MAX_MERGES: usize = 100_000;
 /// Records read from the whole Workbook stream at most (a 65,536 × 256 sheet has fewer). One
 /// allowance shared by every substream: many BoundSheet records pointing into one huge
@@ -58,6 +68,14 @@ pub(crate) fn is_xls(bytes: &[u8]) -> bool {
     let Ok(cf) = Compound::open(bytes) else { return false };
     cf.has_root_stream("Workbook") || cf.has_root_stream("Book")
 }
+
+/// Most shared formulas one sheet expands, and the longest template text one attach may
+/// produce: a template shared by its followers was costing every one of them a full decode and
+/// print however often that could never succeed, so each anchor is tried once and failed ones
+/// are skipped for the rest of the sheet. Beyond the cap the remaining references keep their
+/// cached values.
+const MAX_SHARED_ATTACHES: usize = 262_144;
+const MAX_SHARED_TEMPLATE: usize = 8192;
 
 pub(crate) struct Budget {
     cells: usize,
@@ -123,7 +141,12 @@ struct Globals {
     sheets: Vec<BoundSheet>,
     date1904: bool,
     formats: HashMap<u16, String>,
-    xf_formats: Vec<u16>,
+    xfs: Vec<styles::Xf>,
+    fonts: Vec<styles::FontRec>,
+    /// The pictures of the workbook's drawing group.
+    blips: Vec<escher::Stored>,
+    /// Palette colours (0xRRGGBB) from entry 8 on, when the workbook redefines them.
+    palette: Vec<u32>,
     sst: Vec<Arc<str>>,
     links: Links,
     names: Vec<Lbl>,
@@ -132,7 +155,14 @@ struct Globals {
 
 /// The overview every `.xls` import starts its warnings with. It describes the import as a
 /// whole, so the app shows it in the info bar and not in a message box.
-pub const IMPORT_NOTICE: &str = "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.";
+pub const IMPORT_NOTICE: &str = "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, fonts, fills, borders, alignment, pictures, merged cells, column widths, row heights and defined names were read. Charts, text boxes, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.";
+
+/// Whether a warning only says an optional feature of the file (pictures, comments, conditional
+/// formatting…) is not imported yet. The overview ([`IMPORT_NOTICE`]) already says so in general,
+/// so the app does not stop the user with a message box for each one.
+pub fn is_feature_gap(warning: &str) -> bool {
+    warning == IMPORT_NOTICE || warning.contains("not imported yet")
+}
 
 /// Reads an Excel 97-2003 workbook. Inspect the report's warnings for what was skipped.
 pub fn read_xls(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
@@ -157,20 +187,35 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     let mut wb = Workbook::new();
     wb.sheets.clear();
     wb.date_system = if g.date1904 { DateSystem::D1904 } else { DateSystem::D1900 };
-    // One model style per XF: only the number format is imported.
+    // One model style per XF.
     let styles: Vec<StyleId> = g
-        .xf_formats
+        .xfs
         .iter()
-        .map(|ifmt| {
-            let code = g.formats.get(ifmt).map(String::as_str).or_else(|| builtin_format(u32::from(*ifmt))).unwrap_or("General");
-            if code.eq_ignore_ascii_case("General") {
-                StyleId::DEFAULT
-            } else {
-                wb.styles.intern(Style { num_fmt: NumFmt::new(code), ..Style::default() })
-            }
+        .map(|xf| {
+            let code = g.formats.get(&xf.format).map(String::as_str).or_else(|| builtin_format(u32::from(xf.format))).unwrap_or("General");
+            let num_fmt = (!code.eq_ignore_ascii_case("General")).then_some(code);
+            let style = styles::style(xf, &g.fonts, &g.palette, num_fmt);
+            if style == Style::default() { StyleId::DEFAULT } else { wb.styles.intern(style) }
+        })
+        .collect();
+    // Blank cells are kept only where they show something: a fill, a border or a number format.
+    let keep_blank: Vec<bool> = g
+        .xfs
+        .iter()
+        .map(|xf| {
+            xf.paints()
+                || !g
+                    .formats
+                    .get(&xf.format)
+                    .map(String::as_str)
+                    .or_else(|| builtin_format(u32::from(xf.format)))
+                    .unwrap_or("General")
+                    .eq_ignore_ascii_case("General")
         })
         .collect();
 
+    // Pictures take ids from one count for the whole workbook.
+    let mut next_object = 1u32;
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
     for bs in &g.sheets {
@@ -184,7 +229,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
             continue;
         }
         wb.check_sheet_name(&bs.name, None).map_err(invalid)?;
-        let Some((mut sheet, calc)) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
+        let Some((mut sheet, calc)) = worksheet(&stream, bs, &g, &styles, &keep_blank, &mut budget, &mut report)? else {
             report.warn("Dialog sheets and unreadable sheets were skipped.");
             model_index.push(None);
             continue;
@@ -194,6 +239,10 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         if wb.sheets.is_empty() {
             wb.calc = calc;
         }
+        for im in &mut sheet.images {
+            im.id = next_object;
+            next_object += 1;
+        }
         model_index.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
@@ -202,7 +251,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     }
     wb.calc.precision_as_displayed = g.precision_as_displayed;
     defined_names(&g, &model_index, &mut wb, &mut report);
-    wb.active_sheet = wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
+    wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
     // The overview comes first.
     report.warnings.insert(0, IMPORT_NOTICE.into());
     Ok((wb, report))
@@ -273,9 +322,17 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
             }
-            0x00E0 if g.xf_formats.len() < MAX_XFS => {
-                c.u16()?;
-                g.xf_formats.push(c.u16()?);
+            0x00E0 if g.xfs.len() < MAX_XFS => g.xfs.push(styles::Xf::parse(&mut c).unwrap_or_default()),
+            0x00EB => g.blips = escher::read_store(&c.rest()),
+            0x0031 if g.fonts.len() < MAX_FONTS => g.fonts.push(styles::FontRec::parse(&mut c).unwrap_or_default()),
+            0x0092 => {
+                let n = usize::from(c.u16()?).min(styles::MAX_PALETTE);
+                g.palette.clear();
+                for _ in 0..n.min(c.remaining() / 4) {
+                    let (r, gr, b) = (c.u8()?, c.u8()?, c.u8()?);
+                    c.u8()?;
+                    g.palette.push((u32::from(r) << 16) | (u32::from(gr) << 8) | u32::from(b));
+                }
             }
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
@@ -406,6 +463,9 @@ fn parsed(c: &mut Cursor<'_, '_>) -> Result<Parsed, IoError> {
 struct SheetState<'g> {
     g: &'g Globals,
     styles: &'g [StyleId],
+    keep_blank: &'g [bool],
+    /// The sheet's drawing (MsoDrawing records), read once the sheet is done.
+    drawing: Vec<u8>,
     sheet: Sheet,
     pending: Vec<Pending>,
     shared: HashMap<CellRef, Parsed>,
@@ -443,7 +503,7 @@ impl SheetState<'_> {
     fn put(&mut self, budget: &mut Budget, row: u16, col: u16, ixfe: u16, value: Value) -> Result<Option<CellRef>, IoError> {
         let Some(pos) = self.pos(row, col) else { return Ok(None) };
         let style = self.style(ixfe);
-        if value.is_empty() && style == StyleId::DEFAULT {
+        if value.is_empty() && !self.keep_blank.get(usize::from(ixfe)).copied().unwrap_or(false) {
             return Ok(Some(pos));
         }
         budget.cell()?;
@@ -479,11 +539,62 @@ fn rk(v: u32) -> Value {
     Value::number(if v & 1 != 0 { n / 100.0 } else { n })
 }
 
+/// Attaches every pending formula to its anchor's template, returning how many shared
+/// templates were expanded. An anchor whose template can't be imported is refused once:
+/// its followers re-decode the same template for nothing, so they are skipped instead (they
+/// keep their cached values).
+fn resolve_pending(
+    st: &mut SheetState<'_>,
+    arrays: &HashMap<CellRef, (RangeRef, Parsed)>,
+    shared: &HashMap<CellRef, Parsed>,
+    pending: &[Pending],
+) -> usize {
+    let mut failed: HashSet<CellRef> = HashSet::new();
+    let mut shared_attaches = 0usize;
+    for p in pending {
+        if let Some((range, f)) = arrays.get(&p.anchor) {
+            if p.pos == p.anchor {
+                st.attach(p.pos, f, Mode::Cell, Some(*range));
+            }
+        } else if let Some(f) = shared.get(&p.anchor) {
+            if failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
+                continue;
+            }
+            shared_attaches += 1;
+            st.attach(p.pos, f, Mode::Shared, None);
+            let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
+            if !imported {
+                failed.insert(p.anchor);
+            }
+        } else {
+            st.unsupported("a shared formula that is missing from the file");
+        }
+    }
+    if shared_attaches >= MAX_SHARED_ATTACHES {
+        st.unsupported("more shared formulas than the expansion cap; some formulas kept their values");
+    }
+    shared_attaches
+}
+
+/// The other cells of a legacy array formula hold only cached results: dropped, as when an
+/// .xlsx is read, so that the formula fills its range on recalculation. If the formula itself
+/// couldn't be imported, they keep their values.
+fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
+    for p in pending {
+        let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
+        if p.pos != p.anchor && filled {
+            let style = st.sheet.style_id(p.pos);
+            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
+        }
+    }
+}
+
 fn worksheet(
     stream: &[u8],
     bs: &BoundSheet,
     g: &Globals,
     styles: &[StyleId],
+    keep_blank: &[bool],
     budget: &mut Budget,
     report: &mut ReadReport,
 ) -> Result<Option<(Sheet, CalcSettings)>, IoError> {
@@ -499,6 +610,8 @@ fn worksheet(
     let mut st = SheetState {
         g,
         styles,
+        keep_blank,
+        drawing: vec![],
         sheet: Sheet::new(&bs.name),
         pending: vec![],
         shared: HashMap::new(),
@@ -534,27 +647,9 @@ fn worksheet(
     // Shared and array formulas: their definitions follow the first cell that uses them.
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
-    for p in &pending {
-        if let Some((range, f)) = arrays.get(&p.anchor) {
-            if p.pos == p.anchor {
-                st.attach(p.pos, f, Mode::Cell, Some(*range));
-            }
-        } else if let Some(f) = shared.get(&p.anchor) {
-            st.attach(p.pos, f, Mode::Shared, None);
-        } else {
-            st.unsupported("a shared formula that is missing from the file");
-        }
-    }
-    // The other cells of a legacy array formula hold only cached results: dropped, as when an
-    // .xlsx is read, so that the formula fills its range on recalculation. If the formula itself
-    // couldn't be imported, they keep their values.
-    for p in &pending {
-        let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
-        if p.pos != p.anchor && filled {
-            let style = st.sheet.style_id(p.pos);
-            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
-        }
-    }
+    resolve_pending(&mut st, &arrays, &shared, &pending);
+    blank_array_followers(&mut st, &pending);
+    pictures(&mut st, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -562,6 +657,58 @@ fn worksheet(
         report.warn(format!("Some formulas use {why}; their saved results were kept as values."));
     }
     Ok(Some((st.sheet, st.calc)))
+}
+
+/// Places the sheet's pictures. Shapes that aren't pictures, and pictures in formats GridCraft
+/// can't show, are reported as not imported.
+fn pictures(st: &mut SheetState<'_>, report: &mut ReadReport) {
+    if st.drawing.is_empty() {
+        return;
+    }
+    let shapes = escher::read_shapes(&st.drawing);
+    let mut skipped = 0usize;
+    for pic in &shapes.pictures {
+        let Some(escher::Stored::Picture(blip)) = pic.blip.checked_sub(1).and_then(|i| st.g.blips.get(i)) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(anchor) = anchor_of(&st.sheet, pic) else {
+            skipped += 1;
+            continue;
+        };
+        st.sheet.images.push(Image { id: 0, anchor, data: Arc::new(blip.data.clone()), mime: blip.mime.to_string(), alt: String::new() });
+    }
+    if skipped > 0 {
+        report.warn("Some pictures in .xls files are in a format GridCraft can't show (such as WMF) and are not imported yet.");
+    }
+    if shapes.others > 0 {
+        report.warn("Charts, text boxes and other shapes in .xls files are not imported yet.");
+    }
+}
+
+/// A picture's anchor: the cells it spans, with offsets in 1/1024 of a column and 1/256 of a row.
+fn anchor_of(sheet: &Sheet, pic: &escher::PictureShape) -> Option<Anchor> {
+    let point = |(col, dx, row, dy): (u16, u16, u16, u16)| -> Option<(CellRef, f64, f64)> {
+        let (col, row) = (u32::from(col), u32::from(row));
+        if col >= MAX_COLS.min(256) || row >= MAX_ROWS {
+            return None;
+        }
+        let x = sheet.col_left(col) + f64::from(sheet.col_width(col)) * f64::from(dx.min(1024)) / 1024.0;
+        let y = sheet.row_top(row) + f64::from(sheet.row_height(row)) * f64::from(dy.min(256)) / 256.0;
+        Some((CellRef::new(row, col), x, y))
+    };
+    let (cell, x1, y1) = point(pic.from)?;
+    let (_, x2, y2) = point(pic.to)?;
+    let (width, height) = ((x2 - x1) as f32, (y2 - y1) as f32);
+    if !(width >= 1.0 && height >= 1.0) {
+        return None;
+    }
+    let mode = match pic.flags {
+        2 => AnchorMode::MoveOnly,
+        3 => AnchorMode::Absolute,
+        _ => AnchorMode::MoveAndSize,
+    };
+    Some(Anchor { cell, dx: (x1 - sheet.col_left(cell.col)) as f32, dy: (y1 - sheet.row_top(cell.row)) as f32, width, height, mode })
 }
 
 /// The shortest WINDOW2 a file holds (the chart-sheet form); a shorter one is truncated.
@@ -756,7 +903,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
             st.sheet.right_to_left = on(0x0040);
         }
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
-        0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
+        0x00EC if st.drawing.len() < MAX_DRAWING => st.drawing.extend(c.rest()),
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
         0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),

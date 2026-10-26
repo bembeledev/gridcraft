@@ -1493,6 +1493,12 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
     }
 }
 
+/// A header or footer section's lines. Excel breaks at a carriage return as at a line feed, so CR
+/// LF is two breaks and a trailing CR lifts the text by an empty line (observed).
+fn hf_lines(text: &str) -> Vec<&str> {
+    text.split(['\r', '\n']).take(20).collect()
+}
+
 fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
     let [_, _, _, _, hm, fm] = lay.margins;
     let (l, r) = lay.hf_sides();
@@ -1510,7 +1516,7 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
             }
             let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
-            let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
+            let lines = hf_lines(&sec.text);
             let n = lines.len() as f32;
             for (j, line) in lines.iter().enumerate() {
                 let lw = gridcraft_pdf::text_width(font, size, line);
@@ -1928,6 +1934,14 @@ mod tests {
             let _ = join_header_footer(&split_header_footer(t));
             let _ = fields_to_codes(&codes_to_fields(t));
         }
+    }
+
+    #[test]
+    fn header_footer_lines_break_at_cr_and_lf() {
+        assert_eq!(hf_lines("Thanks"), ["Thanks"]);
+        assert_eq!(hf_lines("Thanks\r"), ["Thanks", ""]);
+        assert_eq!(hf_lines("a\r\nb"), ["a", "", "b"]);
+        assert_eq!(hf_lines("a\nb"), ["a", "b"]);
     }
 
     #[test]

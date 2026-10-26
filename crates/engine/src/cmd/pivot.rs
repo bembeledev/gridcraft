@@ -232,7 +232,7 @@ fn other(msg: impl Into<String>) -> EngineError {
 /// (sheet, index) of the pivot a call targets.
 fn find_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
-    let active = d.wb.active_sheet;
+    let active = d.wb.active_sheet();
     if let Some(v) = p.get("pivot").filter(|v| !v.is_null()) {
         let mut order: Vec<usize> = vec![active];
         order.extend((0..d.wb.sheets.len()).filter(|i| *i != active));
@@ -642,7 +642,7 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(other("The workbook is protected and cannot be changed."));
     }
     let source = source_param(s, p)?;
-    let active = s.doc()?.wb.active_sheet;
+    let active = s.doc()?.wb.active_sheet();
     // Validate the source now (header names, size).
     let src = pv::read_source(&s.doc()?.wb, &source, active).map_err(other)?;
     let name = match str_param(p, "name") {
@@ -721,7 +721,7 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         sh.pivots.push(pt);
         let pi = sh.pivots.len() - 1;
         let area = pv::refresh(&mut cx.wb, si, pi, replace).map_err(other)?;
-        cx.wb.active_sheet = si;
+        cx.wb.set_active_sheet(si);
         *cx.sel = crate::Selection::at(anchor);
         cx.structural = true;
         let sheet_name = cx.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
@@ -746,7 +746,7 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
 /// Inserts a new, empty sheet before the active one (Excel's place for a new PivotTable or a
 /// Show Details sheet); returns its index.
 fn insert_sheet_before_active(cx: &mut Ctx) -> usize {
-    let at = cx.wb.active_sheet.min(cx.wb.sheets.len());
+    let at = cx.wb.active_sheet().min(cx.wb.sheets.len());
     let nm = cx.wb.next_sheet_name();
     cx.wb.sheets.insert(at, Arc::new(Sheet::new(nm)));
     for n in cx.wb.names.iter_mut() {
@@ -764,7 +764,7 @@ fn insert_sheet_before_active(cx: &mut Ctx) -> usize {
 fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let active = d.wb.active_sheet;
+    let active = d.wb.active_sheet();
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let pt = sh
         .pivots
@@ -833,7 +833,7 @@ fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         let name = sh.name.clone();
-        cx.wb.active_sheet = si;
+        cx.wb.set_active_sheet(si);
         *cx.sel = crate::Selection::at(CellRef::new(0, 0));
         cx.structural = true;
         Ok(json!({"sheet": name, "records": count}))
@@ -1580,7 +1580,7 @@ fn chart_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
                 let sh = gridcraft_core::unquote_sheet(sh);
                 (d.wb.sheet_index(&sh), a)
             }
-            None => (Some(d.wb.active_sheet), t),
+            None => (Some(d.wb.active_sheet()), t),
         };
         if let (Some(si), Some(c)) = (sheet, CellRef::parse(addr.trim().replace('$', "").as_str())) {
             let hit = d.wb.sheet(si).and_then(|sh| sh.pivots.iter().position(|pt| pt.last_range.is_some_and(|r| r.contains(c)) || pt.anchor == c));
@@ -1714,7 +1714,7 @@ fn suggestions(wb: &Workbook, src: &pv::Source) -> Vec<Json> {
 
 fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
     let source = source_param(s, p)?;
-    let active = s.doc()?.wb.active_sheet;
+    let active = s.doc()?.wb.active_sheet();
     let src = pv::read_source(&s.doc()?.wb, &source, active).map_err(other)?;
     let list = suggestions(&s.doc()?.wb, &src);
     let Some(apply) = p.get("apply").and_then(Json::as_u64) else {
@@ -1798,7 +1798,7 @@ mod tests {
         assert_eq!(r["fields"], json!(["Region", "Product", "Date", "Units", "Sales"]));
         let d = s.doc().unwrap();
         assert_eq!(d.wb.sheets.len(), 2);
-        assert_eq!(d.wb.active_sheet, 0, "new sheet goes before the current one");
+        assert_eq!(d.wb.active_sheet(), 0, "new sheet goes before the current one");
         assert_eq!(d.wb.active().unwrap().name, "Sheet2");
         assert!(text(&s, "A3").starts_with("PivotTable1"));
         assert_eq!(pt(&s).source, "Sheet1!$A$1:$E$13");
@@ -2183,7 +2183,7 @@ mod tests {
     fn edit_pt(s: &mut Session, f: impl FnOnce(&mut gridcraft_model::PivotTable)) {
         let d = s.doc_mut().unwrap();
         let wb = std::sync::Arc::make_mut(&mut d.wb);
-        let si = wb.active_sheet;
+        let si = wb.active_sheet();
         f(wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap());
         s.execute("pivot.refresh", json!({})).unwrap();
     }
@@ -2342,7 +2342,7 @@ mod tests {
             s.execute("insert.pivotTable", json!({"rows": ["K"], "values": ["V"]})).unwrap();
             edit_pt(&mut s, |p| p.rows[0].sort = PivotSort::Asc);
             let wb = &s.doc().unwrap().wb;
-            let si = wb.active_sheet;
+            let si = wb.active_sheet();
             let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
             out.grid.iter().skip(1).filter_map(|r| r.first().map(|c| c.value.display())).filter(|l| l != "Grand Total").collect()
         };
@@ -2379,7 +2379,7 @@ mod tests {
                 s.execute("pivot.filter", json!({"field": "R", "selected": ["a"]})).unwrap();
             }
             let wb = &s.doc().unwrap().wb;
-            let si = wb.active_sheet;
+            let si = wb.active_sheet();
             let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
             out.grid.iter().filter_map(|r| r.first().map(|c| c.value.display())).filter(|l| l == "45000" || l == "ABC").collect()
         };
@@ -2411,7 +2411,7 @@ mod tests {
     }
     fn plotted(s: &Session) -> Vec<Vec<Option<f64>>> {
         let d = s.doc().unwrap();
-        let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, &pivot_chart(s));
+        let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &pivot_chart(s));
         data.series.into_iter().map(|x| x.values).collect()
     }
 
@@ -2809,7 +2809,7 @@ mod tests {
             assert!(x.contains(one), "{x}");
             x.replace(one, &two)
         });
-        let si = wb.active_sheet;
+        let si = wb.active_sheet();
         let p = wb.sheet(si).unwrap().pivots.last().unwrap();
         let apples = gridcraft_model::PivotScopeItem { source_col: "Product".into(), item: "Apples".into(), ..Default::default() };
         assert_eq!(p.rows[0].sort_scope, vec![apples]);
@@ -2826,7 +2826,7 @@ mod tests {
         let bad =
             format!("<references count=\"2\">{values_ref}<reference field=\"1\" count=\"2\" selected=\"0\"><x v=\"0\"/><x v=\"1\"/></reference>");
         let (wb2, warnings) = reopen_patched(&s, |x| x.replace(one, &bad));
-        let p2 = wb2.sheet(wb2.active_sheet).unwrap().pivots.last().unwrap();
+        let p2 = wb2.sheet(wb2.active_sheet()).unwrap().pivots.last().unwrap();
         assert_eq!(p2.rows[0].sort_by, None);
         assert!(p2.rows[0].sort_scope.is_empty());
         assert!(warnings.iter().any(|w| w.contains("scope")), "{warnings:?}");
@@ -2839,7 +2839,7 @@ mod tests {
     }
     /// The labels in the report's first column, as computed from `wb`, keeping only `keep`.
     fn first_col(wb: &gridcraft_model::Workbook, keep: &[&str]) -> Vec<String> {
-        let si = wb.active_sheet;
+        let si = wb.active_sheet();
         let p = wb.sheet(si).unwrap().pivots.last().unwrap();
         let out = crate::pivot::compute(wb, p, si).unwrap();
         out.grid.iter().filter_map(|r| r.first()).map(|c| c.value.display()).filter(|l| keep.contains(&l.as_str())).collect()
@@ -2875,7 +2875,7 @@ mod tests {
         assert_eq!(first_col(&wb, &regions), ["West", "East", "North"]);
         // Saving writes both references back.
         let back = reopen(&wb);
-        let scope = |wb: &gridcraft_model::Workbook| wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap().rows[0].sort_scope.clone();
+        let scope = |wb: &gridcraft_model::Workbook| wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap().rows[0].sort_scope.clone();
         assert_eq!(scope(&back).len(), 2);
         assert_eq!(scope(&back), scope(&wb));
         assert_eq!(first_col(&back, &regions), ["West", "East", "North"]);
@@ -2896,12 +2896,12 @@ mod tests {
             assert!(field.contains("t=\"sum\""), "{field}");
             format!("{}{field}{}", &x[..start], &x[end..])
         });
-        let p = wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap();
+        let p = wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap();
         assert_ne!(p.rows[1].subtotal, Some(false));
         // Shown with the automatic subtotal, with a warning.
         let plain = reopen(&s.doc().unwrap().wb);
         let all = |wb: &gridcraft_model::Workbook| {
-            let si = wb.active_sheet;
+            let si = wb.active_sheet();
             let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
             out.grid.iter().map(|r| r.iter().map(|c| c.value.display()).collect::<Vec<_>>()).collect::<Vec<_>>()
         };
@@ -2926,7 +2926,7 @@ mod tests {
             assert!(field.contains("t=\"sum\""), "{field}");
             format!("{}{field}{}", &x[..start], &x[end..])
         });
-        let p = wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap();
+        let p = wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap();
         assert!(p.subtotals);
         assert_eq!([p.rows[0].subtotal, p.rows[1].subtotal], [None, None]);
         // Saving doesn't add a table default of "off" the file never had.
@@ -2946,7 +2946,7 @@ mod tests {
         // Sorted by the values in the Kiwis column (Product item 3)…
         let refs = format!("<references count=\"2\">{VALUES_REF}<reference field=\"1\" count=\"1\" selected=\"0\"><x v=\"3\"/></reference>");
         let (mut wb, _) = reopen_patched(&s, |x| x.replace(&values_only(), &refs));
-        assert_eq!(wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap().rows[0].sort_scope.len(), 1);
+        assert_eq!(wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap().rows[0].sort_scope.len(), 1);
         // …then Kiwis leaves the source: the rows sort by the grand total, before and after saving.
         let src = wb.sheets.iter().position(|sh| sh.name == "Sheet1").unwrap();
         wb.sheet_mut(src).unwrap().set_value(CellRef::parse("B14").unwrap(), Value::text("Apples"));
@@ -2970,7 +2970,7 @@ mod tests {
         assert_eq!(first_col(&back, &quarters), quarters);
         // A reordered list still wins; items it doesn't name follow in date order.
         let mut wb = back;
-        let si = wb.active_sheet;
+        let si = wb.active_sheet();
         wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap().rows[0].item_order = vec!["Qtr3".into()];
         assert_eq!(first_col(&wb, &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
         assert_eq!(first_col(&reopen(&wb), &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
@@ -2990,7 +2990,7 @@ mod tests {
         s.execute("pivot.sort", json!({"field": "Shift", "order": "none"})).unwrap();
         // The report's first column: times as minutes, and the blank item.
         let shifts = |wb: &gridcraft_model::Workbook| -> Vec<String> {
-            let si = wb.active_sheet;
+            let si = wb.active_sheet();
             let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
             out.grid
                 .iter()
@@ -3084,7 +3084,7 @@ mod tests {
         assert_eq!(r["records"], 2);
         let d = s.doc().unwrap();
         assert_eq!(d.wb.sheets.len(), 3);
-        assert_eq!(d.wb.active_sheet, 0, "the new sheet goes before the PivotTable's");
+        assert_eq!(d.wb.active_sheet(), 0, "the new sheet goes before the PivotTable's");
         assert_eq!(d.wb.active().unwrap().name, "Sheet3");
         assert_eq!(
             sheet_rows(&mut s),
@@ -3224,7 +3224,7 @@ mod tests {
                 s.execute("pivot.moveField", json!({"field": "Product", "from": "columns", "to": "rows"})).unwrap();
             }
             let d = s.doc().unwrap();
-            let si = d.wb.active_sheet;
+            let si = d.wb.active_sheet();
             let pt = &d.wb.active().unwrap().pivots[0];
             let r = pt.last_range.unwrap();
             let cells = crate::pivot::detail_cells(&d.wb, pt, si).unwrap();
@@ -3242,6 +3242,6 @@ mod tests {
         s.execute("range.setValues", json!({"range": "Sheet1!A2", "values": [["Central"]]})).unwrap();
         let d = s.doc().unwrap();
         let pt = &d.wb.active().unwrap().pivots[0];
-        assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet).unwrap_err().contains("out of date"));
+        assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
     }
 }

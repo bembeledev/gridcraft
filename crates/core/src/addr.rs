@@ -10,6 +10,36 @@ use serde::{Deserialize, Serialize};
 pub const MAX_ROWS: u32 = 1_048_576;
 pub const MAX_COLS: u32 = 16_384;
 
+/// The most text one cell holds, counted in UTF-16 code units like `LEN` counts — Excel's cell
+/// limit. A longer cell saves to a file Excel can't open, so editing refuses more and text
+/// imports keep it whole only with a warning.
+pub const MAX_CELL_CHARS: usize = 32_767;
+
+/// The string's length in UTF-16 code units, the count [`MAX_CELL_CHARS`] and `LEN` use: one
+/// unit for most characters, two for the ones outside the Basic Multilingual Plane.
+pub fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// The string cut to at most [`MAX_CELL_CHARS`] UTF-16 code units, as Excel stores a longer
+/// concatenation (`=REPT("x",20000)&REPT("x",20000)` keeps its first 32,767 characters).
+pub fn cut_to_cell_chars(s: String) -> String {
+    if utf16_len(&s) <= MAX_CELL_CHARS {
+        return s;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut units = 0;
+    for c in s.chars() {
+        let w = c.len_utf16();
+        if units + w > MAX_CELL_CHARS {
+            break;
+        }
+        units += w;
+        out.push(c);
+    }
+    out
+}
+
 /// A cell position (0-based).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub struct CellRef {

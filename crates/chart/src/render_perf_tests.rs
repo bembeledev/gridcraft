@@ -3,6 +3,8 @@
 
 use std::cell::Cell;
 
+use super::kinds::squarify;
+use super::legend::swatch_w;
 use super::*;
 use crate::{ApproxMeasure, Measure};
 

@@ -152,14 +152,30 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "kind", json!("textBox"))
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
-        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
-        cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!(
+            "object.delete",
+            "Delete Object",
+            [],
+            None,
+            "{kind: chart|image|shape|group, id, member?: bool (a grouped object alone, leaving the rest of its group)}",
+            has_doc,
+            delete_object
+        ),
+        cmd!(
+            "object.move",
+            "Move Object",
+            [],
+            None,
+            "{kind: chart|image|shape|group, id, at?: \"C3\", dx?, dy?, width?, height?}",
+            has_doc,
+            move_object
+        ),
         cmd!(
             "object.setAnchorMode",
             "Object Properties",
             [],
             None,
-            "{kind: chart|image|shape, id, mode: moveAndSize|moveOnly|absolute}",
+            "{kind: chart|image|shape|group, id, mode: moveAndSize|moveOnly|absolute}",
             has_doc,
             set_anchor_mode
         ),

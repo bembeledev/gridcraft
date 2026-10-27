@@ -7,7 +7,7 @@ use serde_json::{Value as Json, json};
 use super::analysis::OVERWRITE_ERROR;
 use super::insert::write_totals;
 use super::*;
-use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest, WebTable};
+use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, MAX_PAGE_CELLS, MAX_TEXT, WebRequest, WebTable};
 use gridcraft_core::MAX_ROWS;
 use gridcraft_model::{TableColumn, TotalsFn, Workbook};
 
@@ -89,6 +89,13 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     // A background worker's download comes back through the command as `prefetched`; without
     // one, the fetch runs here.
     let tables = fetch_tables(s, &req, p)?;
+    // The prefetched path gets the same `max_rows` cut the HTML path applies while parsing.
+    let mut tables = tables;
+    if tables.iter().any(|t| t.rows.len() > req.max_rows) {
+        for t in &mut tables {
+            t.rows.truncate(req.max_rows);
+        }
+    }
     let table = pick_table(&tables, want, occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
     let occurrence = tables.iter().take_while(|t| !std::ptr::eq(*t, table)).filter(|t| t.name.eq_ignore_ascii_case(&table.name)).count();
     let name = str_param(p, "sheet").map(|n| n.chars().take(31).collect::<String>()).unwrap_or_else(|| default_sheet_name(&req.url));
@@ -471,22 +478,43 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
 fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
     let raw = p.get("prefetched").ok_or_else(|| EngineError::Other("missing `prefetched`".into()))?;
     let mut out = Vec::new();
+    // The same caps as the HTML path: the caller JSON is as hostile as the page it came from.
+    let mut page_budget: usize = MAX_PAGE_CELLS;
     for t in raw.as_array().ok_or_else(|| EngineError::Other("`prefetched` must be an array of tables".into()))? {
         let name = t["name"].as_str().unwrap_or_default().to_string();
-        // Empty rows are dropped, not kept as zero-cell rows: the widest row then always has
-        // at least one cell, so the width arithmetic below cannot underflow (an all-empty
-        // table reaches the existing "The table is empty." refusal instead).
-        let rows: Vec<Vec<String>> = t["rows"]
-            .as_array()
-            .map(|rs| {
-                rs.iter()
-                    .filter_map(|r| r.as_array())
-                    .map(|cs| cs.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect::<Vec<String>>())
-                    .filter(|r| !r.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut cells: usize = 0;
+        for r in t["rows"].as_array().into_iter().flatten() {
+            if rows.len() >= DEFAULT_MAX_ROWS {
+                break;
+            }
+            let mut row: Vec<String> = Vec::new();
+            for c in r.as_array().into_iter().flatten() {
+                if row.len() >= MAX_COLS {
+                    break;
+                }
+                let text: String = c.as_str().unwrap_or_default().chars().take(MAX_TEXT).collect();
+                cells += 1;
+                row.push(text);
+                if cells >= MAX_PAGE_CELLS {
+                    break;
+                }
+            }
+            // Empty rows are dropped, not kept as zero-cell rows: the widest row then always has
+            // at least one cell, so the width arithmetic cannot underflow (an all-empty
+            // table reaches the existing "The table is empty." refusal instead).
+            if !row.is_empty() {
+                rows.push(row);
+            }
+            if cells >= MAX_PAGE_CELLS {
+                break;
+            }
+        }
+        page_budget = page_budget.saturating_sub(cells);
         out.push(WebTable { name, rows });
+        if page_budget == 0 {
+            break;
+        }
     }
     Ok(out)
 }

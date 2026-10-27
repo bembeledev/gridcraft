@@ -334,7 +334,9 @@ fn decode_entities(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         rest = rest.get(i..).unwrap_or_default();
-        let end = rest.find(';').unwrap_or(rest.len());
+        // Entities are short: look for `;` only nearby, so a run of bare `&` stays linear.
+        let window = rest.get(..rest.len().min(32)).unwrap_or(rest);
+        let end = window.find(';').unwrap_or(rest.len());
         let ent = rest.get(..end.min(rest.len())).unwrap_or_default();
         let value = match ent.strip_prefix("&#") {
             Some(num) => num
@@ -444,6 +446,17 @@ fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// A long run of `&` with no `;` nearby is processed in linear time, not quadratically.
+    fn a_run_of_bare_ampersands_stays_linear() {
+        let ampersands = "&".repeat(8 * 1024 * 1024);
+        let html = format!("<table><tr><td>{ampersands}</td></tr></table>");
+        let t = extract_tables(&html, DEFAULT_MAX_ROWS, MAX_COLS);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].rows[0][0].len(), MAX_TEXT);
+        assert!(t[0].rows[0][0].chars().all(|c| c == '&'));
+    }
 
     #[test]
     /// A named table takes its id for a name; others are numbered.

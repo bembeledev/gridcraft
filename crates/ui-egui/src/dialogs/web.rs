@@ -27,14 +27,21 @@ pub(super) fn poll_preview_fetch(app: &mut SheetApp, d: &mut Dialog, url: &str, 
     if app.fetching() {
         return true;
     }
-    // The URL the running fetch was started for: an address edited since invalidates the
-    // result (the dialog state was cleared when it changed), so an old page never lands under
-    // the new URL.
-    let fetch_url = app.fetch.as_ref().and_then(|f| f.command.1.get("url")).and_then(Json::as_str).map(str::to_string);
+    // Only this dialog's own fetches; a foreign command (a ribbon refresh, say) is left to
+    // its own poller, so it never lands in the dialog's table list.
+    let Some((id, fetch_url)) = app.fetch.as_ref().map(|f| (f.command.0.clone(), f.command.1.get("url").and_then(Json::as_str).map(str::to_string))) else {
+        return false;
+    };
+    if id != "data.webPreview" && id != "data.fromWeb" {
+        return false;
+    }
+    // An address edited since invalidates the fetch: drop it without running its command, so
+    // an old page never lands under the new URL.
+    if fetch_url.as_deref().is_some_and(|u| u != url.trim()) {
+        app.discard_fetch();
+        return false;
+    }
     if let Some((pages, r)) = app.poll_fetch() {
-        if fetch_url.as_deref().is_some_and(|u| u != url.trim()) {
-            return false;
-        }
         match r {
             Ok(res) => {
                 // The full rows are kept for Load (the preview's own list is truncated to the

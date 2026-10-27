@@ -193,12 +193,12 @@ mod tests {
         cache.get(1, &w, 0, 0, (1.0, 1.0), build);
         assert_eq!(cache.builds, 1, "same workbook: a hit");
         // Sole owner of the Arc: without the Weak this write would happen in place, at the same address.
-        Arc::make_mut(&mut w).active_sheet = 0;
+        Arc::make_mut(&mut w).active_sheet.set(0);
         cache.get(1, &w, 0, 0, (1.0, 1.0), build);
         assert_eq!(cache.builds, 2, "a write through make_mut moved the workbook to a new allocation");
         // Shared with an undo snapshot: make_mut clones, the pointer changes as well.
         let snapshot = w.clone();
-        Arc::make_mut(&mut w).active_sheet = 0;
+        Arc::make_mut(&mut w).active_sheet.set(0);
         cache.get(1, &w, 0, 0, (1.0, 1.0), build);
         assert_eq!(cache.builds, 3);
         // Replacing the Arc with an equal workbook (a reload) is a change too.
@@ -310,13 +310,13 @@ mod tests {
         let mut cache = ChartCache::default();
         for (i, ch) in sh.charts.iter().enumerate() {
             let fresh = || {
-                let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, ch);
+                let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet.get(), ch);
                 gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &ApproxMeasure)
             };
             let expect = fresh();
             assert!(expect.len() > 3, "{:?} renders something", ch.kind);
-            let first = cache.get(d.uid, &d.wb, d.wb.active_sheet, i, (1.0, 1.0), fresh);
-            let second = cache.get(d.uid, &d.wb, d.wb.active_sheet, i, (1.0, 1.0), || panic!("must be a hit"));
+            let first = cache.get(d.uid, &d.wb, d.wb.active_sheet.get(), i, (1.0, 1.0), fresh);
+            let second = cache.get(d.uid, &d.wb, d.wb.active_sheet.get(), i, (1.0, 1.0), || panic!("must be a hit"));
             assert_eq!(&*first, &expect[..], "{:?}: built entry", ch.kind);
             assert_eq!(&*second, &expect[..], "{:?}: cached entry", ch.kind);
         }

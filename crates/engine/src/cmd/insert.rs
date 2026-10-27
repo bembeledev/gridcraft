@@ -18,6 +18,7 @@ mod table;
 
 pub use chart::{build_chart, chart_kind, recommend_charts, scatter_x_from_first, series_from_range};
 use chart::{chart_delete, chart_set, chart_switch, insert_chart};
+pub use cond_format::preset_style;
 use cond_format::{add_cf, clear_cf, insert_icon, manage_cf};
 use links::{comment, delete_comment, insert_link, open_link, reply_comment, resolve_comment, show_note};
 use objects::{delete_object, insert_picture, insert_shape, insert_sparkline, move_object, set_anchor_mode, shape_set_text};
@@ -203,7 +204,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, stopIfTrue?, rule: {type: cellIs|expression|containsText|notContainsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, equal?, stdDev?, period?, colors?: [..], min?|mid?|max?: {type: min|max|num|percent|percentile|formula, value?}, color?, gradient?, showValue?, set?, reverse?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…, fill?, fontColor?, border?: hex|none, bold?, italic?, underline?, strike?}}",
             has_doc,
             add_cf
         ),
@@ -213,7 +214,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{show?: sheet|selection, selection?: \"A1:B9,D2\"} lists the rules (index, appliesTo, stopIfTrue, params); {set?: [{rule|params, appliesTo, stopIfTrue?}] replaces them all, {update?: index, rule?: {..as home.conditionalFormat}, appliesTo?: \"=$A$1:$B$9\", stopIfTrue?, duplicate?: index, delete?: index, moveUp?: index, moveDown?: index} changes them",
             has_doc,
             manage_cf
         ),
@@ -310,5 +311,186 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn manage_rules_lists_params_that_recreate_the_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rules = [
+            json!({"type": "cellIs", "operator": "between", "value": "1", "value2": "say \"hi\"", "fill": "#FFEB9C", "bold": true}),
+            json!({"type": "expression", "formula": "=MOD(ROW(),2)=0", "preset": "redBorder"}),
+            json!({"type": "aboveAverage", "below": true, "equal": true, "stdDev": 1}),
+            json!({"type": "colorScale", "colors": ["#F8696B", "#63BE7B"], "min": {"type": "num", "value": 5}}),
+            json!({"type": "dataBar", "showValue": false, "max": {"type": "formula", "value": "=$Z$1"}}),
+        ];
+        for r in &rules {
+            s.execute("home.conditionalFormat", json!({"range": "A1:A9", "rule": r})).unwrap();
+        }
+        let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"].as_array().cloned().unwrap();
+        let before: Vec<Json> = listed.iter().map(|r| r["rule"].clone()).collect();
+        // Each rule's params replace it with itself.
+        for (i, r) in listed.iter().enumerate() {
+            s.execute("home.manageRules", json!({"update": i, "rule": r["params"]})).unwrap();
+        }
+        let after = s.execute("home.manageRules", json!({})).unwrap();
+        let after: Vec<Json> = after["rules"].as_array().unwrap().iter().map(|r| r["rule"].clone()).collect();
+        assert_eq!(before, after);
+        assert_eq!(listed[0]["appliesTo"], "=$A$1:$A$9");
+        assert_eq!(listed[4]["params"]["value2"], "say \"hi\"");
+        assert_eq!(listed[4]["params"]["fill"], "#FFEB9C");
+    }
+
+    #[test]
+    fn listed_cell_values_read_back_as_the_same_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // Text that looks like a number or a formula, and a formula that starts and ends with a quote.
+        for value in [json!("\"5\""), json!("\"=x\""), json!("=\"a\"&A1&\"b\""), json!("plain text"), json!(7)] {
+            s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "cellIs", "operator": "equal", "value": value}})).unwrap();
+            let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+            s.execute("home.manageRules", json!({"update": 0, "rule": listed["params"]})).unwrap();
+            let again = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+            assert_eq!(again, listed["rule"], "{value}");
+        }
+        assert_eq!(s.execute("home.manageRules", json!({})).unwrap()["total"], 5);
+    }
+
+    #[test]
+    fn edit_and_restore_keep_format_details_the_plain_overrides_cant_show() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // A bottom-only medium border, a pattern fill and a double underline, as a file can hold.
+        let style = json!({
+            "borders": {"bottom": {"style": "Medium", "color": {"Rgb": 0x0000FF}}},
+            "fill": {"pattern": "Gray125", "fg": {"Rgb": 0xFF0000}, "bg": "Auto"},
+            "font": {"underline": "Double"},
+        });
+        s.execute("home.conditionalFormat", json!({"range": "A1:A9", "rule": {"type": "blanks", "style": style}})).unwrap();
+        let listed = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+        let original = listed["rule"].clone();
+        // Edit Rule… with the format untouched.
+        s.execute("home.manageRules", json!({"update": 0, "rule": listed["params"]})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after, original);
+        // The same colours written another way (lower case) are no change either.
+        let mut lower = listed["params"].clone();
+        for k in ["fill", "fontColor", "border"] {
+            if let Some(c) = lower[k].as_str().map(str::to_ascii_lowercase) {
+                lower[k] = json!(c);
+            }
+        }
+        s.execute("home.manageRules", json!({"update": 0, "rule": lower})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after, original);
+        // Edit Rule… changing only bold keeps the rest.
+        let mut bold = listed["params"].clone();
+        bold["bold"] = json!(true);
+        s.execute("home.manageRules", json!({"update": 0, "rule": bold})).unwrap();
+        let after = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(after["Blanks"]["style"]["font"]["bold"], true);
+        assert_eq!(after["Blanks"]["style"]["font"]["underline"], "Double");
+        assert_eq!(after["Blanks"]["style"]["fill"], original["Blanks"]["style"]["fill"]);
+        assert_eq!(after["Blanks"]["style"]["borders"], original["Blanks"]["style"]["borders"]);
+        // Cancel puts back the listed rule exactly.
+        let saved = json!([{"rule": original, "appliesTo": listed["appliesTo"], "stopIfTrue": false}]);
+        s.execute("home.manageRules", json!({"set": saved})).unwrap();
+        let back = s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone();
+        assert_eq!(back, original);
+        // A serialized rule whose formula doesn't parse is refused like a new one (#1999).
+        let bad_rule = json!({"Expression": {"formula": "A1>", "style": Style::default()}});
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": bad_rule, "appliesTo": "=$A$1"}]})).is_err());
+        let icons = json!({"type": "iconSet", "set": "3Arrows", "thresholds": [{"Formula": "=1+"}]});
+        assert!(s.execute("home.conditionalFormat", json!({"range": "B1:B3", "rule": icons})).is_err());
+        // A malformed serialized rule is refused, not read as a default rule.
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": {"Blanks": {}}, "appliesTo": "=$A$1"}]})).is_err());
+        // Icon thresholds: one per icon or one fewer, nothing else.
+        let three = |n: usize| json!({"type": "iconSet", "set": "3Arrows", "thresholds": vec![json!({"Percent": 50.0}); n]});
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(2)})).is_ok());
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(3)})).is_ok());
+        assert!(s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": three(5)})).is_err());
+        // An entry with neither `rule` nor `params` is refused.
+        assert!(s.execute("home.manageRules", json!({"set": [{"appliesTo": "=$A$1"}]})).is_err());
+    }
+
+    #[test]
+    fn manage_rules_work_on_a_sheet_that_is_not_active() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        // The manager opened on Sheet1 with A1:A3 selected; Two is active now.
+        let rule = json!({"type": "blanks", "fill": "#FFC7CE"});
+        s.execute("home.conditionalFormat", json!({"sheet": 0, "range": "A1:A3", "rule": rule})).unwrap();
+        s.execute("home.conditionalFormat", json!({"sheet": 0, "range": "D1:D3", "rule": rule})).unwrap();
+        let listed = s.execute("home.manageRules", json!({"sheet": 0, "show": "selection", "selection": "A1:A3"})).unwrap();
+        let ranges: Vec<Json> = listed["rules"].as_array().unwrap().iter().map(|r| r["appliesTo"].clone()).collect();
+        assert_eq!(ranges, vec![json!("=$A$1:$A$3")]);
+        let two = s.execute("home.manageRules", json!({"sheet": 1})).unwrap();
+        assert_eq!(two["rules"].as_array().map(Vec::len), Some(0));
+        assert!(s.execute("home.manageRules", json!({"sheet": 0, "show": "selection", "selection": "nope"})).is_err());
+        // Applies to may name the rule's own sheet, never another one.
+        s.execute("home.manageRules", json!({"sheet": 0, "update": 0, "appliesTo": "=Sheet1!$A$1:$A$5"})).unwrap();
+        let first = s.execute("home.manageRules", json!({"sheet": 0})).unwrap();
+        assert_eq!(first["rules"][0]["appliesTo"], "=$A$1:$A$5");
+        assert!(s.execute("home.manageRules", json!({"sheet": 0, "update": 0, "appliesTo": "=Two!$B$2"})).is_err());
+    }
+
+    #[test]
+    fn malformed_overrides_and_thresholds_are_refused() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let add = |s: &mut Session, rule: Json| s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule}));
+        // A colour that doesn't parse, or a flag that isn't a boolean, is an error, not no change.
+        for (k, v) in [("fill", json!("#nothex")), ("fontColor", json!(12)), ("border", json!({"x": 1})), ("bold", json!("yes"))] {
+            let mut rule = json!({"type": "blanks"});
+            rule[k] = v;
+            assert!(add(&mut s, rule).is_err(), "{k}");
+        }
+        // Null still means no override.
+        assert!(add(&mut s, json!({"type": "blanks", "fill": null, "bold": null})).is_ok());
+        // A serialized icon set with the wrong threshold count is refused like params are.
+        let icons = json!({"IconSet": {"set": "3Arrows", "thresholds": vec![json!({"Percent": 10.0}); 5], "reverse": false, "show_value": true}});
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": icons, "appliesTo": "=$A$1"}]})).is_err());
+        // A threshold that parses to infinity reads as the default 0 and lists as a number.
+        add(&mut s, json!({"type": "dataBar", "min": {"type": "num", "value": "inf"}})).unwrap();
+        let listed = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(listed["rules"][0]["params"]["min"], json!({"type": "num", "value": 0.0}));
+    }
+
+    #[test]
+    fn manage_rules_edits_duplicates_and_filters() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rule = json!({"type": "blanks", "fontColor": "#FF0000"});
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "C1:C3", "rule": {"type": "errors"}, "stopIfTrue": true})).unwrap();
+        s.execute("home.manageRules", json!({"update": 1, "appliesTo": "=$A$1:$A$5,$E$1", "stopIfTrue": true})).unwrap();
+        s.execute("home.manageRules", json!({"duplicate": 0})).unwrap();
+        let all = s.execute("home.manageRules", json!({})).unwrap();
+        let all = all["rules"].as_array().unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0]["params"]["type"], "errors");
+        assert_eq!(all[0]["stopIfTrue"], true);
+        assert_eq!(all[1]["params"]["type"], "errors");
+        assert_eq!(all[2]["appliesTo"], "=$A$1:$A$5,$E$1");
+        assert_eq!(all[2]["params"]["fontColor"], "#FF0000");
+        // Plain overrides alone don't bring the default preset's fill.
+        assert_eq!(all[2]["params"]["fill"], "none");
+        s.execute("selection.set", json!({"range": "E1"})).unwrap();
+        let sel = s.execute("home.manageRules", json!({"show": "selection"})).unwrap();
+        let idx: Vec<u64> = sel["rules"].as_array().unwrap().iter().filter_map(|r| r["index"].as_u64()).collect();
+        assert_eq!(idx, vec![2]);
+        assert!(s.execute("home.manageRules", json!({"update": 0, "appliesTo": "=nope"})).is_err());
+        assert!(s.execute("home.manageRules", json!({"update": 9, "stopIfTrue": true})).is_ok());
+        // `set` puts back a listing taken earlier.
+        let saved: Vec<Json> =
+            all.iter().map(|r| json!({"params": r["params"], "appliesTo": r["appliesTo"], "stopIfTrue": r["stopIfTrue"]})).collect();
+        s.execute("home.manageRules", json!({"delete": 0})).unwrap();
+        s.execute("home.manageRules", json!({"set": saved})).unwrap();
+        let back = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(back["rules"].as_array().map(Vec::len), Some(3));
+        assert_eq!(back["rules"][0]["stopIfTrue"], true);
+        assert!(s.execute("home.manageRules", json!({"set": [{"rule": {"type": "blanks"}}]})).is_err());
     }
 }

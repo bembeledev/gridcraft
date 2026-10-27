@@ -1,6 +1,6 @@
 # Analysis ToolPak regression models
 
-Last updated: 2026-10-23.
+Last updated: 2026-10-27.
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
 
@@ -46,6 +46,16 @@ The model, first-row labels and zero-intercept option are separate controls. Gen
 resizing, scrolling, chooser layout and dialog footers belong to the responsive-interface PR.
 This change does not require chart formatting, export, model or XLSX changes.
 
+## Code layout
+
+The regression engine remains in `crates/engine/src/cmd/analysis.rs`. After the shared module
+split (#2690), ToolPak schemas, range editors and picking helpers live in
+`crates/ui-egui/src/dialogs/analysis.rs`; the dialog window and shared form fields live in
+`dialogs/show.rs`. `dialogs.rs` retains the dialog state and document-ownership checks, and
+re-exports the grid-picking helpers. Pointer handling lives in `grid/interact.rs`, with the
+picker's cursor handled in `grid/cursor.rs`. Control-protocol confirmation retains the
+upstream per-window dialog restoration in `control.rs`.
+
 ## Validation
 
 Regression cases compare noisy transformed fits (including a forced zero intercept)
@@ -54,8 +64,7 @@ overwrite/undo/redo, and exercise cross-worksheet grid input and document owners
 
 ```sh
 cargo test -p gridcraft-engine --lib cmd::analysis::tests
-cargo test -p gridcraft-ui-egui --lib dialogs::tests::analysis_
-cargo test -p gridcraft-ui-egui --lib dialogs::tests::regression_
+cargo test -p gridcraft-ui-egui --lib dialogs::analysis::tests
 cargo test -p gridcraft-ui-egui --test it regression_analysis::
 cargo test -p gridcraft-ui-egui --test it interaction::data_analysis_dialog_runs_a_tool_and_asks_before_overwriting
 cargo test -p gridcraft-ui-egui --test it dialog_confirm::
@@ -67,5 +76,6 @@ cargo check -p gridcraft-ui-egui --target wasm32-unknown-unknown
 
 | Date | Change |
 |---|---|
+| 2026-10-27 | Move ToolPak UI and regression tests into the shared dialog/grid modules; retain document and window ownership; update validation command paths |
 | 2026-10-23 | Sync with main; document production API behavior for regression model validation, fitted-domain reports and analysis dialog ownership |
 | 2026-10-23 | Describe transformed regression diagnostics, range selection and the PR2 validation plan |

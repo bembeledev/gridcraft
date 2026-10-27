@@ -10,7 +10,7 @@
 //! Native only: on wasm there are no system fonts, every function here reports "nothing", and the
 //! font list is the standard [`crate::ribbon::FONTS`] set.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -41,6 +41,9 @@ pub struct Face {
     pub weight: f32,
     /// Whether the style name reads as italic or oblique.
     pub italic: bool,
+    /// Whether the face maps a common Arabic letter. A cell that names this family can then shape
+    /// Persian/Arabic in one face instead of splitting the line at a fallback boundary.
+    pub arabic: bool,
 }
 
 /// The font folders of the platform (the system's and the user's). Empty on wasm.
@@ -70,9 +73,198 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
                 dirs.push(h.join(".fonts"));
                 dirs.push(h.join(".local/share/fonts"));
             }
+            // Folders fontconfig is configured with: a distribution need not keep every font under
+            // the standard paths above, and a user's own folder may live anywhere. Parsing
+            // fontconfig's configuration keeps discovery dynamic instead of guessing layouts.
+            dirs.extend(fontconfig_dirs());
         }
         dirs
     }
+}
+
+/// Font folders from fontconfig's configuration, so a font installed where fontconfig points is
+/// found even when it is not under a distribution's default path (a user's font folder, a custom
+/// prefix, ChromeOS's Linux container). Follows `<include>` elements (a directory include pulls in
+/// its `.conf` files) and expands `~` and `prefix="xdg"`. A missing or malformed file contributes
+/// nothing, never a panic; empty on wasm.
+pub fn fontconfig_dirs() -> Vec<PathBuf> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Vec::new()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut seen_files: HashSet<PathBuf> = HashSet::new();
+        for file in fontconfig_config_files() {
+            parse_fontconfig_file(&file, &mut out, &mut seen_dirs, &mut seen_files, 0);
+        }
+        out
+    }
+}
+
+/// The fontconfig configuration files, system first then user, as fontconfig reads them. The
+/// `FONTCONFIG_FILE` environment variable overrides the main configuration file when set.
+#[cfg(not(target_arch = "wasm32"))]
+fn fontconfig_config_files() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut files: Vec<PathBuf> = Vec::new();
+    match std::env::var_os("FONTCONFIG_FILE") {
+        Some(f) => files.push(PathBuf::from(f)),
+        None => files.push(PathBuf::from("/etc/fonts/fonts.conf")),
+    }
+    files.push(PathBuf::from("/etc/fonts/local.conf"));
+    if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".config"))) {
+        files.push(config.join("fontconfig/fonts.conf"));
+    }
+    if let Some(h) = &home {
+        files.push(h.join(".fonts.conf")); // the pre-XDG location
+    }
+    files
+}
+
+/// How deep `<include>`s are followed before giving up, so a cycle can't spin forever.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_FONTCONFIG_DEPTH: usize = 16;
+
+/// Read one fontconfig file: collect its `<dir>` folders and recurse into its `<include>`s. An
+/// include of a directory pulls in that directory's `.conf` files, as fontconfig does.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_fontconfig_file(
+    path: &std::path::Path,
+    out: &mut Vec<PathBuf>,
+    seen_dirs: &mut HashSet<PathBuf>,
+    seen_files: &mut HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > MAX_FONTCONFIG_DEPTH {
+        return;
+    }
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !seen_files.insert(key) {
+        return;
+    }
+    if path.is_dir() {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(path)
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("conf"))).collect())
+            .unwrap_or_default();
+        entries.sort();
+        for entry in entries {
+            parse_fontconfig_file(&entry, out, seen_dirs, seen_files, depth + 1);
+        }
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let base = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    for (attrs, inner) in xml_elements(&text, "include") {
+        let value = decode_xml_entities(inner).trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        let target = resolve_fontconfig_path(&value, xml_attr(&attrs, "prefix").as_deref(), &base);
+        parse_fontconfig_file(&target, out, seen_dirs, seen_files, depth + 1);
+    }
+    for (attrs, inner) in xml_elements(&text, "dir") {
+        let value = decode_xml_entities(inner).trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        let dir = resolve_fontconfig_path(&value, xml_attr(&attrs, "prefix").as_deref(), &base);
+        if dir.is_dir() {
+            let key = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            if seen_dirs.insert(key) {
+                out.push(dir);
+            }
+        }
+    }
+}
+
+/// Resolve a fontconfig path value: `~` is the home folder, `prefix="xdg"` means
+/// `$XDG_DATA_HOME` (defaulting to `~/.local/share`), `prefix="cwd"` the working folder, and any
+/// other relative value is relative to the file that named it.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_fontconfig_path(value: &str, prefix: Option<&str>, base: &std::path::Path) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home.map(|h| h.join(rest)).unwrap_or_else(|| PathBuf::from(value));
+    }
+    if value == "~" {
+        return home.unwrap_or_else(|| PathBuf::from(value));
+    }
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        return path;
+    }
+    match prefix {
+        Some("xdg") => std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".local/share")))
+            .map(|d| d.join(value))
+            .unwrap_or_else(|| base.join(value)),
+        Some("cwd") => std::env::current_dir().map(|d| d.join(value)).unwrap_or_else(|_| base.join(value)),
+        _ => base.join(value),
+    }
+}
+
+/// The attributes and text content of every `<name>` element in `text`, in document order. Not a
+/// full XML parser: fontconfig's configuration only uses simple elements, and malformed input is
+/// ignored rather than rejected.
+#[cfg(not(target_arch = "wasm32"))]
+fn xml_elements<'a>(text: &'a str, name: &str) -> Vec<(String, &'a str)> {
+    let open = format!("<{name}");
+    let close = format!("</{name}>");
+    let mut out: Vec<(String, &str)> = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(&open) {
+        rest = &rest[i + open.len()..];
+        // The tag name must end here: `<dirty>` is not `<dir>`.
+        if !rest.starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/') {
+            continue;
+        }
+        let Some(gt) = rest.find('>') else { break };
+        let attrs = rest[..gt].to_string();
+        let self_closing = attrs.trim_end().ends_with('/');
+        rest = &rest[gt + 1..];
+        if self_closing {
+            out.push((attrs, ""));
+            continue;
+        }
+        let Some(end) = rest.find(&close) else { break };
+        out.push((attrs, &rest[..end]));
+        rest = &rest[end + close.len()..];
+    }
+    out
+}
+
+/// The value of the XML attribute `name` in `attrs`, if quoted with `"` or `'`.
+#[cfg(not(target_arch = "wasm32"))]
+fn xml_attr(attrs: &str, name: &str) -> Option<String> {
+    let key = format!("{name}=");
+    let mut rest = attrs;
+    while let Some(i) = rest.find(&key) {
+        if rest[..i].chars().next_back().is_none_or(char::is_whitespace) {
+            let after = &rest[i + key.len()..];
+            let quote = after.chars().next()?;
+            if quote == '"' || quote == '\'' {
+                let value = &after[quote.len_utf8()..];
+                if let Some(end) = value.find(quote) {
+                    return Some(value[..end].to_string());
+                }
+            }
+        }
+        rest = &rest[i + key.len()..];
+    }
+    None
+}
+
+/// Decode the XML entities that can appear in a fontconfig path. Anything unknown is left as is.
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_xml_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
@@ -111,10 +303,10 @@ fn style_italic(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// Every face in `data` as `(index, family, names, style)`, where `names` holds every family name
-/// (see [`Face::names`]). Damaged data yields nothing, never a panic.
+/// Every face in `data` as `(index, family, names, style, arabic)`, where `names` holds every
+/// family name (see [`Face::names`]). Damaged data yields nothing, never a panic.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
+fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String, bool)> {
     use skrifa::raw::FileRef;
     use skrifa::{MetadataProvider, string::StringId};
     let count = match FileRef::new(data) {
@@ -141,7 +333,10 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
                 }
             }
             let style = name(&f, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]).unwrap_or_else(|| "Regular".into());
-            Some((i, family, names, style))
+            // A representative Arabic letter, enough to tell an Arabic-capable face from a Latin-only
+            // one without trusting its family name.
+            let arabic = f.charmap().map('\u{0633}').is_some();
+            Some((i, family, names, style, arabic))
         })
         .collect()
 }
@@ -173,8 +368,8 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
                 continue;
             }
             let Ok(data) = std::fs::read(&path) else { continue };
-            for (index, family, names, style) in file_faces(&data) {
-                out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
+            for (index, family, names, style, arabic) in file_faces(&data) {
+                out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style), arabic });
             }
         }
     }
@@ -222,6 +417,30 @@ pub fn scan_done() -> bool {
 /// pick from).
 pub fn faces_of(family: &str) -> Vec<Face> {
     catalog_now().map(|cat| faces_named(cat, family)).unwrap_or_default()
+}
+
+/// One lookup per family and weight: cell painting asks this for every visible Arabic cell, while
+/// the catalog scan is linear in installed faces.
+static ARABIC_FAMILIES: OnceLock<std::sync::RwLock<HashMap<(String, bool, bool), bool>>> = OnceLock::new();
+
+fn arabic_families() -> &'static std::sync::RwLock<HashMap<(String, bool, bool), bool>> {
+    ARABIC_FAMILIES.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Whether the face the family would use for this weight/slant maps Arabic letters. `false` until
+/// the background scan has found the family, and when that primary face has no Arabic coverage (its
+/// regular sibling does not help: a space would resolve to the primary face and split the line).
+pub fn family_supports_arabic(name: &str, bold: bool, italic: bool) -> bool {
+    if catalog_now().is_none() {
+        return false;
+    }
+    let key = (name.to_string(), bold, italic);
+    if let Some(answer) = arabic_families().read().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return *answer;
+    }
+    let answer = pick_face(&faces_of(name), bold, italic).is_some_and(|f| f.arabic);
+    arabic_families().write().unwrap_or_else(|e| e.into_inner()).insert(key, answer);
+    answer
 }
 
 /// The faces in `cat` that go by `wanted`. When two families claim one name the winner is fixed,
@@ -461,7 +680,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+        let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false, arabic: false };
 
         let mut fonts = egui::FontDefinitions::default();
         let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));
@@ -512,7 +731,15 @@ mod tests {
     const KO: u16 = 0x0412;
 
     fn face(family: &str, names: &[&str], path: &str, weight: f32) -> Face {
-        Face { family: family.into(), names: names.iter().map(|s| s.to_string()).collect(), path: path.into(), index: 0, weight, italic: false }
+        Face {
+            family: family.into(),
+            names: names.iter().map(|s| s.to_string()).collect(),
+            path: path.into(),
+            index: 0,
+            weight,
+            italic: false,
+            arabic: false,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -522,14 +749,14 @@ mod tests {
         let font = font_with_names(&[(EN, 1, "Malgun Gothic"), (EN, 2, "Regular"), (KO, 1, "맑은 고딕"), (KO, 2, "보통")]);
         let faces = file_faces(&font);
         assert_eq!(faces.len(), 1);
-        let (_, family, names, style) = &faces[0];
+        let (_, family, names, style, _) = &faces[0];
         assert_eq!(family, "Malgun Gothic", "the font list keeps the English name");
         assert_eq!(names, &["Malgun Gothic", "맑은 고딕"]);
         assert_eq!(style, "Regular");
 
         // Both name IDs are kept: a legacy family name (ID 1) names a single face (#1606).
         let font = font_with_names(&[(EN, 1, "Noto Sans KR Medium"), (EN, 2, "Regular"), (EN, 16, "Noto Sans KR"), (EN, 17, "Medium")]);
-        let (_, family, names, _) = &file_faces(&font)[0];
+        let (_, family, names, _, _) = &file_faces(&font)[0];
         assert_eq!(family, "Noto Sans KR");
         assert_eq!(names, &["Noto Sans KR", "Noto Sans KR Medium"]);
     }
@@ -539,7 +766,7 @@ mod tests {
     fn a_name_table_full_of_names_is_capped() {
         let texts: Vec<String> = (0..100).map(|i| format!("Family {i}")).collect();
         let records: Vec<(u16, u16, &str)> = texts.iter().enumerate().map(|(i, t)| (0x0400 + i as u16, 1, t.as_str())).collect();
-        let (_, _, names, _) = &file_faces(&font_with_names(&records))[0];
+        let (_, _, names, _, _) = &file_faces(&font_with_names(&records))[0];
         assert_eq!(names.len(), MAX_FAMILY_NAMES);
     }
 
@@ -599,7 +826,15 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let f = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into(), "우분투".into()], path, index: 0, weight: 300.0, italic: false };
+        let f = Face {
+            family: "Ubuntu".into(),
+            names: vec!["Ubuntu".into(), "우분투".into()],
+            path,
+            index: 0,
+            weight: 300.0,
+            italic: false,
+            arabic: false,
+        };
 
         let mut fonts = egui::FontDefinitions::default();
         let before = fonts.font_data.len();
@@ -611,6 +846,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fontconfig_configuration_adds_directories_and_follows_includes() {
+        let base = std::env::temp_dir().join(format!("gridcraft-fontconfig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for d in ["fonts", "relative", "conf.d/fonts"] {
+            std::fs::create_dir_all(base.join(d)).expect("temp dir");
+        }
+        // A directory include pulls in its .conf files, and a relative <dir> is relative to the
+        // file that names it. A cycle (second.conf includes the root again) must terminate.
+        std::fs::write(base.join("conf.d/10-extra.conf"), "<fontconfig><dir>fonts</dir></fontconfig>").expect("write");
+        std::fs::write(
+            base.join("root.conf"),
+            "<fontconfig><include>conf.d</include><include>second.conf</include><dir>relative</dir><dir>missing</dir></fontconfig>",
+        )
+        .expect("write");
+        std::fs::write(base.join("second.conf"), "<fontconfig><include>root.conf</include></fontconfig>").expect("write");
+
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut seen_files: HashSet<PathBuf> = HashSet::new();
+        parse_fontconfig_file(&base.join("root.conf"), &mut out, &mut seen_dirs, &mut seen_files, 0);
+        assert!(out.iter().any(|p| p.ends_with("conf.d/fonts")), "directory include: {out:?}");
+        assert!(out.iter().any(|p| p.ends_with("relative")), "relative dir: {out:?}");
+        assert!(!out.iter().any(|p| p.ends_with("missing")), "a non-directory is not offered: {out:?}");
+
+        // Malformed input contributes nothing and never panics.
+        std::fs::write(base.join("broken.conf"), "<fontconfig><dir>unclosed").expect("write");
+        let mut out = Vec::new();
+        parse_fontconfig_file(&base.join("broken.conf"), &mut out, &mut HashSet::new(), &mut HashSet::new(), 0);
+        assert!(out.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// On a Windows machine with Malgun Gothic, the real file carries its Korean name.
     #[cfg(windows)]
     #[test]
@@ -618,6 +887,6 @@ mod tests {
         let root = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
         let Ok(data) = std::fs::read(root.join("Fonts").join("malgun.ttf")) else { return };
         let faces = file_faces(&data);
-        assert!(faces.iter().any(|(_, family, names, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
+        assert!(faces.iter().any(|(_, family, names, _, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
     }
 }

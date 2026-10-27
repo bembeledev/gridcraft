@@ -231,6 +231,8 @@ pub(crate) fn paint_quadrant(
         if text.is_empty() {
             continue;
         }
+        // Arabic-only text leads with an Arabic face so egui does not split it at the spaces.
+        let font = FontId::new(size, theme::cell_family_for_text(&st.font.name, st.font.bold, st.font.italic, &text));
         let color = ncolor.unwrap_or(lk.text_color);
         let halign = match st.align.h {
             HAlign::General => match v {

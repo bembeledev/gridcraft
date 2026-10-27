@@ -111,13 +111,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let id = egui::Id::unique("gridcraft.formula_bar");
                 // A spill child shows its anchor's formula muted and read-only.
                 let read_only = active_spill_anchor(app).is_some();
-                let info = if app.editor.is_some() {
-                    editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
+                let info = if let Some(edit) = app.editor.as_ref() {
+                    let edit_font = theme::font_for_text(font.clone(), &edit.text);
+                    editor_widget(app, &mut child, id, edit_font, true, inner.width(), inner.height())
                 } else {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
                     let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = child.painter().layout(text, font.clone(), color, inner.width());
+                    let text_font = theme::font_for_text(font.clone(), &text);
+                    let galley = child.painter().layout(text, text_font, color, inner.width());
                     let lines = galley.rows.len();
                     // Each cell's view starts at its top: the offset is kept per cell, not per bar.
                     let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));

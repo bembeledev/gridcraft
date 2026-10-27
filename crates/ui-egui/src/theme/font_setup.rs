@@ -35,6 +35,10 @@ pub const CELL_ITALIC: &str = "cell-italic";
 
 pub const CELL_BOLD_ITALIC: &str = "cell-bold-italic";
 
+/// Cell text in an Arabic-script face first: a whole Persian/Arabic sentence shares one face, so a
+/// space cannot split it into separately shaped runs (egui has no bidi reordering between runs).
+pub const CELL_ARABIC: &str = "cell-arabic";
+
 pub const SERIF: &str = "serif";
 
 pub const MONO: &str = "mono";
@@ -81,16 +85,67 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// The family for cell text: the workbook's own font when it carries Arabic glyphs, else a
+/// script-leading family for Arabic-only text. egui assigns each character to the first family
+/// that has it; with an Arabic-only line led by the Latin font, the spaces belong to Latin and the
+/// Arabic words become separate runs, which egui draws left to right (#2384).
+pub fn cell_family_for_text(name: &str, bold: bool, italic: bool, text: &str) -> FontFamily {
+    if is_arabic_only(text) {
+        let role = crate::fonts::role_key(name, bold, italic);
+        if crate::fonts::is_bound(&role) && crate::fonts::family_supports_arabic(name, bold, italic) {
+            return FontFamily::Name(role.into());
+        }
+        if crate::fonts::is_bound(CELL_ARABIC) {
+            return FontFamily::Name(CELL_ARABIC.into());
+        }
+    }
+    cell_family(name, bold, italic)
+}
+
+/// [`FontId`] for a single line of interface text (formula bar, in-cell editor), in the Arabic
+/// script-leading family when the line is Arabic-only.
+pub fn font_for_text(font: FontId, text: &str) -> FontId {
+    if is_arabic_only(text) && crate::fonts::is_bound(CELL_ARABIC) { FontId::new(font.size, FontFamily::Name(CELL_ARABIC.into())) } else { font }
+}
+
+/// Whether `text` is made only of Arabic-script letters, Arabic punctuation/digits and neutral
+/// separators. Mixed Latin/Arabic text is deliberately not redirected: egui cannot reorder its
+/// runs, and forcing the whole line into an Arabic face would change the Latin glyph shapes too.
+fn is_arabic_only(text: &str) -> bool {
+    let mut arabic = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() || ch.is_ascii_digit() || ch.is_ascii_punctuation() {
+            continue;
+        }
+        let c = ch as u32;
+        let neutral = matches!(c, 0x200C..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069 | 0x00AB | 0x00BB | 0x061C);
+        if neutral {
+            continue;
+        }
+        if (0x0600..=0x06FF).contains(&c)
+            || (0x0750..=0x077F).contains(&c)
+            || (0x08A0..=0x08FF).contains(&c)
+            || (0xFB50..=0xFDFF).contains(&c)
+            || (0xFE70..=0xFEFF).contains(&c)
+        {
+            arabic = true;
+        } else {
+            return false;
+        }
+    }
+    arabic
+}
+
 /// Width in points, at 100% zoom, of one line of cell text drawn as the grid draws it: in the
-/// face [`cell_family`] picks, which on a machine without the named font is a wider or narrower
-/// substitute (#1316). A family the active font set doesn't have yet (bound fonts apply from the
+/// face [`cell_family_for_text`] picks, which on a machine without the named font is a wider or
+/// narrower substitute (#1316). A family the active font set doesn't have yet (bound fonts apply from the
 /// next frame) falls back to the engine's estimate rather than letting egui panic on it.
 ///
 /// `exact` lays the text out (a galley kept until the end of the frame); otherwise the glyph
 /// advances are summed without kerning, which is cheap and never narrower. This takes the
 /// Context lock (`fonts_mut`): never call it, or run a command, while an egui lock is held.
 pub fn cell_text_width(ctx: &egui::Context, text: &str, font: &gridcraft_engine::model::Font, exact: bool) -> f32 {
-    let family = cell_family(&font.name, font.bold, font.italic);
+    let family = cell_family_for_text(&font.name, font.bold, font.italic, text);
     let id = FontId::new(font.size * 96.0 / 72.0, family);
     ctx.fonts_mut(|f| {
         f.families().contains(&id.family).then(|| {
@@ -464,6 +519,23 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Chinese comes from the native-only OFL LXGW face when embedded; a system Han face still
     // leads, and the barred Noto CJK collection never enters.
     append_craft_faces(&mut fonts);
+    // An Arabic-first chain for Arabic-only cell text. A system Arabic face is preferred, then the
+    // permitted craft-fonts Arabic face, so the same rule works on the web and on hosts without a
+    // system Arabic font. Without either, the role families behave as before.
+    let craft = craft_font_faces();
+    let arabic = fallback.iter().find(|k| k.as_str() == "sys-arabic").cloned();
+    let arabic = arabic.or_else(|| craft.iter().find(|(_, f)| f.scripts.contains(&"Arab")).map(|(k, _)| k.clone()));
+    if let Some(arabic) = arabic {
+        let mut chain: Vec<String> = Vec::new();
+        for key in std::iter::once(&arabic).chain(base_prop.iter()).chain(fallback.iter()).chain(craft.iter().map(|(k, _)| k)) {
+            if !chain.contains(key) {
+                chain.push(key.clone());
+            }
+        }
+        chain.retain(|k| fonts.font_data.contains_key(k));
+        fonts.families.insert(FontFamily::Name(CELL_ARABIC.into()), chain);
+        bound.push(CELL_ARABIC.to_string());
+    }
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
@@ -556,6 +628,18 @@ mod font_binding_tests {
     /// The families [`font_definitions`] always binds, whatever is installed.
     fn always_bound() -> Vec<String> {
         [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO].iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn arabic_only_cell_text_uses_the_arabic_family_when_it_is_bound() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::fonts::set_bound(always_bound().into_iter().chain([CELL_ARABIC.to_string()]));
+        assert_eq!(cell_family_for_text("Calibri", false, false, "سلام دنیا"), FontFamily::Name(CELL_ARABIC.into()));
+        assert_eq!(cell_family_for_text("Calibri", false, false, "سلام."), FontFamily::Name(CELL_ARABIC.into()));
+        assert_eq!(font_for_text(ui_font(14.0), "سلام دنیا").family, FontFamily::Name(CELL_ARABIC.into()));
+        // Mixed text and Latin-only text keep their ordinary role (egui cannot reorder mixed runs).
+        assert_eq!(cell_family_for_text("Calibri", false, false, "GridCraft فارسی"), FontFamily::Name(CELL.into()));
+        assert_eq!(font_for_text(ui_font(14.0), "GridCraft"), ui_font(14.0));
     }
 
     #[test]

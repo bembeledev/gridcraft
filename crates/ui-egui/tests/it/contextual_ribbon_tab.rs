@@ -2,6 +2,7 @@
 //! The tab remembered in the saved UI state, or left behind when the selection moves away, must
 //! not leave the ribbon blank: it falls back to Home.
 
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
@@ -59,6 +60,13 @@ fn shape_format_is_available_only_while_a_shape_is_selected() {
     h.state_mut().ui.ribbon_tab = "Shape Format".into();
     h.run_steps(2);
     assert_eq!(h.state().ui.ribbon_tab, "Shape Format");
+    assert!(h.query_by_label("Rotate selected shape 90 degrees").is_none());
+    assert!(h.query_by_label("Bring object forward or to front").is_none());
+    assert!(h.query_by_label("Send object backward or to back").is_none());
+    h.get_by_label("Open Selection Pane").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Bring Forward").is_none());
+    assert!(h.query_by_label("Send Backward").is_none());
 
     h.state_mut().selected_chart = None;
     h.run_steps(2);

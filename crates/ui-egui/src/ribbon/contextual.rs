@@ -189,7 +189,7 @@ pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
     if !exists {
         return;
     }
-    object_arrange_controls(app, ui, "image", id);
+    selection_pane_button(app, ui);
     sep(ui);
     let properties = big_button(ui, Icon::Settings, "Cell\nPlacement", "Picture placement relative to cells", true);
     egui::Popup::menu(&properties).show(|ui| {
@@ -217,7 +217,7 @@ pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
     if !exists {
         return;
     }
-    object_arrange_controls(app, ui, "shape", id);
+    selection_pane_button(app, ui);
     sep(ui);
     let fill = big_button(ui, Icon::Fill, "Shape\nFill", "Change shape fill color", true);
     egui::Popup::menu(&fill).show(|ui| {
@@ -237,12 +237,6 @@ pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
             ui.close();
         }
     });
-    sep(ui);
-    let rotate = big_button(ui, Icon::Orient, "Rotate\n90°", "Rotate selected shape 90 degrees", false);
-    control_keytip(app, ui, &rotate, "arrange.rotate");
-    if rotate.clicked() {
-        act(app, "arrange.rotate", json!({"kind": "shape", "id": id}));
-    }
     if big_button(ui, Icon::Delete, "Delete\nShape", "Delete selected shape", false).clicked() {
         act(app, "object.delete", json!({"kind": "shape", "id": id}));
         app.selected_chart = None;
@@ -268,28 +262,8 @@ pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-/// Shared stacking-order and Selection Pane controls for pictures and shapes.
-fn object_arrange_controls(app: &mut SheetApp, ui: &mut Ui, kind: &str, id: u32) {
-    let forward = big_button(ui, Icon::ChevronUp, "Bring\nForward", "Bring object forward or to front", true);
-    control_keytip(app, ui, &forward, "arrange.bringForward");
-    egui::Popup::menu(&forward).show(|ui| {
-        for (label, to_front) in [("Bring Forward", false), ("Bring to Front", true)] {
-            if ui.button(app.ui.language.tr(label)).clicked() {
-                act(app, "arrange.bringForward", json!({"kind": kind, "id": id, "toFront": to_front}));
-                ui.close();
-            }
-        }
-    });
-    let backward = big_button(ui, Icon::Chevron, "Send\nBackward", "Send object backward or to back", true);
-    control_keytip(app, ui, &backward, "arrange.sendBackward");
-    egui::Popup::menu(&backward).show(|ui| {
-        for (label, to_back) in [("Send Backward", false), ("Send to Back", true)] {
-            if ui.button(app.ui.language.tr(label)).clicked() {
-                act(app, "arrange.sendBackward", json!({"kind": kind, "id": id, "toBack": to_back}));
-                ui.close();
-            }
-        }
-    });
+/// Opens the Selection Pane without implying cross-type stacking order the renderer doesn't yet support.
+fn selection_pane_button(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Settings, "Selection\nPane", "Open Selection Pane", false).clicked() {
         app.grid.pane = Some("selection".into());
     }

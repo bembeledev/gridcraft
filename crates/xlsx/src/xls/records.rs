@@ -143,15 +143,16 @@ impl<'a, 'b> Cursor<'a, 'b> {
     pub fn take_rest(&mut self, max: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.remaining().min(max));
         if let Some(p) = self.parts.get(self.part) {
-            out.extend_from_slice(p.get(self.pos..).unwrap_or(&[]));
+            let p = p.get(self.pos..).unwrap_or(&[]);
+            out.extend_from_slice(&p[..p.len().min(max)]);
         }
         for p in self.parts.iter().skip(self.part + 1) {
-            if out.len() >= max {
+            let room = max.saturating_sub(out.len());
+            if room == 0 {
                 break;
             }
-            out.extend_from_slice(p);
+            out.extend_from_slice(&p[..p.len().min(room)]);
         }
-        out.truncate(max);
         self.part = self.parts.len();
         self.pos = 0;
         self.after = 0;
@@ -253,5 +254,10 @@ mod tests {
         assert_eq!(c.take_rest(100), vec![2, 3, 4, 5, 6, 7, 8]);
         let mut c = Cursor::new(&parts);
         assert!(c.take_rest(0).is_empty());
+        // A limit that falls inside a part cuts that part, in the first part as in a later one.
+        let mut c = Cursor::new(&parts);
+        assert_eq!(c.take_rest(2), vec![1, 2]);
+        let mut c = Cursor::new(&parts);
+        assert_eq!(c.take_rest(5), vec![1, 2, 3, 4, 5]);
     }
 }

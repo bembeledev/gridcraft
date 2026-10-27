@@ -31,6 +31,16 @@ struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
     text: String,
+    /// Approximate bytes one dependent cell costs (its printed text plus its expression tree),
+    /// charged against [`MAX_SHARED_FORMULA_BYTES`].
+    cost: u64,
+}
+
+/// What one sheet's hyperlinks have copied so far, across all its `<hyperlinks>` blocks.
+#[derive(Default)]
+struct LinkBudget {
+    cells: u64,
+    bytes: u64,
 }
 
 #[derive(Default)]
@@ -78,10 +88,18 @@ fn push_dynamic(st: &mut RowState, range: RangeRef) {
     st.dynamic.push(range);
 }
 
-const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
+/// Most cells one sheet's hyperlinks may cover (each cell gets its own copy of the link).
+const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// Longest hyperlink target kept, in bytes (Excel's own limit is about 2,079 characters).
+const MAX_HYPERLINK_TARGET: usize = 8_192;
+/// Longest hyperlink ScreenTip kept, in characters (Excel's limit).
+const MAX_TOOLTIP_CHARS: usize = 255;
+/// Budget, per workbook, for shared formulas expanded into their dependent cells: each dependent
+/// costs a copy of the master's text and expression tree.
+pub const MAX_SHARED_FORMULA_BYTES: u64 = 2 << 30;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
@@ -119,6 +137,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut link_budget = LinkBudget::default();
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
@@ -169,7 +188,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet, &mut link_budget),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -539,13 +558,25 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
+                let cost = shared_cost(text, expr.as_ref());
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), cost });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
+                if sh.expr.is_none() && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN {
+                    cx.warn(format!(
+                        "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
+                        gridcraft_formula::MAX_FORMULA_LEN
+                    ));
+                    return None;
+                }
+                if !charge(&mut cx.shared_formula_bytes, sh.cost, MAX_SHARED_FORMULA_BYTES) {
+                    cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
+                    return None;
+                }
                 Some(match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
@@ -618,6 +649,35 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     Some(serial)
 }
 
+/// What one dependent of a shared formula costs: its printed text plus its expression tree.
+fn shared_cost(text: &str, expr: Option<&Expr>) -> u64 {
+    let mut nodes = 0u64;
+    if let Some(e) = expr {
+        e.walk(&mut |_| nodes = nodes.saturating_add(1));
+    }
+    let node = std::mem::size_of::<Expr>() as u64;
+    (text.len() as u64).saturating_mul(2).saturating_add(nodes.saturating_mul(node)).saturating_add(64)
+}
+
+/// Adds `cost` to `used` when that stays within `cap`; `false` (and `used` unchanged) otherwise.
+fn charge(used: &mut u64, cost: u64, cap: u64) -> bool {
+    match used.checked_add(cost) {
+        Some(total) if total <= cap => {
+            *used = total;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The first `max` characters of `s`.
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((at, _)) => s.get(..at).unwrap_or(s).to_string(),
+        None => s.to_string(),
+    }
+}
+
 pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
     s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).collect()
 }
@@ -677,6 +737,25 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_formula_budget_stops_expansion() {
+        let expr = gridcraft_formula::parse("SUM(1,2,3)").ok();
+        let cost = shared_cost("SUM(1,2,3)", expr.as_ref());
+        assert!(cost > 64 + 4 * std::mem::size_of::<Expr>() as u64);
+        let cap = cost * 3;
+        let mut used = 0;
+        assert!((0..3).all(|_| charge(&mut used, cost, cap)));
+        assert!(!charge(&mut used, cost, cap));
+        assert_eq!(used, cap);
+        assert!(!charge(&mut used, u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn truncate_keeps_whole_characters() {
+        assert_eq!(truncate_chars("ab\u{e9}d", 3), "ab\u{e9}");
+        assert_eq!(truncate_chars("ab", 3), "ab");
+    }
 
     #[test]
     fn iso_dates() {

@@ -14,6 +14,9 @@ use crate::xml::{El, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
 
+/// Longest font name kept, in characters (Excel's own limit is 31).
+pub const MAX_FONT_NAME_CHARS: usize = 255;
+
 /// Styles read from a file.
 #[derive(Debug, Default)]
 pub struct StylesIn {
@@ -63,7 +66,11 @@ const MAX_FONT_FAMILY: u8 = 14;
 pub fn read_font(e: &El, palette: &[u32]) -> Font {
     let mut f = Font::default();
     if let Some(n) = e.child("name").or_else(|| e.child("rFont")).and_then(|n| n.attr("val")) {
-        f.name = n.to_string();
+        // Every cell format that uses the font copies its name: keep it short.
+        f.name = match n.char_indices().nth(MAX_FONT_NAME_CHARS) {
+            Some((at, _)) => n.get(..at).unwrap_or_default().to_string(),
+            None => n.to_string(),
+        };
     }
     if let Some(sz) = e.child("sz").and_then(|s| s.attr_f64("val")) {
         f.size = sz.clamp(1.0, 409.0) as f32;
@@ -277,14 +284,16 @@ fn read_protection(p: &El) -> Protection {
     Protection { locked: p.flag("locked", true), hidden: p.flag("hidden", false) }
 }
 
-fn num_fmt_code(id: u32, custom: &HashMap<u32, String>) -> NumFmt {
+/// A number format by id. Custom formats are built once and shared (`NumFmt` is an `Arc`), so
+/// many cell formats naming one long code don't each copy it.
+fn num_fmt_code(id: u32, custom: &HashMap<u32, NumFmt>) -> NumFmt {
     if let Some(c) = custom.get(&id) {
-        return NumFmt::new(c);
+        return c.clone();
     }
     NumFmt::new(builtin_format(id).unwrap_or("General"))
 }
 
-fn read_xf(xf: &El, fonts: &[Font], fills: &[Fill], borders: &[Borders], fmts: &HashMap<u32, String>, checkboxes: &[bool]) -> Style {
+fn read_xf(xf: &El, fonts: &[Font], fills: &[Fill], borders: &[Borders], fmts: &HashMap<u32, NumFmt>, checkboxes: &[bool]) -> Style {
     let mut s = Style::default();
     if let Some(f) = xf.attr_u32("fontId").and_then(|i| fonts.get(i as usize)) {
         s.font = f.clone();
@@ -336,6 +345,7 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
+    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().map(|(&id, code)| (id, NumFmt::new(code))).collect();
     // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
     let body_font = |e: &El| {
         let mut f = read_font(e, &palette);
@@ -345,10 +355,14 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
     let fonts: Vec<Font> = root.child("fonts").map(|f| f.kids("font").map(body_font).collect()).unwrap_or_default();
     let fills: Vec<Fill> = root.child("fills").map(|f| f.kids("fill").map(|e| read_fill(e, &palette, false)).collect()).unwrap_or_default();
     let borders: Vec<Borders> = root.child("borders").map(|f| f.kids("border").map(|e| read_border(e, &palette)).collect()).unwrap_or_default();
-    let xfs =
-        root.child("cellXfs").map(|x| x.kids("xf").map(|xf| read_xf(xf, &fonts, &fills, &borders, &fmts, checkboxes)).collect()).unwrap_or_default();
-    let style_xfs: Vec<Style> =
-        root.child("cellStyleXfs").map(|x| x.kids("xf").map(|xf| read_xf(xf, &fonts, &fills, &borders, &fmts, &[])).collect()).unwrap_or_default();
+    let xfs = root
+        .child("cellXfs")
+        .map(|x| x.kids("xf").map(|xf| read_xf(xf, &fonts, &fills, &borders, &shared_fmts, checkboxes)).collect())
+        .unwrap_or_default();
+    let style_xfs: Vec<Style> = root
+        .child("cellStyleXfs")
+        .map(|x| x.kids("xf").map(|xf| read_xf(xf, &fonts, &fills, &borders, &shared_fmts, &[])).collect())
+        .unwrap_or_default();
     let mut named = Vec::new();
     if let Some(cs) = root.child("cellStyles") {
         for c in cs.kids("cellStyle") {
@@ -359,12 +373,12 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &fmts)).collect()).unwrap_or_default();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.
-fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
         let f = read_font(e, palette);

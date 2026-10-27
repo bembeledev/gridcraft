@@ -18,6 +18,7 @@ fn has_truetype_outlines(bytes: &[u8]) -> bool {
 }
 
 fn manifest_fonts(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    println!("cargo:rerun-if-changed={}", root.display());
     let manifest = root.join("fonts/manifest.txt");
     println!("cargo:rerun-if-changed={}", manifest.display());
     let contents = fs::read_to_string(&manifest).map_err(|error| format!("{}: {error}", manifest.display()))?;

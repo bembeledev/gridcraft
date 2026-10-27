@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -53,6 +53,10 @@ PDF export keeps command validation and document construction in `engine/cmd/pri
 layout, drawing, text, objects and headers/footers live in its child modules. Each uses the
 same document-local font set for rendering and measurement. The native fallback provider lives
 in `ui-egui/theme/pdf.rs`, using the shared system-font candidates and bounded file reads.
+Header/footer expansion retains ordered font/style runs (up to 40,000 UTF-8 bytes per section).
+PDF fallback loading retains up to four faces: primary and alternate regular/bold pairs.
+A face covering both Greek and Cyrillic wins; otherwise text is split into covered runs,
+and measurement and rotated drawing use the same faces and advances.
 
 ## UI building blocks
 
@@ -155,6 +159,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | PDF headers/footers preserve per-run family, weight, slant and size with combined line alignment; automatic fallback prefers Greek+Cyrillic faces and retains separate script faces when needed, with matching mixed-run metrics and bounded expanded sections |
 | 2026-10-27 | minor | Preserve PDF font selection, measurement, validation and regressions across the upstream print/theme module split; isolate the bounded system fallback provider in theme/pdf.rs |
 | 2026-10-25 | minor | PDF font setters reject changes after the first page to keep shared resources and glyph mappings consistent; fallback lookups before loader registration no longer prevent later loading, and existing documents retain their faces |
 | 2026-10-25 | trivial | Correct metadata emphasis and cache immutable default PDF text faces during width measurement |

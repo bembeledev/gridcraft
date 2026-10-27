@@ -1,17 +1,39 @@
 use super::font_setup::candidates;
 
-/// Regular and bold system fonts for printed and exported text the standard PDF fonts can't
-/// show (Greek, Cyrillic, …): the first sheet-font candidate that parses as an embeddable
-/// TrueType file and has Greek or Cyrillic letters (`pdf_font_covers_greek_or_cyrillic`).
+/// Primary regular/bold and alternate regular/bold system faces for PDF text.
+/// Prefer a face covering both Greek and Cyrillic; otherwise keep a face for each script.
 /// Pass to `gridcraft_engine::pdf::set_unicode_font_loader` (the desktop app and the CLI do).
-pub fn pdf_unicode_fonts() -> [Option<Vec<u8>>; 2] {
-    ["cell", "cell-bold"].map(|role| {
-        candidates(role)
-            .into_iter()
-            .filter(|(path, index)| *index == 0 && path.to_ascii_lowercase().ends_with(".ttf"))
-            .filter_map(|(path, _)| read_pdf_font(&path))
-            .find(|bytes| gridcraft_engine::pdf::UnicodeFont::parse(bytes.clone()).is_some_and(|f| pdf_font_covers_greek_or_cyrillic(&f)))
-    })
+pub fn pdf_unicode_fonts() -> [Option<Vec<u8>>; 4] {
+    let [[regular, regular_alt], [bold, bold_alt]] = ["cell", "cell-bold"].map(|role| {
+        select_fallbacks(
+            candidates(role)
+                .into_iter()
+                .filter(|(path, index)| *index == 0 && path.to_ascii_lowercase().ends_with(".ttf"))
+                .filter_map(|(path, _)| read_pdf_font(&path)),
+        )
+    });
+    [regular, bold, regular_alt, bold_alt]
+}
+
+fn select_fallbacks(fonts: impl IntoIterator<Item = Vec<u8>>) -> [Option<Vec<u8>>; 2] {
+    let (mut greek, mut cyrillic) = (None, None);
+    for bytes in fonts {
+        let Some(face) = gridcraft_engine::pdf::UnicodeFont::parse(bytes.clone()) else { continue };
+        if !pdf_font_covers_greek_or_cyrillic(&face) {
+            continue;
+        }
+        let has_greek = face.has('Ω') && face.has('ω');
+        let has_cyrillic = face.has('Ж') && face.has('џ');
+        if has_greek && has_cyrillic {
+            return [Some(bytes), None];
+        }
+        if has_greek && greek.is_none() {
+            greek = Some(bytes);
+        } else if has_cyrillic && cyrillic.is_none() {
+            cyrillic = Some(bytes);
+        }
+    }
+    [greek, cyrillic]
 }
 
 /// Bound the native fallback read before parsing or cloning bytes. A system-font symlink may
@@ -40,4 +62,32 @@ pub(super) fn read_pdf_font(path: &str) -> Option<Vec<u8>> {
 /// real glyphs too.
 pub(super) fn pdf_font_covers_greek_or_cyrillic(f: &gridcraft_engine::pdf::UnicodeFont) -> bool {
     (f.has('Ω') && f.has('ω')) || (f.has('Ж') && f.has('џ'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_engine::pdf::{UnicodeFont, test_support::tiny_ttf};
+
+    #[test]
+    fn a_combined_face_wins_over_earlier_single_script_faces() {
+        let greek = tiny_ttf(&['Ω', 'ω'], 400, 0);
+        let cyrillic = tiny_ttf(&['Ж', 'џ'], 500, 0);
+        let both = tiny_ttf(&['Ω', 'ω', 'Ж', 'џ'], 600, 0);
+        let selected = select_fallbacks([greek, cyrillic, both.clone()]);
+        assert_eq!(selected, [Some(both), None]);
+    }
+
+    #[test]
+    fn separate_script_faces_survive_either_candidate_order() {
+        let greek = tiny_ttf(&['Ω', 'ω'], 400, 0);
+        let cyrillic = tiny_ttf(&['Ж', 'џ'], 500, 0);
+        for candidates in [[greek.clone(), cyrillic.clone()], [cyrillic.clone(), greek.clone()]] {
+            let selected = select_fallbacks(candidates);
+            assert_eq!(selected, [Some(greek.clone()), Some(cyrillic.clone())]);
+            let [g, c] = selected.map(|b| UnicodeFont::parse(b.unwrap()).unwrap());
+            assert!(g.has('Ω') && c.has('Ж'));
+        }
+        assert_eq!(select_fallbacks([vec![0; 16], tiny_ttf(&['A'], 500, 0), tiny_ttf(&['Ω', 'ω'], 500, 2)]), [None, None]);
+    }
 }

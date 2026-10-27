@@ -199,11 +199,13 @@ fn pdf_unicode_fonts_set_cyrillic_in_real_glyphs() {
     let samples = ["Добар дан, Ђорђе! Љубав, њива, џеп, ћуп", "Съешь же ещё этих мягких булок"];
     let has_cyrillic =
         |role: &str| candidates(role).iter().filter_map(|(p, _)| read_pdf_font(p)).filter_map(UnicodeFont::parse).any(|f| f.has('Ж') && f.has('џ'));
+    let selected = pdf_unicode_fonts();
     for (i, role) in ["cell", "cell-bold"].into_iter().enumerate() {
         if !has_cyrillic(role) {
             continue; // no Cyrillic face for this role here; nothing to assert
         }
-        let font = pdf_unicode_fonts()[i].clone().and_then(UnicodeFont::parse);
+        let font =
+            [i, i + 2].into_iter().filter_map(|slot| selected.get(slot)?.clone()).filter_map(UnicodeFont::parse).find(|f| f.has('Ж') && f.has('џ'));
         let font = font.unwrap_or_else(|| panic!("a {role} candidate has Cyrillic but none was picked for PDF"));
         assert!(pdf_font_covers_greek_or_cyrillic(&font));
         for text in samples {

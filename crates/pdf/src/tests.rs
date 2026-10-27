@@ -354,7 +354,7 @@ fn truetype_rejects_restricted_and_malformed_fonts() {
 fn greek_text_embeds_a_unicode_font_instead_of_question_marks() {
     let font = Arc::new(UnicodeFont::parse(tiny_ttf(&['Α', 'β', ' ', 'Q'], 600, 0)).unwrap());
     let mut doc = PdfDoc::default();
-    doc.set_unicode_fonts([Some(font), None]).unwrap();
+    doc.set_unicode_fonts([Some(font), None, None, None]).unwrap();
     let pg = doc.add_page(612.0, 792.0);
     pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Αβ Q");
     pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], "Αβ");
@@ -410,7 +410,7 @@ fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() {
     let regular = Arc::new(UnicodeFont::parse(tiny_ttf(&chars, 600, 0)).unwrap());
     let bold = Arc::new(UnicodeFont::parse(tiny_ttf(&chars, 650, 0)).unwrap());
     let mut doc = PdfDoc::default();
-    doc.set_unicode_fonts([Some(regular), Some(bold)]).unwrap();
+    doc.set_unicode_fonts([Some(regular), Some(bold), None, None]).unwrap();
     let pg = doc.add_page(612.0, 792.0);
     pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], serbian);
     pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], russian);
@@ -593,6 +593,33 @@ fn missing_glyph_checks_the_space_used_to_render_a_tab() {
 }
 
 #[test]
+fn separate_script_fallbacks_match_measurement_and_drawing_for_both_weights() {
+    let face = |chars: &[char], width| Arc::new(UnicodeFont::parse(tiny_ttf(chars, width, 0)).unwrap());
+    let fonts =
+        TextFonts::fallback([Some(face(&['Ω', 'ω'], 400)), Some(face(&['Ω', 'ω'], 500)), Some(face(&['Ж', 'џ'], 600)), Some(face(&['Ж', 'џ'], 700))]);
+    assert!((fonts.text_width(Font::Helvetica, 10.0, "ΩЖAΩ") - 20.67).abs() < 0.001);
+    assert_eq!(fonts.text_width(Font::HelveticaBold, 10.0, "ΩЖ"), 12.0);
+    assert_eq!(fonts.text_width(Font::Helvetica, 10.0, "ΩЖΨ"), 20.0, "unavailable characters retain the CID fallback");
+    let mut doc = PdfDoc::with_text_fonts(fonts);
+    let pg = doc.add_page(100.0, 100.0);
+    pg.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ΩЖAΩ");
+    pg.text_rotated(10.0, 40.0, 10.0, Font::HelveticaBold, [0, 0, 0], "ΩЖ", std::f32::consts::FRAC_PI_2);
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    for entry in
+        ["/U1 10 Tf", "/U2 10 Tf", "/U3 10 Tf", "/U4 10 Tf", "1 0 0 1 14 80 Tm", "1 0 0 1 20 80 Tm", "1 0 0 1 26.67 80 Tm", "0 -1 1 0 10 55 Tm"]
+    {
+        assert!(find(&pdf, entry.as_bytes()).is_some(), "missing {entry}");
+    }
+    assert_eq!(pdf.windows(10).filter(|w| *w == b"/FontFile2").count(), 4);
+    assert!(find(&pdf, b"UniGB-UTF16-H").is_none(), "available scripts must use their embedded faces");
+    assert!(find(&pdf, b"> <03A9>").is_some());
+    assert!(find(&pdf, b"> <0416>").is_some());
+    let mixed_weights = TextFonts::fallback([Some(face(&['Ω', 'Ж'], 900)), Some(face(&['Ω'], 500)), None, Some(face(&['Ж'], 700))]);
+    assert_eq!(mixed_weights.text_width(Font::HelveticaBold, 10.0, "ΩЖ"), 12.0, "separate bold faces take precedence over a combined regular face");
+}
+
+#[test]
 fn changing_fonts_after_a_page_is_rejected_without_corrupting_metrics_or_glyphs() {
     let first_bytes = tiny_ttf(&['A', 'Ω'], 500, 0);
     let second_bytes = tiny_ttf(&[' ', 'A', 'Ω'], 900, 0);
@@ -603,7 +630,7 @@ fn changing_fonts_after_a_page_is_rejected_without_corrupting_metrics_or_glyphs(
     let pg = doc.add_page(100.0, 100.0);
     pg.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "AΩ");
     assert!(doc.set_text_fonts(TextFonts::custom(second.clone(), None, None, None)).is_err());
-    assert!(doc.set_unicode_fonts([Some(second), None]).is_err(), "the legacy setter must enforce the same invariant");
+    assert!(doc.set_unicode_fonts([Some(second), None, None, None]).is_err(), "the legacy setter must enforce the same invariant");
     assert_eq!(doc.page_mut(0).unwrap().text_width(Font::Helvetica, 10.0, "AΩ"), 10.0);
     let pg = doc.add_page(100.0, 100.0);
     assert_eq!(pg.text_width(Font::Helvetica, 10.0, "AΩ"), 10.0, "new pages retain the original metrics");
@@ -623,9 +650,9 @@ fn changing_fonts_after_a_page_is_rejected_without_corrupting_metrics_or_glyphs(
 fn a_loader_registered_after_initial_lookups_supplies_cached_fonts_to_new_documents() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static LOADS: AtomicUsize = AtomicUsize::new(0);
-    fn load() -> [Option<Vec<u8>>; 2] {
+    fn load() -> [Option<Vec<u8>>; 4] {
         LOADS.fetch_add(1, Ordering::SeqCst);
-        [Some(tiny_ttf(&['Ω'], 500, 0)), Some(tiny_ttf(&['Ω'], 700, 0))]
+        [Some(tiny_ttf(&['Ω'], 500, 0)), Some(tiny_ttf(&['Ω'], 700, 0)), None, None]
     }
     // A local cache exercises registration order without changing process-wide test state.
     let cache = SystemFontCache::new();
@@ -635,13 +662,13 @@ fn a_loader_registered_after_initial_lookups_supplies_cached_fonts_to_new_docume
     existing.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Ω");
     cache.loader.set(load).unwrap();
     let faces = cache.unicode();
-    assert!(faces.iter().all(Option::is_some));
+    assert!(faces[..2].iter().all(Option::is_some));
     assert_eq!(cache.text().text_width(Font::Helvetica, 10.0, "Ω"), 5.0);
     assert_eq!(cache.text().text_width(Font::HelveticaBold, 10.0, "Ω"), 7.0);
     assert!(std::ptr::eq(cache.text(), cache.text()), "registered measurement faces are reused");
     assert!(std::ptr::eq(faces, cache.unicode()), "registered parsed faces are reused");
     assert_eq!(LOADS.load(Ordering::SeqCst), 1, "the registered loader runs once");
-    assert!(cache.loader.set(|| [None, None]).is_err(), "first registration wins");
+    assert!(cache.loader.set(|| [None, None, None, None]).is_err(), "first registration wins");
     let mut next = PdfDoc::with_text_fonts(cache.text().clone());
     next.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Ω");
     let next_pdf = next.finish();

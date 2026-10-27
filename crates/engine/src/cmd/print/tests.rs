@@ -64,6 +64,79 @@ fn header_sections_split_join_and_field_names() {
 }
 
 #[test]
+fn header_font_runs_capture_styles_fields_and_bounded_expansion() {
+    let cx = HfContext { page: 3, sheet: "Ω".into(), ..Default::default() };
+    let sections = expand_header_footer("&C&\"Greek,Bold Italic\"&20&A&\"Latin,Regular\"&10A&P&BZ&IY&LLeft", &cx);
+    let runs = &sections[1].runs;
+    assert_eq!(sections[1].text, "ΩA3ZY");
+    assert_eq!(runs.len(), 4);
+    assert_eq!(
+        (runs[0].text.as_str(), runs[0].font.as_deref(), runs[0].bold, runs[0].italic, runs[0].size),
+        ("Ω", Some("Greek"), true, true, Some(20.0))
+    );
+    assert_eq!(
+        (runs[1].text.as_str(), runs[1].font.as_deref(), runs[1].bold, runs[1].italic, runs[1].size),
+        ("A3", Some("Latin"), false, false, Some(10.0))
+    );
+    assert!(runs[2].bold && !runs[2].italic);
+    assert!(runs[3].bold && runs[3].italic);
+    assert_eq!(sections[0].runs[0].text, "Left");
+    let huge = HfContext { sheet: "Ω".repeat(100_000), ..Default::default() };
+    let expanded = expand_header_footer("&A&A&A", &huge);
+    assert_eq!(expanded[1].text.len(), 40_000);
+    assert_eq!(expanded[1].runs.len(), 1);
+    assert_eq!(expanded[1].runs[0].text, expanded[1].text);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn header_and_footer_font_switches_measure_and_align_each_run() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-header-font-runs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let greek = dir.join("greek.ttf");
+    let greek_bold = dir.join("greek-bold.ttf");
+    let latin = dir.join("latin.ttf");
+    for (path, chars, width) in [(&greek, vec!['Ω'], 400), (&greek_bold, vec!['Ω'], 700), (&latin, vec!['A'], 300)] {
+        std::fs::write(path, gridcraft_pdf::test_support::tiny_ttf(&chars, width, 0)).unwrap();
+    }
+    let mut s = s();
+    for part in ["header", "footer"] {
+        for section in ["&L", "&C", "&R"] {
+            let spec = format!("{section}&\"Greek,Bold\"&20Ω&\"Latin,Regular\"&10A");
+            let mut setup = json!({"scale": 100, "fitToPage": false, "header": "", "footer": ""});
+            setup[part] = json!(spec);
+            s.execute("pageLayout.pageSetup", setup).unwrap();
+            let lay = layouts(&s.doc().unwrap().wb, &PrintOptions::default()).remove(0);
+            let (left, right) = lay.hf_sides();
+            let expected = match section {
+                "&L" => left,
+                "&C" => (lay.page_w - 17.0) / 2.0,
+                _ => lay.page_w - right - 17.0,
+            };
+            for command in ["file.exportPdf", "file.print"] {
+                let r = s
+                    .execute_headless(
+                        command,
+                        json!({"fontFamilies": {"Greek": {"regular": greek, "bold": greek_bold}, "Latin": {"regular": latin}}}),
+                    )
+                    .unwrap();
+                let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+                let pdf = String::from_utf8_lossy(&bytes);
+                let runs: Vec<_> = pdf.split("BT\n").filter(|b| b.contains("/U6 20 Tf") || b.contains("/U9 10 Tf")).collect();
+                assert_eq!(runs.len(), 2, "each header/footer character must use its own mapped face");
+                for (run, x) in runs.iter().zip([expected, expected + 14.0]) {
+                    let tm = run.lines().find(|line| line.ends_with(" Tm")).unwrap();
+                    let actual: f32 = tm.split_whitespace().nth(4).unwrap().parse().unwrap();
+                    assert!((actual - x).abs() < 0.01, "{part} {section}: expected {x}, got {actual}");
+                }
+                assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 2);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn header_footer_date_follows_the_workbook_date_system() {
     let mut wb = Workbook::new();
     let date_1900 = hf_date_time(&wb).0;

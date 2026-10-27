@@ -35,12 +35,12 @@ pub const MAX_TOTAL_FONT_BYTES: u64 = 256 * 1024 * 1024;
 /// Bounds the character maps for each embedded face, including Unicode aliases.
 pub const MAX_FONT_CHARACTERS: usize = 65_535;
 
-/// Regular and bold fonts for text outside WinAnsiEncoding.
-pub type UnicodeFonts = [Option<Arc<UnicodeFont>>; 2];
+/// Primary regular/bold and alternate regular/bold faces for text outside WinAnsiEncoding.
+pub type UnicodeFonts = [Option<Arc<UnicodeFont>>; 4];
 
-/// Loads the raw `.ttf` bytes of the regular and bold fallback fonts. Runs at most once, the
-/// first time a PDF needs them.
-pub type UnicodeFontLoader = fn() -> [Option<Vec<u8>>; 2];
+/// Loads primary regular/bold and alternate regular/bold `.ttf` faces. Runs at most once,
+/// the first time a PDF needs them after registration.
+pub type UnicodeFontLoader = fn() -> [Option<Vec<u8>>; 4];
 
 static SYSTEM_FONTS: SystemFontCache = SystemFontCache::new();
 
@@ -58,7 +58,7 @@ impl SystemFontCache {
     }
 
     fn unicode(&self) -> &UnicodeFonts {
-        static EMPTY: UnicodeFonts = [None, None];
+        static EMPTY: UnicodeFonts = [None, None, None, None];
         let Some(load) = self.loader.get() else { return &EMPTY };
         self.unicode.get_or_init(|| load().map(|bytes| bytes.and_then(UnicodeFont::parse).map(Arc::new)))
     }
@@ -106,13 +106,13 @@ impl Default for TextFonts {
 }
 
 impl TextFonts {
-    /// The registered regular/bold Unicode fallback, with the standard PDF fonts for Latin.
+    /// The registered Unicode fallbacks, with the standard PDF fonts for Latin.
     pub fn system() -> Self {
         SYSTEM_FONTS.text().clone()
     }
 
-    fn fallback([regular, bold]: UnicodeFonts) -> Self {
-        Self { faces: vec![regular, bold, None, None], ..Self::default() }
+    fn fallback(fonts: UnicodeFonts) -> Self {
+        Self { faces: Vec::from(fonts), ..Self::default() }
     }
 
     /// Explicit regular, bold, italic and bold-italic faces. Omitted styles use regular.
@@ -183,18 +183,52 @@ impl TextFonts {
             return None;
         }
         let want = usize::from(font.is_bold());
-        [want, 1 - want]
+        [want, want + 2]
             .into_iter()
             .find(|i| self.faces.get(*i).is_some_and(|f| f.as_ref().is_some_and(|f| text.chars().all(|c| c.is_control() || f.has(c)))))
     }
 
     /// Width using exactly the face that will draw the text, in points.
     pub fn text_width(&self, font: Font, size: f32, text: &str) -> f32 {
-        let units: u64 = match self.slot(font, text).and_then(|i| self.faces.get(i)?.as_deref()) {
+        let slot = self.slot(font, text);
+        let units =
+            if slot.is_some() || self.custom || matches!(font, Font::Embedded(_)) || !needs_unicode(text) || self.faces.iter().all(Option::is_none) {
+                self.run_units(font, text, slot)
+            } else {
+                let mut rest = text;
+                let mut units = 0u64;
+                while let Some((slot, run)) = self.fallback_run(font, rest) {
+                    units = units.saturating_add(self.run_units(font, run, slot));
+                    rest = rest.get(run.len()..).unwrap_or_default();
+                }
+                units
+            };
+        units as f32 * size / 1000.0
+    }
+
+    fn run_units(&self, font: Font, text: &str, slot: Option<usize>) -> u64 {
+        match slot.and_then(|i| self.faces.get(i)?.as_deref()) {
             Some(f) => text.chars().map(|c| u64::from(f.char_width(if c == '\t' { ' ' } else { c }))).sum(),
             None => text.chars().map(|c| u64::from(font.char_width(c))).sum(),
+        }
+    }
+
+    /// The next contiguous fallback run when no single face covers the complete text.
+    fn fallback_run<'a>(&self, font: Font, text: &'a str) -> Option<(Option<usize>, &'a str)> {
+        let slot_for = |c: char| {
+            let mut bytes = [0; 4];
+            let text = c.encode_utf8(&mut bytes);
+            if !needs_unicode(text) {
+                return None;
+            }
+            let want = usize::from(font.is_bold());
+            [want, want + 2, 1 - want, 3 - want]
+                .into_iter()
+                .find(|i| self.faces.get(*i).and_then(Option::as_ref).is_some_and(|face| c.is_control() || face.has(c)))
         };
-        units as f32 * size / 1000.0
+        let slot = slot_for(text.chars().next()?);
+        let end = text.char_indices().find(|(_, c)| slot_for(*c) != slot).map_or(text.len(), |(i, _)| i);
+        Some((slot, text.get(..end)?))
     }
 
     /// A custom export must not silently render missing characters as .notdef.
@@ -790,7 +824,29 @@ impl Page {
             return;
         }
         self.missing_glyph = self.missing_glyph.or_else(|| self.unicode.missing_glyph(font, text));
-        if let Some(slot) = self.unicode.slot(font, text) {
+        let slot = self.unicode.slot(font, text);
+        if slot.is_none()
+            && !self.unicode.custom
+            && !matches!(font, Font::Embedded(_))
+            && needs_unicode(text)
+            && self.unicode.faces.iter().any(Option::is_some)
+        {
+            let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+            let mut rest = text;
+            let mut offset = 0.0;
+            while let Some((slot, run)) = self.unicode.fallback_run(font, rest) {
+                let width = self.unicode.run_units(font, run, slot) as f32 * size.min(10_000.0) / 1000.0;
+                self.text_run(x + offset * cs, y + offset * sn, size, font, color, run, angle, slot);
+                offset += width;
+                rest = rest.get(run.len()..).unwrap_or_default();
+            }
+        } else {
+            self.text_run(x, y, size, font, color, text, angle, slot);
+        }
+    }
+
+    fn text_run(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, angle: f32, slot: Option<usize>) {
+        if let Some(slot) = slot {
             let shown = self.unicode_string(slot, text);
             let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
             let s = format!(

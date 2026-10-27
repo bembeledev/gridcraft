@@ -4610,6 +4610,10 @@ fn file_open_reads_text_files_with_the_import_wizards_settings() {
         json!({"fixedWidths": "10,20"}),
         json!({"fixedWidths": 10}),
         json!({"fixedWidths": [-5, 2.5]}),
+        json!({"decimal": 5}),
+        json!({"textQualifier": false}),
+        json!({"treatConsecutive": "yes"}),
+        json!({"csvAsText": 1}),
         // A line end ends the record before any delimiter is looked for.
         json!({"delimiter": "\n"}),
         json!({"other": "\r"}),

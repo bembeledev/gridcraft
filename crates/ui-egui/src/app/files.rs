@@ -82,15 +82,16 @@ impl SheetApp {
             .collect()
     }
 
-    /// Opens files that arrived asynchronously (web file picker, dropped files).
+    /// Opens files that arrived asynchronously (web file picker, dropped files), in order. They wait
+    /// in the inbox while a dialog is open, so a file that asks first (Text Import, a password)
+    /// holds the ones after it, and text files picked together are asked about in turn (#2553).
     pub(super) fn poll_async_opens(&mut self) {
-        let arrived: Vec<(String, Vec<u8>)> = self
-            .services
-            .inbox
-            .as_ref()
-            .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
-            .unwrap_or_default();
-        for (name, bytes) in arrived {
+        while self.dialog.is_none() {
+            let next = self.services.inbox.as_ref().and_then(|i| {
+                let mut inbox = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                (!inbox.is_empty()).then(|| inbox.remove(0))
+            });
+            let Some((name, bytes)) = next else { return };
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
             if wants_text_import(&name) {
                 self.backstage = None;

@@ -145,3 +145,30 @@ fn a_text_file_picked_on_the_web_opens_through_text_import_too() {
     assert_eq!(dialog(&h), None);
     assert_eq!((cell(&h, "A1"), cell(&h, "B1"), cell(&h, "C1")), (Value::text("plain"), Value::text("a,b"), Value::Number(12.0)));
 }
+
+#[test]
+fn text_files_picked_together_are_asked_about_one_after_another() {
+    let inbox: Inbox = Default::default();
+    let mut h = harness(Services { inbox: Some(inbox.clone()), ..Default::default() });
+    inbox.lock().unwrap().extend([
+        ("a.txt".to_string(), b"a1\tb1\r\n".to_vec()),
+        ("b.prn".to_string(), b"plain     a,b       12\r\n".to_vec()),
+        ("c.csv".to_string(), b"c1,d1\r\n".to_vec()),
+    ]);
+    h.run_steps(3);
+    let asked = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().dialog.as_ref().and_then(|d| d.values.get("name").cloned());
+    assert_eq!(asked(&h), Some(json!("a.txt")));
+    assert_eq!(inbox.lock().unwrap().len(), 2, "the files after it wait for the dialog");
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(3);
+    assert_eq!(asked(&h), Some(json!("b.prn")));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    // Nothing asks about the .csv: it opens once the dialog before it closes.
+    assert_eq!(dialog(&h), None);
+    assert!(inbox.lock().unwrap().is_empty());
+    let titles: Vec<String> = h.state().session.documents().iter().map(|d| d.title.clone()).collect();
+    assert!(!titles.iter().any(|t| t.starts_with("a.")), "{titles:?}");
+    assert!(titles.iter().any(|t| t.starts_with("b.")) && titles.iter().any(|t| t.starts_with("c.")), "{titles:?}");
+    assert_eq!(cell(&h, "A1"), Value::text("c1"));
+}

@@ -157,11 +157,12 @@ fn preview_text(_: &mut Session, p: &Json) -> Result<Json> {
 fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
     use crate::io::{Qualifier, SplitChoice};
     use gridcraft_xlsx::text_layout::{Decimal, Split};
-    let mut t = crate::io::TextOpen { as_text: bool_param(p, "csvAsText").unwrap_or(false), ..Default::default() };
-    let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
     // A setting of the wrong kind is an error, never a quiet fall back to the extension's split.
     let given = |k: &str| p.get(k).filter(|v| !v.is_null());
     let text = |k: &str| given(k).map(|v| v.as_str().ok_or_else(|| bad("file.open", format!("`{k}` is a string")))).transpose();
+    let flag = |k: &str| given(k).map(|v| v.as_bool().ok_or_else(|| bad("file.open", format!("`{k}` is true or false")))).transpose();
+    let mut t = crate::io::TextOpen { as_text: flag("csvAsText")?.unwrap_or(false), ..Default::default() };
+    let consecutive = flag("treatConsecutive")?.unwrap_or(false);
     let delimiter = text("delimiter")?;
     let other = text("other")?.filter(|o| !o.is_empty());
     let list = given("delimiters")
@@ -203,13 +204,13 @@ fn text_options(p: &Json) -> Result<crate::io::TextOpen> {
         let row = row.as_u64().filter(|r| *r >= 1).ok_or_else(|| bad("file.open", "`startRow` is a row number from 1"))?;
         t.start_row = Some(usize::try_from(row - 1).unwrap_or(usize::MAX));
     }
-    t.decimal = match str_param(p, "decimal") {
+    t.decimal = match text("decimal")? {
         None | Some("auto") => None,
         Some("." | "point" | "dot") => Some(Decimal::Point),
         Some("," | "comma") => Some(Decimal::Comma),
         Some(other) => return Err(bad("file.open", format!("unknown `decimal` `{other}`: use \"auto\", \".\" or \",\""))),
     };
-    t.qualifier = match str_param(p, "textQualifier") {
+    t.qualifier = match text("textQualifier")? {
         None | Some("\"") => Qualifier::Double,
         Some("'") => Qualifier::Single,
         Some("" | "none") => Qualifier::None,

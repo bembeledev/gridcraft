@@ -2447,6 +2447,18 @@ fn csv_formulas_open_computed() {
     assert_eq!(f["values"], json!([["=SUM(B2:B3)"], ["=AVERAGE(B2:B3)"]]));
 }
 
+/// Data › From Text/CSV reads the fields into a new sheet: a formula field arrives as the same
+/// formula, computed there, not as an empty cell.
+#[test]
+fn csv_import_into_a_sheet_keeps_formulas() {
+    let mut s = s();
+    s.execute("data.fromTextCsv", json!({"text": "Item,Amount\nRent,800\nFood,300\nTotal,=SUM(B2:B3)\n", "sheet": "Budget"})).unwrap();
+    let v = s.execute("sheet.read", json!({"sheet": "Budget", "range": "A4:B4"})).unwrap();
+    assert_eq!(v["values"], json!([["Total", 1100.0]]));
+    let f = s.execute("sheet.read", json!({"sheet": "Budget", "range": "B4", "formulas": true})).unwrap();
+    assert_eq!(f["values"], json!([["=SUM(B2:B3)"]]));
+}
+
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_an_opened_semicolon_csv_keeps_semicolons() {

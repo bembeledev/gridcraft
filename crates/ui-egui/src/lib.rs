@@ -90,7 +90,7 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// User chart templates are stored with desktop preferences and may be applied to charts of
     /// the same kind. They are local to this GridCraft installation, not embedded in XLSX.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_chart_templates")]
     pub chart_templates: Vec<ChartTemplate>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -122,6 +122,13 @@ pub struct ChartTemplate {
     pub format: gridcraft_engine::model::ChartFormat,
     #[serde(default)]
     pub use_for_new: bool,
+}
+
+/// Keeps a malformed local chart template from making every saved UI preference unreadable.
+/// Invalid entries are ignored individually; a malformed collection becomes an empty list.
+fn lenient_chart_templates<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ChartTemplate>, D::Error> {
+    let value = Json::deserialize(d)?;
+    Ok(value.as_array().into_iter().flatten().filter_map(|template| serde_json::from_value(template.clone()).ok()).collect())
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;

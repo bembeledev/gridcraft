@@ -538,6 +538,16 @@ pub(super) fn chart_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn chart_paste(s: &mut Session, p: &Json) -> Result<Json> {
     let mut chart: Chart = serde_json::from_value(p.get("snapshot").cloned().ok_or_else(|| bad("chart.paste", "Missing chart"))?)
         .map_err(|_| bad("chart.paste", "Invalid chart"))?;
+    chart.style = chart.style.clamp(1, 16);
+    for series in &mut chart.series {
+        for trendline in &mut series.trendlines {
+            trendline.forward = gridcraft_model::Trendline::clamp_forecast(trendline.forward);
+            trendline.backward = gridcraft_model::Trendline::clamp_forecast(trendline.backward);
+            if let gridcraft_model::TrendlineKind::Polynomial(order) = &mut trendline.kind {
+                *order = (*order).clamp(2, 6);
+            }
+        }
+    }
     validate_chart_format(&chart.format)?;
     if !chart.anchor.cell.is_valid()
         || chart.series.len() > 256

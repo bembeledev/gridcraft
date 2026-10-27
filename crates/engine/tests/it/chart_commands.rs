@@ -198,6 +198,26 @@ fn paste_places_snapshot_on_active_sheet_and_keeps_source_references() {
 }
 
 #[test]
+fn paste_clamps_chart_style_and_trendline_values() {
+    let mut s = source();
+    s.execute("chart.addElement", json!({"element":"trendline","series":1,"type":"polynomial","order":3})).unwrap();
+    let mut snapshot = serde_json::to_value(chart(&s)).unwrap();
+    snapshot["style"] = json!(u32::MAX);
+    snapshot["series"][1]["trendlines"][0]["forward"] = json!(1e300);
+    snapshot["series"][1]["trendlines"][0]["backward"] = json!(-1.0);
+    snapshot["series"][1]["trendlines"][0]["kind"]["Polynomial"] = json!(u8::MAX);
+
+    let result = s.execute("chart.paste", json!({"snapshot":snapshot})).unwrap();
+    let pasted = chart(&s);
+    assert_eq!(pasted.id, result["chart"].as_u64().unwrap() as u32);
+    assert_eq!(pasted.style, 16);
+    let trendline = &pasted.series[1].trendlines[0];
+    assert_eq!(trendline.forward, gridcraft_engine::model::Trendline::MAX_FORECAST);
+    assert_eq!(trendline.backward, 0.0);
+    assert_eq!(trendline.kind, gridcraft_engine::model::TrendlineKind::Polynomial(6));
+}
+
+#[test]
 fn paste_rejects_invalid_format_and_anchor_without_changing_workbook() {
     let mut s = source();
     let snapshot = serde_json::to_value(chart(&s)).unwrap();

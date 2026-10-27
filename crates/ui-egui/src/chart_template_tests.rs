@@ -100,3 +100,34 @@ fn invalid_default_template_reports_error_and_leaves_inserted_chart_undoable() {
     assert_eq!(app.session.doc().unwrap().wb.active().unwrap().charts.len(), 2);
     assert_eq!(app.session.doc().unwrap().wb.active().unwrap().charts[1].format, Default::default());
 }
+
+#[test]
+fn malformed_saved_chart_templates_do_not_discard_other_ui_preferences() {
+    let valid = crate::ChartTemplate {
+        name: "Reusable chart".into(),
+        kind: gridcraft_engine::model::ChartKind::ColumnClustered,
+        style: 4,
+        legend: gridcraft_engine::model::LegendPos::Bottom,
+        data_labels: false,
+        gridlines: true,
+        format: Default::default(),
+        use_for_new: true,
+    };
+    let mut saved = serde_json::to_value(crate::UiState { dark: true, chart_templates: vec![valid.clone()], ..Default::default() }).unwrap();
+    saved["chartTemplates"] = json!([{"name":"incomplete"}, serde_json::to_value(&valid).unwrap()]);
+
+    let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+    assert!(restored.dark);
+    assert_eq!(restored.chart_templates.len(), 1);
+    assert_eq!(restored.chart_templates[0].name, valid.name);
+    assert_eq!(restored.chart_templates[0].style, valid.style);
+    assert!(restored.chart_templates[0].use_for_new);
+
+    let malformed: crate::UiState = serde_json::from_value(json!({
+        "dark": true,
+        "chartTemplates": {"unexpected": "object"}
+    }))
+    .unwrap();
+    assert!(malformed.dark);
+    assert!(malformed.chart_templates.is_empty());
+}

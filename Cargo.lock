@@ -2159,6 +2159,7 @@ dependencies = [
  "aes",
  "gridcraft-core",
  "gridcraft-formula",
+ "gridcraft-functions",
  "gridcraft-model",
  "quick-xml 0.41.0",
  "serde_json",

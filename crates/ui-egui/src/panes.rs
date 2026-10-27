@@ -190,39 +190,12 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
 fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engine::model::Chart) {
     let id = chart.id;
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
-    ui.collapsing(crate::widgets::tr(ui, "Chart Settings"), |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Chart Settings")).default_open(true).show(ui, |ui| {
         ui.collapsing(crate::widgets::tr(ui, "Chart Title"), |ui| {
             let field = egui::Id::unique(("gridcraft.chart_title", id));
             if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
             }
-        });
-        ui.collapsing(crate::widgets::tr(ui, "Chart Type"), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (l, k, s) in [
-                    ("Clustered Column", "column", ""),
-                    ("Stacked Column", "column", "stacked"),
-                    ("100% Stacked Column", "column", "stacked100"),
-                    ("Clustered Bar", "bar", ""),
-                    ("Stacked Bar", "bar", "stacked"),
-                    ("100% Stacked Bar", "bar", "stacked100"),
-                    ("Line with Markers", "line", "markers"),
-                    ("Stacked Line", "line", "stacked"),
-                    ("100% Stacked Line", "line", "stacked100"),
-                    ("100% Stacked Line with Markers", "line", "stacked100Markers"),
-                    ("Area", "area", ""),
-                    ("Stacked Area", "area", "stacked"),
-                    ("100% Stacked Area", "area", "stacked100"),
-                    ("Pie", "pie", ""),
-                    ("Doughnut", "doughnut", ""),
-                    ("Scatter", "scatter", ""),
-                    ("Radar", "radar", ""),
-                ] {
-                    if ui.button(crate::widgets::tr(ui, l)).clicked() {
-                        app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
-                    }
-                }
-            });
         });
         ui.collapsing(crate::widgets::tr(ui, "Legend"), |ui| {
             ui.horizontal(|ui| {
@@ -327,6 +300,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
     let id = chart.id;
     let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_else(|| gridcraft_engine::model::Theme::default().colors);
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("chart_theme_colors"), colors));
+    chart_type_controls(app, ui, chart);
     let names = app
         .session
         .active()
@@ -738,6 +712,40 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
         app.run_or_alert("chart.set", json!({"chart": id, "format": format}));
     }
     ui.separator();
+}
+
+/// Keeps chart-type choices directly available in the format pane and marks the active type.
+fn chart_type_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engine::model::Chart) {
+    let id = chart.id;
+    let title = egui::RichText::new(crate::widgets::tr(ui, "Chart Type")).strong().color(Tokens::get(ui.ctx()).accent);
+    egui::CollapsingHeader::new(title).id_salt("Chart Type").default_open(false).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (label, kind, subtype) in [
+                ("Column", "column", ""),
+                ("Stacked Column", "column", "stacked"),
+                ("100% Stacked Column", "column", "stacked100"),
+                ("Bar", "bar", ""),
+                ("Stacked Bar", "bar", "stacked"),
+                ("100% Stacked Bar", "bar", "stacked100"),
+                ("Line", "line", "markers"),
+                ("Stacked Line", "line", "stacked"),
+                ("100% Stacked Line", "line", "stacked100"),
+                ("100% Stacked Line with Markers", "line", "stacked100Markers"),
+                ("Area", "area", ""),
+                ("Stacked Area", "area", "stacked"),
+                ("100% Stacked Area", "area", "stacked100"),
+                ("Pie", "pie", ""),
+                ("Doughnut", "doughnut", ""),
+                ("Scatter", "scatter", ""),
+                ("Radar", "radar", ""),
+            ] {
+                let selected = chart.kind == gridcraft_engine::cmd::insert::chart_kind(kind, subtype);
+                if ui.selectable_label(selected, crate::widgets::tr(ui, label)).clicked() {
+                    app.run_or_alert("chart.set", json!({"chart": id, "type": kind, "subtype": subtype}));
+                }
+            }
+        });
+    });
 }
 
 fn chart_trendline_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engine::model::Chart, series: usize) {

@@ -283,7 +283,8 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
             t.name = name.clone();
         }
         // A saved From Web connection to this table follows the rename.
-        crate::cmd::web::rename_connection(&mut cx.wb, &old, &name);
+        let sheet = cx.wb.sheet(si).map(|sh| sh.name.clone()).unwrap_or_default();
+        crate::cmd::web::rename_connection(&mut cx.wb, &sheet, &old, &name);
         // Structured references follow the rename.
         for i in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
@@ -327,17 +328,6 @@ pub(super) fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(sh) = wb.sheet_mut(si) {
             sh.tables.remove(ti);
         }
-        // A saved From Web connection whose table is gone goes with it.
-        let mut live = Vec::new();
-        for sh in wb.sheets.iter() {
-            for t in sh.tables.iter() {
-                if t.id as usize >= live.len() {
-                    live.resize(t.id as usize + 1, false);
-                }
-                live[t.id as usize] = true;
-            }
-        }
-        crate::cmd::web::retain_connections(wb, &live);
         cx.structural = true;
         Ok(Json::Null)
     })

@@ -230,8 +230,8 @@ impl SheetApp {
         }
         dialogs::show(self, &ctx);
         // A From Web background fetch the open dialog did not consume (ribbon Refresh All,
-        // or a dialog closed while its fetch ran): apply and report it here. A preview fetch
-        // with no dialog left is dropped — its tables have nowhere to land.
+        // or a dialog closed while its fetch ran): a refresh is applied and reported here; a
+        // preview or import whose dialog is gone is dropped — its result has nowhere to land.
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.fetching() {
@@ -244,7 +244,8 @@ impl SheetApp {
                     }
                 }
             } else if self.fetch.is_some() {
-                self.fetch = None;
+                // Join the finished worker so its result is freed, then drop it.
+                let _ = self.poll_fetch();
             }
         }
         widgets::message_box(self, &ctx);

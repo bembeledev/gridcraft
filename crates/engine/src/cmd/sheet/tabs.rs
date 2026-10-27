@@ -64,17 +64,6 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.wb.names.retain(|n| n.scope != Some(i));
-        // Saved From Web connections whose tables lived on the deleted sheet go with it.
-        let mut live = Vec::new();
-        for sh in cx.wb.sheets.iter() {
-            for t in sh.tables.iter() {
-                if t.id as usize >= live.len() {
-                    live.resize(t.id as usize + 1, false);
-                }
-                live[t.id as usize] = true;
-            }
-        }
-        crate::cmd::web::retain_connections(&mut cx.wb, &live);
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
                 && *sc > i

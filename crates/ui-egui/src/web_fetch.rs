@@ -21,12 +21,16 @@ fn table_json(t: &gridcraft_engine::webquery::WebTable) -> Json {
 }
 
 impl SheetApp {
-    /// Starts fetching `urls` in the background (a no-op retry if the same fetch is already
-    /// running); [`poll_fetch`](Self::poll_fetch) runs `command` with the results once they
-    /// are in.
+    /// Starts fetching `urls` in the background (a no-op retry if the same fetch for the same
+    /// command is already running); [`poll_fetch`](Self::poll_fetch) runs `command` with the
+    /// results once they are in. An empty URL list starts nothing: there is nothing to fetch.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start_fetch(&mut self, urls: &[&str], command: (&str, Json)) {
-        if self.fetch.as_ref().is_some_and(|f| f.urls == urls.iter().map(|s| s.to_string()).collect::<Vec<_>>()) {
+        if urls.is_empty() {
+            return;
+        }
+        let urls: Vec<String> = urls.iter().map(|s| s.to_string()).collect();
+        if self.fetch.as_ref().is_some_and(|f| f.urls == urls && f.command.0 == command.0 && f.command.1 == command.1) {
             return;
         }
         let source = match self.session.web_source.clone() {

@@ -398,6 +398,21 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", t0.elapsed());
     }
+    // A saved From Web connection whose table is gone goes with it, whatever deleted the table
+    // (deleted rows or columns collapsing its range, Convert to Range, a deleted sheet): a
+    // dangling id could later match a new table that reuses the id.
+    if !wb.web_queries.is_empty() {
+        let mut live = Vec::new();
+        for sh in wb.sheets.iter() {
+            for t in sh.tables.iter() {
+                if t.id as usize >= live.len() {
+                    live.resize(t.id as usize + 1, false);
+                }
+                live[t.id as usize] = true;
+            }
+        }
+        wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.get(id as usize).is_some_and(|l| *l)));
+    }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)

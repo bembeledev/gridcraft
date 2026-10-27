@@ -93,11 +93,14 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     load_table(s, &req, table, &name, true, occurrence)
 }
 
-/// The page's tables: the `prefetched` result a background worker already downloaded, else the
-/// fetch source's own download.
+/// The page's tables: a background worker's download (`prefetched` for this URL, or the
+/// `prefetchedByUrl` entry for it), else the fetch source's own download.
 fn fetch_tables(s: &Session, req: &WebRequest, p: &Json) -> Result<Vec<WebTable>> {
     if p.get("prefetched").is_some() {
         return prefetched_tables(p);
+    }
+    if p.get("prefetchedByUrl").is_some() {
+        return prefetched_for_url(p, &req.url);
     }
     let Some(source) = s.web_source.clone() else {
         return Err(EngineError::Other("Web page import is not available in this build.".into()));
@@ -224,19 +227,14 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
 /// Keeps the saved connections pointing at their table after `table.rename`: the connection's
 /// `name` follows, so the Queries & Connections pane and `data.webRefresh` name lookups stay
 /// current. The stable `table_id` already finds the table; this keeps the human-facing name.
-pub(crate) fn rename_connection(wb: &mut Workbook, old: &str, name: &str) {
+/// Only connections on the renamed table's sheet match: another sheet's connection may name a
+/// different table by the same name.
+pub(crate) fn rename_connection(wb: &mut Workbook, sheet: &str, old: &str, name: &str) {
     for q in wb.web_queries.iter_mut() {
-        if q.name.eq_ignore_ascii_case(old) {
+        if q.sheet.eq_ignore_ascii_case(sheet) && q.name.eq_ignore_ascii_case(old) {
             q.name = name.to_string();
         }
     }
-}
-
-/// Drops the saved connection whose table is gone (`table.convertToRange`, `home.deleteSheet`):
-/// a connection to a deleted table must not sit in the Queries & Connections pane, and a
-/// refresh must not go looking for a name another table may since have taken.
-pub(crate) fn retain_connections(wb: &mut Workbook, live: &[bool]) {
-    wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.get(id as usize).is_some_and(|l| *l)));
 }
 
 /// Keeps the connection's sheet name current after `sheet.rename`.
@@ -309,9 +307,6 @@ fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
 fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty());
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
-    if p.get("prefetched").is_none() && p.get("prefetchedByUrl").is_none() && s.web_source.is_none() {
-        return Err(EngineError::Other("Web page import is not available in this build.".into()));
-    }
     let queries: Vec<gridcraft_model::WebQuery> = {
         let d = s.doc()?;
         d.wb.web_queries
@@ -327,9 +322,9 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let mut errors: Vec<Json> = Vec::new();
     for q in queries {
         let req = WebRequest { url: q.url.clone(), max_rows: DEFAULT_MAX_ROWS, max_cols: MAX_COLS, max_bytes: DEFAULT_MAX_BYTES };
-        // A background worker's downloads come keyed by URL; without them, the fetch runs here.
-        let tables = if p.get("prefetchedByUrl").is_some() { prefetched_for_url(p, &q.url) } else { fetch_tables(s, &req, p) };
-        match tables.and_then(|tables| {
+        // A background worker's downloads come through `fetch_tables` (keyed by URL); without
+        // them, the fetch runs here.
+        match fetch_tables(s, &req, p).and_then(|tables| {
             let table = pick_table(&tables, Some(&q.table), q.occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
             rewrite_table(s, &q, table)
         }) {
@@ -350,16 +345,12 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     let d = s.doc()?;
     // Only the connection's own table. The stable id decides: a renamed table keeps refreshing,
     // and a different table created with the former name is never selected. Workbooks saved
-    // before the id fall back to the same name on the connection's sheet, else a name match
-    // anywhere. Never the first unrelated table that happens to be there.
+    // before connections held the id fall back to the name match, as they always did.
     let by_id = |t: &gridcraft_model::Table| q.table_id.is_some_and(|id| t.id == id);
     let by_name = |t: &gridcraft_model::Table| q.table_id.is_none() && t.name.eq_ignore_ascii_case(&q.name);
-    let Some((sheet, tname, old)) = d.wb.sheets.iter().enumerate().find_map(|(si, sh)| {
-        sh.tables
-            .iter()
-            .find(|t| by_id(t) || (by_name(t) && q.sheet.is_empty()) || (by_name(t) && sh.name.eq_ignore_ascii_case(&q.sheet)))
-            .map(|t| (si, t.name.clone(), t.range))
-    }) else {
+    let Some((sheet, tname, old)) =
+        d.wb.sheets.iter().enumerate().find_map(|(si, sh)| sh.tables.iter().find(|t| by_id(t) || by_name(t)).map(|t| (si, t.name.clone(), t.range)))
+    else {
         return Err(EngineError::Other(format!("The sheet or table of the connection `{}` is gone.", q.name)));
     };
     let rows = json_rows(table);
@@ -475,7 +466,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
 /// The `prefetched` param's value: tables a background worker already downloaded for this URL.
 /// The UI thread runs the fetch off itself and feeds the result back through the command, so a
 /// slow page never blocks the interface (Excel's queries run in the background too).
-pub(crate) fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
+fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
     let raw = p.get("prefetched").ok_or_else(|| EngineError::Other("missing `prefetched`".into()))?;
     let mut out = Vec::new();
     for t in raw.as_array().ok_or_else(|| EngineError::Other("`prefetched` must be an array of tables".into()))? {
@@ -957,6 +948,20 @@ mod tests {
         s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
         s.execute("home.deleteSheet", json!({"sheet": "Web"})).unwrap();
         let d = s.active().unwrap();
+        assert!(d.wb.web_queries.is_empty());
+    }
+
+    #[test]
+    /// Deleting the rows a web table spans drops its connection, whatever deleted the table
+    /// (the choke-point prune in `commit`), so its id cannot later match a reused id.
+    fn deleting_the_table_s_rows_drops_the_connection() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        // Delete the rows the imported table spans: the table goes with them.
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        s.execute("home.deleteRows", json!({"rows": "1:2"})).unwrap();
+        let d = s.active().unwrap();
+        assert!(d.wb.active().unwrap().tables.is_empty());
         assert!(d.wb.web_queries.is_empty());
     }
 

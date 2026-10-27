@@ -1,48 +1,58 @@
 use super::show::ok_cancel;
 use super::*;
 
-/// Starts the preview fetch off the UI thread (native); the wasm build runs it synchronously.
-fn start_preview_fetch(app: &mut SheetApp, url: &str) {
+/// Starts the preview fetch off the UI thread (native); the wasm build runs it synchronously,
+/// straight into the dialog being drawn.
+fn start_preview_fetch(app: &mut SheetApp, d: &mut Dialog, url: &str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = d;
         app.start_fetch(&[url], ("data.webPreview", json!({"url": url})));
     }
     #[cfg(target_arch = "wasm32")]
-    {
-        match app.run("data.webPreview", json!({"url": url})) {
-            Ok(res) => {
-                if let Some(d) = app.dialog.as_mut() {
-                    d.values.insert("tables".into(), res["tables"].clone());
-                }
-            }
-            Err(e) => app.message = Some(("From Web".into(), crate::clean_error(&e))),
+    match app.run("data.webPreview", json!({"url": url})) {
+        Ok(res) => {
+            d.values.insert("tables".into(), res["tables"].clone());
         }
+        Err(e) => app.message = Some(("From Web".into(), crate::clean_error(&e))),
     }
 }
 
-/// Applies a finished background fetch's preview: the tables land in the dialog. A still-running
-/// fetch keeps the dialog as it was and asks for repaints; the caller shows a spinner.
+/// Applies a finished background preview fetch: the tables land in the dialog the caller is
+/// drawing (`app.dialog` is taken while a dialog renders, so the result must go to `d`). A
+/// still-running fetch keeps the dialog as it was and asks for repaints; the caller shows a
+/// spinner. A result for a URL the user has since edited away is dropped.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn poll_preview_fetch(app: &mut SheetApp) -> bool {
+pub(super) fn poll_preview_fetch(app: &mut SheetApp, d: &mut Dialog, url: &str, open: &mut bool) -> bool {
     if app.fetching() {
         return true;
     }
-    if let Some((raw, r)) = app.poll_fetch() {
-        if let Some(d) = app.dialog.as_mut() {
-            // The full rows are kept for Load (the preview's own list is truncated to the pane).
-            d.values.insert("full_tables".into(), raw);
+    // The URL the running fetch was started for: an address edited since invalidates the
+    // result (the dialog state was cleared when it changed), so an old page never lands under
+    // the new URL.
+    let fetch_url = app.fetch.as_ref().and_then(|f| f.command.1.get("url")).and_then(Json::as_str).map(str::to_string);
+    if let Some((pages, r)) = app.poll_fetch() {
+        if fetch_url.as_deref().is_some_and(|u| u != url.trim()) {
+            return false;
         }
         match r {
             Ok(res) => {
-                if let Some(d) = app.dialog.as_mut() {
+                // The full rows are kept for Load (the preview's own list is truncated to the
+                // pane); a `data.fromWeb` fetch (Load before Go) imports straight away.
+                if let Some(page) = pages.get(url.trim()) {
+                    d.values.insert("full_tables".into(), page["tables"].clone());
+                }
+                if res.get("sheet").is_some() {
+                    // Load before Go landed: the import ran, the dialog closes with its toast.
+                    app.toast = Some((format!("Imported {} rows into {}", res["rows"], res["sheet"]), crate::now_ms()));
+                    *open = false;
+                } else {
                     d.values.insert("tables".into(), res["tables"].clone());
                 }
             }
             Err(e) => {
                 app.message = Some(("From Web".into(), crate::clean_error(&e)));
-                if let Some(d) = app.dialog.as_mut() {
-                    d.values.insert("tables".into(), Json::Null);
-                }
+                d.values.insert("tables".into(), Json::Null);
             }
         }
     }
@@ -50,7 +60,6 @@ pub(super) fn poll_preview_fetch(app: &mut SheetApp) -> bool {
 }
 
 /// Reports one connection's Sync result: a toast on success, the per-connection error else.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn report_sync(app: &mut SheetApp, name: &str, r: &Json) {
     let refreshed = r["refreshed"].as_u64().unwrap_or(0);
     let errors = r["errors"].as_array().map(Vec::len).unwrap_or(0);
@@ -74,15 +83,21 @@ pub(crate) fn report_refresh_all(app: &mut SheetApp, r: &Json) {
     }
 }
 
-/// Applies a finished background Sync/Refresh All and reports it like the synchronous path.
+/// Applies a finished background Sync/Refresh All and reports it like the synchronous path:
+/// a single connection's Sync reports by name, a batch reports as Refresh All.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn poll_refresh_fetch(app: &mut SheetApp) -> bool {
     if app.fetching() {
         return true;
     }
+    let sync_name = app.fetch.as_ref().and_then(|f| f.command.1.get("name").and_then(Json::as_str)).map(str::to_string);
     if let Some((_, r)) = app.poll_fetch() {
         match r {
-            Ok(res) => report_refresh_all(app, &res),
+            Ok(res) => match &sync_name {
+                // A single connection's Sync reports by its name, like the synchronous path.
+                Some(name) => report_sync(app, name, &res),
+                None => report_refresh_all(app, &res),
+            },
             Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
         }
     }
@@ -119,8 +134,9 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
                         Some(ms) => ui.weak(format!("Last synced: {}", crate::format_sync_time(ms))),
                         None => ui.weak("Last synced: never"),
                     };
+                    let is_web = q.get("web").and_then(Json::as_bool).unwrap_or(false);
                     ui.horizontal(|ui| {
-                        if ui.button("Sync").clicked() {
+                        if is_web && ui.button("Sync").clicked() {
                             let urls: Vec<String> = q.get("url").and_then(Json::as_str).map(str::to_string).into_iter().collect();
                             #[cfg(not(target_arch = "wasm32"))]
                             {
@@ -143,8 +159,13 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Refresh All").clicked() {
-                let urls: Vec<String> = queries.iter().filter_map(|q| q.get("url").and_then(Json::as_str).map(str::to_string)).collect();
+            let any_web = queries.iter().any(|q| q.get("web").and_then(Json::as_bool).unwrap_or(false));
+            if ui.button("Refresh All").clicked() && any_web {
+                let urls: Vec<String> = queries
+                    .iter()
+                    .filter(|q| q.get("web").and_then(Json::as_bool).unwrap_or(false))
+                    .filter_map(|q| q.get("url").and_then(Json::as_str).map(str::to_string))
+                    .collect();
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
@@ -186,14 +207,14 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
             d.values.insert("preview_url".into(), json!(url.trim()));
             d.values.insert("tables".into(), Json::Null);
             d.values.insert("pick".into(), json!(0));
-            start_preview_fetch(app, url.trim());
+            start_preview_fetch(app, d, url.trim());
         }
         ui.end_row();
     });
     // A background preview fetch lands here as soon as it finishes.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if poll_preview_fetch(app) {
+        if poll_preview_fetch(app, d, &url, open) {
             ui.ctx().request_repaint();
             ui.spinner();
         }
@@ -246,6 +267,15 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
         // OK with no address: stay open and say so, instead of closing with nothing.
         app.message = Some(("From Web".into(), "Enter an https:// address first.".into()));
         *confirm = false;
+    }
+    if *confirm && !url.trim().is_empty() && d.values.get("full_tables").is_none() {
+        // Load without a downloaded page (no Go yet, or the fetch still running): fetch in the
+        // background and import when it lands, instead of blocking the interface on the fetch.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.start_fetch(&[url.trim()], ("data.fromWeb", json!({"url": url.trim()})));
+            *confirm = false;
+        }
     }
     if *confirm && !url.trim().is_empty() {
         let pick = d.values.get("pick").and_then(Json::as_u64).unwrap_or(0) as usize;

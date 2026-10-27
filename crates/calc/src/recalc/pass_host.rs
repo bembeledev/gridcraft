@@ -62,6 +62,10 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Parsed defined names, by (lower-cased name, scope sheet asked from): the workbook doesn't
+    /// change during a pass, and a column of cells calling one LAMBDA name would otherwise parse
+    /// that name's formula (and every name it calls) once per cell.
+    names: HashMap<(String, usize), Option<(Option<std::sync::Arc<Expr>>, Option<usize>)>>,
 }
 
 impl<'a> PassHost<'a> {
@@ -94,6 +98,7 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            names: HashMap::default(),
         }
     }
 }
@@ -399,6 +404,16 @@ impl Host for PassHost<'_> {
     }
     fn stack_exhausted(&mut self) {
         self.out_of_stack = true;
+    }
+    /// The parsed definition, cached for the pass: the workbook's names don't change while it runs.
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<(Option<std::sync::Arc<Expr>>, Option<usize>)> {
+        let key = (name.to_ascii_lowercase(), scope_sheet);
+        if let Some(hit) = self.names.get(&key) {
+            return hit.clone();
+        }
+        let found = self.wb.name(name, scope_sheet).map(|def| (gridcraft_formula::parse_name(&def.formula).ok().map(std::sync::Arc::new), def.scope));
+        self.names.insert(key, found.clone());
+        found
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);

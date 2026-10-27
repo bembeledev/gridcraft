@@ -44,10 +44,12 @@ fn drawn(ctx: &egui::Context, family: &FontFamily, text: &str) -> Vec<egui::epai
     galley.rows.iter().flat_map(|r| r.glyphs.iter().copied()).collect()
 }
 
-/// Whether this machine has an Arabic-script face for the fallback chain. Without one there is
-/// nothing to shape with, and the tests skip instead of failing a minimal install.
+/// Whether the font set has an Arabic-script face for the fallback chain: a system face or the
+/// permitted craft-fonts Arabic face. Without one there is nothing to shape with, and the tests
+/// skip instead of failing a minimal install (the CI gate builds craft fonts).
 fn arabic_face_loaded() -> bool {
-    theme::font_definitions().font_data.contains_key("sys-arabic")
+    let fonts = theme::font_definitions();
+    fonts.font_data.contains_key("sys-arabic") || fonts.families.contains_key(&FontFamily::Name(theme::CELL_ARABIC.into()))
 }
 
 /// The characters of `text` that have no glyph in `family`. Fonts may draw a missing character

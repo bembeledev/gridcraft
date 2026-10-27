@@ -121,11 +121,11 @@ fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
         keys(HanOrder::Japanese),
-        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-arabic", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(
         keys(HanOrder::Chinese),
-        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+        ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-arabic", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
     for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -183,7 +183,7 @@ fn fallback_covers_its_script() {
     // have a glyph for every non-space character in the sample. A script runs when a system
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
-    let cases: [(&str, Vec<(String, u32)>, &str); 10] = [
+    let cases: [(&str, Vec<(String, u32)>, &str); 11] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.
@@ -191,6 +191,7 @@ fn fallback_covers_its_script() {
         ("sys-cjk-hangul", cjk_hangul(), "한글"),
         ("sys-thai", thai(), "ทดสอบ"),
         ("sys-lao", lao(), "ພາສາລາວ"),
+        ("sys-arabic", arabic(), "مرحبا"),
         ("sys-hebrew", hebrew(), "עברית"),
         ("craft-noto-sans-arabic", Vec::new(), "مرحبا"),
         ("craft-noto-sans-georgian", Vec::new(), "ქართული"),

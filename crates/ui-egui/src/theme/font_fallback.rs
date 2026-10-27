@@ -54,6 +54,7 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
         ("sys-lao", lao()),
+        ("sys-arabic", arabic()),
         ("sys-hebrew", hebrew()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
@@ -239,6 +240,70 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
         &["NotoSansHebrew-Regular.ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
         "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
     )
+}
+
+/// Arabic-script faces (Arabic, Persian, Urdu). Windows ships Segoe UI, Tahoma and Arial; macOS has
+/// Geeza Pro and Noto Sans Arabic on newer versions; Linux usually has Noto Sans Arabic, Vazirmatn
+/// or DejaVu Sans. The installed-font catalog comes first, so a face fontconfig found in a custom
+/// folder is used too; the fixed paths follow for machines whose scan has not finished yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn arabic() -> Vec<(String, u32)> {
+    let mut v: Vec<(String, u32)> = Vec::new();
+    // Prefer a face whose family name says it is designed for Arabic/Persian, then the broad
+    // Noto/DejaVu faces. One regular face per family; load_fallback stops at the first that parses.
+    for family in [
+        "Vazirmatn",
+        "Noto Naskh Arabic",
+        "Noto Sans Arabic",
+        "Noto Kufi Arabic",
+        "Noto Naskh Arabic UI",
+        "Noto Sans Arabic UI",
+        "Shabnam",
+        "Sahel",
+        "Amiri",
+        "Noto Sans",
+        "Segoe UI",
+        "Tahoma",
+        "Arial",
+        "Geeza Pro",
+        "DejaVu Sans",
+    ] {
+        if let Some(face) = crate::fonts::faces_of(family).into_iter().find(|f| !f.italic && (f.weight - 400.0).abs() < 1.0) {
+            v.push((face.path.to_string_lossy().into_owned(), face.index));
+        }
+    }
+    let w = windows_fonts();
+    for f in ["segoeui.ttf", "tahoma.ttf", "arial.ttf", "times.ttf"] {
+        v.push((format!("{w}\\{f}"), 0));
+    }
+    for p in [
+        "/System/Library/Fonts/GeezaPro.ttc",
+        "/System/Library/Fonts/Supplemental/Geeza Pro.ttc",
+        "/System/Library/Fonts/Supplemental/NotoSansArabic-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+    ] {
+        v.push((p.into(), 0));
+    }
+    for d in [
+        "/run/host/fonts",
+        "/run/host/local-fonts",
+        "/run/host/user-fonts",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+    ] {
+        v.push((format!("{d}/NotoSansArabic-Regular.ttf"), 0));
+        v.push((format!("{d}/Vazirmatn-Regular.ttf"), 0));
+        v.push((format!("{d}/vazirmatn/Vazirmatn-Regular.ttf"), 0));
+        v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
+    }
+    // Fedora's variable Noto Sans Arabic (and the mac supplemental folder path above) covers
+    // distributions that package only the variable font.
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansArabic[wght].ttf".into(), 0));
+    v
 }
 
 /// Symbol faces behind the UI font. Interface fonts such as Noto Sans and Cantarell (and egui's

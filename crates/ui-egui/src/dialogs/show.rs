@@ -293,36 +293,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
-                    let mut chosen = None;
+                    let mut chosen = ui.input_mut(|i| {
+                        let fresh_enter = consume_fresh_key(i, egui::Key::Enter);
+                        // Discard remaining Enter events so egui does not fake-click focused buttons on Enter
+                        i.events.retain(|event| !matches!(event, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. }));
+
+                        if fresh_enter
+                            || (i.modifiers.is_none()
+                                && (consume_fresh_key(i, egui::Key::Y) || consume_fresh_key(i, egui::Key::S)))
+                        {
+                            Some(crate::SaveAnswer::Save)
+                        } else if i.modifiers.is_none()
+                            && (consume_fresh_key(i, egui::Key::N) || consume_fresh_key(i, egui::Key::D))
+                        {
+                            Some(crate::SaveAnswer::DontSave)
+                        } else {
+                            None
+                        }
+                    });
                     ui.horizontal(|ui| {
                         for (label, answer) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() {
+                            if ui.button(label).clicked() && chosen.is_none() {
                                 chosen = Some(answer);
                             }
                         }
                     });
-                    if chosen.is_none() {
-                        chosen = ui.input_mut(|i| {
-                            if i.modifiers.is_none() {
-                                if consume_fresh_key(i, egui::Key::Y)
-                                    || consume_fresh_key(i, egui::Key::S)
-                                    || consume_fresh_key(i, egui::Key::Enter)
-                                {
-                                    Some(crate::SaveAnswer::Save)
-                                } else if consume_fresh_key(i, egui::Key::N)
-                                    || consume_fresh_key(i, egui::Key::D)
-                                {
-                                    Some(crate::SaveAnswer::DontSave)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        });
-                    }
                     if let Some(answer) = chosen && app.answer_save_changes(answer, quitting, ui.ctx()) {
                         open = false;
                     }

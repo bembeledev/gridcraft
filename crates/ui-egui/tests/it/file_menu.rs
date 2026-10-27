@@ -403,6 +403,54 @@ fn save_changes_dialog_answers_with_single_key_shortcuts() {
     let sent = press_dialog_key(&mut h, egui::Key::D, egui::Modifiers::NONE);
     assert!(sent.contains(&egui::ViewportCommand::Close));
     assert!(h.state().dialog.is_none());
+
+    // 4. Focused "Don't Save" button does not hijack Enter key; Enter still answers Save
+    let dir = std::env::temp_dir().join(format!("gridcraft-enter-focus-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("FocusTest.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_this"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    h.get_by_label("Don't Save").focus();
+    h.run_steps(1);
+
+    let sent = press_dialog_key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none());
+
+    let (wb, _) = gridcraft_engine::io::open_bytes("FocusTest.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("keep_this"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // 5. Space key on focused "Don't Save" button activates it
+    let dir = std::env::temp_dir().join(format!("gridcraft-space-focus-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("SpaceTest.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "discard_this"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    h.get_by_label("Don't Save").focus();
+    h.run_steps(1);
+
+    let sent = press_dialog_key(&mut h, egui::Key::Space, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none());
+
+    let (wb, _) = gridcraft_engine::io::open_bytes("SpaceTest.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).

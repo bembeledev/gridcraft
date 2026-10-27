@@ -21,7 +21,20 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         let ra = small_button(ui, Icon::Redo, "", "Refresh All (re-sync every saved web table)", false);
         control_keytip(app, ui, &ra, "data.webRefresh");
         if ra.clicked() {
-            act(app, "data.webRefresh", json!({}));
+            // The fetch runs in the background (the ribbon keeps responding); the app-level
+            // poll applies and reports it. Per-connection failures come back as `errors` on a
+            // successful result, which `act`'s alert path never shows.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let urls: Vec<String> = app.session.active().map(|d| d.wb.web_queries.iter().map(|q| q.url.clone()).collect()).unwrap_or_default();
+                let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                app.start_fetch(&refs, ("data.webRefresh", json!({})));
+            }
+            #[cfg(target_arch = "wasm32")]
+            match app.run("data.webRefresh", json!({})) {
+                Ok(r) => crate::dialogs::report_refresh_all(app, &r),
+                Err(e) => app.message = Some(("Refresh All".into(), crate::clean_error(&e))),
+            }
         }
     });
     sep(ui);

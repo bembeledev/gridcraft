@@ -37,6 +37,8 @@ impl SheetApp {
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            fetch: None,
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -227,6 +229,24 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        // A From Web background fetch the open dialog did not consume (ribbon Refresh All,
+        // or a dialog closed while its fetch ran): apply and report it here. A preview fetch
+        // with no dialog left is dropped — its tables have nowhere to land.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.fetching() {
+                ctx.request_repaint();
+            } else if self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh") {
+                if let Some((_, r)) = self.poll_fetch() {
+                    match r {
+                        Ok(res) => dialogs::report_refresh_all(self, &res),
+                        Err(e) => self.message = Some(("From Web".into(), crate::clean_error(&e))),
+                    }
+                }
+            } else if self.fetch.is_some() {
+                self.fetch = None;
+            }
+        }
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.

@@ -67,8 +67,12 @@ pub struct TableColumn {
 /// which `data.webRefresh` re-fetches into the same sheet.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WebQuery {
-    /// The connection's name: the worksheet table it fills.
+    /// The connection's name: the worksheet table it fills, kept current when it's renamed.
     pub name: String,
+    /// The imported table's stable id: refresh finds the table by it, so a rename never
+    /// points the connection at a different table that took the former name.
+    #[serde(default)]
+    pub table_id: Option<u32>,
     /// The page the table came from.
     pub url: String,
     /// The page table's name, as the import saw it.

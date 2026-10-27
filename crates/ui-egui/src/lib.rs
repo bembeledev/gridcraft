@@ -38,6 +38,10 @@ pub mod tabs;
 pub mod text_box;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
+mod web_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+pub use web_fetch::PendingFetch;
+#[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
 pub mod widgets;
 mod window_ui;
@@ -217,6 +221,9 @@ pub struct SheetApp {
     /// without reaching input handling, so the hook must offer the same step again.
     pub(crate) synthetic_injected_at_pass: Option<u64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The From Web page fetch running on a worker thread (native only; see `web_fetch`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fetch: Option<PendingFetch>,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,

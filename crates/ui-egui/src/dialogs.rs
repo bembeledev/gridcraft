@@ -28,6 +28,7 @@ mod paste;
 mod show;
 mod spelling;
 mod web;
+pub(crate) use web::report_refresh_all;
 mod zoom;
 
 use analysis::toolpak_defaults;

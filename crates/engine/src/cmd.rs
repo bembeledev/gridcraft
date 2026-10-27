@@ -80,12 +80,21 @@ pub fn is_secret_param(key: &str) -> bool {
     key == "password" || key.ends_with("Password")
 }
 
+/// Params too large for the journal: a background worker's downloaded page tables. Replaying
+/// the entry re-fetches the page instead (the commands fall back to the fetch source without
+/// the param).
+fn is_bulk_param(key: &str) -> bool {
+    key == "prefetched" || key == "prefetchedByUrl"
+}
+
 /// The params as the journal records them: secret params are left out, so a password never
 /// reaches the journal dialog, `engine.journal` or a recorded script (saved in the workbook).
 /// Replaying such an entry runs the command without that param.
 pub fn journal_params(params: &Json) -> Json {
     match params {
-        Json::Object(o) => Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Json::Object(o) => {
+            Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k) && !is_bulk_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
         other => other.clone(),
     }
 }

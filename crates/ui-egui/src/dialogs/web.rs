@@ -1,10 +1,106 @@
 use super::show::ok_cancel;
 use super::*;
 
+/// Starts the preview fetch off the UI thread (native); the wasm build runs it synchronously.
+fn start_preview_fetch(app: &mut SheetApp, url: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.start_fetch(&[url], ("data.webPreview", json!({"url": url})));
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        match app.run("data.webPreview", json!({"url": url})) {
+            Ok(res) => {
+                if let Some(d) = app.dialog.as_mut() {
+                    d.values.insert("tables".into(), res["tables"].clone());
+                }
+            }
+            Err(e) => app.message = Some(("From Web".into(), crate::clean_error(&e))),
+        }
+    }
+}
+
+/// Applies a finished background fetch's preview: the tables land in the dialog. A still-running
+/// fetch keeps the dialog as it was and asks for repaints; the caller shows a spinner.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn poll_preview_fetch(app: &mut SheetApp) -> bool {
+    if app.fetching() {
+        return true;
+    }
+    if let Some((raw, r)) = app.poll_fetch() {
+        if let Some(d) = app.dialog.as_mut() {
+            // The full rows are kept for Load (the preview's own list is truncated to the pane).
+            d.values.insert("full_tables".into(), raw);
+        }
+        match r {
+            Ok(res) => {
+                if let Some(d) = app.dialog.as_mut() {
+                    d.values.insert("tables".into(), res["tables"].clone());
+                }
+            }
+            Err(e) => {
+                app.message = Some(("From Web".into(), crate::clean_error(&e)));
+                if let Some(d) = app.dialog.as_mut() {
+                    d.values.insert("tables".into(), Json::Null);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Reports one connection's Sync result: a toast on success, the per-connection error else.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn report_sync(app: &mut SheetApp, name: &str, r: &Json) {
+    let refreshed = r["refreshed"].as_u64().unwrap_or(0);
+    let errors = r["errors"].as_array().map(Vec::len).unwrap_or(0);
+    if refreshed > 0 && errors == 0 {
+        app.toast = Some((format!("Synced {name}"), crate::now_ms()));
+    } else if let Some(e) = r["errors"].as_array().and_then(|a| a.first()) {
+        let msg = e["error"].as_str().unwrap_or_default();
+        app.message = Some(("Queries & Connections".into(), format!("{name}: {msg}")));
+    }
+}
+
+/// Reports a Refresh All result: a toast when everything synced, the joined errors else.
+pub(crate) fn report_refresh_all(app: &mut SheetApp, r: &Json) {
+    let refreshed = r["refreshed"].as_u64().unwrap_or(0);
+    let errors = r["errors"].as_array().cloned().unwrap_or_default();
+    if errors.is_empty() {
+        app.toast = Some((format!("Synced {refreshed} connection(s)"), crate::now_ms()));
+    } else {
+        let msg = errors.iter().filter_map(|e| e["error"].as_str()).collect::<Vec<_>>().join("; ");
+        app.message = Some(("Queries & Connections".into(), msg));
+    }
+}
+
+/// Applies a finished background Sync/Refresh All and reports it like the synchronous path.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn poll_refresh_fetch(app: &mut SheetApp) -> bool {
+    if app.fetching() {
+        return true;
+    }
+    if let Some((_, r)) = app.poll_fetch() {
+        match r {
+            Ok(res) => report_refresh_all(app, &res),
+            Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
+        }
+    }
+    false
+}
+
 /// Data ▸ Queries & Connections: the workbook's saved From Web connections, each with a
 /// one-click Sync, its last-synced time, and the refresh errors and unavailable-source
 /// messages in the same window (Excel's Queries & Connections pane).
 pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    // A background Sync/Refresh All lands here as soon as it finishes.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if poll_refresh_fetch(app) {
+            ui.ctx().request_repaint();
+            ui.spinner();
+        }
+    }
     let queries = app.run("data.queriesConnections", json!({})).ok().and_then(|r| r.as_array().cloned()).unwrap_or_default();
     if queries.is_empty() {
         ui.label("No saved connections. Import a table with Data ▸ From Web to create one.");
@@ -25,17 +121,15 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
                     };
                     ui.horizontal(|ui| {
                         if ui.button("Sync").clicked() {
+                            let urls: Vec<String> = q.get("url").and_then(Json::as_str).map(str::to_string).into_iter().collect();
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                                app.start_fetch(&refs, ("data.webRefresh", json!({"name": name})));
+                            }
+                            #[cfg(target_arch = "wasm32")]
                             match app.run("data.webRefresh", json!({"name": name})) {
-                                Ok(r) => {
-                                    let refreshed = r["refreshed"].as_u64().unwrap_or(0);
-                                    let errors = r["errors"].as_array().map(Vec::len).unwrap_or(0);
-                                    if refreshed > 0 && errors == 0 {
-                                        app.toast = Some((format!("Synced {name}"), crate::now_ms()));
-                                    } else if let Some(e) = r["errors"].as_array().and_then(|a| a.first()) {
-                                        let msg = e["error"].as_str().unwrap_or_default();
-                                        app.message = Some(("Queries & Connections".into(), format!("{name}: {msg}")));
-                                    }
-                                }
+                                Ok(r) => report_sync(app, name, &r),
                                 Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
                             }
                         }
@@ -50,17 +144,15 @@ pub(super) fn queries_connections(app: &mut SheetApp, ui: &mut egui::Ui, _d: &mu
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Refresh All").clicked() {
+                let urls: Vec<String> = queries.iter().filter_map(|q| q.get("url").and_then(Json::as_str).map(str::to_string)).collect();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                    app.start_fetch(&refs, ("data.webRefresh", json!({})));
+                }
+                #[cfg(target_arch = "wasm32")]
                 match app.run("data.webRefresh", json!({})) {
-                    Ok(r) => {
-                        let refreshed = r["refreshed"].as_u64().unwrap_or(0);
-                        let errors = r["errors"].as_array().cloned().unwrap_or_default();
-                        if errors.is_empty() {
-                            app.toast = Some((format!("Synced {refreshed} connection(s)"), crate::now_ms()));
-                        } else {
-                            let msg = errors.iter().filter_map(|e| e["error"].as_str()).collect::<Vec<_>>().join("; ");
-                            app.message = Some(("Queries & Connections".into(), msg));
-                        }
-                    }
+                    Ok(r) => report_refresh_all(app, &r),
                     Err(e) => app.message = Some(("Queries & Connections".into(), crate::clean_error(&e))),
                 }
             }
@@ -86,6 +178,7 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
         if d.values.get("preview_url").and_then(Json::as_str).is_some_and(|u| u != url.trim()) {
             d.values.remove("preview_url");
             d.values.remove("tables");
+            d.values.remove("full_tables");
             d.values.remove("pick");
         }
         if ui.button("Go").clicked() && !url.trim().is_empty() {
@@ -93,17 +186,18 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
             d.values.insert("preview_url".into(), json!(url.trim()));
             d.values.insert("tables".into(), Json::Null);
             d.values.insert("pick".into(), json!(0));
-            let r = app.run("data.webPreview", json!({"url": url.trim()}));
-            match r {
-                Ok(res) => d.values.insert("tables".into(), res["tables"].clone()),
-                Err(e) => {
-                    app.message = Some(("From Web".into(), crate::clean_error(&e)));
-                    d.values.insert("tables".into(), Json::Null)
-                }
-            };
+            start_preview_fetch(app, url.trim());
         }
         ui.end_row();
     });
+    // A background preview fetch lands here as soon as it finishes.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if poll_preview_fetch(app) {
+            ui.ctx().request_repaint();
+            ui.spinner();
+        }
+    }
     let tables: Vec<Json> = d.values.get("tables").and_then(Json::as_array).cloned().unwrap_or_default();
     if !tables.is_empty() {
         ui.separator();
@@ -161,7 +255,13 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
                 // A page can hold duplicate table names: which one was picked is which one to
                 // import, and the connection saves it so refreshes keep importing the same.
                 let occurrence = tables.iter().take(pick).filter(|o| o["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&t))).count();
-                json!({"url": url.trim(), "table": t, "occurrence": occurrence})
+                let mut p = json!({"url": url.trim(), "table": t, "occurrence": occurrence});
+                // The page is already downloaded (the preview fetched it): hand the full tables
+                // over instead of fetching again.
+                if let Some(full) = d.values.get("full_tables") {
+                    p.as_object_mut().map(|o| o.insert("prefetched".into(), full.clone()));
+                }
+                p
             }
             None => json!({"url": url.trim()}),
         };

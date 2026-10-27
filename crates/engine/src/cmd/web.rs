@@ -9,7 +9,7 @@ use super::insert::write_totals;
 use super::*;
 use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, WebRequest, WebTable};
 use gridcraft_core::MAX_ROWS;
-use gridcraft_model::{TableColumn, TotalsFn};
+use gridcraft_model::{TableColumn, TotalsFn, Workbook};
 
 /// Preview rows and columns per table (the Navigator's preview pane).
 const PREVIEW_ROWS: usize = 10;
@@ -82,16 +82,27 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(Json::Null);
     }
     let req = request(p)?;
-    let Some(source) = s.web_source.clone() else {
-        return Err(EngineError::Other("Web page import is not available in this build.".into()));
-    };
-    let tables = source(&req).map_err(EngineError::Other)?;
     let want = str_param(p, "table").map(str::trim).filter(|t| !t.is_empty());
     let occurrence = p.get("occurrence").and_then(Json::as_u64).unwrap_or(0) as usize;
+    // A background worker's download comes back through the command as `prefetched`; without
+    // one, the fetch runs here.
+    let tables = fetch_tables(s, &req, p)?;
     let table = pick_table(&tables, want, occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
     let occurrence = tables.iter().take_while(|t| !std::ptr::eq(*t, table)).filter(|t| t.name.eq_ignore_ascii_case(&table.name)).count();
     let name = str_param(p, "sheet").map(|n| n.chars().take(31).collect::<String>()).unwrap_or_else(|| default_sheet_name(&req.url));
     load_table(s, &req, table, &name, true, occurrence)
+}
+
+/// The page's tables: the `prefetched` result a background worker already downloaded, else the
+/// fetch source's own download.
+fn fetch_tables(s: &Session, req: &WebRequest, p: &Json) -> Result<Vec<WebTable>> {
+    if p.get("prefetched").is_some() {
+        return prefetched_tables(p);
+    }
+    let Some(source) = s.web_source.clone() else {
+        return Err(EngineError::Other("Web page import is not available in this build.".into()));
+    };
+    source(req).map_err(EngineError::Other)
 }
 
 /// The site's own name (`https://www.example.com/x` → `example`), capped at 31 characters.
@@ -180,16 +191,20 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
     })?;
     let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, w as u32 - 1).a1()}));
     // The table that was actually created: its name may be a generated one when the page
-    // table's name was taken or not valid. The connection and the result both report it.
-    let created_name = {
+    // table's name was taken or not valid. The connection and the result both report it, and
+    // the connection binds to the table's stable id, not its name.
+    let (created_name, created_id) = {
         let d = s.doc()?;
-        d.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.range == range).map(|t| t.name.clone())).unwrap_or_else(|| tname.clone())
+        d.wb.sheet(sheet)
+            .and_then(|sh| sh.tables.iter().find(|t| t.range == range).map(|t| (t.name.clone(), t.id)))
+            .unwrap_or_else(|| (tname.clone(), 0))
     };
     if save {
         let synced = now_ms();
         let name = created_name.clone();
         let q = gridcraft_model::WebQuery {
             name,
+            table_id: (created_id > 0).then_some(created_id),
             url: req.url.clone(),
             table: table.name.clone(),
             occurrence,
@@ -204,6 +219,33 @@ fn load_table_steps(s: &mut Session, req: &WebRequest, table: &WebTable, sheet_n
         })?;
     }
     Ok(json!({"sheet": sheet_name, "table": created_name, "rows": table.rows.len(), "cols": w, "tables_found": table_count(s)}))
+}
+
+/// Keeps the saved connections pointing at their table after `table.rename`: the connection's
+/// `name` follows, so the Queries & Connections pane and `data.webRefresh` name lookups stay
+/// current. The stable `table_id` already finds the table; this keeps the human-facing name.
+pub(crate) fn rename_connection(wb: &mut Workbook, old: &str, name: &str) {
+    for q in wb.web_queries.iter_mut() {
+        if q.name.eq_ignore_ascii_case(old) {
+            q.name = name.to_string();
+        }
+    }
+}
+
+/// Drops the saved connection whose table is gone (`table.convertToRange`, `home.deleteSheet`):
+/// a connection to a deleted table must not sit in the Queries & Connections pane, and a
+/// refresh must not go looking for a name another table may since have taken.
+pub(crate) fn retain_connections(wb: &mut Workbook, live: &[bool]) {
+    wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.get(id as usize).is_some_and(|l| *l)));
+}
+
+/// Keeps the connection's sheet name current after `sheet.rename`.
+pub(crate) fn rename_connection_sheet(wb: &mut Workbook, old: &str, name: &str) {
+    for q in wb.web_queries.iter_mut() {
+        if q.sheet.eq_ignore_ascii_case(old) {
+            q.sheet = name.to_string();
+        }
+    }
 }
 
 /// How many web connections the workbook holds (the import result's `tables_found`).
@@ -250,10 +292,7 @@ fn would_be_formula(c: &str) -> bool {
 /// (the Navigator's list and preview pane).
 fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let req = request(p)?;
-    let Some(source) = s.web_source.clone() else {
-        return Err(EngineError::Other("Web page import is not available in this build.".into()));
-    };
-    let tables = source(&req).map_err(EngineError::Other)?;
+    let tables = fetch_tables(s, &req, p)?;
     let preview = |t: &WebTable| {
         json!({
             "name": t.name,
@@ -270,9 +309,9 @@ fn web_preview(s: &mut Session, p: &Json) -> Result<Json> {
 fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty());
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
-    let Some(source) = s.web_source.clone() else {
+    if p.get("prefetched").is_none() && p.get("prefetchedByUrl").is_none() && s.web_source.is_none() {
         return Err(EngineError::Other("Web page import is not available in this build.".into()));
-    };
+    }
     let queries: Vec<gridcraft_model::WebQuery> = {
         let d = s.doc()?;
         d.wb.web_queries
@@ -288,7 +327,9 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let mut errors: Vec<Json> = Vec::new();
     for q in queries {
         let req = WebRequest { url: q.url.clone(), max_rows: DEFAULT_MAX_ROWS, max_cols: MAX_COLS, max_bytes: DEFAULT_MAX_BYTES };
-        match source(&req).map_err(EngineError::Other).and_then(|tables| {
+        // A background worker's downloads come keyed by URL; without them, the fetch runs here.
+        let tables = if p.get("prefetchedByUrl").is_some() { prefetched_for_url(p, &q.url) } else { fetch_tables(s, &req, p) };
+        match tables.and_then(|tables| {
             let table = pick_table(&tables, Some(&q.table), q.occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
             rewrite_table(s, &q, table)
         }) {
@@ -307,14 +348,18 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
 /// outside the range are kept.
 fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTable) -> Result<(usize, usize)> {
     let d = s.doc()?;
-    // Only the connection's own table: the same name on the connection's sheet, else a name
-    // match anywhere. Never the first unrelated table that happens to be there.
-    let Some((sheet, tname, old)) =
-        d.wb.sheets
+    // Only the connection's own table. The stable id decides: a renamed table keeps refreshing,
+    // and a different table created with the former name is never selected. Workbooks saved
+    // before the id fall back to the same name on the connection's sheet, else a name match
+    // anywhere. Never the first unrelated table that happens to be there.
+    let by_id = |t: &gridcraft_model::Table| q.table_id.is_some_and(|id| t.id == id);
+    let by_name = |t: &gridcraft_model::Table| q.table_id.is_none() && t.name.eq_ignore_ascii_case(&q.name);
+    let Some((sheet, tname, old)) = d.wb.sheets.iter().enumerate().find_map(|(si, sh)| {
+        sh.tables
             .iter()
-            .enumerate()
-            .find_map(|(si, sh)| sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&q.name)).map(|t| (si, t.name.clone(), t.range)))
-    else {
+            .find(|t| by_id(t) || (by_name(t) && q.sheet.is_empty()) || (by_name(t) && sh.name.eq_ignore_ascii_case(&q.sheet)))
+            .map(|t| (si, t.name.clone(), t.range))
+    }) else {
         return Err(EngineError::Other(format!("The sheet or table of the connection `{}` is gone.", q.name)));
     };
     let rows = json_rows(table);
@@ -425,6 +470,36 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         Ok(())
     })?;
     Ok((table.rows.len(), w))
+}
+
+/// The `prefetched` param's value: tables a background worker already downloaded for this URL.
+/// The UI thread runs the fetch off itself and feeds the result back through the command, so a
+/// slow page never blocks the interface (Excel's queries run in the background too).
+pub(crate) fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
+    let raw = p.get("prefetched").ok_or_else(|| EngineError::Other("missing `prefetched`".into()))?;
+    let mut out = Vec::new();
+    for t in raw.as_array().ok_or_else(|| EngineError::Other("`prefetched` must be an array of tables".into()))? {
+        let name = t["name"].as_str().unwrap_or_default().to_string();
+        let rows = t["rows"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .map(|r| r.as_array().map(|cs| cs.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(WebTable { name, rows });
+    }
+    Ok(out)
+}
+
+/// One entry of the `prefetchedByUrl` map: a page's tables (or its fetch `error`).
+fn prefetched_for_url(p: &Json, url: &str) -> Result<Vec<WebTable>> {
+    let entry = p.get("prefetchedByUrl").and_then(|m| m.get(url)).ok_or_else(|| EngineError::Other(format!("no prefetched page for {url}")))?;
+    if let Some(e) = entry.get("error").and_then(Json::as_str) {
+        return Err(EngineError::Other(e.to_string()));
+    }
+    prefetched_tables(&json!({"prefetched": entry["tables"]}))
 }
 
 #[cfg(test)]
@@ -732,13 +807,14 @@ mod tests {
         let d = s.doc().unwrap();
         let tname = d.wb.active().unwrap().tables[0].name.clone();
         s.execute("table.rename", json!({"table": tname, "name": "Renamed"})).unwrap();
+        // Convert the renamed table to a range: the connection's table is truly gone.
+        s.execute("table.convertToRange", json!({"table": "Renamed"})).unwrap();
         // Another, unrelated table now sits on the sheet.
         s.execute("range.setValues", json!({"range": "E1", "sheet": "Web", "values": [["keep"]]})).unwrap();
         s.execute("insert.table", json!({"range": "E1", "header": true, "name": "Unrelated"})).unwrap();
-        let r = s.execute("data.webRefresh", json!({})).unwrap();
-        // The connection's table is gone: refresh reports it, and E1 is untouched.
-        assert_eq!(r["refreshed"], 0);
-        assert!(!r["errors"].as_array().unwrap().is_empty());
+        // The connection was dropped with its table: refresh reports nothing to do.
+        let err = s.execute("data.webRefresh", json!({})).unwrap_err();
+        assert!(err.to_string().contains("No saved web table matches"));
         assert_eq!(a1(&s, "E1"), "keep");
     }
 
@@ -810,5 +886,114 @@ mod tests {
         for id in ["data.fromWeb", "data.webPreview", "data.webRefresh"] {
             let _ = s.execute(id, json!({}));
         }
+    }
+
+    #[test]
+    /// A renamed table keeps refreshing: the connection follows the rename by its stable id,
+    /// and a different table created with the former name is never selected.
+    fn refresh_follows_a_renamed_table_not_a_new_same_named_one() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Web"})).unwrap();
+        let d = s.doc().unwrap();
+        let tname = d.wb.active().unwrap().tables[0].name.clone();
+        s.execute("table.rename", json!({"table": tname, "name": "Renamed"})).unwrap();
+        // The connection's name followed the rename.
+        {
+            let d = s.active().unwrap();
+            assert_eq!(d.wb.web_queries[0].name, "Renamed");
+        }
+        // A new, unrelated table takes the connection's former name.
+        s.execute("range.setValues", json!({"range": "E1", "sheet": "Web", "values": [["keep"]]})).unwrap();
+        s.execute("insert.table", json!({"range": "E1", "header": true, "name": tname})).unwrap();
+        // The source now serves different rows: the refresh lands in the renamed table.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th></tr><tr><td>Z</td><td>9</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+        assert_eq!(a1(&s, "A2"), "Z");
+        // The same-named decoy was not touched.
+        assert_eq!(a1(&s, "E1"), "keep");
+    }
+
+    #[test]
+    /// Renaming the imported sheet keeps the connection's sheet current.
+    fn sheet_rename_keeps_the_connection_s_sheet() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        s.execute("sheet.rename", json!({"sheet": "Web", "name": "Data"})).unwrap();
+        {
+            let d = s.active().unwrap();
+            assert_eq!(d.wb.web_queries[0].sheet, "Data");
+        }
+        // The Queries & Connections pane reports the current name too.
+        let r = s.execute("data.queriesConnections", json!({})).unwrap();
+        assert_eq!(r[0]["sheet"], "Data");
+        // And a refresh still finds the table on the renamed sheet.
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1);
+    }
+
+    #[test]
+    /// Deleting the imported sheet or converting its table to a range drops the connection.
+    fn deleting_the_table_or_sheet_drops_the_connection() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        let tname = {
+            let d = s.active().unwrap();
+            d.wb.active().unwrap().tables[0].name.clone()
+        };
+        s.execute("table.convertToRange", json!({"table": tname})).unwrap();
+        {
+            let d = s.active().unwrap();
+            assert!(d.wb.web_queries.is_empty());
+        }
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com", "sheet": "Web"})).unwrap();
+        s.execute("home.deleteSheet", json!({"sheet": "Web"})).unwrap();
+        let d = s.active().unwrap();
+        assert!(d.wb.web_queries.is_empty());
+    }
+
+    #[test]
+    /// A background worker's download re-enters through the command as `prefetched`.
+    fn preview_and_refresh_run_on_prefetched_tables() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let r = s
+            .execute(
+                "data.webPreview",
+                json!({
+                    "url": "https://example.com",
+                    "prefetched": [{"name": "prices", "rows": [["Sym", "Price"], ["A", "1"]]}]
+                }),
+            )
+            .unwrap();
+        assert_eq!(r["tables"][0]["name"], "prices");
+        let r = s
+            .execute(
+                "data.fromWeb",
+                json!({"url": "https://example.com", "table": "prices", "prefetched": [{"name": "prices", "rows": [["Sym", "Price"], ["A", "1"]]}]}),
+            )
+            .unwrap();
+        assert_eq!(r["rows"], 2);
+        // The prefetched pages keyed by URL refresh the saved connection.
+        let r = s
+            .execute(
+                "data.webRefresh",
+                json!({
+                    "prefetchedByUrl": {
+                        "https://example.com": {"tables": [{"name": "prices", "rows": [["Sym", "Price"], ["B", "2"]]}]}
+                    }
+                }),
+            )
+            .unwrap();
+        assert_eq!(r["refreshed"], 1);
+        assert_eq!(a1(&s, "A2"), "B");
     }
 }

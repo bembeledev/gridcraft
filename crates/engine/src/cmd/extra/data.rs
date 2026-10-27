@@ -130,13 +130,20 @@ pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {
                     .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1)}))
             })
             .collect();
-    // The saved From Web connections, with the source and the last sync the pane shows.
+    // The saved From Web connections, with the source and the last sync the pane shows. The
+    // sheet and name are resolved from the live table (by its stable id) so the pane and "Go to
+    // table" follow renames even in workbooks saved before connections tracked them.
     let web: Vec<Json> =
         d.wb.web_queries
             .iter()
             .map(|q| {
+                let live = q.table_id.and_then(|id| {
+                    d.wb.sheets.iter().find_map(|sh| sh.tables.iter().find(|t| t.id == id).map(|t| (t.name.clone(), sh.name.clone())))
+                });
                 json!({
-                    "name": q.name, "sheet": q.sheet, "url": q.url, "table": q.table,
+                    "name": live.as_ref().map(|(n, _)| n).unwrap_or(&q.name),
+                    "sheet": live.as_ref().map(|(_, s)| s).unwrap_or(&q.sheet),
+                    "url": q.url, "table": q.table,
                     "last_synced": q.last_synced.unwrap_or(0), "web": true,
                 })
             })

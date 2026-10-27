@@ -154,13 +154,26 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
     let kind = g("type").unwrap_or_else(|| "cellIs".into());
-    let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
-        match v {
+    let value_kind = |v: Option<&Json>, default: CfValueKind| -> Result<CfValueKind> {
+        Ok(match v {
             Some(Json::Object(o)) => {
                 let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
                 let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
-                // A string value is the stop's own formula; the stop keeps its kind (#1848).
-                let formula = o.get("value").and_then(Json::as_str).map(|s| s.trim().trim_start_matches('=').to_string()).filter(|s| !s.is_empty());
+                // A string value is the stop's own formula; the stop keeps its kind (#1848). A
+                // `min`, `max` or `formula` stop reads its value elsewhere, so only the typed
+                // stops normalize the string here — and one that empties out is refused instead
+                // of falling back to the zero `as_f64` makes of any string, which is not a value
+                // the stop was given (#1885 review).
+                let formula = match o.get("value").and_then(Json::as_str).filter(|_| !matches!(t, "min" | "max" | "formula")) {
+                    Some(s) => {
+                        let f = s.trim().trim_start_matches('=').to_string();
+                        if f.is_empty() {
+                            return Err(bad("home.conditionalFormat", format!("the `{t}` stop's formula is empty")));
+                        }
+                        Some(f)
+                    }
+                    None => None,
+                };
                 match t {
                     "min" => CfValueKind::Min,
                     "max" => CfValueKind::Max,
@@ -171,7 +184,7 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             _ => default,
-        }
+        })
     };
     let rule = match kind.as_str() {
         "cellIs" => {
@@ -238,8 +251,8 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             CfRule::ColorScale { stops }
         }
         "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
+            min: value_kind(rule.get("min"), CfValueKind::Min)?,
+            max: value_kind(rule.get("max"), CfValueKind::Max)?,
             color: crate::cmd::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,

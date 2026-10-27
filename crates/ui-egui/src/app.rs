@@ -244,10 +244,13 @@ impl SheetApp {
                     }
                 }
             } else if self.fetch.is_some() {
-                // Only the From Web dialogs poll a finished fetch into place; any other state
-                // (no dialog, a different dialog) joins the finished worker so its result is
-                // freed, then drops it.
-                let polls = self.dialog.as_ref().is_some_and(|d| matches!(d.name.as_str(), "fromWeb" | "queriesConnections"));
+                // Only the From Web dialog polls a finished preview or import into place;
+                // Queries & Connections polls its own refreshes too (routed by command in
+                // `poll_refresh_fetch`). Any other state joins the finished worker so its
+                // result is freed, then drops it.
+                let polls = self.dialog.as_ref().is_some_and(|d| {
+                    d.name == "fromWeb" || (d.name == "queriesConnections" && self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webRefresh"))
+                });
                 if polls {
                     ctx.request_repaint();
                 } else {

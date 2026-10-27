@@ -66,7 +66,9 @@ fn now_ms() -> u64 {
 /// A page request from the command params, with the caps clamped (shared by the three commands).
 fn request(p: &Json) -> Result<WebRequest> {
     const ID: &str = "data.fromWeb";
-    let url = str_param(p, "url").map(str::trim).filter(|u| u.starts_with("http")).ok_or_else(|| bad(ID, "missing `url`"))?;
+    // HTTPS only, like the fetch provider itself: a plain-http address must be refused before
+    // the prefetched paths too, or a caller-supplied page bypasses the https-only contract.
+    let url = str_param(p, "url").map(str::trim).filter(|u| u.starts_with("https://")).ok_or_else(|| bad(ID, "missing `url`"))?;
     let max_rows = p
         .get("maxRows")
         .and_then(Json::as_u64)
@@ -862,6 +864,9 @@ mod tests {
         assert!(err.to_string().contains("not available"));
         assert!(s.execute("data.fromWeb", json!({"url": "ftp://x"})).is_err());
         assert!(s.execute("data.fromWeb", json!({})).is_ok()); // opens the dialog
+        // A plain-http address is refused even with tables supplied (prefetched), keeping the
+        // https-only contract; https with prefetched tables still imports.
+        assert!(s.execute("data.fromWeb", json!({"url": "http://x.com", "prefetched": [{"name": "t", "rows": [["a"]]}]})).is_err());
         let mut s = session_with_source();
         let err = s.execute("data.fromWeb", json!({"url": "https://example.com", "table": "nope"})).unwrap_err();
         assert!(err.to_string().contains("no table by that name") || err.to_string().to_lowercase().contains("no table"));

@@ -87,8 +87,11 @@ pub(crate) fn report_refresh_all(app: &mut SheetApp, r: &Json) {
 /// a single connection's Sync reports by name, a batch reports as Refresh All.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn poll_refresh_fetch(app: &mut SheetApp) -> bool {
-    if app.fetching() {
-        return true;
+    // Only this dialog's own refreshes: a preview or import fetch that is still running when
+    // the dialog opens stays for the From Web dialog or the app-level fallback, never
+    // reported here as a refresh.
+    if app.fetching() || app.fetch.as_ref().is_none_or(|f| f.command.0 != "data.webRefresh") {
+        return app.fetching();
     }
     let sync_name = app.fetch.as_ref().and_then(|f| f.command.1.get("name").and_then(Json::as_str)).map(str::to_string);
     if let Some((_, r)) = app.poll_fetch() {

@@ -2275,6 +2275,53 @@ fn loan_schedule_residue_keeps_excels_sign() {
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
 
+/// A full-height column spill (inside the 10,000,000-cell cap) and a paste of 17 cells elsewhere:
+/// the paste must not register the spill's 65,536 blocks, and a paste over the spill must still
+/// block it.
+fn tall_spill_book() -> T {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(1048576)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    t
+}
+
+fn paste_into(t: &mut T, cells: &[(u32, u32)]) {
+    let changed: Vec<(usize, CellRef)> = cells.iter().map(|&(r, c)| (0, CellRef::new(r, c))).collect();
+    for k in &changed {
+        t.wb.sheet_mut(0).unwrap().cells.set(k.1, Cell::value(Value::Number(1.0)));
+    }
+    t.calc.cells_changed(&mut t.wb, &changed);
+}
+
+#[test]
+fn a_paste_beside_a_tall_spill_leaves_it_alone_and_one_over_it_blocks_it() {
+    let mut t = tall_spill_book();
+    let beside: Vec<(u32, u32)> = (0..17).map(|i| (i, 5)).collect();
+    paste_into(&mut t, &beside);
+    assert_eq!(t.num("A1048576"), 1_048_576.0);
+    let over: Vec<(u32, u32)> = (0..17).map(|i| (500_000 + i, if i == 9 { 0 } else { 5 })).collect();
+    paste_into(&mut t, &over);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+}
+
+/// Probe: `cells_changed` for a 17-cell paste in column F beside the tall spill.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture tall_spill_paste_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn tall_spill_paste_probe() {
+    let mut t = tall_spill_book();
+    let mut best = std::time::Duration::MAX;
+    for round in 0..9u32 {
+        let beside: Vec<(u32, u32)> = (0..17).map(|i| (round * 20 + i, 5)).collect();
+        let start = std::time::Instant::now();
+        paste_into(&mut t, &beside);
+        best = best.min(start.elapsed());
+    }
+    eprintln!("tall spill, 17-cell paste beside it: best of 9 = {best:?}");
+}
+
 #[test]
 fn many_spills_are_read_and_blocked_by_a_paste() {
     let mut t = T::new();

@@ -42,6 +42,23 @@ fn block_span(rect: &RangeRef) -> (u32, u32, u32, u32) {
     (rect.start.row / BLOCK, rect.end.row / BLOCK, rect.start.col / BLOCK, rect.end.col / BLOCK)
 }
 
+/// Whether registering `areas` in blocks costs less than checking each of them against each of
+/// `lookups` cells would: a few block entries cost about one containment check each. A tall or
+/// wide area (a full-height column spill takes 65,536 blocks) is cheaper to test directly.
+pub(crate) fn indexing_pays<'a>(areas: impl ExactSizeIterator<Item = &'a RangeRef>, lookups: usize) -> bool {
+    const BLOCK_COST: u64 = 16;
+    let budget = (lookups as u64).saturating_mul(areas.len() as u64) / BLOCK_COST;
+    let mut blocks = 0u64;
+    for r in areas {
+        let (r0, r1, c0, c1) = block_span(r);
+        blocks = blocks.saturating_add(u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1));
+        if blocks > budget {
+            return false;
+        }
+    }
+    true
+}
+
 impl SpillIndex {
     /// Whether any area is indexed on `sheet`.
     pub(crate) fn has_sheet(&self, sheet: usize) -> bool {
@@ -161,6 +178,18 @@ mod tests {
         assert!(ix.has_sheet(1) && !ix.has_sheet(2));
         ix.insert((0, at(0, 0)), 1, 1);
         assert!(matches!(ix.covering(0, at(39, 2)), Cover::None));
+    }
+
+    #[test]
+    fn tall_or_wide_areas_are_not_worth_indexing_for_a_small_paste() {
+        let column = RangeRef::new(at(0, 0), at(1_048_575, 0));
+        assert!(!indexing_pays([column].iter(), 17));
+        assert!(!indexing_pays([column].iter(), 1_000));
+        // Many small areas pay back for a paste of a hundred cells.
+        let small: Vec<RangeRef> = (0..1_000).map(|i| RangeRef::new(at(i * 3, 0), at(i * 3 + 2, 0))).collect();
+        assert!(indexing_pays(small.iter(), 100));
+        // A big area among many areas is paid for by a big paste.
+        assert!(indexing_pays([column].iter(), 2_000_000));
     }
 
     #[test]

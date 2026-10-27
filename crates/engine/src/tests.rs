@@ -2434,6 +2434,19 @@ fn ods_import_never_reuses_source_as_save_target() {
 }
 
 /// Open a `;` CSV by path (a double-click), edit, Save: the file keeps its `;` separator.
+/// A CSV written by a script with totals as formulas opens computed, as in Excel, instead of
+/// showing the formula text until the cell is re-entered; what doesn't parse stays text.
+#[test]
+fn csv_formulas_open_computed() {
+    let text = "Item,Amount\r\nRent,800\r\nFood,300\r\nTotal,=SUM(B2:B3)\r\nMean,\"=AVERAGE(B2:B3)\"\r\nLocal,=SOMMA(B2;B3)\r\nSign,=\r\n";
+    let mut s = s();
+    s.execute("file.open", json!({"name": "budget.csv", "base64": crate::io::base64_encode(text.as_bytes())})).unwrap();
+    let v = s.execute("sheet.read", json!({"range": "B4:B7"})).unwrap();
+    assert_eq!(v["values"], json!([[1100.0], [550.0], ["=SOMMA(B2;B3)"], ["="]]));
+    let f = s.execute("sheet.read", json!({"range": "B4:B5", "formulas": true})).unwrap();
+    assert_eq!(f["values"], json!([["=SUM(B2:B3)"], ["=AVERAGE(B2:B3)"]]));
+}
+
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_an_opened_semicolon_csv_keeps_semicolons() {

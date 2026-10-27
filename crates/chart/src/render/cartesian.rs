@@ -45,6 +45,36 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack)
 }
 
+/// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
+/// bars' start positions) and along the value axis (`lo..hi`).
+struct BarRun {
+    bucket: f32,
+    a0: f32,
+    a1: f32,
+    lo: f32,
+    hi: f32,
+}
+
+impl BarRun {
+    fn new(pos: f32, lo: f32, hi: f32) -> Self {
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi }
+    }
+    fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.a0 = self.a0.min(pos);
+        self.a1 = self.a1.max(pos);
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba) {
+        let along = self.a1 - self.a0 + bw;
+        if horizontal {
+            ctx.rect(self.lo, self.a0, self.hi - self.lo, along, color, None);
+        } else {
+            ctx.rect(self.a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -255,12 +285,27 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    // Hairline bars are merged per pixel column (their envelope is what shows).
+                    let cull = bw < MIN_BAR_PX && !labels_on;
+                    let mut run: Option<BarRun> = None;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
+                        if cull {
+                            let pos = if horizontal { c + nslots * bw / 2.0 - (k + 1.0) * bw } else { c - nslots * bw / 2.0 + k * bw };
+                            match &mut run {
+                                Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
+                                _ => {
+                                    if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                                        m.draw(ctx, bw, horizontal, s.color);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if horizontal {
                             let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
                             ctx.rect(lo, y, len, bw, s.color, None);
@@ -292,6 +337,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                                 }
                             }
                         }
+                    }
+                    if let Some(m) = run {
+                        m.draw(ctx, bw, horizontal, s.color);
                     }
                 }
                 _ => {

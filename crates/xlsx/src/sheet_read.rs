@@ -83,6 +83,16 @@ const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
+/// What one `row` element may hold, by the schema: one cell (`c`) per column of the grid and one
+/// extension list. The parser drops the rest before the row is handed over, so a crafted part
+/// cannot make one row grow to the element cap, and a cell past the width cannot overwrite one
+/// already read.
+const ROW_CHILDREN: &[(&str, usize)] = &[("c", MAX_COLS as usize), ("extLst", 1)];
+/// The import warning for cell text longer than Excel allows. The text is kept whole: cutting it
+/// would lose the user's data at the next save.
+fn long_text_warning() -> String {
+    format!("cell texts longer than Excel's {} characters were kept whole; Excel may refuse or repair the saved file", gridcraft_core::MAX_CELL_CHARS)
+}
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
 /// Worst-case cells inside the dynamic ranges the sheet declares. Beyond it further ranges are
@@ -102,12 +112,21 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
+    let how = xml::Streaming { split: &["row"], children: ROW_CHILDREN };
+    let res = xml::parse_streaming(&bytes, how, &mut |row| {
         read_row(cx, &mut sheet, &mut st, &row);
         Ok(())
     });
     let root = match res {
-        Ok(r) => r,
+        Ok(s) => {
+            if s.dropped > 0 {
+                cx.warn(format!(
+                    "sheet \"{name}\": dropped {} element(s) a row may not hold (more than {MAX_COLS} cells, a second extension list, or unknown elements)",
+                    s.dropped
+                ));
+            }
+            s.root
+        }
         Err(e) => {
             cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
             El::default()
@@ -460,6 +479,14 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     }
 }
 
+/// Cell text from the file, kept whole, with a warning when it is longer than Excel allows.
+fn noted(cx: &mut Ctx<'_>, text: String) -> String {
+    if xml::exceeds_cell_text(&text) {
+        cx.warn(long_text_warning());
+    }
+    text
+}
+
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
@@ -474,10 +501,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             },
             None => Value::Empty,
         },
-        "str" => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
-        "inlineStr" => {
-            c.child("is").map(|is| Value::text(xml::rich_text(is))).or_else(|| v.map(|v| Value::text(xml::decode_xstring(v)))).unwrap_or(Value::Empty)
-        }
+        "str" => v.map(|v| Value::text(noted(cx, xml::decode_xstring(v)))).unwrap_or(Value::Empty),
+        "inlineStr" => c
+            .child("is")
+            .map(|is| Value::text(noted(cx, xml::rich_text(is))))
+            .or_else(|| v.map(|v| Value::text(noted(cx, xml::decode_xstring(v)))))
+            .unwrap_or(Value::Empty),
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
         "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {

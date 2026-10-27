@@ -11,7 +11,7 @@ use crate::theme::{self, Cat, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
-fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
+pub(crate) fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 

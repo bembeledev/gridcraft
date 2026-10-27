@@ -46,7 +46,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
 fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
     match drag {
         Drag::None => None,
-        Drag::Select => Some(CursorIcon::Cell),
+        Drag::Select | Drag::DialogRange { .. } => Some(CursorIcon::Cell),
         Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
         Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),

@@ -30,6 +30,7 @@ mod spelling;
 mod zoom;
 
 use analysis::toolpak_defaults;
+pub(crate) use analysis::{dialog_range_picker_active, update_dialog_range_picker};
 use charts::select_chart;
 use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
@@ -42,11 +43,27 @@ use zoom::zoom_preset;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
+    Range { key: &'static str, label: &'static str },
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
     Check { key: &'static str, label: &'static str },
     Note(String),
+}
+
+const ANALYSIS_DOCUMENT_ERROR: &str = "Return to the original workbook to continue this analysis, or cancel.";
+const ANALYSIS_RANGES: &[&str] = &["range", "inputY", "inputX", "range1", "range2", "bins", "output"];
+
+#[derive(Clone, Debug)]
+struct AnalysisContext {
+    document: u64,
+    sheet: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RangePicker {
+    key: String,
+    single_cell: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -66,6 +83,8 @@ pub struct Dialog {
     /// The first text or number field still has to take keyboard focus (set when a form opens,
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
+    analysis_context: Option<AnalysisContext>,
+    pub(crate) range_picker: Option<RangePicker>,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
@@ -98,6 +117,51 @@ struct RefPick {
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Checks that an analysis dialog still belongs to the active document; other dialogs are unchanged.
+    /// On a worksheet switch, qualifies pending relative ranges against the previously recorded sheet
+    /// before remembering the new sheet. Returns an error if the owner is inactive, closed or missing,
+    /// leaving the dialog available for cancellation or recovery when its owner becomes active again.
+    /// Qualified references remain name-based; this does not establish stable worksheet identity.
+    pub(crate) fn prepare_analysis(&mut self, session: &gridcraft_engine::Session) -> Result<(), String> {
+        if self.name != "analysisToolPak" {
+            return Ok(());
+        }
+        let context = self.analysis_context.as_ref().ok_or(ANALYSIS_DOCUMENT_ERROR)?;
+        let doc = session.active().filter(|doc| doc.uid == context.document).ok_or(ANALYSIS_DOCUMENT_ERROR)?;
+        let sheet = doc.wb.active().ok_or(ANALYSIS_DOCUMENT_ERROR)?.name.clone();
+        if sheet != context.sheet {
+            self.qualify_analysis_ranges();
+            if let Some(context) = &mut self.analysis_context {
+                context.sheet = sheet;
+            }
+        }
+        Ok(())
+    }
+
+    /// Anchors bare A1 input/output ranges to the recorded analysis sheet, quoting its name.
+    /// Already qualified, blank and unparseable values are left for normal engine validation;
+    /// dialogs without analysis context are unchanged. Does not run a command or move the selection.
+    fn qualify_analysis_ranges(&mut self) {
+        let Some(context) = &self.analysis_context else { return };
+        for key in ANALYSIS_RANGES {
+            if let Some(text) = self.values.get(*key).and_then(Json::as_str)
+                && RangeRef::parse(text.trim()).is_some()
+            {
+                let qualified = format!("{}!{}", gridcraft_engine::formula::quote_sheet(&context.sheet), text.trim());
+                self.values.insert((*key).into(), json!(qualified));
+            }
+        }
+    }
+
+    /// Prepares the parameters a control-channel confirmation will send to the dialog's command.
+    /// Verifies analysis ownership and freezes relative ranges before the usual per-dialog reshaping.
+    /// An error must keep the dialog open and must not execute its command in the active workbook.
+    pub(crate) fn command_params(&mut self, session: &gridcraft_engine::Session) -> Result<Json, String> {
+        self.prepare_analysis(session)?;
+        self.qualify_analysis_ranges();
+        Ok(build_params(self))
     }
 
     /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom`
@@ -166,6 +230,9 @@ impl Dialog {
         self.values.insert(pick.key.into(), json!(ed.text));
     }
 
+    /// Creates a field-driven dialog whose OK action submits its values to `command`.
+    /// Object defaults initialize its draft, and the first eligible field takes initial focus.
+    /// The opener binds document ownership and worksheet-picker state where needed.
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -179,6 +246,8 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: true,
+            analysis_context: None,
+            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -187,6 +256,9 @@ impl Dialog {
         }
     }
 
+    /// Creates a dialog whose custom renderer owns its controls and completion behavior.
+    /// Starts without fields, a command or an initial field-focus request; a specific opener may
+    /// attach a command and document context, as the Analysis ToolPak chooser does.
     fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -200,6 +272,8 @@ impl Dialog {
             result: None,
             show_password: false,
             focus_first_field: false,
+            analysis_context: None,
+            range_picker: None,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -208,6 +282,9 @@ impl Dialog {
         }
     }
 
+    /// Builds a named UI dialog using the active workbook and selection for its starting values.
+    /// Returns `None` for an unsupported dialog name. Analysis dialogs capture the document UID
+    /// and qualify their initial ranges here, so later worksheet changes cannot retarget those inputs.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
@@ -641,6 +718,12 @@ impl Dialog {
                     d.values = toolpak_defaults(&sel, tool);
                 }
                 d.command = Some("data.analysisToolPak");
+                if let Some(doc) = app.session.active()
+                    && let Some(sheet) = doc.wb.active()
+                {
+                    d.analysis_context = Some(AnalysisContext { document: doc.uid, sheet: sheet.name.clone() });
+                    d.qualify_analysis_ranges();
+                }
                 d
             }
             "solver" => {

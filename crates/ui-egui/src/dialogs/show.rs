@@ -1,5 +1,5 @@
 use super::about::about;
-use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
+use super::analysis::{analysis_toolpak, goal_seek, range_editor, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
@@ -103,7 +103,9 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
-/// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
+/// Renders the active dialog and handles confirmation, cancellation and child-dialog handoff.
+/// Analysis confirmation validates the owning document before command execution. Errors keep the
+/// draft available in its window; occupied report output enters its overwrite-confirmation flow.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let home = app.ui_window();
@@ -124,8 +126,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let picking = d.range_picker.is_some();
+    let window_id = if picking { egui::Id::unique("analysis_range_picker") } else { egui::Id::unique("dialog").with(&d.name) };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::unique("dialog").with(&d.name))
+        .id(window_id)
         .collapsible(false)
         .resizable(false)
         .default_width(width)
@@ -134,6 +138,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
         .open(&mut win_open);
     let window = match d.name.as_str() {
+        "analysisToolPak" if picking => window.default_pos(ctx.content_rect().center_top() + vec2(0.0, 80.0)),
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
         _ => window,
@@ -358,7 +363,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && let Err(error) = d.prepare_analysis(&app.session) {
+        app.message = Some((d.title.clone(), app.ui.language.tr(&error).into()));
+        confirm = false;
+    }
     if confirm && let Some(cmd) = d.command {
+        d.qualify_analysis_ranges();
         let params = build_params(&d);
         match app.run(cmd, params) {
             Ok(r) => {
@@ -440,7 +450,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
 /// Enter sets the width, as in Excel.
 /// Keeps asking until the field really has focus: a new window's first frame is an invisible
 /// sizing pass where a focus request is ignored.
-fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
+pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     if !d.focus_first_field {
         return;
     }
@@ -476,7 +486,9 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     }
 }
 
-/// Draws a dialog's `fields`, editing its values.
+/// Draws the dialog's fields into draft values, translating labels while retaining command keys.
+/// Analysis range fields share the worksheet picker editor; text and numeric fields take initial
+/// focus once. Rendering these controls does not submit the dialog's command.
 pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
@@ -504,6 +516,12 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
                         }
+                    });
+                }
+                Field::Range { key, label } => {
+                    ui.vertical(|ui| {
+                        let label = ui.label(lang.tr(label));
+                        range_editor(ui, d, key, false, label.id);
                     });
                 }
                 Field::Password { key, label } => {

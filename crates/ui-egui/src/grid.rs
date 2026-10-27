@@ -92,6 +92,12 @@ pub enum Drag {
     #[default]
     None,
     Select,
+    /// A dialog range drag belongs to one worksheet in one document, even across tab changes.
+    DialogRange {
+        document: u64,
+        sheet: usize,
+        start: CellRef,
+    },
     Rows(u32),
     Cols(u32),
     /// Reordering one contiguous whole-column selection by its header.

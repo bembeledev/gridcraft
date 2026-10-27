@@ -1,5 +1,8 @@
-use super::show::{form_fields, ok_cancel};
+use super::show::{form_fields, ok_cancel, take_first_focus};
 use super::*;
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
@@ -31,13 +34,70 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
     }
 }
 
-/// The fields of one Analysis ToolPak tool's form (input and options; output is drawn apart).
+/// Edits one analysis range and toggles worksheet selection for that field with Select… / Finish.
+/// Typing cancels the active picker; editing `output` also selects range output. `single_cell`
+/// makes subsequent grid picking keep only the drag's starting cell, as report output requires.
+pub(super) fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_cell: bool, label_id: egui::Id) {
+    ui.push_id(key, |ui| {
+        ui.horizontal(|ui| {
+            let mut text = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
+            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(240.0)).labelled_by(label_id);
+            take_first_focus(d, &edit);
+            if edit.changed() {
+                d.values.insert(key.into(), json!(text));
+                d.range_picker = None;
+                if key == "output" {
+                    d.values.insert("outputTo".into(), json!("range"));
+                }
+            }
+            let picking = d.range_picker.as_ref().is_some_and(|picker| picker.key == key);
+            let select = ui.button(crate::widgets::tr(ui, if picking { "Finish" } else { "Select…" })).labelled_by(label_id);
+            if select.clicked() {
+                d.range_picker = if picking { None } else { Some(RangePicker { key: key.into(), single_cell }) };
+            }
+        })
+    });
+}
+
+/// Reports whether the grid may route pointer input to the dialog's pending range field.
+/// Requires the owning document UID to be active, while permitting worksheet changes within it.
+/// An inactive owner's picker is suspended, so returning to that document can resume selection.
+pub(crate) fn dialog_range_picker_active(app: &SheetApp) -> bool {
+    app.dialog.as_ref().is_some_and(|d| {
+        d.range_picker.is_some()
+            && d.analysis_context.as_ref().is_some_and(|context| app.session.active().is_some_and(|doc| doc.uid == context.document))
+    })
+}
+
+/// Stores a grid-picked, worksheet-qualified range and mirrors it in the worksheet selection.
+/// Ignores updates without a picker, from another document, or for a non-active worksheet.
+/// Preserves other fields' relative-reference meaning before a sheet switch; output picking
+/// uses only `start` and selects range output. Does not write report data or submit the analysis.
+pub(crate) fn update_dialog_range_picker(app: &mut SheetApp, sheet: usize, start: CellRef, end: CellRef) {
+    let Some(d) = app.dialog.as_mut() else { return };
+    if d.prepare_analysis(&app.session).is_err() {
+        return;
+    }
+    let Some(picker) = d.range_picker.clone() else { return };
+    let Some(doc) = app.session.active().filter(|doc| doc.wb.active_sheet() == sheet) else { return };
+    let Some(sh) = doc.wb.sheet(sheet) else { return };
+    let range = RangeRef::new(start, if picker.single_cell { start } else { end });
+    d.values.insert(picker.key.clone(), json!(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&sh.name), range.a1())));
+    if picker.key == "output" {
+        d.values.insert("outputTo".into(), json!("range"));
+    }
+    let _ = app.session.run("selection.set", json!({"range": range.a1()}));
+}
+
+/// Declares one Analysis ToolPak tool's input/options schema; output controls are rendered separately.
+/// Regression keeps the Y/X ranges and label checkbox first, then model choice and fit options:
+/// its renderer groups these slices so labels and the zero-intercept option are not model choices.
 fn toolpak_fields(tool: &str) -> Vec<Field> {
     use Field::*;
     let grouped = || Choice { key: "groupedBy", label: "Grouped By:", options: vec![("columns", "Columns"), ("rows", "Rows")] };
     let labels = || Check { key: "labels", label: "Labels in first row" };
-    let range = || Text { key: "range", label: "Input Range:" };
-    let two = || vec![Text { key: "range1", label: "Variable 1 Range:" }, Text { key: "range2", label: "Variable 2 Range:" }];
+    let range = || Range { key: "range", label: "Input Range:" };
+    let two = || vec![Range { key: "range1", label: "Variable 1 Range:" }, Range { key: "range2", label: "Variable 2 Range:" }];
     match tool {
         "descriptive" => vec![
             range(),
@@ -50,7 +110,7 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         ],
         "histogram" => vec![
             range(),
-            Text { key: "bins", label: "Bin Range (blank for automatic bins):" },
+            Range { key: "bins", label: "Bin Range (blank for automatic bins):" },
             labels(),
             Check { key: "pareto", label: "Pareto (sorted histogram)" },
             Check { key: "cumulative", label: "Cumulative Percentage" },
@@ -58,9 +118,14 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
         "correlation" | "covariance" | "rankPercentile" => vec![range(), grouped(), labels()],
         "anovaSingle" => vec![range(), grouped(), labels(), Text { key: "alpha", label: "Alpha:" }],
         "regression" => vec![
-            Text { key: "inputY", label: "Input Y Range:" },
-            Text { key: "inputX", label: "Input X Range:" },
+            Range { key: "inputY", label: "Input Y Range:" },
+            Range { key: "inputX", label: "Input X Range:" },
             labels(),
+            Choice {
+                key: "model",
+                label: "Regression Type:",
+                options: vec![("linear", "Linear"), ("exponential", "Exponential"), ("logarithmic", "Logarithmic"), ("power", "Power / Geometric")],
+            },
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
             Check { key: "residuals", label: "Residuals" },
@@ -90,12 +155,15 @@ fn toolpak_fields(tool: &str) -> Vec<Field> {
     }
 }
 
-/// The starting values of a tool's form: the selection as its input, a new sheet as output.
+/// Initializes a tool's draft values with `sel` as input and a new worksheet as report output.
+/// Regression defaults to a linear model and 95% confidence; the opener/chooser qualifies the
+/// selection against its bound worksheet after installing these values on the dialog.
 pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
     let mut v = json!({
         "tool": tool, "range": sel, "inputY": "", "inputX": "", "range1": sel, "range2": "", "bins": "",
         "groupedBy": "columns", "labels": false, "summary": true, "confidence": "", "kthLargest": "", "kthSmallest": "",
         "interval": "3", "damping": "0.3", "alpha": "0.05", "hypothesizedDifference": "0",
+        "model": "linear",
         "outputTo": "newSheet", "output": "", "newSheet": "",
     });
     if tool == "regression" {
@@ -107,8 +175,33 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
+/// A mismatched document offers cancellation instead of execution. While picking a range, shows
+/// only that field so grid selection remains available; regression otherwise separates inputs,
+/// model and fit options and explains diagnostics for a transformed response.
 pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
+    let lang = app.ui.language;
+    if let Err(error) = d.prepare_analysis(&app.session) {
+        ui.label(lang.tr(&error));
+        if ui.button(lang.tr("Cancel")).clicked() {
+            *open = false;
+        }
+        return;
+    }
+    if let Some(picker) = d.range_picker.clone() {
+        ui.label(lang.tr("Select a worksheet range, then choose Finish."));
+        let label = d
+            .fields
+            .iter()
+            .find_map(|field| match field {
+                Field::Range { key, label } if *key == picker.key => Some(*label),
+                _ => None,
+            })
+            .unwrap_or("Output Range:");
+        let label = ui.label(lang.tr(label));
+        range_editor(ui, d, &picker.key, picker.single_cell, label.id);
+        return;
+    }
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
         ui.label("The output range already holds data. Replace it with the report?");
         ui.horizontal(|ui| {
@@ -145,24 +238,57 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         if (ok || chosen) && TOOLS.iter().any(|(id, _)| *id == pick) {
             let sel = app.session.active().map(|doc| doc.selection.current().a1()).unwrap_or_default();
             d.values = toolpak_defaults(&sel, &pick);
+            d.qualify_analysis_ranges();
         }
         return;
     };
     d.title = label.to_string();
     d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
+    if tool == "regression" {
+        let fields = std::mem::take(&mut d.fields);
+        d.fields = fields.iter().take(3).cloned().collect();
+        ui.push_id("regression-inputs", |ui| form_fields(ui, d));
+        ui.separator();
+        ui.label(egui::RichText::new(lang.tr("Regression method")).strong());
+        if let Some(Field::Choice { key, label, options }) = fields.get(3) {
+            ui.label(lang.tr(label));
+            let mut selected = d.values.get(*key).and_then(Json::as_str).unwrap_or("linear").to_string();
+            let text = options.iter().find(|(value, _)| *value == selected).map(|(_, label)| lang.tr(label)).unwrap_or("");
+            craft_ui::ComboBox::from_id_salt("regression-model").selected_text(text).show_ui(ui, |ui| {
+                for (value, label) in options {
+                    ui.selectable_value(&mut selected, (*value).into(), lang.tr(label));
+                }
+            });
+            d.values.insert((*key).into(), json!(selected));
+        }
+        ui.separator();
+        ui.label(egui::RichText::new(lang.tr("Regression options")).strong());
+        d.fields = fields.get(4..).unwrap_or_default().to_vec();
+        ui.push_id("regression-options", |ui| form_fields(ui, d));
+        d.fields = fields;
+        if matches!(d.values.get("model").and_then(Json::as_str), Some("exponential" | "power")) {
+            ui.add(egui::Label::new(lang.tr("Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.")).wrap());
+        }
+    } else {
+        form_fields(ui, d);
+    }
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let radio = ui.radio(to == choice, text_label);
+            if radio.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
             }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
+            if choice == "range" {
+                range_editor(ui, d, key, true, radio.id);
+            } else {
+                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
+                    d.values.insert(key.into(), json!(t));
+                    d.values.insert("outputTo".into(), json!(choice));
+                }
             }
         });
     }

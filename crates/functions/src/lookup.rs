@@ -676,8 +676,9 @@ mod tests {
         let a = arr(vals.iter().map(|v| vec![tv(v)]).collect());
         is_err(ev("MATCH", vec![t("x~"), rf(a.clone()), n(0.0)]), CellError::NA);
         close(ev("MATCH", vec![t("a~b"), rf(a.clone()), n(0.0)]), 3.0);
-        // A needle that is only `~` stays a literal `~` (not measured in Excel).
-        close(ev("MATCH", vec![t("~"), rf(a), n(0.0)]), 5.0);
+        // A needle that is only `~` is an empty pattern, so none of these texts match.
+        // Measured in Excel 365 (16.0 build 20527).
+        is_err(ev("MATCH", vec![t("~"), rf(a), n(0.0)]), CellError::NA);
     }
 
     #[test]

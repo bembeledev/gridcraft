@@ -252,14 +252,16 @@ fn tokenize(pattern: &str) -> Vec<Tok> {
     let mut it = pattern.chars();
     while let Some(c) = it.next() {
         match c {
-            // `~` takes the next character literally; a trailing `~` is dropped, as in Excel.
-            '~' => match it.next() {
-                Some(n) => out.push(Tok::Char(lower_char(n))),
-                // A pattern that is only `~` would be empty and match empty text. Excel wasn't
-                // measured for it, so it stays a literal `~`, as before #1455.
-                None if out.is_empty() => out.push(Tok::Char('~')),
-                None => {}
-            },
+            // `~` takes the next character literally; a trailing `~` is dropped, as in Excel,
+            // including when the pattern is only `~` (then an empty pattern). Excel 365
+            // (16.0 build 20527) measures that for SEARCH and MATCH. COUNTIF leaves a lone `~`
+            // as plain text (no `*` or `?`). DCOUNTA escapes it and appends `*`, so the pattern
+            // that reaches here is `~~*`. Neither of those was measured in Excel.
+            '~' => {
+                if let Some(n) = it.next() {
+                    out.push(Tok::Char(lower_char(n)));
+                }
+            }
             '*' => out.push(Tok::Star),
             '?' => out.push(Tok::Any),
             c => out.extend(std::iter::once(lower_char(c)).map(Tok::Char)),
@@ -284,7 +286,8 @@ fn is_wildcard_criterion(t: &str) -> bool {
     t.contains('*') || t.contains('?')
 }
 
-/// Whether the pattern contains an unescaped wildcard.
+/// Whether lookup should treat `pattern` as a wildcard pattern. `~` still counts when
+/// tokenizing drops a trailing one, so a pattern that is only `~` stays on this path.
 pub(crate) fn has_wildcards(pattern: &str) -> bool {
     tokenize(pattern).iter().any(|t| !matches!(t, Tok::Char(_))) || pattern.contains('~')
 }
@@ -481,10 +484,13 @@ mod tests {
         assert!(!wildcard_match("x~", "x~"));
         assert!(wildcard_match("*~~", "xyz~"));
         assert_eq!(wildcard_find("x~", "axb", 0), Some(1));
-        // A pattern that is only `~` stays a literal `~` (not measured in Excel).
-        assert!(wildcard_match("~", "~"));
-        assert!(!wildcard_match("~", ""));
-        assert_eq!(wildcard_find("~", "abc", 0), None);
-        assert_eq!(wildcard_find("~", "a~b", 0), Some(1));
+        // A pattern that is only `~` drops that trailing `~` and is an empty pattern.
+        // These finds are the 0-based form of SEARCH("~", …), measured in Excel 365
+        // (16.0 build 20527): both SEARCH("~","abc") and SEARCH("~","a~b") are 1.
+        assert_eq!(wildcard_find("~", "abc", 0), Some(0));
+        assert_eq!(wildcard_find("~", "a~b", 0), Some(0));
+        // Whole-text match of that empty pattern is inferred, not measured: only "" matches.
+        assert!(!wildcard_match("~", "~"));
+        assert!(wildcard_match("~", ""));
     }
 }

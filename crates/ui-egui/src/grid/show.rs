@@ -274,6 +274,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     fill_options_tag(app, ui, &geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, &geo, sh);
+    crate::quick_analysis::show(app, ui, &geo, sh);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.

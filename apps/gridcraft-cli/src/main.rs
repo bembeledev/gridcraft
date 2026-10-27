@@ -9,7 +9,7 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--root DIR | --automation-read-root DIR --automation-write-root DIR]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -47,7 +47,7 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--root DIR | --automation-read-root DIR --automation-write-root DIR]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
@@ -526,8 +526,28 @@ fn functions(args: &[String]) -> Result<(), String> {
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    let a = Args::parse(args, &["connect", "in", "sample", "root", "automation-read-root", "automation-write-root"], &[])?;
     a.no_extra(0)?;
+    for option in ["root", "automation-read-root", "automation-write-root"] {
+        if a.opts.iter().filter(|(name, _)| name == option).count() > 1 {
+            return Err(format!("--{option} may be given only once"));
+        }
+    }
+    if a.opt("root").is_some() && (a.opt("automation-read-root").is_some() || a.opt("automation-write-root").is_some()) {
+        return Err("--root cannot be combined with --automation-read-root or --automation-write-root".into());
+    }
+    let read_root = a.opt("root").or(a.opt("automation-read-root"));
+    let write_root = a.opt("root").or(a.opt("automation-write-root"));
+    if a.opt("connect").is_some() && (read_root.is_some() || write_root.is_some()) {
+        return Err("automation roots require headless MCP; --connect cannot enforce them in the desktop app".into());
+    }
+    let roots = gridcraft_engine::file_access::AutomationRoots::new(read_root.map(std::path::Path::new), write_root.map(std::path::Path::new))?;
+    // Apply before --in, and to worker threads as well as calls arriving over MCP.
+    if let Some(roots) = &roots
+        && !gridcraft_engine::file_access::confine_process(roots.clone())
+    {
+        return Err("automation roots were already configured for this process".into());
+    }
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
             let addr = control_addr(c);
@@ -546,7 +566,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
-            Box::new(Headless::with_session(session))
+            Box::new(Headless::with_session(session).with_automation_roots(roots))
         }
     };
     eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());

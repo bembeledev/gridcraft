@@ -90,3 +90,62 @@ methods `-32601`.
 `Server::new(Box::new(Remote::connect(&control_addr("7979"))?))`, then `Server::serve(stdin, stdout)` or
 `Server::handle_line(line) -> Option<String>`. Implement the `Backend` trait (`call(method, params)`) to drive another
 host.
+
+## Restrict file access to a folder
+
+Use the in-process server with a folder chosen by the operator:
+
+```sh
+gridcraft-cli mcp --root /path/to/project
+```
+
+`--root DIR` grants read and write access only inside that existing folder. It is a
+shortcut for giving the same directory to `--automation-read-root DIR` and
+`--automation-write-root DIR`. Separate roots can keep inputs read-only and place
+outputs in another folder:
+
+```sh
+gridcraft-cli mcp --automation-read-root /path/to/inputs --automation-write-root /path/to/outputs
+```
+
+When either access root is supplied, an omitted read or write root grants no
+access of that kind. With no root options the existing unrestricted behaviour is
+retained; the startup message and MCP initialization say which policy is active.
+Relative paths are relative to the server's working directory, and still have to
+resolve inside the corresponding root. Roots must exist and be directories.
+Duplicate root flags, an empty root, or combining `--root` with separate roots are
+errors. Both `--root DIR` and `--root=DIR` are accepted.
+
+The checks apply before `--in FILE` is opened and at the engine's file I/O
+boundary: workbook open/save, CSV and text import, picture import, CSV/HTML/PDF
+export, `file.print` with a path, implicit Save to the workbook's current path,
+and the temporary path used for atomic saving. `execute_command` and nested
+commands use the same checks. Returning workbook/PDF bytes without writing a path
+still works in read-only mode. Resolving symlinks and comparing whole path
+components rejects traversal outside the root and similarly named sibling
+folders. Canonical components are compared exactly; Unicode case folding never
+widens a root. Dangling links are refused.
+
+Root flags cannot be combined with `--connect`: the desktop control channel does
+not enforce these roots, so the CLI refuses that configuration rather than
+advertising a restriction it cannot provide. This is a file policy for the
+headless MCP server, not an OS sandbox. It does not defend against another local
+process changing symlinks between validation and opening a file. Windows-specific
+path behaviour needs native Windows validation.
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "gridcraft": {
+      "command": "/path/to/gridcraft-cli",
+      "args": ["mcp", "--root", "/path/to/project"]
+    }
+  }
+}
+```
+
+This implementation adapts Isaac Levine's [PR #480](https://github.com/storytold/gridcraft/pull/480) and additionally checks the
+initial `--in` file, offers the single-folder `--root` option, and covers the
+current command layout. Related issues: #445 and #2172.

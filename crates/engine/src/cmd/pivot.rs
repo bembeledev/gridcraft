@@ -22,6 +22,8 @@ mod params;
 
 use charts::{insert_pivot_chart, recommended};
 use create::{insert_pivot, options, show_details, summarize_table};
+#[cfg(test)]
+use fields::has_connected_slicer;
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
 use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
 

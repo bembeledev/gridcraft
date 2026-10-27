@@ -1,4 +1,4 @@
-use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
+use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label, selects};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::*;
 
@@ -95,17 +95,14 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     if vals.len() > MAX_VALUE_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_VALUE_FIELDS} value fields."));
     }
-    let axis_group = |name: &str| -> Option<PivotDateGroup> {
-        pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name)).map(|f| f.date_group)
-    };
+    let on_axis = |name: &str| pt.rows.iter().chain(pt.columns.iter()).any(|f| f.source_col.eq_ignore_ascii_case(name));
     // (column, filter, grouping used for labels, shown as a report filter)
     let filters: Vec<(usize, &PivotFilter, PivotDateGroup, bool)> = pt
         .filters
         .iter()
         .filter_map(|f| {
             let c = src.col(&f.source_col)?;
-            let g = axis_group(&f.source_col);
-            Some((c, f, g.unwrap_or_default(), g.is_none()))
+            Some((c, f, pt.filter_group(f), !on_axis(&f.source_col) && !f.hidden))
         })
         .collect();
     let shown_filters: Vec<&(usize, &PivotFilter, PivotDateGroup, bool)> = filters.iter().filter(|f| f.3).collect();
@@ -134,8 +131,8 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
         for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
             if let Some(sel) = &f.selected {
-                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
-                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
+                let v = rec.get(*c).unwrap_or(&Value::Empty);
+                if !selects(sel, v, &item_label(wb, v, *g, fmt), *g) {
                     continue 'rec;
                 }
             }

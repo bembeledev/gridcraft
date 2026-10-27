@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, control_keytip, keytip, sep};
 use super::galleries::{paint_table_swatch, table_gallery};
 use super::*;
 

@@ -1,5 +1,6 @@
 //! Right-hand task panes: Comments, Watch Window, Selection Pane, Format Chart.
 
+use craft_ui::ComboBox;
 use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
 
@@ -333,7 +334,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
         .unwrap_or_default();
     let mut selected = selected_element(ui.ctx(), id);
     ui.label(crate::widgets::tr(ui, "Current Selection"));
-    egui::ComboBox::from_id_salt(("chart_current_selection", id)).selected_text(crate::widgets::tr(ui, selected.label())).show_ui(ui, |ui| {
+    ComboBox::from_id_salt(("chart_current_selection", id)).selected_text(crate::widgets::tr(ui, selected.label())).show_ui(ui, |ui| {
         for e in [
             ChartElement::ChartArea,
             ChartElement::PlotArea,
@@ -471,7 +472,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     }
                     ui.label(crate::widgets::tr(ui, "Major Tick Marks"));
                     let old_tick = axis.major_tick.clone();
-                    egui::ComboBox::from_id_salt("major_ticks")
+                    ComboBox::from_id_salt("major_ticks")
                         .selected_text(crate::widgets::tr(
                             ui,
                             match axis.major_tick.as_deref() {
@@ -499,7 +500,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                             Some("0.00E+00") => "Scientific",
                             _ => "Custom",
                         };
-                        egui::ComboBox::from_id_salt("number_category").selected_text(crate::widgets::tr(ui, category)).show_ui(ui, |ui| {
+                        ComboBox::from_id_salt("number_category").selected_text(crate::widgets::tr(ui, category)).show_ui(ui, |ui| {
                             for (label, code) in [
                                 ("Linked to source", None),
                                 ("General", Some("General")),
@@ -604,7 +605,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                     } else {
                         chart_section(ui, "Marker Options", |ui| {
                             let old = spec.marker.clone();
-                            egui::ComboBox::from_id_salt("marker_type")
+                            ComboBox::from_id_salt("marker_type")
                                 .selected_text(crate::widgets::tr(
                                     ui,
                                     match spec.marker.as_deref() {
@@ -708,7 +709,7 @@ fn chart_format_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_engi
                 if page == 1 {
                     let key = ui.scope_id().with(("trendline_series", id));
                     let mut i = ui.ctx().data_mut(|d| d.get_temp::<usize>(key)).unwrap_or(0).min(chart.series.len().saturating_sub(1));
-                    egui::ComboBox::from_id_salt("trendline_series")
+                    ComboBox::from_id_salt("trendline_series")
                         .selected_text(format!("{} {}", crate::widgets::tr(ui, "Chart|Series"), i + 1))
                         .show_ui(ui, |ui| {
                             for j in 0..chart.series.len() {
@@ -813,7 +814,7 @@ fn chart_stroke(ui: &mut Ui, style: &mut gridcraft_engine::model::ChartStroke) -
 fn chart_tick_picker(ui: &mut Ui, label: &str, value: &mut Option<String>) -> bool {
     ui.label(crate::widgets::tr(ui, label));
     let old = value.clone();
-    egui::ComboBox::from_id_salt(label)
+    ComboBox::from_id_salt(label)
         .selected_text(crate::widgets::tr(
             ui,
             match value.as_deref() {

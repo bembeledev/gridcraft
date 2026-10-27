@@ -763,6 +763,12 @@ fn pictures_that_cant_be_shown_and_other_shapes_are_reported() {
     let (wb, report) = read_xls(&workbook_with(&globals, &sheet)).unwrap();
     assert!(wb.sheets[0].images.is_empty());
     assert!(report.warnings.iter().any(|w| w.contains("format GridCraft can't show")), "{:?}", report.warnings);
+    // Lost pictures are real data loss: that line must not be swallowed as a general feature gap.
+    assert!(
+        report.warnings.iter().filter(|w| w.contains("format GridCraft can't show")).all(|w| !crate::xls_is_feature_gap(w)),
+        "{:?}",
+        report.warnings
+    );
     assert!(report.warnings.iter().any(|w| w.contains("other shapes")), "{:?}", report.warnings);
 }
 

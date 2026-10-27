@@ -138,6 +138,26 @@ impl<'a, 'b> Cursor<'a, 'b> {
         out
     }
 
+    /// At most `max` bytes of the rest of the record, copied straight from its parts so a huge
+    /// merged record is never buffered whole. The cursor then sits at the end of the record.
+    pub fn take_rest(&mut self, max: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.remaining().min(max));
+        if let Some(p) = self.parts.get(self.part) {
+            out.extend_from_slice(p.get(self.pos..).unwrap_or(&[]));
+        }
+        for p in self.parts.iter().skip(self.part + 1) {
+            if out.len() >= max {
+                break;
+            }
+            out.extend_from_slice(p);
+        }
+        out.truncate(max);
+        self.part = self.parts.len();
+        self.pos = 0;
+        self.after = 0;
+        out
+    }
+
     /// `cch` characters, compressed (one byte each) or UTF-16. When the characters run into
     /// a `Continue` record, that record starts with a fresh compression flag ([MS-XLS] 2.5.293).
     pub fn chars(&mut self, cch: usize, mut high: bool) -> Result<String, IoError> {
@@ -219,5 +239,19 @@ mod tests {
         assert_eq!(u64::from(c.u8().unwrap()), 1);
         assert_eq!(c.rest().len(), 12);
         assert_eq!(c.remaining(), 0);
+    }
+
+    #[test]
+    fn take_rest_stops_at_the_limit_across_parts() {
+        let (a, b, d): (&[u8], &[u8], &[u8]) = (&[1, 2, 3], &[4, 5, 6], &[7, 8]);
+        let parts = [a, b, d];
+        let mut c = Cursor::new(&parts);
+        assert_eq!(c.take_rest(4), vec![1, 2, 3, 4]);
+        assert_eq!(c.remaining(), 0);
+        let mut c = Cursor::new(&parts);
+        c.u8().unwrap();
+        assert_eq!(c.take_rest(100), vec![2, 3, 4, 5, 6, 7, 8]);
+        let mut c = Cursor::new(&parts);
+        assert!(c.take_rest(0).is_empty());
     }
 }

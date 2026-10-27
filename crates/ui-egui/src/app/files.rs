@@ -59,6 +59,9 @@ impl SheetApp {
         } else {
             let text = if msgs.len() == 1 {
                 msgs[0].to_string()
+            } else if msgs[0].starts_with("Imported from an Excel 97-2003") {
+                // What the overview does not cover (a lost picture, say) must stay readable.
+                msgs.join(" ")
             } else {
                 format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
             };

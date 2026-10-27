@@ -1143,3 +1143,16 @@ fn xls_overview_is_not_followed_by_its_own_feature_lines() {
     assert!(n.text.starts_with("Imported from an Excel 97-2003"), "{}", n.text);
     assert!(!n.text.contains("items in this file"), "{}", n.text);
 }
+
+#[test]
+fn xls_overview_keeps_the_line_about_pictures_that_were_left_out() {
+    let mut h = harness(blank());
+    h.state_mut().show_open_warnings(&json!({"warnings": [
+        "Imported from an Excel 97-2003 (.xls) workbook: values were read. Charts are not imported yet.",
+        "Some pictures in .xls files are in a format GridCraft can't show (such as WMF) and were left out.",
+        "Cell comments in .xls files are not imported yet."
+    ]}));
+    let n = h.state().notice.clone().unwrap();
+    assert!(n.text.starts_with("Imported from an Excel 97-2003") && n.text.contains("were left out"), "{}", n.text);
+    assert!(!n.text.contains("comments"), "{}", n.text);
+}

@@ -157,7 +157,7 @@ struct Globals {
 
 /// The overview every `.xls` import starts its warnings with. It describes the import as a
 /// whole, so the app shows it in the info bar and not in a message box.
-pub const IMPORT_NOTICE: &str = "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, fonts, fills, borders, alignment, pictures, merged cells, column widths, row heights and defined names were read. Charts, text boxes, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.";
+pub const IMPORT_NOTICE: &str = "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, fonts, fills, borders, alignment, pictures (PNG, JPEG and EMF), merged cells, column widths, row heights and defined names were read. Charts, text boxes, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.";
 
 /// Whether a warning only says an optional feature of the file (pictures, comments, conditional
 /// formatting…) is not imported yet. The overview ([`IMPORT_NOTICE`]) already says so in general,
@@ -327,7 +327,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             0x00E0 if g.xfs.len() < MAX_XFS => g.xfs.push(styles::Xf::parse(&mut c).unwrap_or_default()),
             0x00EB => {
                 let room = MAX_DRAWING.saturating_sub(g.drawing_group.len());
-                g.drawing_group.extend(c.rest().into_iter().take(room));
+                g.drawing_group.extend(c.take_rest(room));
             }
             0x0031 if g.fonts.len() < MAX_FONTS => g.fonts.push(styles::FontRec::parse(&mut c).unwrap_or_default()),
             0x0092 => {
@@ -685,7 +685,7 @@ fn pictures(st: &mut SheetState<'_>, report: &mut ReadReport) {
         st.sheet.images.push(Image { id: 0, anchor, data: Arc::clone(&blip.data), mime: blip.mime.to_string(), alt: String::new() });
     }
     if skipped > 0 {
-        report.warn("Some pictures in .xls files are in a format GridCraft can't show (such as WMF) and are not imported yet.");
+        report.warn("Some pictures in .xls files are in a format GridCraft can't show (such as WMF) and were left out.");
     }
     if shapes.others > 0 {
         report.warn("Charts, text boxes and other shapes in .xls files are not imported yet.");
@@ -909,7 +909,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
             st.sheet.right_to_left = on(0x0040);
         }
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
-        0x00EC if st.drawing.len() < MAX_DRAWING => st.drawing.extend(c.rest()),
+        0x00EC if st.drawing.len() < MAX_DRAWING => st.drawing.extend(c.take_rest(MAX_DRAWING - st.drawing.len())),
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
         0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),

@@ -99,15 +99,19 @@ pub enum Drag {
         source: RangeRef,
         before: Option<u32>,
     },
+    /// `to`: the previewed size once the pointer moved. Only the dragged line changes while the
+    /// button is held; the release applies the size to every selected line (Excel).
     ResizeCol {
         col: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     ResizeRow {
         row: u32,
         start: f32,
         orig: f32,
+        to: Option<f32>,
     },
     /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {

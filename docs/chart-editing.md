@@ -1,6 +1,6 @@
 # Chart editing and export
 
-Last updated: 2026-10-23.
+Last updated: 2026-10-27.
 
 ## Scope
 
@@ -52,6 +52,23 @@ colors and supports secondary scatter groups. Those features must be reconciled 
 the types and serialized fields are not interchangeable. This port additionally covers text fonts,
 log/reversed axes, line/marker widths and sizes, UI editing, templates, clipboard and image export.
 
+## Code layout after #2690
+
+Chart rendering follows the shared module split: axes and ticks live in `chart/src/render/frame.rs`,
+Cartesian series in `render/cartesian.rs`, markers and series styling in `render/lines.rs`,
+legend entries in `render/legend.rs`, and trendline labels in `render/trend.rs`. The root renderer
+retains dispatch and whole-group placement, and keeps its existing public re-exports.
+
+Chart command validation, export and duplication live in `engine/src/cmd/insert/chart.rs`;
+series changes in `cmd/extra/chart.rs` retain formatting-index maintenance. Pivot charts and
+PDF text adaptation follow the corresponding `cmd/pivot/charts.rs` and `cmd/print/draw.rs` modules.
+
+The UI routes Home font commands through `ui-egui/src/app/chart_font.rs`, clipboard operations
+through `app/clipboard.rs`, and template defaults through `app/commands.rs`. Chart picking and
+label dragging live in `grid/interact.rs`, keyboard actions in `grid/keyboard.rs`, and menus
+in `grid/menus.rs`. Dialogs and ribbon controls use their existing `dialogs/` and `ribbon/`
+modules. Host clipboard-image access is declared in `services.rs`.
+
 ## Validation and limits
 
 Chart command and font-routing integration tests are registered in the existing
@@ -69,6 +86,7 @@ Some extension-only properties can become stale after another editor changes a w
 
 | Date | Change |
 |---|---|
+| 2026-10-27 | Adapt chart rendering, engine commands and UI behavior to the shared module layout; separate chart-font routing into app/chart_font.rs |
 | 2026-10-23 | Follow-up review: fractional minor ticks, combo series-index mapping and fontless native test hosts |
 | 2026-10-23 | Address chart review: role-aware text layout, ticks/legends, native XLSX defaults, template undo and contextual translations |
 | 2026-10-23 | Port chart editing/export and persistence, preserve donor review fixes, document #2265 overlap |

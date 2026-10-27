@@ -68,7 +68,10 @@ fn request(p: &Json) -> Result<WebRequest> {
     const ID: &str = "data.fromWeb";
     // HTTPS only, like the fetch provider itself: a plain-http address must be refused before
     // the prefetched paths too, or a caller-supplied page bypasses the https-only contract.
-    let url = str_param(p, "url").map(str::trim).filter(|u| u.starts_with("https://")).ok_or_else(|| bad(ID, "missing `url`"))?;
+    let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or_else(|| bad(ID, "missing `url`"))?;
+    if !url.starts_with("https://") {
+        return Err(EngineError::Other("Only https:// addresses can be imported.".into()));
+    }
     let max_rows = p
         .get("maxRows")
         .and_then(Json::as_u64)

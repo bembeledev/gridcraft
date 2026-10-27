@@ -290,7 +290,7 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
     if *confirm && !url.trim().is_empty() {
         let pick = d.values.get("pick").and_then(Json::as_u64).unwrap_or(0) as usize;
         let table = tables.get(pick).and_then(|t| t["name"].as_str()).map(String::from);
-        let params = match table {
+        let mut params = match table {
             Some(t) => {
                 // A page can hold duplicate table names: which one was picked is which one to
                 // import, and the connection saves it so refreshes keep importing the same.
@@ -305,6 +305,11 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
             }
             None => json!({"url": url.trim()}),
         };
+        // The page is already downloaded whenever the preview fetched it — also when it found
+        // no tables: hand the full tables over so Load never re-fetches on the UI thread.
+        if let (Some(full), Some(o)) = (d.values.get("full_tables"), params.as_object_mut()) {
+            o.entry("prefetched").or_insert_with(|| full.clone());
+        }
         match app.run("data.fromWeb", params) {
             Ok(r) => app.toast = Some((format!("Imported {} rows into {}", r["rows"], r["sheet"]), crate::now_ms())),
             Err(e) => {

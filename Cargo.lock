@@ -1524,6 +1524,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "winresource",
+ "x11rb",
 ]
 
 [[package]]

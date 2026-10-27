@@ -28,8 +28,7 @@ fn apply_impl() {
     }
     let xrdb = run_query("xrdb", &["-query"]);
     let xdpy = run_query("xdpyinfo", &[]);
-    let xsettings = run_query("xprop", &["-root", "_XSETTINGS_SETTINGS"]);
-    if parse_xft_dpi(&xrdb).is_none() && xsettings_manager_present(&xsettings) {
+    if parse_xft_dpi(&xrdb).is_none() && xsettings_manager_present() {
         return;
     }
     if xrdb.is_empty() && xdpy.is_empty() {
@@ -98,13 +97,20 @@ fn run_query(program: &str, args: &[&str]) -> String {
     }
 }
 
-fn xsettings_manager_present(output: &str) -> bool {
-    output.lines().map(str::trim).any(|line| {
-        line.contains("_XSETTINGS_SETTINGS")
-            && (line.contains(" = ") || line.contains(": "))
-            && !line.contains("no such atom")
-            && !line.contains("not found")
-    })
+fn xsettings_manager_present() -> bool {
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let Ok((connection, screen)) = x11rb::connect(None) else { return false };
+    let name = format!("_XSETTINGS_S{screen}");
+    let Ok(cookie) = connection.intern_atom(false, name.as_bytes()) else { return false };
+    let Ok(atom) = cookie.reply() else { return false };
+    let Ok(cookie) = connection.get_selection_owner(atom.atom) else { return false };
+    let Ok(owner) = cookie.reply() else { return false };
+    selection_owner_present(owner.owner)
+}
+
+fn selection_owner_present(owner: u32) -> bool {
+    owner != 0
 }
 
 fn valid_scale_factor(factor: f64) -> bool {
@@ -253,9 +259,9 @@ mod tests {
     }
 
     #[test]
-    fn xsettings_diagnostic_is_not_a_manager() {
-        assert!(!xsettings_manager_present("_XSETTINGS_SETTINGS: no such atom on any window."));
-        assert!(xsettings_manager_present("_XSETTINGS_SETTINGS(CARDINAL) = 0x1, 0x2"));
+    fn xsettings_owner_zero_means_no_manager() {
+        assert!(!selection_owner_present(0));
+        assert!(selection_owner_present(0x200001));
     }
 
     #[test]

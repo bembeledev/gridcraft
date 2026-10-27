@@ -390,9 +390,7 @@ impl Default for StatusBarStats {
     }
 }
 
-/// The shipped defaults: Enter moves down, autocomplete on, no macros loaded.
 impl Default for Prefs {
-    /// The preferences a fresh install starts with.
     fn default() -> Self {
         Prefs {
             enter_direction: "down".into(),

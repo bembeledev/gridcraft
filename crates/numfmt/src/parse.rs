@@ -450,7 +450,8 @@ fn japanese_tag(lc: &str) -> Option<bool> {
     let body = lc.strip_prefix("$-")?;
     let first = body.split('-').next().unwrap_or("");
     // `411` is the ja-JP LCID, `ja`/`ja-JP` the language tag; the legacy gannen tag names the
-    // LCID inside its own marker instead (`[$-x-gannen411]`).
+    // LCID inside its own marker. `[$-x-gannen411]` is the legacy spelling: Excel 16.0 (en-US)
+    // rejects it as a number format, so it is read leniently here rather than for parity.
     let japanese = first == "411" || first == "ja" || body == "x-gannen411";
     japanese.then(|| body.contains("gannen"))
 }

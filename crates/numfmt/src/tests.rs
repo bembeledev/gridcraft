@@ -367,6 +367,9 @@ fn wareki_tokens_and_locale_tags() {
 fn wareki_gannen_renders_moto_for_year_one_only() {
     let first = d(2019, 5, 1, S);
     assert_eq!(f("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", first), "令和元年5月1日");
+    // The legacy tag is a lenient extension, not an Excel behaviour: Excel 16.0 (en-US) rejects
+    // `[$-x-gannen411]` as a number format (and TEXT() gives #VALUE!), while `[$-ja-JP-x-gannen]`
+    // is the documented one. Accepting it costs nothing and keeps such a file readable.
     assert_eq!(f("[$-x-gannen411]ggge\"年\"m\"月\"d\"日\"", first), "令和元年5月1日");
     // 元 replaces the number for `e` and `ee` alike: it is not a number and cannot be padded.
     assert_eq!(f("[$-ja-JP-x-gannen]gee\"年\"", first), "R元年");

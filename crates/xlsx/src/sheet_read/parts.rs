@@ -1,11 +1,11 @@
 use super::*;
 
-pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet) {
+pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &HashMap<&str, &Rel>, sheet: &mut Sheet) {
     let mut cells = 0u64;
     let mut bytes = 0u64;
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let mut target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone()).unwrap_or_default();
+        let mut target = h.attr("id").and_then(|id| rels.get(id)).map(|r| r.target.clone()).unwrap_or_default();
         // A relationship is a file or web page; a bare `location` is a place in this workbook.
         let external = !target.is_empty();
         if let Some(loc) = h.attr("location").filter(|l| !l.is_empty()) {

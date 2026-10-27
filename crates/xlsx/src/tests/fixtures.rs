@@ -542,6 +542,8 @@ fn chartex_parts_as_excel_expects_them() {
         y_title: None,
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];

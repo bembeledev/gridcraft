@@ -93,69 +93,87 @@ fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) 
     }
 }
 
-pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
-    let size = LABEL_SIZE;
+pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx, custom: Option<[f32; 2]>) -> Bx {
+    if let Some([x, y]) = custom {
+        let x = x.clamp(area.x, area.right());
+        let y = y.clamp(area.y, area.bottom());
+        let custom_area = Bx { x, y, w: (area.right() - x).max(4.0), h: (area.bottom() - y).max(4.0) };
+        let _ = draw_horizontal_legend(ctx, entries, custom_area, false);
+        return area;
+    }
+    match pos {
+        LegendPos::None => area,
+        LegendPos::Top | LegendPos::Bottom => {
+            let used = draw_horizontal_legend(ctx, entries, area, pos == LegendPos::Bottom);
+            if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
+        }
+        LegendPos::Left | LegendPos::Right => draw_side_legend(ctx, entries, area, pos == LegendPos::Right),
+    }
+}
+
+fn draw_horizontal_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], area: Bx, bottom: bool) -> f32 {
+    let size = ctx.size(TextRole::Legend, LABEL_SIZE);
     let row_h = size * 1.6;
     let s = size * 0.8;
     let gap = 4.0;
     let spacing = size * 1.3;
-    let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.tw(&e.0, size);
-    match pos {
-        LegendPos::None => area,
-        LegendPos::Top | LegendPos::Bottom => {
-            let max_rows = ((area.h * 0.3 / row_h).floor() as usize).max(1);
-            let mut rows: Vec<Vec<(usize, f32)>> = vec![vec![]];
-            let mut cur = 0.0f32;
-            for (i, e) in entries.iter().enumerate() {
-                let iw = item_w(ctx, e).min(area.w);
-                let need = if cur > 0.0 { spacing + iw } else { iw };
-                if cur > 0.0 && cur + need > area.w {
-                    if rows.len() >= max_rows {
-                        break;
-                    }
-                    rows.push(vec![]);
-                    cur = 0.0;
-                }
-                cur += if cur > 0.0 { spacing + iw } else { iw };
-                if let Some(r) = rows.last_mut() {
-                    r.push((i, iw));
-                }
+    let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.tw_role(&e.0, LABEL_SIZE, TextRole::Legend);
+    let max_rows = ((area.h * 0.3 / row_h).floor() as usize).max(1);
+    let mut rows: Vec<Vec<(usize, f32)>> = vec![vec![]];
+    let mut cur = 0.0f32;
+    for (i, e) in entries.iter().enumerate() {
+        let iw = item_w(ctx, e).min(area.w);
+        let need = if cur > 0.0 { spacing + iw } else { iw };
+        if cur > 0.0 && cur + need > area.w {
+            if rows.len() >= max_rows {
+                break;
             }
-            let lh = rows.len() as f32 * row_h;
-            let y0 = if pos == LegendPos::Bottom { area.bottom() - lh } else { area.y };
-            for (ri, row) in rows.iter().enumerate() {
-                let total: f32 = row.iter().map(|(_, w)| w).sum::<f32>() + spacing * row.len().saturating_sub(1) as f32;
-                let mut x = area.x + (area.w - total).max(0.0) / 2.0;
-                let yc = y0 + ri as f32 * row_h + row_h / 2.0;
-                for &(i, iw) in row {
-                    if let Some(e) = entries.get(i) {
-                        draw_swatch(ctx, e.2, x, yc, s, e.1);
-                        let sx = swatch_w(e.2, s) + gap;
-                        let t = ctx.fit(&e.0, size, (iw - sx).max(0.0) + 0.5);
-                        ctx.text(x + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
-                    }
-                    x += iw + spacing;
-                }
-            }
-            let used = lh + 4.0;
-            if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
+            rows.push(vec![]);
+            cur = 0.0;
         }
-        LegendPos::Left | LegendPos::Right => {
-            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * 0.35);
-            let max_rows = ((area.h / row_h).floor() as usize).max(1);
-            let n = entries.len().min(max_rows);
-            let lh = n as f32 * row_h;
-            let y0 = area.y + (area.h - lh).max(0.0) / 2.0;
-            let x0 = if pos == LegendPos::Right { area.right() - colw } else { area.x };
-            for (i, e) in entries.iter().take(n).enumerate() {
-                let yc = y0 + i as f32 * row_h + row_h / 2.0;
-                draw_swatch(ctx, e.2, x0, yc, s, e.1);
-                let sx = swatch_w(e.2, s) + gap;
-                let t = ctx.fit(&e.0, size, (colw - sx).max(0.0) + 0.5);
-                ctx.text(x0 + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
-            }
-            let used = colw + 8.0;
-            if pos == LegendPos::Right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }
+        cur += if cur > 0.0 { spacing + iw } else { iw };
+        if let Some(r) = rows.last_mut() {
+            r.push((i, iw));
         }
     }
+    let lh = rows.len() as f32 * row_h;
+    let y0 = if bottom { area.bottom() - lh } else { area.y };
+    for (ri, row) in rows.iter().enumerate() {
+        let total: f32 = row.iter().map(|(_, w)| w).sum::<f32>() + spacing * row.len().saturating_sub(1) as f32;
+        let mut x = area.x + (area.w - total).max(0.0) / 2.0;
+        let yc = y0 + ri as f32 * row_h + row_h / 2.0;
+        for &(i, iw) in row {
+            if let Some(e) = entries.get(i) {
+                draw_swatch(ctx, e.2, x, yc, s, e.1);
+                let sx = swatch_w(e.2, s) + gap;
+                let t = ctx.fit_role(&e.0, LABEL_SIZE, (iw - sx).max(0.0) + 0.5, TextRole::Legend);
+                ctx.text_role(TextRole::Legend, x + sx, yc, &t, LABEL_SIZE, TEXT, HAlign::Left, VAlign::Middle);
+            }
+            x += iw + spacing;
+        }
+    }
+    lh + 4.0
+}
+
+fn draw_side_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], area: Bx, right: bool) -> Bx {
+    let size = ctx.size(TextRole::Legend, LABEL_SIZE);
+    let row_h = size * 1.6;
+    let s = size * 0.8;
+    let gap = 4.0;
+    let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.tw_role(&e.0, LABEL_SIZE, TextRole::Legend);
+    let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * 0.35);
+    let max_rows = ((area.h / row_h).floor() as usize).max(1);
+    let n = entries.len().min(max_rows);
+    let lh = n as f32 * row_h;
+    let y0 = area.y + (area.h - lh).max(0.0) / 2.0;
+    let x0 = if right { area.right() - colw } else { area.x };
+    for (i, e) in entries.iter().take(n).enumerate() {
+        let yc = y0 + i as f32 * row_h + row_h / 2.0;
+        draw_swatch(ctx, e.2, x0, yc, s, e.1);
+        let sx = swatch_w(e.2, s) + gap;
+        let t = ctx.fit_role(&e.0, LABEL_SIZE, (colw - sx).max(0.0) + 0.5, TextRole::Legend);
+        ctx.text_role(TextRole::Legend, x0 + sx, yc, &t, LABEL_SIZE, TEXT, HAlign::Left, VAlign::Middle);
+    }
+    let used = colw + 8.0;
+    if right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }
 }

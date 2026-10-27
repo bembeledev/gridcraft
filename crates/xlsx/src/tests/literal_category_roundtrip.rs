@@ -47,6 +47,8 @@ fn literal_category_with_separators_survives_save() {
         y_title: None,
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     });
     wb.sheets = vec![Arc::new(s)];

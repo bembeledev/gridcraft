@@ -26,6 +26,19 @@ impl SheetApp {
             names.extend(d.wb.styles.iter().map(|(_, s)| s.font.name.clone()));
             names.push(d.wb.theme.major_font.clone());
             names.push(d.wb.theme.minor_font.clone());
+            names.extend(d.wb.sheets.iter().flat_map(|sh| {
+                sh.charts.iter().flat_map(|c| {
+                    [
+                        c.text.general.font.clone(),
+                        c.text.title.font.clone(),
+                        c.text.axis_labels.font.clone(),
+                        c.text.axis_titles.font.clone(),
+                        c.text.legend.font.clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                })
+            }));
             // Text boxes and shapes name their own typefaces.
             names.extend(d.wb.sheets.iter().flat_map(|sh| sh.shapes.iter().filter_map(|s| s.format.font.clone())));
         }

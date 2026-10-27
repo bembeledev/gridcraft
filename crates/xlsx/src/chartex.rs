@@ -136,6 +136,8 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         y_title: axis_title("1"),
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     })
 }

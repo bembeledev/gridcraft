@@ -95,6 +95,9 @@ pub enum Prim {
         y: f32,
         text: String,
         size: f32,
+        /// Optional font family. `None` uses the renderer's default chart font.
+        #[serde(default)]
+        font: Option<String>,
         color: Rgba,
         bold: bool,
         align: HAlign,
@@ -106,6 +109,12 @@ pub enum Prim {
 /// Measures text width (the UI passes real font metrics; tests use a fixed-width approximation).
 pub trait Measure {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32;
+
+    /// Measures a text run using an optional chart font. Implementations that do not distinguish
+    /// font families may use the default measurement, which keeps existing exporters compatible.
+    fn text_width_with_font(&self, text: &str, size: f32, bold: bool, _font: Option<&str>) -> f32 {
+        self.text_width(text, size, bold)
+    }
 }
 
 /// Fixed-width approximation: `0.55 × size` per character (bold 10% wider).

@@ -24,6 +24,13 @@ impl gridcraft_chart::Measure for EguiMeasure<'_> {
         let font = if bold { theme::ui_bold(size * self.z) } else { theme::ui_font(size * self.z) };
         self.painter.layout_no_wrap(text.to_string(), font, Color32::BLACK).size().x / self.z.max(0.01)
     }
+
+    fn text_width_with_font(&self, text: &str, size: f32, bold: bool, family: Option<&str>) -> f32 {
+        let font = family
+            .map(|name| FontId::new(size * self.z, theme::cell_family(name, bold, false)))
+            .unwrap_or_else(|| if bold { theme::ui_bold(size * self.z) } else { theme::ui_font(size * self.z) });
+        self.painter.layout_no_wrap(text.to_string(), font, Color32::BLACK).size().x / self.z.max(0.01)
+    }
 }
 
 /// Paints `chart` (not necessarily on the sheet: the Recommended Charts preview) scaled to fit
@@ -118,8 +125,11 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                     p.circle_stroke(pt(*cx, *cy), r * z, Stroke::new(w * z.max(0.5), rgba(*c)));
                 }
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
-                let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
+            Prim::Text { x, y, text, size, font, color, bold, align, valign, rotation } => {
+                let font: FontId = font
+                    .as_deref()
+                    .map(|name| FontId::new(size * z, theme::cell_family(name, *bold, false)))
+                    .unwrap_or_else(|| if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) });
                 let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
                 let sz = galley.size();
                 let ax = match align {
@@ -488,6 +498,45 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
             }
         }
         return None; // inside this (topmost) slicer, but on its header/background → select/drag
+    }
+    None
+}
+
+/// Returns the chart legend under the pointer and its current chart-local origin. The hit box is
+/// deliberately generous because the rendered legend can wrap when the chart is narrow.
+pub fn legend_drag_info(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(u32, Pos2, [f32; 2])> {
+    for ch in sh.charts.iter().rev() {
+        if ch.legend == gridcraft_engine::model::LegendPos::None {
+            continue;
+        }
+        let r = anchor_rect(geo, sh, &ch.anchor);
+        if !r.contains(p) {
+            continue;
+        }
+        let w = ch.anchor.width.max(1.0);
+        let h = ch.anchor.height.max(1.0);
+        let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
+        let title_used = ch.title.as_deref().filter(|t| !t.trim().is_empty()).map(|_| 14.0_f32.min(h * 0.12).max(4.0) * 1.3 + 4.0).unwrap_or(0.0);
+        let area = egui::Rect::from_min_size(pos2(pad, pad + title_used), vec2((w - 2.0 * pad).max(4.0), (h - 2.0 * pad - title_used).max(4.0)));
+        let origin = if let Some(origin) = ch.legend_position {
+            origin
+        } else {
+            match ch.legend {
+                gridcraft_engine::model::LegendPos::Top => [area.left(), area.top()],
+                gridcraft_engine::model::LegendPos::Bottom => [area.left(), (area.bottom() - 28.0).max(area.top())],
+                gridcraft_engine::model::LegendPos::Left => [area.left(), (area.center().y - 28.0).max(area.top())],
+                gridcraft_engine::model::LegendPos::Right => [(area.right() - (w * 0.35)).max(area.left()), (area.center().y - 28.0).max(area.top())],
+                gridcraft_engine::model::LegendPos::None => continue,
+            }
+        };
+        let side = matches!(ch.legend, gridcraft_engine::model::LegendPos::Left | gridcraft_engine::model::LegendPos::Right);
+        let box_w = if side { (w * 0.4).max(80.0) } else { (w * 0.85).max(100.0) };
+        let box_h = if side { (h * 0.45).max(32.0) } else { 34.0 };
+        let local = pos2((p.x - r.left()) / geo.z.max(0.01), (p.y - r.top()) / geo.z.max(0.01));
+        let hit = egui::Rect::from_min_size(pos2(origin[0], origin[1]), vec2(box_w, box_h));
+        if hit.contains(local) {
+            return Some((ch.id, p, origin));
+        }
     }
     None
 }

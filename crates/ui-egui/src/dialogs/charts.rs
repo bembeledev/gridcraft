@@ -122,57 +122,100 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
     }
 }
 
-/// Draws chart range, series keep/remove and category-range controls and runs `chart.selectData` when something changed.
+/// Draws the compact chart data dialog. Each series is edited in its own dialog so long
+/// references do not force the parent dialog to become excessively wide.
 pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let text = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
         let label = ui.label(label);
         let mut v = text(d, key);
-        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(420.0)).labelled_by(label.id).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(960.0)).labelled_by(label.id).changed() {
             d.values.insert(key.into(), json!(v));
         }
     };
     edit(ui, d, "range", "Chart data range:");
     ui.add_space(6.0);
     ui.strong("Legend Entries (Series)");
-    let names: Vec<String> =
-        d.values.get("names").and_then(Json::as_array).map(|a| a.iter().map(|n| n.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
-    let mut remove: Vec<u64> =
-        d.values.get("remove").and_then(Json::as_array).map(|a| a.iter().filter_map(Json::as_u64).collect()).unwrap_or_default();
-    let kept = names.len().saturating_sub(remove.len());
-    egui::ScrollArea::vertical().id_salt("series").max_height(160.0).show(ui, |ui| {
-        for (i, name) in names.iter().enumerate() {
-            let i = i as u64;
-            let removed = remove.contains(&i);
-            ui.horizontal(|ui| {
-                let label = if name.is_empty() { format!("Series{}", i + 1) } else { name.clone() };
-                ui.label(if removed { egui::RichText::new(label).strikethrough().weak() } else { egui::RichText::new(label) });
-                if removed {
-                    if ui.small_button("Keep").clicked() {
-                        remove.retain(|x| *x != i);
-                    }
-                } else if ui.add_enabled(kept > 1, egui::Button::new("Remove").small()).clicked() {
-                    remove.push(i);
-                }
-            });
+    ui.label("Use Select… to edit the legend title and the independent X/Y ranges for each curve.");
+    let mut rows: Vec<(String, String, String)> = d
+        .values
+        .get("series")
+        .and_then(Json::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    (
+                        item.get("name").and_then(Json::as_str).unwrap_or("").to_string(),
+                        item.get("x").and_then(Json::as_str).unwrap_or("").to_string(),
+                        item.get("y").and_then(Json::as_str).unwrap_or("").to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    egui::Grid::new("chart_series_editor").striped(true).num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
+        ui.strong("Legend title");
+        ui.strong("X values");
+        ui.strong("Y values");
+        ui.strong("");
+        ui.strong("");
+        ui.end_row();
+        let mut remove = None;
+        let mut edit = None;
+        let can_remove = rows.len() > 1;
+        for (i, (name, x, y)) in rows.iter_mut().enumerate() {
+            ui.add_sized([150.0, 24.0], egui::Label::new(egui::RichText::new(name.as_str()).strong()));
+            ui.add_sized([175.0, 24.0], egui::Label::new(egui::RichText::new(short_ref(x)).monospace()));
+            ui.add_sized([175.0, 24.0], egui::Label::new(egui::RichText::new(short_ref(y)).monospace()));
+            if ui.button("Select…").clicked() {
+                edit = Some(i);
+            }
+            if ui.add_enabled(can_remove, egui::Button::new("Remove").small()).clicked() {
+                remove = Some(i);
+            }
+            ui.end_row();
+        }
+        if let Some(i) = remove {
+            rows.remove(i);
+        }
+        if let Some(i) = edit {
+            d.values.insert("series".into(), json!(rows.iter().map(|(name, x, y)| json!({"name": name, "x": x, "y": y})).collect::<Vec<_>>()));
+            let (name, x, y) = rows.get(i).cloned().unwrap_or_default();
+            app.open_dialog("chartSeries", json!({"index": i, "name": name, "x": x, "y": y}));
         }
     });
-    d.values.insert("remove".into(), json!(remove));
-    ui.add_space(6.0);
-    edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    if ui.button("Add Series").clicked() {
+        let i = rows.len();
+        let name = format!("Series{}", i + 1);
+        rows.push((name.clone(), String::new(), String::new()));
+        app.open_dialog("chartSeries", json!({"index": i, "name": name, "x": "", "y": ""}));
+    }
+    let series: Vec<Json> = rows.iter().map(|(name, x, y)| json!({"name": name, "x": x, "y": y})).collect();
+    d.values.insert("series".into(), json!(series));
+    let uses_independent_xy = rows.len() > 1 && rows.iter().all(|(_, x, y)| !x.trim().is_empty() && !y.trim().is_empty());
+    if !uses_independent_xy {
+        ui.add_space(6.0);
+        edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    }
     ok_cancel(ui, confirm, open);
     if *confirm {
         *confirm = false;
         let mut params = serde_json::Map::new();
         params.insert("chart".into(), d.values.get("chart").cloned().unwrap_or(Json::Null));
+        let series_changed = d.values.get("series") != d.values.get("series0");
         let range_changed = text(d, "range") != text(d, "range0");
-        if range_changed {
+        if series_changed {
+            params.insert("series".into(), d.values.get("series").cloned().unwrap_or_else(|| json!([])));
+        } else if range_changed {
             params.insert("range".into(), json!(text(d, "range")));
-        } else if !remove.is_empty() {
-            // A new range rebuilds the series; removals only apply to the current ones.
+        }
+        // Keep the pre-existing command path usable for automation and older callers that still
+        // set the legacy `remove` field directly.
+        if let Some(remove) = d.values.get("remove").and_then(Json::as_array).filter(|items| !items.is_empty()) {
             params.insert("removeSeries".into(), json!(remove));
         }
-        if text(d, "categories") != text(d, "categories0") || (range_changed && !text(d, "categories").is_empty()) {
+        if !series_changed && (text(d, "categories") != text(d, "categories0") || (range_changed && !text(d, "categories").is_empty())) {
             params.insert("categories".into(), json!(text(d, "categories")));
         }
         if params.len() == 1 {
@@ -184,4 +227,88 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
     }
+}
+
+fn short_ref(value: &str) -> String {
+    const MAX: usize = 25;
+    let value = value.strip_prefix('=').unwrap_or(value);
+    if value.chars().count() <= MAX {
+        return value.to_string();
+    }
+    let end: String = value.chars().skip(value.chars().count().saturating_sub(MAX - 1)).collect();
+    format!("…{end}")
+}
+
+/// Edits one series at a time. While X or Y picking is active, clicks and drags on the sheet are
+/// routed through Dialog::pick_reference, exactly like Excel's range selector.
+pub(super) fn chart_series(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    ui.label("Legend title");
+    let mut name = series_text(d, "name");
+    if ui.add(egui::TextEdit::singleline(&mut name).desired_width(360.0)).changed() {
+        d.values.insert("name".into(), json!(name));
+    }
+    ui.add_space(6.0);
+    chart_series_field(ui, d, "x", "X values");
+    chart_series_field(ui, d, "y", "Y values");
+    ui.add_space(8.0);
+    ok_cancel(ui, confirm, open);
+    if *confirm {
+        *confirm = false;
+        if series_text(d, "y").trim().is_empty() {
+            app.message = Some((d.title.clone(), "Y values cannot be empty.".into()));
+            return;
+        }
+        let name = series_text(d, "name");
+        let x = series_text(d, "x").trim_start_matches('=').to_string();
+        let y = series_text(d, "y").trim_start_matches('=').to_string();
+        if let Some(parent) = d.back.as_mut()
+            && let Some(index) = d.values.get("index").and_then(Json::as_u64).and_then(|i| usize::try_from(i).ok())
+            && let Some(series) = parent.values.get_mut("series").and_then(Json::as_array_mut)
+            && let Some(row) = series.get_mut(index).and_then(Json::as_object_mut)
+        {
+            row.insert("name".into(), json!(name));
+            row.insert("x".into(), json!(x));
+            row.insert("y".into(), json!(y));
+        }
+        *open = false;
+    }
+}
+
+fn series_text(d: &Dialog, key: &str) -> String {
+    d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string()
+}
+
+fn chart_series_field(ui: &mut egui::Ui, d: &mut Dialog, key: &'static str, label: &str) {
+    ui.label(label);
+    ui.horizontal(|ui| {
+        let mut value = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+        let r = ui.add(egui::TextEdit::singleline(&mut value).desired_width(360.0));
+        if r.changed() {
+            d.values.insert(key.into(), json!(value));
+        }
+        if ui.button("Select…").clicked() {
+            // Point mode is formula-based. Existing chart references are stored without the
+            // leading `=`, so add it before handing the field to the shared range picker.
+            if !value.trim().is_empty() && !value.trim_start().starts_with('=') {
+                value = format!("={value}");
+                d.values.insert(key.into(), json!(value.clone()));
+            }
+            let pointed = crate::editor::formula_refs(&value).last().map(|(start, end, ..)| (*end, Some((*start, *end))));
+            let (caret, point) = pointed.unwrap_or((value.chars().count(), None));
+            d.pick = Some(super::RefPick {
+                key,
+                // Chart series keep an explicit sheet qualifier, including for the active sheet.
+                sheet: String::new(),
+                caret,
+                point,
+                anchor: gridcraft_engine::core::CellRef::new(0, 0),
+                refocus: false,
+                applies_to: String::new(),
+            });
+        }
+        let typed = r.changed();
+        if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
+            super::show::track_pick(pick, &r, typed);
+        }
+    });
 }

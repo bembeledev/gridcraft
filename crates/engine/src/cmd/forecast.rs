@@ -430,6 +430,8 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             y_title: None,
             source: None,
             by_rows: false,
+            text: Default::default(),
+            legend_position: None,
             pivot: None,
         });
         cx.wb.sheets.insert(at, Arc::new(sheet));

@@ -263,6 +263,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     };
     Ok((sheet, chart))
@@ -336,6 +338,34 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(t) = p.get("yTitle") {
             c.y_title = t.as_str().map(str::to_string);
+        }
+        if let Some(text) = p.get("text").and_then(Json::as_object) {
+            let apply = |key: &str, style: &mut gridcraft_model::ChartTextStyle| {
+                let Some(v) = text.get(key).and_then(Json::as_object) else { return };
+                if let Some(font) = v.get("font") {
+                    style.font = font.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+                }
+                if let Some(size) = v.get("size").and_then(Json::as_f64).filter(|v| v.is_finite()) {
+                    style.size = Some((size as f32).clamp(4.0, 72.0));
+                }
+            };
+            apply("general", &mut c.text.general);
+            apply("title", &mut c.text.title);
+            apply("axisLabels", &mut c.text.axis_labels);
+            apply("axisTitles", &mut c.text.axis_titles);
+            apply("legend", &mut c.text.legend);
+        }
+        if let Some(pos) = p.get("legendPosition") {
+            if pos.is_null() {
+                c.legend_position = None;
+            } else if let Some(pos) = pos.as_array()
+                && pos.len() == 2
+                && let (Some(x), Some(y)) = (pos[0].as_f64(), pos[1].as_f64())
+                && x.is_finite()
+                && y.is_finite()
+            {
+                c.legend_position = Some([x.clamp(0.0, c.anchor.width as f64) as f32, y.clamp(0.0, c.anchor.height as f64) as f32]);
+            }
         }
         if let Some(at) = at {
             c.anchor.cell = at;

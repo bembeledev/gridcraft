@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Data…",
             ["Chart Design", "Data"],
             None,
-            "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…]}",
+            "{chart?, series?: [{name?, x?, y}], range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…]}",
             has_doc,
             select_data
         ),

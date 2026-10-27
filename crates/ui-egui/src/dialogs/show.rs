@@ -122,12 +122,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
+        "selectData" => 760.0,
+        "chartSeries" => 520.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(egui::Id::unique("dialog").with(&d.name))
         .collapsible(false)
-        .resizable(false)
+        .resizable(d.name == "selectData" || d.name == "chartSeries")
         .default_width(width)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
@@ -154,6 +156,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
+                "chartSeries" => charts::chart_series(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
@@ -459,7 +462,7 @@ fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
 
 /// Keeps a picking formula box's caret, and gives it the keyboard back after a grid click put a
 /// reference in it (the click took the focus), its caret after the reference.
-fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
+pub(super) fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     if typed {
         pick.point = None;
     }

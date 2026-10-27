@@ -59,6 +59,8 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         y_title: None,
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     }
 }

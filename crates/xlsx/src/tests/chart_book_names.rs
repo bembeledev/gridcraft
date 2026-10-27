@@ -81,6 +81,8 @@ fn chart_names_are_written_qualified() {
         y_title: None,
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new("My Data"))];

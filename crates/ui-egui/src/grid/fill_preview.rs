@@ -41,12 +41,11 @@ pub(super) fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target
         .collect::<Option<_>>()?;
     let style_cell = *source.first()?;
     let format = wb.styles.get(sh.style_id(style_cell)).num_fmt.as_str();
-    if !alternate
-        && matches!(
-            gridcraft_engine::numfmt::NumberFormat::parse(format).kind(),
-            gridcraft_engine::numfmt::FormatKind::Date | gridcraft_engine::numfmt::FormatKind::Time
-        )
-    {
+    let temporal = matches!(
+        gridcraft_engine::numfmt::NumberFormat::parse(format).kind(),
+        gridcraft_engine::numfmt::FormatKind::Date | gridcraft_engine::numfmt::FormatKind::Time
+    );
+    if !alternate && temporal {
         // The fill engine applies calendar/time-specific rules. Do not show a numeric guess that
         // would disagree with the values committed when the drag ends.
         return None;
@@ -84,7 +83,7 @@ pub(super) fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target
         .map(|step| {
             let sign = if forward { 1.0 } else { -1.0 };
             let source_index = if forward { (step as usize - 1) % source.len() } else { source.len() - 1 - ((step as usize - 1) % source.len()) };
-            let raw = if alternate && numbers.len() == 1 {
+            let raw = if alternate && numbers.len() == 1 && !temporal {
                 // Ctrl/Cmd swaps the normal single-number copy behavior for a +1/-1 series.
                 numbers[0] + f64::from(step) * sign
             } else if alternate {
@@ -132,6 +131,23 @@ mod fill_preview_tests {
     fn alternate_preview_counts_up_from_a_single_number() {
         assert_eq!(preview(&[1.0], 3, true).as_deref(), Some("2\n3\n4"));
         assert_eq!(preview(&[1.0], 3, false).as_deref(), Some("1\n1\n1"));
+    }
+
+    #[test]
+    fn alternate_preview_copies_a_single_temporal_value() {
+        let mut wb = Workbook::default();
+        let mut sh = Sheet::new("Sheet1");
+        let cell = CellRef::new(0, 0);
+        let value = 45_292.0;
+        sh.set_value(cell, Value::number(value));
+        let style = wb.styles.intern(Style { num_fmt: gridcraft_engine::model::NumFmt::new("yyyy-mm-dd"), ..Style::default() });
+        sh.set_style(cell, style);
+
+        let expected = gridcraft_engine::display::value_text_as(&wb, &Value::number(value), "yyyy-mm-dd");
+        assert_eq!(
+            fill_preview_text(&wb, &sh, RangeRef::new(cell, cell), RangeRef::new(cell, CellRef::new(1, 0)), true).as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]

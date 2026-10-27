@@ -1,4 +1,4 @@
-use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
+use super::items::{Acc, ByValue, FieldItems, build_tree, collect_siblings, date_flags, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::*;
 
@@ -129,8 +129,13 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let mut col_set: HashSet<Vec<u32>> = HashSet::new();
     let mut col_leaves: HashSet<Vec<u32>> = HashSet::new();
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
-    let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
-    let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
+    // Item labels use the field's number format, else the source column's.
+    let field_fmt = |c: usize, f: &PivotField| f.number_format.clone().unwrap_or_else(|| fmt_of(c));
+    let row_fmts: Vec<String> = rows.iter().map(|(c, f)| field_fmt(*c, f)).collect();
+    let col_fmts: Vec<String> = cols.iter().map(|(c, f)| field_fmt(*c, f)).collect();
+    let row_dates: Vec<Vec<bool>> = rows.iter().map(|(c, f)| date_flags(wb, src, *c, f.date_group)).collect();
+    let col_dates: Vec<Vec<bool>> = cols.iter().map(|(c, f)| date_flags(wb, src, *c, f.date_group)).collect();
+    let is_date = |dates: &[bool], ri: usize| dates.get(ri).copied().unwrap_or(false);
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
         for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
             if let Some(sel) = &f.selected {
@@ -144,12 +149,12 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             continue;
         }
         let mut rp = Vec::with_capacity(rows.len());
-        for (((c, f), fi), fmt) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()) {
-            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
+        for ((((c, f), fi), fmt), dates) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()).zip(row_dates.iter()) {
+            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, is_date(dates, ri), ri));
         }
         let mut cp = Vec::with_capacity(cols.len());
-        for (((c, f), fi), fmt) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()) {
-            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
+        for ((((c, f), fi), fmt), dates) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()).zip(col_dates.iter()) {
+            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, is_date(dates, ri), ri));
         }
         for a in 0..=rp.len() {
             for b in 0..=cp.len() {
@@ -188,27 +193,75 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         }
     }
 
+    for (fi, (_, f)) in row_items.iter_mut().zip(rows.iter()) {
+        fi.apply(f);
+    }
+    for (fi, (_, f)) in col_items.iter_mut().zip(cols.iter()) {
+        fi.apply(f);
+    }
+
+    let get = |rp: &[u32], cp: &[u32], vi: usize| -> Option<Value> {
+        let (vs, v) = vals.get(vi)?;
+        let accs = aggs.get(&(rp.to_vec(), cp.to_vec()))?;
+        match vs {
+            ValSrc::Col(_) => accs.get(vi).map(|a| a.result(v.func)),
+            ValSrc::Calc(i) => {
+                let sum = |name: &str| -> Value {
+                    src.col(name)
+                        .and_then(|c| extra.iter().position(|x| *x == c))
+                        .and_then(|j| accs.get(k + j))
+                        .map(|a| a.result(PivotFunc::Sum))
+                        .unwrap_or(Value::Number(0.0))
+                };
+                Some(calc.value(wb, *i, &sum))
+            }
+        }
+    };
+
     // ---- axes
     let row_fields: Vec<&PivotField> = rows.iter().map(|(_, f)| *f).collect();
     let col_fields: Vec<&PivotField> = cols.iter().map(|(_, f)| *f).collect();
     let row_paths: Vec<&[u32]> = row_set.iter().map(Vec::as_slice).collect();
     let col_paths: Vec<&[u32]> = col_set.iter().map(Vec::as_slice).collect();
-    let row_tree = build_tree(&row_paths, 0, &row_fields, &row_items);
-    let col_tree = build_tree(&col_paths, 0, &col_fields, &col_items);
+    // The other-axis path a sort scope names: its items of the other axis's fields, outer first,
+    // up to the first field it doesn't name. A scope naming an item that isn't there sorts by the
+    // grand total, as the writer then drops it.
+    let scope_path = |f: &PivotField, others: &[(usize, &PivotField)], other_items: &[FieldItems]| -> Vec<u32> {
+        let mut path = Vec::new();
+        for ((_, o), oi) in others.iter().zip(other_items) {
+            let Some(e) = f.sort_scope.iter().find(|e| e.is_of(o)) else { break };
+            match oi.find(&e.item) {
+                Some(i) => path.push(i),
+                None => return Vec::new(),
+            }
+        }
+        path
+    };
+    let sorting = |f: &PivotField, others: &[(usize, &PivotField)], other_items: &[FieldItems]| {
+        let vi = f.sort_by.as_deref().and_then(|n| vals.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(n)))?;
+        Some((vi, scope_path(f, others, other_items)))
+    };
+    let row_value = |p: &[u32], other: &[u32], vi: usize| get(p, other, vi).as_ref().and_then(Value::as_f64);
+    let col_value = |p: &[u32], other: &[u32], vi: usize| get(other, p, vi).as_ref().and_then(Value::as_f64);
+    let row_by = ByValue { fields: row_fields.iter().map(|f| sorting(f, &cols, &col_items)).collect(), value: &row_value };
+    let col_by = ByValue { fields: col_fields.iter().map(|f| sorting(f, &rows, &row_items)).collect(), value: &col_value };
+    let row_tree = build_tree(&row_paths, 0, &row_fields, &row_items, &row_by);
+    let col_tree = build_tree(&col_paths, 0, &col_fields, &col_items, &col_by);
     let mut siblings: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
     collect_siblings(&row_tree, &mut Vec::new(), &mut siblings);
     let level0: Vec<u32> = row_tree.iter().map(|n| n.item).collect();
 
     let val_names: Vec<String> = vals.iter().map(|(_, v)| v.name.clone()).collect();
+    let grand_caption = pt.grand_total_caption.as_deref().unwrap_or("Grand Total");
     let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
         lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
     } else {
         if pt.layout == PivotLayout::Tabular {
-            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut lines);
+            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut Vec::new(), &mut lines);
         } else {
-            ctx.flatten(&row_tree, 0, None, &mut Vec::new(), &mut lines);
+            ctx.flatten(&row_tree, 0, None, &mut Vec::new(), &mut Vec::new(), &mut lines);
         }
         // With only Σ Values in Rows its items are the totals already.
         if pt.grand_totals_cols && !rows.is_empty() {
@@ -223,7 +276,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             if on_rows {
                 lines.extend(val_names.iter().enumerate().map(|(vi, name)| grand(format!("Total {name}"), Some(vi))));
             } else {
-                lines.push(grand("Grand Total".into(), None));
+                lines.push(grand(grand_caption.into(), None));
             }
         }
     }
@@ -231,7 +284,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     if cols.is_empty() {
         specs.push(ColSpec { kind: ColKind::Leaf, path: vec![] });
     } else {
-        flatten_cols(&col_tree, 0, &col_fields, &col_items, pt.subtotals, &mut Vec::new(), &mut specs);
+        flatten_cols(&col_tree, 0, &col_fields, &col_items, pt, &mut Vec::new(), &mut specs);
         if pt.grand_totals_rows {
             specs.push(ColSpec { kind: ColKind::Grand, path: vec![] });
         }
@@ -311,12 +364,12 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             return;
         }
         if compact {
-            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
+            g.set(r, 0, Value::text(pt.row_header_caption.as_deref().unwrap_or("Row Labels")), CellKind::Header, 0, None);
         } else {
-            // One column per row field, Σ Values ("Values") at its place.
-            let mut names: Vec<&str> = row_fields.iter().map(|f| f.source_col.as_str()).collect();
+            // One column per row field, Σ Values (its caption, "Values" by default) at its place.
+            let mut names: Vec<&str> = row_fields.iter().map(|f| f.header()).collect();
             if let Some(p) = vpos {
-                names.insert(p.min(names.len()), "Values");
+                names.insert(p.min(names.len()), pt.data_caption.as_deref().unwrap_or("Values"));
             }
             for (i, name) in names.into_iter().enumerate() {
                 g.set(r, i, Value::text(name), CellKind::Header, 0, None);
@@ -326,11 +379,25 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
 
     // ---- header rows
     if cols.is_empty() {
+        // Classic layout with one value field: its caption sits above the row headers and the
+        // value column is headed "Total" (an empty column area).
+        let classic = pt.classic_layout && !compact && k == 1 && headers_on;
+        if classic {
+            let r = g.push_row(RowKind::Header)?;
+            g.set(r, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
+        }
+        if !compact && k > 1 && !on_rows && pt.show_values_row && headers_on {
+            let r = g.push_row(RowKind::Header)?;
+            g.set(r, l, Value::text(pt.data_caption.as_deref().unwrap_or("Values")), CellKind::Header, 0, None);
+        }
         let r = g.push_row(RowKind::Header)?;
         row_header(&mut g, r);
         for (j, (_, vi)) in data_cols.iter().enumerate() {
             match vi {
-                Some(vi) => g.set(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None),
+                Some(vi) => {
+                    let caption = if classic { "Total".to_string() } else { val_name(*vi) };
+                    g.set(r, l + j, Value::text(caption), CellKind::Header, 0, None);
+                }
                 // Values on rows, no column field: the one data column is the grand total.
                 None if on_rows => g.set(r, l + j, Value::text("Total"), CellKind::Header, 0, None),
                 None => {}
@@ -342,7 +409,11 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
         }
         if headers_on {
-            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
+            let caption = if compact {
+                pt.col_header_caption.as_deref().unwrap_or("Column Labels").to_string()
+            } else {
+                col_fields.first().map(|f| f.header().to_string()).unwrap_or_default()
+            };
             g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
         }
         let levels = cols.len() + usize::from(k > 1 && !on_rows);
@@ -360,8 +431,8 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                         let same = prev.is_some_and(|p| p.kind != ColKind::Grand && p.path.get(..=lv) == spec.path.get(..=lv));
                         if !same {
                             let Some(item) = col_items.get(lv).and_then(|fi| fi.get(it)) else { continue };
-                            let fmt = if item.formatted { cols.get(lv).map(|(cc, _)| fmt_of(*cc)) } else { None };
-                            g.set(first_level + lv, c, item.value.clone(), CellKind::ColLabel, 0, fmt);
+                            let fmt = if item.formatted && item.caption.is_none() { col_fmts.get(lv).cloned() } else { None };
+                            g.set(first_level + lv, c, item.shown_value(), CellKind::ColLabel, 0, fmt);
                         }
                     }
                     if k > 1
@@ -372,7 +443,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                 }
                 ColKind::Subtotal => {
                     let lv = spec.path.len().saturating_sub(1);
-                    let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.label(*it))).unwrap_or_default();
+                    let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.shown_label(*it))).unwrap_or_default();
                     let text = match vi {
                         Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
                         _ => format!("{label} Total"),
@@ -382,7 +453,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                 ColKind::Grand => {
                     let text = match vi {
                         Some(vi) if k > 1 => format!("Total {}", val_name(*vi)),
-                        _ => "Grand Total".to_string(),
+                        _ => grand_caption.to_string(),
                     };
                     g.set(first_level, c, Value::text(text), CellKind::ColLabel, 0, None);
                 }
@@ -394,23 +465,6 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     }
 
     // ---- body
-    let get = |rp: &[u32], cp: &[u32], vi: usize| -> Option<Value> {
-        let (vs, v) = vals.get(vi)?;
-        let accs = aggs.get(&(rp.to_vec(), cp.to_vec()))?;
-        match vs {
-            ValSrc::Col(_) => accs.get(vi).map(|a| a.result(v.func)),
-            ValSrc::Calc(i) => {
-                let sum = |name: &str| -> Value {
-                    src.col(name)
-                        .and_then(|c| extra.iter().position(|x| *x == c))
-                        .and_then(|j| accs.get(k + j))
-                        .map(|a| a.result(PivotFunc::Sum))
-                        .unwrap_or(Value::Number(0.0))
-                };
-                Some(calc.value(wb, *i, &sum))
-            }
-        }
-    };
     let num = |v: &Option<Value>| v.as_ref().and_then(Value::as_f64);
     let ratio = |a: Value, b: Option<Value>| -> Value {
         match (a, b) {
@@ -455,7 +509,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                 return None;
             }
             let mut parts: Vec<String> =
-                spec.path.iter().enumerate().map(|(lv, it)| col_items.get(lv).map(|fi| fi.label(*it)).unwrap_or_default()).collect();
+                spec.path.iter().enumerate().map(|(lv, it)| col_items.get(lv).map(|fi| fi.shown_label(*it)).unwrap_or_default()).collect();
             if let Some(vi) = vi
                 && (k > 1 || parts.is_empty())
             {
@@ -501,7 +555,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             let (Some(spec), Some(vi)) = (specs.get(*si), &line_vi) else { continue };
             let Some((_, vdef)) = vals.get(*vi) else { continue };
             let cp = spec.path.as_slice();
-            let Some(raw) = get(rp, cp, *vi) else { continue };
+            let Some(raw) = get(rp, cp, *vi) else {
+                // No records: blank, or the "For empty cells show" caption (a number when it
+                // reads as one, as Excel stores `missingCaption="0"`).
+                if let Some(c) = &pt.empty_caption {
+                    let v = c.trim().parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::number).unwrap_or_else(|| Value::text(c.as_str()));
+                    let fmt = if matches!(v, Value::Number(_)) { data_fmt.get(*vi).cloned().flatten() } else { None };
+                    g.set(r, l + j, v, ck.1, 0, fmt);
+                }
+                continue;
+            };
             let shown = match vdef.show_as {
                 PivotShowAs::Normal => raw,
                 PivotShowAs::PercentOfGrandTotal => ratio(raw, get(&[], &[], *vi)),

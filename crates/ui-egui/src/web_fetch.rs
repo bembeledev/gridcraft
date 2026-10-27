@@ -75,6 +75,15 @@ impl SheetApp {
         }
     }
 
+    /// Discards a finished fetch without running its command: the worker is joined so its
+    /// result is freed, and the command (a canceled import, say) never runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn discard_fetch(&mut self) {
+        if let Some(fetch) = self.fetch.take() {
+            let _ = fetch.handle.and_then(|h| h.join().ok());
+        }
+    }
+
     /// Applies a finished fetch: the downloaded pages go to `command` as `prefetchedByUrl` and
     /// both the raw map and the command's result come back to the caller.
     #[cfg(not(target_arch = "wasm32"))]

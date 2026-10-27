@@ -254,7 +254,9 @@ impl SheetApp {
                 if polls {
                     ctx.request_repaint();
                 } else {
-                    let _ = self.poll_fetch();
+                    // Discard, don't run: a canceled import (Load, then the dialog closed)
+                    // must not create its sheet and connection behind the user's back.
+                    self.discard_fetch();
                 }
             }
         }

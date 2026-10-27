@@ -128,4 +128,6 @@ fn syntax_errors_name_the_separator_as_typed() {
     // A `)` closed too early: the stray separator is the French `;`, not the canonical `,`.
     assert_eq!(parse_input("SI(G10<1000);\"a\";\"b\"", FR, |_| false).unwrap_err().msg, "unexpected `;`");
     assert_eq!(gridcraft_formula::parse("IF(A1<1),1").unwrap_err().msg, "unexpected `,`");
+    // In an array the French column separator is `.`, not the argument `;`.
+    assert_eq!(parse_input("={1..2}", FR, |_| false).unwrap_err().msg, "array constants may only contain constants, found `.`");
 }

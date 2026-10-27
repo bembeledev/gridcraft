@@ -1161,3 +1161,34 @@ fn legacy_array_clearing_spill_anchor_recalculates_dependents() {
     assert_eq!(wb_of(&s).sheets[0].value(dependent), Value::Number(0.0));
     assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
 }
+
+#[test]
+fn clearing_styled_and_unstyled_blockers_unblocks_near_and_distant_spills() {
+    for styled in [false, true] {
+        for rows in [3, 100] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({})).unwrap();
+            let blocker = format!("A{rows}");
+            s.execute("cell.set", json!({"cell":blocker,"input":"9"})).unwrap();
+            if styled {
+                s.execute("home.bold", json!({"range":blocker})).unwrap();
+            }
+            s.execute("cell.set", json!({"cell":"A1","input":format!("=SEQUENCE({rows})")})).unwrap();
+            s.execute("cell.set", json!({"cell":"C1","input":format!("=SUM(A2:A{rows})")})).unwrap();
+            let anchor = CellRef::new(0, 0);
+            let dependent = CellRef::new(0, 2);
+            assert_eq!(wb_of(&s).sheets[0].value(anchor), Value::Error(gridcraft_engine::core::CellError::Spill));
+            s.execute("edit.clearContents", json!({"range":blocker})).unwrap();
+            let expected = Value::Number(f64::from(rows * (rows + 1) / 2 - 1));
+            assert_eq!(wb_of(&s).sheets[0].value(dependent), expected);
+            assert_eq!(wb_of(&s).sheets[0].value(CellRef::new(rows - 1, 0)), Value::Number(f64::from(rows)));
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(wb_of(&s).sheets[0].value(anchor), Value::Error(gridcraft_engine::core::CellError::Spill));
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(wb_of(&s).sheets[0].value(dependent), expected);
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+        }
+    }
+}

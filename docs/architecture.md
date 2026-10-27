@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-27 · **Change:** minor (bulk-clear spill invalidation) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -146,10 +146,13 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 - XLSX reader builds the whole workbook in memory; no streaming (#175).
 - Unmodelled XLSX parts are not carried through a save.
 
+Empty changed cells, including style-only blanks, use the per-sheet blocked-spill search. Only content-bearing edits scan nearby stored cells; dense bulk clears retain every change notification without repeatedly scanning overlapping styled blanks.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Bulk clears skip redundant nearby stored-cell scans; blocked-spill unblocking remains per sheet (#2053) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

@@ -658,7 +658,7 @@ fn write_file_with_temp(path: &str, bytes: &[u8], tmp: &str) -> Result<()> {
         opts.mode(p.mode());
     }
     let mut file = opts.open(tmp).map_err(|e| {
-        let _ = std::fs::remove_file(tmp);
+        // `create_new` failed: the path holds someone else's file, so it is left alone.
         EngineError::Other(format!("{path}: {e}"))
     })?;
     #[cfg(not(unix))]
@@ -787,9 +787,9 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn save_fails_upfront_when_the_temp_name_is_taken() {
-        // Another local user who can write the directory must not be able to point the
-        // save's predictable temporary name at their own file: creation is exclusive.
+    fn save_ignores_a_planted_temp_file_at_the_old_shared_name() {
+        // The save's temporary name is unique per save, so a file or symlink planted at the
+        // old shared `<name>.sctmp` path is never followed, truncated, or cleaned up.
         let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -797,9 +797,10 @@ mod tests {
         std::fs::write(&victim, b"original").unwrap();
         let dest = dir.join("book.xlsx");
         std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
-        let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
-        assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-        assert!(!dir.join("book.xlsx").exists(), "{err}");
+        write_file(dest.to_str().unwrap(), b"new").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"original", "the planted link's target is untouched");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new", "the save went through its own temporary file");
+        assert!(std::fs::symlink_metadata(dir.join("book.xlsx.sctmp")).is_ok(), "the planted path is left alone");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

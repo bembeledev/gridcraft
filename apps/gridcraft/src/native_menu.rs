@@ -275,6 +275,7 @@ impl NativeMenu {
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
         let mut window_menu = None;
+        let mut help_menu = None;
         for (title, entries) in tree() {
             let sub = Submenu::new(language.tr(title), true);
             labels.push((title, Label::Submenu(sub.clone())));
@@ -300,8 +301,10 @@ impl NativeMenu {
                 let _ = sub.append(&item);
             }
             let _ = menu.append(&sub);
-            if title == "Window" {
-                window_menu = Some(sub);
+            match title {
+                "Window" => window_menu = Some(sub),
+                "Help" => help_menu = Some(sub),
+                _ => {}
             }
         }
         menu.init_for_nsapp();
@@ -310,6 +313,11 @@ impl NativeMenu {
         // the submenu up in the installed main menu.
         if let Some(window) = &window_menu {
             window.set_as_windows_menu_for_nsapp();
+        }
+        // A translated title ("Aide") isn't the system's Help title, so AppKit only adds its Help
+        // search field once the submenu is registered as NSApp's helpMenu.
+        if let Some(help) = &help_menu {
+            help.set_as_help_menu_for_nsapp();
         }
         let (tx, rx) = channel();
         let ctx = ctx.clone();

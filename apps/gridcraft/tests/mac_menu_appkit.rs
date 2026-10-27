@@ -36,6 +36,7 @@ fn main() {
     let file = bar.itemAtIndex(1).and_then(|item| item.submenu()).expect("File menu");
     assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("Nouveau classeur"));
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Fenêtre"));
+    assert_eq!(nsapp.helpMenu().map(|m| m.title().to_string()).as_deref(), Some("Aide"), "AppKit knows the translated Help menu");
     app.ui.language = gridcraft_ui_egui::i18n::Language::En;
     menu.sync_language(&app);
     assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("New Workbook"));

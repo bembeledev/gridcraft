@@ -41,20 +41,22 @@ pub(super) fn chart_title(chart: &Chart, data: &ChartData) -> Option<String> {
 }
 
 pub(super) fn axis_titles(ctx: &mut Ctx, chart: &Chart, mut area: Bx) -> Bx {
-    let lh = AXIS_TITLE_SIZE * 1.4 + 2.0;
+    let title_size = ctx.size(TextRole::AxisTitles, AXIS_TITLE_SIZE);
+    let lh = title_size * 1.4 + 2.0;
     if let Some(t) = chart.x_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        let t = ctx.fit(t, AXIS_TITLE_SIZE, area.w);
-        ctx.text(area.cx(), area.bottom(), &t, AXIS_TITLE_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+        let t = ctx.fit_role(t, AXIS_TITLE_SIZE, area.w, TextRole::AxisTitles);
+        ctx.text_role(TextRole::AxisTitles, area.cx(), area.bottom(), &t, AXIS_TITLE_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
         area.h -= lh;
     }
     if let Some(t) = chart.y_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        let t = ctx.fit(t, AXIS_TITLE_SIZE, area.h);
+        let t = ctx.fit_role(t, AXIS_TITLE_SIZE, area.h, TextRole::AxisTitles);
         if !t.is_empty() {
             ctx.out.push(Prim::Text {
                 x: area.x,
                 y: area.cy(),
                 text: t,
-                size: AXIS_TITLE_SIZE,
+                size: title_size,
+                font: ctx.font(TextRole::AxisTitles),
                 color: TEXT,
                 bold: false,
                 align: HAlign::Center,
@@ -98,16 +100,16 @@ impl ValAxis<'_> {
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
-    let ls = LABEL_SIZE;
+    let ls = ctx.size(TextRole::AxisLabels, LABEL_SIZE);
     let lh = ls * 1.4;
     let ylabels = y.labels();
-    let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+    let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels)).fold(0.0f32, f32::max);
     if !horizontal {
         let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
         let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
-            (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
+            (None, CatAxis::Numeric(s, f)) => (ctx.tw_role(&f.format(s.max, Some(s.step)), LABEL_SIZE, TextRole::AxisLabels) / 2.0).min(area.w * 0.2),
             _ => 4.0,
         };
         let levels = match &cat {
@@ -123,12 +125,12 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             if grid {
                 ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
             }
-            ctx.text(plot.x - 4.0, yy, t, ls, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text_role(TextRole::AxisLabels, plot.x - 4.0, yy, t, LABEL_SIZE, TEXT, HAlign::Right, VAlign::Middle);
         }
         if let (Some(a), Some(l)) = (y2, &y2labels) {
             for (v, t) in l {
                 let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
-                ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, HAlign::Left, VAlign::Middle);
+                ctx.text_role(TextRole::AxisLabels, plot.right() + 4.0, yy, t, LABEL_SIZE, TEXT, HAlign::Left, VAlign::Middle);
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -138,11 +140,20 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(l, outer) => {
                 let n = l.len().max(1);
                 let cw = plot.w / n as f32;
-                let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+                let lw = l.iter().take(2000).map(|t| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels)).fold(0.0f32, f32::max);
                 let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
                 for (j, t) in l.iter().enumerate().step_by(k) {
-                    let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                    let t = ctx.fit_role(t, LABEL_SIZE, cw * k as f32 - 2.0, TextRole::AxisLabels);
+                    ctx.text_role(
+                        TextRole::AxisLabels,
+                        plot.x + (j as f32 + 0.5) * cw,
+                        plot.bottom() + 3.0,
+                        &t,
+                        LABEL_SIZE,
+                        TEXT,
+                        HAlign::Center,
+                        VAlign::Top,
+                    );
                 }
                 // Outer levels, one row each below the labels: a group's name centred under its
                 // categories, and a separator at each group boundary down through the rows.
@@ -151,8 +162,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                     for (first, end) in level_groups(level, n) {
                         let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                            let t = ctx.fit(t, ls, x1 - x0 - 2.0);
-                            ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                            let t = ctx.fit_role(t, LABEL_SIZE, x1 - x0 - 2.0, TextRole::AxisLabels);
+                            ctx.text_role(TextRole::AxisLabels, (x0 + x1) / 2.0, top, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Top);
                         }
                         if first > 0 {
                             ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
@@ -164,12 +175,12 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Numeric(s, f) => {
                 let ticks = s.ticks();
                 let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, Some(s.step))).collect();
-                let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+                let lw = labels.iter().map(|t| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels)).fold(0.0f32, f32::max);
                 let slot = plot.w / ticks.len().max(1) as f32;
                 let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
                 for (v, t) in ticks.iter().zip(&labels).step_by(k) {
                     let xx = plot.x + s.frac(*v) * plot.w;
-                    ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, HAlign::Center, VAlign::Top);
+                    ctx.text_role(TextRole::AxisLabels, xx, plot.bottom() + 3.0, t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Top);
                 }
                 if s.min <= 0.0 && s.max >= 0.0 {
                     let xx = plot.x + s.frac(0.0) * plot.w;
@@ -183,12 +194,14 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(l, o) => (l.to_vec(), o),
             CatAxis::Numeric(..) => (vec![], &[]),
         };
-        let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
+        let lw = (labels.iter().take(2000).map(|t| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
         // Outer levels stand in columns left of the labels, each as wide as its longest name.
-        let level_w: Vec<f32> =
-            outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+        let level_w: Vec<f32> = outer
+            .iter()
+            .map(|l| (l.iter().take(2000).map(|t| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15))
+            .collect();
         let levels_w: f32 = level_w.iter().sum();
-        let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
+        let right = ylabels.last().map(|(_, t)| ctx.tw_role(t, LABEL_SIZE, TextRole::AxisLabels) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
         let plot = Bx { x: area.x + lw + levels_w, y: area.y + 2.0, w: area.w - lw - levels_w - right, h: area.h - lh - 6.0 };
         if !plot.ok() {
             return plot;
@@ -202,7 +215,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                 ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
             }
             if i % k == 0 {
-                ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, HAlign::Center, VAlign::Top);
+                ctx.text_role(TextRole::AxisLabels, xx, plot.bottom() + 3.0, t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Top);
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -212,8 +225,17 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let ch = plot.h / n as f32;
         let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
         for (j, t) in labels.iter().enumerate().step_by(k) {
-            let t = ctx.fit(t, ls, lw - 6.0);
-            ctx.text(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, HAlign::Right, VAlign::Middle);
+            let t = ctx.fit_role(t, LABEL_SIZE, lw - 6.0, TextRole::AxisLabels);
+            ctx.text_role(
+                TextRole::AxisLabels,
+                plot.x - 4.0,
+                plot.bottom() - (j as f32 + 0.5) * ch,
+                &t,
+                LABEL_SIZE,
+                TEXT,
+                HAlign::Right,
+                VAlign::Middle,
+            );
         }
         // Outer levels: a group's name centred beside its categories, separators at the
         // boundaries running right to the axis.
@@ -223,8 +245,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             for (first, end) in level_groups(level, n) {
                 let (y0, y1) = (plot.bottom() - end as f32 * ch, plot.bottom() - first as f32 * ch);
                 if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                    let t = ctx.fit(t, ls, w - 4.0);
-                    ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, HAlign::Center, VAlign::Middle);
+                    let t = ctx.fit_role(t, LABEL_SIZE, w - 4.0, TextRole::AxisLabels);
+                    ctx.text_role(TextRole::AxisLabels, (x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Middle);
                 }
                 if first > 0 {
                     ctx.hline(x0, plot.x, y1, AXIS, 0.75);

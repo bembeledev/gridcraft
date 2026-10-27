@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ChartTextStyle, ChartTextStyles, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -48,12 +48,76 @@ const MAX_LABELS: usize = 200;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    text_styles: &'a ChartTextStyles,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TextRole {
+    General,
+    Title,
+    AxisLabels,
+    AxisTitles,
+    Legend,
 }
 
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
         let w = self.m.text_width(s, size, false);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
+    }
+    fn style(&self, role: TextRole) -> &ChartTextStyle {
+        match role {
+            TextRole::General => &self.text_styles.general,
+            TextRole::Title => &self.text_styles.title,
+            TextRole::AxisLabels => &self.text_styles.axis_labels,
+            TextRole::AxisTitles => &self.text_styles.axis_titles,
+            TextRole::Legend => &self.text_styles.legend,
+        }
+    }
+    fn font(&self, role: TextRole) -> Option<String> {
+        self.style(role).font.clone().or_else(|| self.text_styles.general.font.clone())
+    }
+    fn size(&self, role: TextRole, fallback: f32) -> f32 {
+        self.style(role).size.or(self.text_styles.general.size).unwrap_or(fallback).clamp(1.0, 200.0)
+    }
+    fn tw_role(&self, s: &str, fallback: f32, role: TextRole) -> f32 {
+        let size = self.size(role, fallback);
+        let font = self.font(role);
+        let w = self.m.text_width_with_font(s, size, false, font.as_deref());
+        if w.is_finite() { w.max(0.0) } else { 0.0 }
+    }
+    fn fit_role(&self, s: &str, fallback: f32, maxw: f32, role: TextRole) -> String {
+        if self.tw_role(s, fallback, role) <= maxw {
+            return s.to_string();
+        }
+        let chars: Vec<char> = s.chars().collect();
+        let mut n = chars.len().min(400);
+        while n > 0 {
+            n -= 1;
+            let t: String = chars.iter().take(n).collect::<String>() + "…";
+            if self.tw_role(&t, fallback, role) <= maxw {
+                return if n == 0 { String::new() } else { t };
+            }
+        }
+        String::new()
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn text_role(&mut self, role: TextRole, x: f32, y: f32, s: &str, fallback: f32, color: Rgba, align: HAlign, valign: VAlign) {
+        if s.is_empty() {
+            return;
+        }
+        self.out.push(Prim::Text {
+            x,
+            y,
+            text: s.to_string(),
+            size: self.size(role, fallback),
+            font: self.font(role),
+            color,
+            bold: false,
+            align,
+            valign,
+            rotation: 0.0,
+        });
     }
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
         if self.tw(s, size) <= maxw {
@@ -75,7 +139,18 @@ impl Ctx<'_> {
         if s.is_empty() {
             return;
         }
-        self.out.push(Prim::Text { x, y, text: s.to_string(), size, color, bold: false, align, valign, rotation: 0.0 });
+        self.out.push(Prim::Text {
+            x,
+            y,
+            text: s.to_string(),
+            size,
+            font: self.font(TextRole::General),
+            color,
+            bold: false,
+            align,
+            valign,
+            rotation: 0.0,
+        });
     }
     fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Rgba, stroke: Option<(Rgba, f32)>) {
         self.out.push(Prim::Rect { x, y, w, h, fill: Some(fill), stroke, radius: 0.0 });
@@ -128,21 +203,21 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, text_styles: &chart.text };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
-        let size = TITLE_SIZE.min(h * 0.12).max(4.0);
-        let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, HAlign::Center, VAlign::Top);
+        let size = ctx.size(TextRole::Title, TITLE_SIZE).min(h * 0.12).max(4.0);
+        let t = ctx.fit_role(&t, TITLE_SIZE, area.w, TextRole::Title);
+        ctx.text_role(TextRole::Title, w / 2.0, area.y, &t, TITLE_SIZE, TEXT, HAlign::Center, VAlign::Top);
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;
     }
     let entries = legend_entries(chart, &data);
     if !entries.is_empty() && area.ok() {
-        area = draw_legend(&mut ctx, &entries, chart.legend, area);
+        area = draw_legend(&mut ctx, &entries, chart.legend, area, chart.legend_position);
     }
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
@@ -152,6 +227,9 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
 
 fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     use ChartKind::*;
+    let independent_numeric_line = matches!(chart.kind, Line | LineMarkers)
+        && data.series.len() > 1
+        && data.series.iter().all(|s| s.x.as_ref().is_some_and(|xs| !xs.is_empty()));
     match chart.kind {
         Pie => pie(ctx, chart, data, area, 0.0, false),
         Doughnut => pie(ctx, chart, data, area, 0.5, false),
@@ -167,6 +245,13 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             match chart.kind {
                 BarClustered | BarStacked | BarStacked100 => cartesian(ctx, chart, data, area, true),
                 Scatter | ScatterLines | Bubble => scatter(ctx, chart, data, area),
+                Line | LineMarkers if independent_numeric_line => {
+                    // Reuse the scatter renderer so each series keeps its own numeric X range.
+                    // ScatterLines also draws the connecting segments and markers.
+                    let mut numeric_chart = chart.clone();
+                    numeric_chart.kind = ScatterLines;
+                    scatter(ctx, &numeric_chart, data, area);
+                }
                 Histogram => histogram(ctx, chart, data, area),
                 Waterfall => waterfall(ctx, chart, data, area),
                 BoxWhisker => box_whisker(ctx, chart, data, area),
@@ -244,11 +329,11 @@ pub(crate) fn finalize(prims: Vec<Prim>, w: f32, h: f32) -> Vec<Prim> {
                 }
                 Some(Prim::Circle { cx: x, cy: y, r, fill, stroke: clamp_stroke(stroke) })
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+            Prim::Text { x, y, text, size, font, color, bold, align, valign, rotation } => {
                 if !(fin(x) && fin(y) && fin(size) && fin(rotation)) || text.is_empty() {
                     return None;
                 }
-                Some(Prim::Text { x: cx(x), y: cy(y), text, size: size.clamp(1.0, 200.0), color, bold, align, valign, rotation })
+                Some(Prim::Text { x: cx(x), y: cy(y), text, size: size.clamp(1.0, 200.0), font, color, bold, align, valign, rotation })
             }
         })
         .collect()

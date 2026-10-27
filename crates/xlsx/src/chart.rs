@@ -274,6 +274,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
     })
 }

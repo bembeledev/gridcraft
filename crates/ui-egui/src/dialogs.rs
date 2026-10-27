@@ -930,11 +930,23 @@ impl Dialog {
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
                     let data = gridcraft_chart::resolve(&doc.wb, si, ch);
-                    let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
+                    let series: Vec<Json> = ch
+                        .series
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| {
+                            json!({
+                                "name": s.name.clone().unwrap_or_else(|| data.series.get(i).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series{}", i + 1))),
+                                "x": s.categories.clone().unwrap_or_default(),
+                                "y": s.values.clone(),
+                            })
+                        })
+                        .collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
-                    Some((ch.source.clone().unwrap_or_default(), cats, names))
+                    let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
+                    Some((ch.source.clone().unwrap_or_default(), cats, series, names))
                 });
-                let Some((range, cats, names)) = found else {
+                let Some((range, cats, series, names)) = found else {
                     app.message = Some(("Select Data".into(), "Select a chart first.".into()));
                     return None;
                 };
@@ -942,8 +954,22 @@ impl Dialog {
                 Dialog::custom(
                     "selectData",
                     "Select Data Source",
-                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "remove": []}),
+                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "series": series, "series0": series, "remove": []}),
                 )
+            }
+            "chartSeries" => {
+                let mut d = Dialog::custom(
+                    "chartSeries",
+                    "Edit Series",
+                    json!({
+                        "index": p("index"),
+                        "name": p("name"),
+                        "x": p("x"),
+                        "y": p("y"),
+                    }),
+                );
+                d.focus_first_field = false;
+                d
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
             "macros" => {
@@ -1028,6 +1054,23 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_series_range_picker_replaces_an_existing_reference() {
+        let mut d = Dialog::custom("chartSeries", "Edit Series", json!({"x": "=Sheet1!$C$3:$C$130"}));
+        d.pick = Some(RefPick {
+            key: "x",
+            sheet: String::new(),
+            caret: 19,
+            point: Some((1, 19)),
+            anchor: CellRef::new(0, 0),
+            refocus: false,
+            applies_to: String::new(),
+        });
+        d.pick_reference(CellRef::new(2, 4), "Sheet1", false);
+        d.pick_reference(CellRef::new(129, 4), "Sheet1", true);
+        assert_eq!(d.values["x"], json!("=Sheet1!$E$3:$E$130"));
+    }
 
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {

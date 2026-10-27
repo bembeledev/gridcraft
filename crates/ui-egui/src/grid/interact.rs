@@ -122,6 +122,13 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                 app.grid.pane = Some("formatChart".into());
             }
             if primary_drag {
+                if kind == "chart"
+                    && let Some((legend_id, start, orig)) = crate::chartview::legend_drag_info(geo, sh, p)
+                    && legend_id == id
+                {
+                    app.grid.drag = Drag::ChartLegend { id, start, orig };
+                    return;
+                }
                 let a = object_anchor(sh, kind, id);
                 let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
                 if let Some(a) = a {
@@ -514,6 +521,11 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                     json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0.max(0.0) - sh.col_left(nc.col) as f32, "dy": y0.max(0.0) - sh.row_top(nc.row) as f32})
                 };
                 let _ = app.session.run("object.move", params);
+                coalesce_last_undo(app);
+            }
+            Drag::ChartLegend { id, start, orig } => {
+                let d = (p - start) / geo.z.max(0.01);
+                let _ = app.session.run("chart.set", json!({"chart": id, "legendPosition": [orig[0] + d.x, orig[1] + d.y]}));
                 coalesce_last_undo(app);
             }
             Drag::None => {}

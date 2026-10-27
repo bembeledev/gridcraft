@@ -68,7 +68,7 @@ fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
                 paint(&mut out, *fill, *stroke);
                 out.push_str("/>");
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+            Prim::Text { x, y, text, size, font, color, bold, align, valign, rotation } => {
                 // Baseline offsets as in the PDF export.
                 let dy = match valign {
                     VAlign::Top => size * 0.78,
@@ -81,6 +81,9 @@ fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
                     HAlign::Right => "end",
                 };
                 let _ = write!(out, "<text x=\"{}\" y=\"{}\" font-size=\"{}\" text-anchor=\"{anchor}\"", num(*x), num(y + dy), num(*size));
+                if let Some(font) = font.as_deref() {
+                    let _ = write!(out, " font-family=\"{}\"", xml_attr(font));
+                }
                 if *bold {
                     out.push_str(" font-weight=\"bold\"");
                 }
@@ -132,6 +135,10 @@ fn hex(c: Rgba) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+fn xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 fn opacity(attr: &str, c: Rgba) -> String {
     if c[3] == 255 { String::new() } else { format!(" {attr}-opacity=\"{:.2}\"", f32::from(c[3]) / 255.0) }
 }
@@ -163,6 +170,7 @@ mod tests {
                 y: 6.0,
                 text: "A<B".into(),
                 size: 10.0,
+                font: None,
                 color: red,
                 bold: true,
                 align: HAlign::Center,

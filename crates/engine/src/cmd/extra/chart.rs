@@ -37,7 +37,8 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                         Some("right") => LegendPos::Right,
                         _ => LegendPos::Bottom,
                     }
-                }
+                };
+                c.legend_position = None;
             }
             "dataLabels" => c.data_labels = on,
             "gridlines" => c.gridlines = on,
@@ -124,6 +125,7 @@ pub(super) fn quick_layout(s: &mut Session, p: &Json) -> Result<Json> {
             _ => (LegendPos::Right, false, true, false),
         };
         c.legend = legend;
+        c.legend_position = None;
         c.data_labels = labels;
         c.gridlines = grid;
         if axes {
@@ -161,6 +163,35 @@ pub(super) fn change_colors(s: &mut Session, p: &Json) -> Result<Json> {
 
 pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
+    // Explicit series keep each series' name, X range and Y range independent. This is the
+    // representation needed by scatter charts whose curves do not share one X axis.
+    let explicit_series = match p.get("series") {
+        None => None,
+        Some(Json::Array(items)) => {
+            if items.is_empty() {
+                return Err(bad("chart.selectData", "`series` must contain at least one series"));
+            }
+            if items.len() > 4096 {
+                return Err(bad("chart.selectData", "too many chart series"));
+            }
+            let mut series = Vec::with_capacity(items.len());
+            for item in items {
+                let obj = item.as_object().ok_or_else(|| bad("chart.selectData", "each series must be an object"))?;
+                let name = obj.get("name").and_then(Json::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+                let x = obj.get("x").and_then(Json::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+                let y = obj
+                    .get("y")
+                    .and_then(Json::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| bad("chart.selectData", "each series needs a non-empty Y range"))?
+                    .to_string();
+                series.push(Series { name, categories: x, values: y, ..Series::default() });
+            }
+            Some(series)
+        }
+        Some(_) => return Err(bad("chart.selectData", "`series` must be an array")),
+    };
     // A new data range rebuilds the series, as in Excel's Select Data › Chart data range.
     let rebuilt = match str_param(p, "range") {
         Some(range) => {
@@ -205,10 +236,15 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_default();
     remove.sort_unstable();
     remove.dedup();
-    if rebuilt.is_none() && categories.is_none() && remove.is_empty() {
-        return Err(bad("chart.selectData", "missing `range`, `categories` or `removeSeries`"));
+    if explicit_series.is_none() && rebuilt.is_none() && categories.is_none() && remove.is_empty() {
+        return Err(bad("chart.selectData", "missing `series`, `range`, `categories` or `removeSeries`"));
     }
     with_chart(s, p, move |c| {
+        if let Some(series) = explicit_series {
+            c.series = series;
+            c.source = None;
+            c.by_rows = false;
+        }
         if let Some((series, source, by_rows)) = rebuilt {
             c.series = series;
             crate::cmd::insert::scatter_x_from_first(c.kind, &mut c.series);

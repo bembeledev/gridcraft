@@ -541,6 +541,37 @@ impl Trendline {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChartTextStyle {
+    /// Font family override. `None` follows the workbook/UI fallback font.
+    #[serde(default)]
+    pub font: Option<String>,
+    /// Font size in chart points. `None` keeps the automatic size for the role.
+    #[serde(default)]
+    pub size: Option<f32>,
+}
+
+impl Default for ChartTextStyle {
+    fn default() -> Self {
+        Self { font: None, size: None }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartTextStyles {
+    /// Global fallback for all chart text.
+    #[serde(default)]
+    pub general: ChartTextStyle,
+    #[serde(default)]
+    pub title: ChartTextStyle,
+    #[serde(default)]
+    pub axis_labels: ChartTextStyle,
+    #[serde(default)]
+    pub axis_titles: ChartTextStyle,
+    #[serde(default)]
+    pub legend: ChartTextStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
     pub kind: ChartKind,
@@ -556,6 +587,12 @@ pub struct Chart {
     /// Source range when created from a selection (for Switch Row/Column).
     pub source: Option<String>,
     pub by_rows: bool,
+    /// Typography overrides for the chart title, axes, legend and general labels.
+    #[serde(default)]
+    pub text: ChartTextStyles,
+    /// Optional free legend position in chart coordinates: top-left `(x, y)`.
+    #[serde(default)]
+    pub legend_position: Option<[f32; 2]>,
     /// A PivotChart's PivotTable (`Sheet2!PivotTable1`): its series are rebuilt from the report
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]

@@ -200,12 +200,20 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    ui.collapsing("Fonts & Text", |ui| {
+        ui.label("Enter a font family name, or leave it empty to use the automatic font.");
+        chart_text_style_row(app, ui, id, "General", "general", &chart.text.general, 10.0);
+        chart_text_style_row(app, ui, id, "Chart title", "title", &chart.text.title, 14.0);
+        chart_text_style_row(app, ui, id, "Axis numbers", "axisLabels", &chart.text.axis_labels, 9.0);
+        chart_text_style_row(app, ui, id, "Axis titles", "axisTitles", &chart.text.axis_titles, 10.0);
+        chart_text_style_row(app, ui, id, "Legend", "legend", &chart.text.legend, 9.0);
+    });
     ui.collapsing("Legend", |ui| {
         ui.horizontal(|ui| {
             for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
                 let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
                 if ui.selectable_label(cur, l).clicked() {
-                    app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
+                    app.run_or_alert("chart.set", json!({"chart": id, "legend": v, "legendPosition": Json::Null}));
                 }
             }
         });
@@ -288,6 +296,36 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             ui.data_mut(|d| d.insert_temp(draft, (w, h)));
         } else {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
+        }
+    });
+}
+
+fn chart_text_style_row(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    chart: u32,
+    label: &str,
+    key: &str,
+    style: &gridcraft_engine::model::ChartTextStyle,
+    fallback_size: f32,
+) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let font_id = egui::Id::unique(("gridcraft.chart_font", chart, key));
+        if let Some(font) = crate::widgets::committed_text(ui, font_id, style.font.as_deref().unwrap_or(""), None) {
+            let mut role = serde_json::Map::new();
+            role.insert("font".into(), if font.trim().is_empty() { Json::Null } else { json!(font.trim()) });
+            let mut text = serde_json::Map::new();
+            text.insert(key.into(), Json::Object(role));
+            app.run_or_alert("chart.set", json!({"chart": chart, "text": text}));
+        }
+        let mut size = style.size.unwrap_or(fallback_size);
+        if ui.add(egui::DragValue::new(&mut size).prefix("Size ").range(4.0..=72.0)).changed() {
+            let mut role = serde_json::Map::new();
+            role.insert("size".into(), json!(size));
+            let mut text = serde_json::Map::new();
+            text.insert(key.into(), Json::Object(role));
+            app.run_or_alert("chart.set", json!({"chart": chart, "text": text}));
         }
     });
 }

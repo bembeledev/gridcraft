@@ -135,7 +135,7 @@ pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf)
                 let (px, py) = xf.p(*cx, *cy);
                 pg.circle(px, py, r * k, fill.map(blend), stroke.map(|(c, w)| (blend(c), (w * k).max(0.1))));
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+            Prim::Text { x, y, text, size, color, bold, align, valign, rotation, .. } => {
                 let font = if *bold { Font::HelveticaBold } else { Font::Helvetica };
                 let size = size * k;
                 let w = gridcraft_pdf::text_width(font, size, text);

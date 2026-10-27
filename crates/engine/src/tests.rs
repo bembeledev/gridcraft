@@ -201,6 +201,34 @@ fn chart_category_axis_from_blank_corner_and_select_data() {
 }
 
 #[test]
+fn chart_select_data_accepts_independent_series_ranges() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[0, 10], [1, 20], [2, 30]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D1", "values": [[100, 7], [200, 9], [300, 11]]})).unwrap();
+    s.execute("insert.chart", json!({"type": "scatter", "range": "A1:B3"})).unwrap();
+
+    s.execute(
+        "chart.selectData",
+        json!({
+            "series": [
+                {"name": "First curve", "x": "Sheet1!$A$1:$A$3", "y": "Sheet1!$B$1:$B$3"},
+                {"name": "Second curve", "x": "Sheet1!$D$1:$D$3", "y": "Sheet1!$E$1:$E$3"}
+            ]
+        }),
+    )
+    .unwrap();
+
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!(c.series.len(), 2);
+    assert_eq!(c.series[0].name.as_deref(), Some("First curve"));
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$A$1:$A$3"));
+    assert_eq!(c.series[0].values, "Sheet1!$B$1:$B$3");
+    assert_eq!(c.series[1].name.as_deref(), Some("Second curve"));
+    assert_eq!(c.series[1].categories.as_deref(), Some("Sheet1!$D$1:$D$3"));
+    assert_eq!(c.series[1].values, "Sheet1!$E$1:$E$3");
+}
+
+#[test]
 fn entry_and_text_paste_use_inherited_formats_and_cell_overrides() {
     let mut s = s();
     s.execute("home.bold", json!({"range": "B:B", "on": true})).unwrap();

@@ -131,6 +131,12 @@ pub enum Drag {
         orig: (CellRef, f32, f32, f32, f32),
         resize: bool,
     },
+    /// Dragging a chart legend inside its chart.
+    ChartLegend {
+        id: u32,
+        start: Pos2,
+        orig: [f32; 2],
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo

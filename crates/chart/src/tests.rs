@@ -49,6 +49,8 @@ fn chart(kind: ChartKind) -> Chart {
         y_title: Some("Revenue".into()),
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     }
 }
@@ -379,6 +381,80 @@ fn scatter_with_text_x_values_numbers_the_points() {
         c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
         assert_eq!(resolve(&wb, 0, &c).series[0].x, Some(vec![Some(0.0), Some(10.0), Some(20.0)]));
     }
+}
+
+#[test]
+fn line_chart_with_independent_numeric_x_uses_a_numeric_axis() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for (row, (x1, y1, x2, y2)) in [(0.0, 1.0, 0.0, 2.0), (1.0, 3.0, 2.0, 4.0), (4.0, 2.0, 4.0, 1.0)].into_iter().enumerate() {
+        let r = row as u32;
+        sh.set_value(CellRef::new(r, 0), Value::Number(x1));
+        sh.set_value(CellRef::new(r, 1), Value::Number(y1));
+        sh.set_value(CellRef::new(r, 2), Value::Number(x2));
+        sh.set_value(CellRef::new(r, 3), Value::Number(y2));
+    }
+    let mut c = chart(ChartKind::Line);
+    c.data_labels = false;
+    c.series = vec![
+        Series {
+            categories: Some("Sheet1!$A$1:$A$3".into()),
+            values: "Sheet1!$B$1:$B$3".into(),
+            color: Some(Color::Rgb(0x010203)),
+            ..Default::default()
+        },
+        Series {
+            categories: Some("Sheet1!$C$1:$C$3".into()),
+            values: "Sheet1!$D$1:$D$3".into(),
+            color: Some(Color::Rgb(0x040506)),
+            ..Default::default()
+        },
+    ];
+
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].x, Some(vec![Some(0.0), Some(1.0), Some(4.0)]));
+    assert_eq!(d.series[1].x, Some(vec![Some(0.0), Some(2.0), Some(4.0)]));
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let lines: Vec<&Vec<[f32; 2]>> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Line { pts, color, .. } if *color == [1, 2, 3, 255] => Some(pts),
+            _ => None,
+        })
+        .collect();
+    assert!(!lines.is_empty());
+    let pts = lines.iter().max_by_key(|pts| pts.len()).copied().unwrap();
+    let first = pts[1][0] - pts[0][0];
+    let second = pts[2][0] - pts[1][0];
+    assert!(second > first * 2.0, "line X coordinates are still category-spaced: {pts:?}");
+}
+
+#[test]
+fn chart_text_styles_reach_title_axis_labels_and_legend_primitives() {
+    let mut c = chart(ChartKind::Line);
+    c.data_labels = false;
+    c.text.title.font = Some("Test Title Font".into());
+    c.text.title.size = Some(22.0);
+    c.text.axis_labels.font = Some("Test Axis Font".into());
+    c.text.axis_labels.size = Some(15.0);
+    c.text.legend.font = Some("Test Legend Font".into());
+    c.text.legend.size = Some(13.0);
+    let prims = render(&c, &sample(ChartKind::Line), 640.0, 400.0, &ApproxMeasure);
+    let title = prims.iter().find_map(|p| match p {
+        Prim::Text { text, size, font, .. } if text == "Quarterly Sales" => Some((*size, font.clone())),
+        _ => None,
+    });
+    assert_eq!(title, Some((22.0, Some("Test Title Font".into()))));
+    let axis_label = prims.iter().find_map(|p| match p {
+        Prim::Text { size, font, .. } if (*size - 15.0).abs() < f32::EPSILON => Some((*size, font.clone())),
+        _ => None,
+    });
+    assert_eq!(axis_label, Some((15.0, Some("Test Axis Font".into()))));
+    let legend_label = prims.iter().find_map(|p| match p {
+        Prim::Text { text, size, font, .. } if text == "North" => Some((*size, font.clone())),
+        _ => None,
+    });
+    assert_eq!(legend_label, Some((13.0, Some("Test Legend Font".into()))));
 }
 
 fn pixel(img: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {

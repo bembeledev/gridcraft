@@ -220,11 +220,26 @@ pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
     if chart.kind == ChartKind::Combo { effective_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i) } else { chart.kind }
 }
 
+/// A line chart normally uses one shared category axis.  When several series
+/// provide different numeric category ranges, however, those ranges are really
+/// independent X coordinates and must be preserved for numeric rendering.
+fn has_independent_numeric_x(wb: &Workbook, sheet: usize, chart: &Chart) -> bool {
+    if !matches!(chart.kind, ChartKind::Line | ChartKind::LineMarkers) || chart.series.len() < 2 {
+        return false;
+    }
+    let formulas: Vec<&str> = chart.series.iter().filter_map(|s| s.categories.as_deref()).collect();
+    if formulas.len() != chart.series.len() || formulas.windows(2).all(|pair| pair[0] == pair[1]) {
+        return false;
+    }
+    formulas.iter().all(|formula| !eval_list(wb, sheet, formula).iter().any(Value::is_text))
+}
+
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X
 /// values (scatter/bubble), bubble sizes, number formats and colours (explicit, else the
 /// default palette derived from the workbook theme accents).
 pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
-    let numeric_x = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+    let numeric_x =
+        matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble) || has_independent_numeric_x(wb, sheet, chart);
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
     let mut category_levels = Vec::new();

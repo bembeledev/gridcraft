@@ -413,6 +413,8 @@ fn sample() -> Workbook {
         y_title: Some("Amount".into()),
         source: None,
         by_rows: false,
+        text: Default::default(),
+        legend_position: None,
         pivot: None,
     };
     for kind in [

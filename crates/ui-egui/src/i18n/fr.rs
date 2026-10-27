@@ -1995,6 +1995,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "unterminated text" => "Texte non terminé.",
         "unterminated sheet name" => "Nom de feuille non terminé.",
         "expected ! after sheet name" => "! attendu après le nom de feuille.",
+        "unexpected end of formula" => "Fin de formule inattendue.",
         "unknown error literal" => "Valeur d'erreur inconnue.",
         "unbalanced [" => "[ non équilibré.",
         "formula is nested too deeply" => "La formule est trop imbriquée.",
@@ -2301,4 +2302,13 @@ pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
         "We can't open '{name}': its part {part} unpacks to more than {mb} MB, over GridCraft's limit of {limit} MB for one part (a guard against damaged or malicious files). To open it, save the data as CSV, which keeps only its values.",
         "Impossible d'ouvrir « {name} » : sa partie {part} se décompresse en plus de {mb} Mo, au-delà de la limite de {limit} Mo par partie de GridCraft (une protection contre les fichiers endommagés ou malveillants). Pour l'ouvrir, enregistrez les données au format CSV, qui n'en conserve que les valeurs.",
     ),
+    // Formula syntax errors (gridcraft-formula parser and lexer).
+    ("unexpected {token}", "{token} inattendu"),
+    ("unexpected character {character}", "Caractère {character} inattendu"),
+    ("unexpected `{gap}` in structured reference", "« {gap} » inattendu dans la référence structurée"),
+    ("expected {expected}, found {found}", "{expected} attendu, {found} trouvé"),
+    ("expected {expected}, found end of formula", "{expected} attendu avant la fin de la formule"),
+    ("expected `;` or `)`, found {found}", "« ; » ou « ) » attendu, {found} trouvé"),
+    ("expected `;` or `)`, found end of formula", "« ; » ou « ) » attendu avant la fin de la formule"),
+    ("expected a reference after the sheet name, found {found}", "Référence attendue après le nom de feuille, {found} trouvé"),
 ];

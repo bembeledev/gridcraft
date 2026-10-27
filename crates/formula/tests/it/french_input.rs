@@ -122,3 +122,10 @@ fn french_input_keeps_text_references_and_rejects_english_separators() {
     assert_eq!(print(&parse("SOMME(1,2)+FAUX").unwrap()), "SOMME(1,2)+FAUX");
     assert!(parse("{VRAI}").is_err());
 }
+
+#[test]
+fn syntax_errors_name_the_separator_as_typed() {
+    // A `)` closed too early: the stray separator is the French `;`, not the canonical `,`.
+    assert_eq!(parse_input("SI(G10<1000);\"a\";\"b\"", FR, |_| false).unwrap_err().msg, "unexpected `;`");
+    assert_eq!(gridcraft_formula::parse("IF(A1<1),1").unwrap_err().msg, "unexpected `,`");
+}

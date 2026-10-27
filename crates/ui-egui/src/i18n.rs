@@ -493,6 +493,10 @@ mod tests {
         assert_eq!(Language::Fr.tr_error("`Region` isn't in the values area"), "« Region » ne figure pas dans la zone Valeurs");
         assert_eq!(Language::Fr.tr_error("Too many constraints (at most 100 cells)."), "Trop de contraintes (100 cellules au maximum).");
         assert_eq!(Language::Fr.tr_error("Too many constraints (at most 100)."), "Trop de contraintes (100 au maximum).");
+        // Formula syntax errors, as the French parser reports them.
+        assert_eq!(Language::Fr.tr_error("unexpected `;`"), "`;` inattendu");
+        assert_eq!(Language::Fr.tr_error("unexpected end of formula"), "Fin de formule inattendue.");
+        assert_eq!(Language::Fr.tr_error("expected `)`, found end of formula"), "`)` attendu avant la fin de la formule");
     }
 
     /// Real engine errors stay matched by the templates, so a reworded engine message shows up here.

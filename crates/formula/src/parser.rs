@@ -70,14 +70,14 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof => Ok(e),
-        t => Err(p.err(format!("unexpected {}", describe(t)))),
+        t => Err(p.err(format!("unexpected {}", describe(t, locale)))),
     }
 }
 
-fn describe(t: &Tok) -> String {
+fn describe(t: &Tok, locale: crate::FormulaLocale) -> String {
     match t {
         Tok::RParen => "`)`".into(),
-        Tok::Comma => "`,`".into(),
+        Tok::Comma => format!("`{}`", locale.list_separator()),
         Tok::Eof => "end of formula".into(),
         other => format!("{other:?}"),
     }
@@ -168,7 +168,7 @@ impl Parser {
             self.next();
             Ok(())
         } else {
-            Err(self.err(format!("expected {}, found {}", describe(&t), describe(self.peek()))))
+            Err(self.err(format!("expected {}, found {}", describe(&t, self.locale), describe(self.peek(), self.locale))))
         }
     }
 
@@ -268,7 +268,7 @@ impl Parser {
             match self.next() {
                 Tok::Comma => continue,
                 Tok::RParen => break,
-                t => return Err(self.err(format!("expected `,` or `)`, found {}", describe(&t)))),
+                t => return Err(self.err(format!("expected `{}` or `)`, found {}", self.locale.list_separator(), describe(&t, self.locale)))),
             }
         }
         if args.len() > 255 {
@@ -332,7 +332,7 @@ impl Parser {
                 match self.next() {
                     Tok::Word(w) => self.reference_from_word(sheet, &w),
                     Tok::Error(CellError::Ref) => Ok(Expr::Error(CellError::Ref)),
-                    t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t)))),
+                    t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t, self.locale)))),
                 }
             }
             Tok::Word(w) => {
@@ -346,7 +346,7 @@ impl Parser {
                 self.reference_from_word(SheetSel::Current, &w)
             }
             Tok::Struct(body) => parse_struct("", &body).map(Expr::Struct).map_err(|msg| self.err(msg)),
-            t => Err(self.err(format!("unexpected {}", describe(&t)))),
+            t => Err(self.err(format!("unexpected {}", describe(&t, self.locale)))),
         }
     }
 
@@ -426,19 +426,19 @@ impl Parser {
                 Tok::Number(n) => Expr::Number(n),
                 Tok::Op("-") => match self.next() {
                     Tok::Number(n) => Expr::Number(-n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t, self.locale)))),
                 },
                 Tok::Op("+") => match self.next() {
                     Tok::Number(n) => Expr::Number(n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t, self.locale)))),
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
                 Tok::Word(w) => crate::input::boolean_alias(&w, self.locale)
                     .map(Expr::Bool)
-                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
+                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w), self.locale))))?,
                 Tok::Error(e) => Expr::Error(e),
-                t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
+                t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t, self.locale)))),
             };
             if let Some(r) = rows.last_mut() {
                 r.push(el);
@@ -447,7 +447,7 @@ impl Parser {
                 Tok::Comma => {}
                 Tok::Semicolon => rows.push(Vec::new()),
                 Tok::RBrace => break,
-                t => return Err(self.err(format!("expected `,`, `;` or `}}`, found {}", describe(&t)))),
+                t => return Err(self.err(format!("expected `,`, `;` or `}}`, found {}", describe(&t, self.locale)))),
             }
         }
         let w = rows.first().map_or(0, Vec::len);

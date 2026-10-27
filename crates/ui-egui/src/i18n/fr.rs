@@ -2063,6 +2063,122 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Le Solveur n'a pas trouvé de solution satisfaisant toutes les contraintes."
         }
         "The objective can grow without limit: the problem is unbounded." => "L'objectif peut croître sans limite : le problème n'est pas borné.",
+        // File import warnings (gridcraft-xlsx readers).
+        "a cell picture has an external or invalid image relationship; kept its scalar fallback" => {
+            "une image dans une cellule a une relation d'image externe ou non valide ; sa valeur de repli a été conservée"
+        }
+        "a cell picture is not a supported PNG/JPEG or exceeds 8192 pixels per side / 16 million pixels; kept its scalar fallback" => {
+            "une image dans une cellule n'est pas un PNG/JPEG pris en charge ou dépasse 8192 pixels de côté / 16 millions de pixels ; sa valeur de repli a été conservée"
+        }
+        "a linked (not embedded) picture was skipped" => "une image liée (non incorporée) a été ignorée",
+        "a PivotTable's cache has no fields; kept as plain cells" => {
+            "le cache d'un tableau croisé dynamique n'a aucun champ ; conservé sous forme de cellules simples"
+        }
+        "a PivotTable's cache has no worksheet source; kept as plain cells" => {
+            "le cache d'un tableau croisé dynamique n'a pas de feuille source ; conservé sous forme de cellules simples"
+        }
+        "a PivotTable's source is in another workbook; its source reference may not resolve" => {
+            "la source d'un tableau croisé dynamique est dans un autre classeur ; sa référence source risque de ne pas être résolue"
+        }
+        "a PivotTable's source reference is missing or invalid; kept as plain cells" => {
+            "la référence source d'un tableau croisé dynamique est absente ou non valide ; conservé sous forme de cellules simples"
+        }
+        "a shared formula refers to a missing master cell; kept the cached value" => {
+            "une formule partagée fait référence à une cellule maître absente ; la valeur en cache a été conservée"
+        }
+        "calculated PivotTable fields are not supported" => "les champs calculés des tableaux croisés dynamiques ne sont pas pris en charge",
+        "Cell comments in .xls files are not imported yet." => "Les commentaires de cellule des fichiers .xls ne sont pas encore importés.",
+        "cell pictures exceed the 128 MiB workbook limit; remaining pictures kept their scalar fallbacks" => {
+            "les images dans les cellules dépassent la limite de 128 Mio par classeur ; les images restantes ont conservé leur valeur de repli"
+        }
+        "Conditional formatting in .xls files is not imported yet." => "La mise en forme conditionnelle des fichiers .xls n'est pas encore importée.",
+        "Data validation in .xls files is not imported yet." => "La validation des données des fichiers .xls n'est pas encore importée.",
+        "date filters in AutoFilters are not supported" => "les filtres de date des filtres automatiques ne sont pas pris en charge",
+        "Dialog sheets and unreadable sheets were skipped." => "Les feuilles de dialogue et les feuilles illisibles ont été ignorées.",
+        "duplicate XLRICHVALUE metadata types; cell pictures were not loaded" => {
+            "types de métadonnées XLRICHVALUE en double ; les images dans les cellules n'ont pas été chargées"
+        }
+        "formula-generated cell pictures were imported as static pictures; their formulas were not retained" => {
+            "les images dans les cellules générées par formule ont été importées comme images statiques ; leurs formules n'ont pas été conservées"
+        }
+        "Hyperlinks in .xls files are not imported yet." => "Les liens hypertexte des fichiers .xls ne sont pas encore importés.",
+        "Invalid XLSB merged ranges were skipped." => "Les plages fusionnées XLSB non valides ont été ignorées.",
+        "links to external workbooks were kept; they are not followed or refreshed" => {
+            "les liaisons vers des classeurs externes ont été conservées ; elles ne sont ni suivies ni actualisées"
+        }
+        "Macro names were skipped." => "Les noms de macros ont été ignorés.",
+        "macros (VBA project) reference a missing part and were dropped" => {
+            "les macros (projet VBA) font référence à une partie absente et ont été supprimées"
+        }
+        "macros (VBA project) were kept but not executed" => "les macros (projet VBA) ont été conservées mais pas exécutées",
+        "missing rich-value data relationship; cell pictures were not loaded" => {
+            "relation de données de valeurs enrichies absente ; les images dans les cellules n'ont pas été chargées"
+        }
+        "missing rich-value structure or image relationships; cell pictures were not loaded" => {
+            "structure de valeurs enrichies ou relations d'image absentes ; les images dans les cellules n'ont pas été chargées"
+        }
+        "missing XLRICHVALUE future metadata; cell pictures were not loaded" => {
+            "métadonnées XLRICHVALUE absentes ; les images dans les cellules n'ont pas été chargées"
+        }
+        "no styles part" => "aucune partie de styles",
+        "ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported." => {
+            "Import ODS des données seules : les formules sont remplacées par leurs résultats enregistrés et ne seront pas recalculées. La mise en forme, les graphiques, les images et les autres fonctionnalités ne sont pas importés. Enregistrez un nouveau fichier .xlsx ; l'enregistrement au format ODS n'est pas pris en charge."
+        }
+        "Pictures, charts and shapes in .xls files are not imported yet." => {
+            "Les images, graphiques et formes des fichiers .xls ne sont pas encore importés."
+        }
+        "PivotTables in .xls files are not imported yet; their values were kept." => {
+            "Les tableaux croisés dynamiques des fichiers .xls ne sont pas encore importés ; leurs valeurs ont été conservées."
+        }
+        "some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)" => {
+            "certaines cellules ont des métadonnées de valeur absentes ou non prises en charge ; leur valeur de repli a été conservée (des images dans les cellules peuvent manquer)"
+        }
+        "some cells refer to missing shared strings" => "certaines cellules font référence à des chaînes partagées absentes",
+        "Some cells refer to missing shared strings and were left empty." => {
+            "Certaines cellules font référence à des chaînes partagées absentes et ont été laissées vides."
+        }
+        "some date cells could not be read" => "certaines cellules de date n'ont pas pu être lues",
+        "some Excel 2010 conditional format extensions were skipped" => {
+            "certaines extensions de mise en forme conditionnelle d'Excel 2010 ont été ignorées"
+        }
+        "Some number formats were shorter than their declared length; the characters present were kept." => {
+            "Certains formats de nombre étaient plus courts que leur longueur déclarée ; les caractères présents ont été conservés."
+        }
+        "some numeric cells could not be read" => "certaines cellules numériques n'ont pas pu être lues",
+        "Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names." => {
+            "Certains noms de feuilles ODS ont été raccourcis ou renommés en noms de feuilles XLSX valides et uniques."
+        }
+        "Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result]." => {
+            "Certaines valeurs ODS ou certains résultats de formule en cache étaient absents ou non pris en charge ; leur texte affiché (ou leur valeur brute) a été conservé comme texte. Une formule sans l'un ni l'autre est marquée [Unavailable ODS formula result]."
+        }
+        "some rich values are unsupported or malformed; their scalar fallbacks were retained (cell pictures may be missing)" => {
+            "certaines valeurs enrichies sont mal formées ou non prises en charge ; leurs valeurs de repli ont été conservées (des images dans les cellules peuvent manquer)"
+        }
+        "the workbook has no worksheets; added an empty sheet" => "le classeur ne contient aucune feuille de calcul ; une feuille vide a été ajoutée",
+        "unmodelled content of a Strict Open XML workbook (custom XML, links, controls…) is not kept on save" => {
+            "le contenu non pris en charge d'un classeur Strict Open XML (XML personnalisé, liaisons, contrôles…) n'est pas conservé à l'enregistrement"
+        }
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Les blocs XLSB d'enregistrements futurs et de contenu alternatif non pris en charge ont été ignorés."
+        }
+        "what-if data tables are not supported; kept their values" => {
+            "les tables de données de simulation ne sont pas prises en charge ; leurs valeurs ont été conservées"
+        }
+        "What-if data tables are not supported; their values were kept." => {
+            "Les tables de données de simulation ne sont pas prises en charge ; leurs valeurs ont été conservées."
+        }
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Import XLSB des données seules : les formules sont remplacées par leurs résultats enregistrés et ne seront pas recalculées. La mise en forme, les graphiques, les images, les macros et les autres fonctionnalités ne sont pas importés ; les dates, montants et pourcentages peuvent s'afficher comme des nombres. Enregistrez un nouveau fichier .xlsx ; l'enregistrement au format XLSB n'est pas pris en charge."
+        }
+        "XLSB module sheets were skipped." => "Les feuilles de module XLSB ont été ignorées.",
+        "XLSB non-worksheet sheets were skipped." => "Les feuilles XLSB autres que des feuilles de calcul ont été ignorées.",
+        "Chart sheets in .xls files are not imported yet and were skipped." => {
+            "Les feuilles graphiques des fichiers .xls ne sont pas encore importées et ont été ignorées."
+        }
+        "Excel 4.0 macro sheets were skipped." => "Les feuilles de macros Excel 4.0 ont été ignorées.",
+        "VBA modules and other non-worksheet sheets were skipped." => {
+            "Les modules VBA et les autres feuilles qui ne sont pas des feuilles de calcul ont été ignorés."
+        }
         _ => return None,
     })
 }
@@ -2311,4 +2427,163 @@ pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
     ("expected {expected}, found end of formula", "{expected} attendu avant la fin de la formule"),
     ("expected `;` or `)`, found {found}", "« ; » ou « ) » attendu, {found} trouvé"),
     ("expected a reference after the sheet name, found {found}", "Référence attendue après le nom de feuille, {found} trouvé"),
+    // File import warnings built with `format!` (gridcraft-xlsx readers, engine file open).
+    ("a chart without its chart part was skipped ({part}, object {n})", "un graphique sans sa partie graphique a été ignoré ({part}, objet {n})"),
+    (
+        "a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})",
+        "un graphique histogramme, cascade, compartimentage… sans sa partie graphique a été ignoré ({part}, objet {n})",
+    ),
+    ("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})", "un objet incorporé (SmartArt, OLE…) a été ignoré ({part}, objet {n})"),
+    (
+        "cell-picture {kind} count does not match its records",
+        "le nombre de {kind} des images dans les cellules ne correspond pas à leurs enregistrements",
+    ),
+    (
+        "cell-picture data could not be read ({error}); scalar fallbacks were retained",
+        "les données des images dans les cellules n'ont pas pu être lues ({error}) ; les valeurs de repli ont été conservées",
+    ),
+    ("{n} cells outside the grid were skipped.", "{n} cellules hors de la grille ont été ignorées."),
+    ("chart sheet \"{name}\" was dropped: {why}", "la feuille graphique « {name} » a été supprimée : {why}"),
+    (
+        "chart sheet \"{name}\" was skipped and is not kept on save",
+        "la feuille graphique « {name} » a été ignorée et ne sera pas conservée à l'enregistrement",
+    ),
+    ("chart {target} has no supported plot and was skipped", "le graphique {target} n'a aucun tracé pris en charge et a été ignoré"),
+    (
+        "chart {target} is missing from the package and was skipped ({part}, object {n})",
+        "le graphique {target} est absent du fichier et a été ignoré ({part}, objet {n})",
+    ),
+    (
+        "conditional formats past {max} kept range cells were dropped",
+        "les mises en forme conditionnelles au-delà de {max} cellules conservées ont été supprimées",
+    ),
+    ("conditional format type \"{other}\" is not supported", "le type de mise en forme conditionnelle « {other} » n'est pas pris en charge"),
+    (
+        "conflicting {kind} relationships; cell pictures may be missing",
+        "relations {kind} contradictoires ; des images dans les cellules peuvent manquer",
+    ),
+    (
+        "external {kind} relationship is unsupported; cell pictures may be missing",
+        "la relation {kind} externe n'est pas prise en charge ; des images dans les cellules peuvent manquer",
+    ),
+    (
+        "grouped shapes are not supported and were skipped ({part}, object {n})",
+        "les formes groupées ne sont pas prises en charge et ont été ignorées ({part}, objet {n})",
+    ),
+    ("invalid cell-picture part {path}", "partie d'image dans une cellule non valide : {path}"),
+    ("{part} is not a PivotTable definition; skipped", "{part} n'est pas une définition de tableau croisé dynamique ; ignoré"),
+    ("links to external workbooks were dropped: {why}", "les liaisons vers des classeurs externes ont été supprimées : {why}"),
+    ("macros (VBA project) could not be read and were dropped: {e}", "les macros (projet VBA) n'ont pas pu être lues et ont été supprimées : {e}"),
+    ("missing or damaged cell-picture part {path}: {e}", "partie d'image dans une cellule absente ou endommagée {path} : {e}"),
+    (
+        "missing, damaged or oversized cell picture {target}: {e}; kept its scalar fallback",
+        "image dans une cellule absente, endommagée ou trop grande {target} : {e} ; sa valeur de repli a été conservée",
+    ),
+    ("missing part {part}", "partie absente : {part}"),
+    ("missing picture {target}", "image absente : {target}"),
+    (
+        "{part} is not a pivot cache definition; its PivotTable was kept as plain cells",
+        "{part} n'est pas une définition de cache de tableau croisé dynamique ; le tableau a été conservé sous forme de cellules simples",
+    ),
+    ("{kind} part {part} was dropped: {why}", "la partie {kind} {part} a été supprimée : {why}"),
+    (
+        "PivotTable \"{name}\": calculated items and label/value filters are not supported",
+        "Tableau croisé dynamique « {name} » : les éléments calculés et les filtres d'étiquettes/de valeurs ne sont pas pris en charge",
+    ),
+    (
+        "PivotTable field \"{name}\" (grouped items) is not supported",
+        "Le champ de tableau croisé dynamique « {name} » (éléments groupés) n'est pas pris en charge",
+    ),
+    (
+        "PivotTable function {s} is not supported; using Sum",
+        "La fonction de tableau croisé dynamique {s} n'est pas prise en charge ; Somme est utilisée",
+    ),
+    (
+        "PivotTable grouping of \"{name}\" is not supported; the field is ungrouped",
+        "Le regroupement de « {name} » dans le tableau croisé dynamique n'est pas pris en charge ; le champ est dissocié",
+    ),
+    (
+        "PivotTable \"{name}\" has no valid location; kept as plain cells",
+        "Le tableau croisé dynamique « {name} » n'a pas d'emplacement valide ; conservé sous forme de cellules simples",
+    ),
+    (
+        "PivotTable in {part} has no cache; kept as plain cells",
+        "Le tableau croisé dynamique de {part} n'a pas de cache ; conservé sous forme de cellules simples",
+    ),
+    (
+        "PivotTable show-values-as {other} is not supported",
+        "L'option « Afficher les valeurs » {other} des tableaux croisés dynamiques n'est pas prise en charge",
+    ),
+    (
+        "PivotTables on sheet \"{name}\" could not be read: {e}",
+        "Les tableaux croisés dynamiques de la feuille « {name} » n'ont pas pu être lus : {e}",
+    ),
+    (
+        "PivotTables with a {ty} data source are not supported; kept as plain cells",
+        "Les tableaux croisés dynamiques avec une source de données {ty} ne sont pas pris en charge ; conservés sous forme de cellules simples",
+    ),
+    ("shared strings are damaged ({e}); kept {n} strings", "les chaînes partagées sont endommagées ({e}) ; {n} chaînes conservées"),
+    (
+        "shared strings: {conflicts} phonetic readings were dropped because another <si> with the same text already had one",
+        "chaînes partagées : {conflicts} lectures phonétiques ont été supprimées car un autre <si> au même texte en avait déjà une",
+    ),
+    (
+        "shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)",
+        "chaînes partagées : {dropped} segments phonétiques ont été supprimés (sb/eb incorrects ou lecture absente)",
+    ),
+    (
+        "sheet \"{name}\": {n} cells or rows outside the 1,048,576 × 16,384 grid were dropped",
+        "feuille « {name} » : {n} cellules ou lignes hors de la grille de 1 048 576 × 16 384 ont été supprimées",
+    ),
+    (
+        "sheet \"{name}\": controls and embedded objects could not be read and were dropped",
+        "feuille « {name} » : les contrôles et objets incorporés n'ont pas pu être lus et ont été supprimés",
+    ),
+    (
+        "sheet \"{name}\": controls and embedded objects were dropped: {why}",
+        "feuille « {name} » : les contrôles et objets incorporés ont été supprimés : {why}",
+    ),
+    ("sheet \"{name}\" could not be read: {e}", "la feuille « {name} » n'a pas pu être lue : {e}"),
+    (
+        "sheet \"{name}\": embedded objects and form controls are not shown; they are kept for saving",
+        "feuille « {name} » : les objets incorporés et les contrôles de formulaire ne sont pas affichés ; ils sont conservés à l'enregistrement",
+    ),
+    ("sheet \"{name}\" has no part; skipped", "la feuille « {name} » n'a pas de partie ; ignorée"),
+    (
+        "sheet \"{name}\": header and footer pictures were dropped: {why}",
+        "feuille « {name} » : les images d'en-tête et de pied de page ont été supprimées : {why}",
+    ),
+    (
+        "sheet \"{name}\": hyperlinks past the first {max} cells were dropped",
+        "feuille « {name} » : les liens hypertexte au-delà des {max} premières cellules ont été supprimés",
+    ),
+    (
+        "sheet \"{name}\": hyperlink targets past {max} bytes were dropped",
+        "feuille « {name} » : les cibles de liens hypertexte de plus de {max} octets ont été supprimées",
+    ),
+    ("sheet \"{name}\" is a {kind} and was skipped", "la feuille « {name} » est de type {kind} et a été ignorée"),
+    ("sheet \"{name}\" is damaged ({e}); kept {n} rows", "la feuille « {name} » est endommagée ({e}) ; {n} lignes conservées"),
+    (
+        "sheet \"{name}\": pictures in the header and footer are not shown; they are kept for saving",
+        "feuille « {name} » : les images de l'en-tête et du pied de page ne sont pas affichées ; elles sont conservées à l'enregistrement",
+    ),
+    ("sheet \"{name}\": printer settings were dropped: {why}", "feuille « {name} » : les paramètres d'imprimante ont été supprimés : {why}"),
+    (
+        "sheet \"{name}\": relationships could not be read ({e}); unmodelled content was dropped",
+        "feuille « {name} » : les relations n'ont pas pu être lues ({e}) ; le contenu non pris en charge a été supprimé",
+    ),
+    ("sheet \"{name}\": {slot} were dropped: {why}", "feuille « {name} » : {slot} supprimés : {why}"),
+    ("sheet \"{name}\": {what} was dropped: {why}", "feuille « {name} » : {what} supprimé : {why}"),
+    ("skipped {part}: {e}", "{part} ignoré : {e}"),
+    ("Some defined names use {why} and were skipped.", "Certains noms définis utilisent {why} et ont été ignorés."),
+    (
+        "Some formulas use {why}; their saved results were kept as values.",
+        "Certaines formules utilisent {why} ; leurs résultats enregistrés ont été conservés comme valeurs.",
+    ),
+    ("{what} was dropped: {why}", "{what} supprimé : {why}"),
+    (
+        "{name}: {n} cells outside the 1,048,576 × 16,384 grid were dropped",
+        "{name} : {n} cellules hors de la grille de 1 048 576 × 16 384 ont été supprimées",
+    ),
+    ("{n} additional import warnings.", "{n} autres avertissements d'import."),
 ];

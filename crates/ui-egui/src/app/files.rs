@@ -59,7 +59,7 @@ impl SheetApp {
                     .language
                     .tr("{count} items in this file were handled differently. First: {first}")
                     .replace("{count}", &msgs.len().to_string())
-                    .replace("{first}", msgs[0])
+                    .replace("{first}", &self.ui.language.tr_error(msgs[0]))
             };
             self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
         }

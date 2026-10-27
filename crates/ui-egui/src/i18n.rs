@@ -489,6 +489,15 @@ mod tests {
         assert_eq!(Language::En.tr_error(&shown), shown);
         assert_eq!(Language::Fr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::Fr.tr_error("no sheet named ``"), "no sheet named ``", "an empty capture is no match");
+        // File import warnings, plain and built with `format!`.
+        assert_eq!(
+            Language::Fr.tr_error("macros (VBA project) were kept but not executed"),
+            "les macros (projet VBA) ont été conservées mais pas exécutées"
+        );
+        assert_eq!(
+            Language::Fr.tr_error("sheet \"Test\": embedded objects and form controls are not shown; they are kept for saving"),
+            "feuille « Test » : les objets incorporés et les contrôles de formulaire ne sont pas affichés ; ils sont conservés à l'enregistrement"
+        );
         // The template with the most literal text wins over a looser one that also matches.
         assert_eq!(Language::Fr.tr_error("`Region` isn't in the values area"), "« Region » ne figure pas dans la zone Valeurs");
         assert_eq!(Language::Fr.tr_error("Too many constraints (at most 100 cells)."), "Trop de contraintes (100 cellules au maximum).");

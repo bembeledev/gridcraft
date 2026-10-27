@@ -551,7 +551,8 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
-    let msg = app.ui.language.tr_error(&msg);
+    // A file's import warnings arrive joined by blank lines: each is translated on its own.
+    let msg = msg.split("\n\n").map(|part| app.ui.language.tr_error(part)).collect::<Vec<_>>().join("\n\n");
     let mut close = false;
     egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);

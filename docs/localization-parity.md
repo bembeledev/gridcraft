@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (French covers every catalog key and the whole function help) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (from PR #1639: native macOS menus follow the interface language; French formula error literals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -40,8 +40,13 @@ right-to-left sheets and full complex-script support. Part of
 - **Formulas: Spanish and French localized; formats en-US only.** Spanish and French formula
   entry and display use localized function names (`SUMA`/`SOMME`…), `;` argument separator and
   `,` decimal separator (`FormulaLocale`); the other languages use English names, `,` and `.`
-  (#45). Number and date formats are en-US in every language (`crates/numfmt` says "en-US
-  only"). German with localized numbers and formulas is in PR #163 (open).
+  (#45). French also reads and shows French error literals (`#VALEUR!`, `#NOM?`…). Number and
+  date formats are en-US in every language (`crates/numfmt` says "en-US only"). German with
+  localized numbers and formulas is in PR #163 (open).
+- **Native macOS menus.** The menu bar uses the shared language catalog (application menu,
+  File/Edit/View… menus, theme choices) and relabels its items in place when the interface
+  language changes, without reinstalling the menu or changing command ids and shortcuts.
+  macOS-owned window-management items follow the system language.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -111,6 +116,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | From PR #1639 (NaviStorm): native macOS menus use the language catalog and relabel in place on a language change (AppKit test checks French and English titles); French formula error literals read and displayed, storage stays English; French functions passed by name are translated; EXPAND is ETENDRE, TOCOL/TOROW/PERCENTOF get DANSCOL/DANSLIGNE/POURCENTAGEDE; a test checks every registered function has a French row or is spelled alike |
 | 2026-10-26 | minor | French catalog (`i18n/fr.rs`) covers every key of the other catalogs: 433 → 1,161 labels (`cargo xtask i18n-report`: `fr: 0 missing`), Excel's French feature names. French function help (`i18n/fr_functions.rs`): all 479 descriptions and 283 argument names, the first complete help table. French formulas (`FormulaLocale::Fr`: SOMME, MOYENNE, SI…, `;` separator, `,` decimal, VRAI/FAUX) when the interface is French; en-US number formats; AI-assisted draft pending native-speaker review |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |

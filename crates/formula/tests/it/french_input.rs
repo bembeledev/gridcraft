@@ -131,3 +131,103 @@ fn syntax_errors_name_the_separator_as_typed() {
     // In an array the French column separator is `.`, not the argument `;`.
     assert_eq!(parse_input("={1..2}", FR, |_| false).unwrap_err().msg, "array constants may only contain constants, found `.`");
 }
+
+// From #1639 (NaviStorm), with array columns separated by `.` as in French Excel.
+#[test]
+fn french_names_separators_booleans_and_arrays() {
+    for (canonical, french) in [
+        ("STDEV.P(A1:A5)+VAR.P(A1:A5)+VARP(A1:A5)", "ECARTYPE.PEARSON(A1:A5)+VAR.P.N(A1:A5)+VAR.P(A1:A5)"),
+        ("TODAY()+SUM({1.5,2;3,4})", "AUJOURDHUI()+SOMME({1,5.2;3.4})"),
+        ("{TRUE,FALSE;FALSE,TRUE}", "{VRAI.FAUX;FAUX.VRAI}"),
+        ("IF(TRUE,,)", "SI(VRAI;;)"),
+        ("PERCENTOF(A1,A1:A3)", "POURCENTAGEDE(A1;A1:A3)"),
+        ("DROP(A1:C3,1)", "EXCLURE(A1:C3;1)"),
+        ("EXPAND(A1:B2,3)+TOCOL(A1:B2)+TOROW(A1:B2)", "ETENDRE(A1:B2;3)+DANSCOL(A1:B2)+DANSLIGNE(A1:B2)"),
+        ("GROUPBY(A1:A3,B1:B3,SUM)", "GROUPER.PAR(A1:A3;B1:B3;SOMME)"),
+    ] {
+        assert_eq!(shown(canonical), french, "{canonical}");
+        assert_eq!(input(french), canonical, "{french}");
+    }
+    assert_eq!(input("somme(1;2)+faux"), "SUM(1,2)+FALSE");
+    // Spanish literals must not be accepted as French array constants.
+    assert!(parse_input("{VERDADERO}", FR, |_| false).is_err());
+}
+
+#[test]
+fn french_translation_preserves_user_text_names_and_scopes() {
+    for canonical in [
+        "LET(SOMME,LAMBDA(x,x+1),SUM(SOMME(2),FALSE))",
+        "LET(FAUX,7,IF(FAUX,FAUX,TRUE))+FALSE",
+        "LAMBDA(SOMME,SOMME(2))(LAMBDA(x,x+1))",
+        "'SOMME;FAUX'!A1+SOMME[NB.SI]",
+        "IF(A1=\"a,b;c\",CONCAT(\"SUM\",\"1.5\"),SUM(0.25,A1:A3 B2))",
+        "_xludf.SUM(1.5)",
+    ] {
+        let expr = parse(canonical).unwrap();
+        let known = |n: &str| n.eq_ignore_ascii_case("FAUX");
+        let shown = print_input(&expr, FR, known).unwrap();
+        assert_eq!(print(&parse_input(&shown, FR, known).unwrap()), print(&expr), "{canonical}");
+    }
+    let deep = "NON(".repeat(300) + "VRAI" + &")".repeat(300);
+    assert!(parse_input(&deep, FR, |_| false).is_err());
+}
+
+#[test]
+fn french_localization_keeps_long_chains_and_unicode_names() {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let canonical = vec!["1"; 4096].join("+");
+            let expr = parse_input(&canonical, FR, |_| false).unwrap();
+            assert_eq!(print_input(&expr, FR, |_| false).unwrap(), canonical);
+            let french = vec!["SOMME(1;2)"; 700].join("+");
+            let expr = parse_input(&french, FR, |_| false).unwrap();
+            assert_eq!(print(&expr), vec!["SUM(1,2)"; 700].join("+"));
+            assert_eq!(print_input(&expr, FR, |_| false).unwrap(), french);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let expr = parse_input("LET(ſomme;LAMBDA(x;x*2);SOMME(3))", FR, |_| false).unwrap();
+    assert_eq!(print(&expr), "LET(ſomme,LAMBDA(x,x*2),SOMME(3))");
+    assert_eq!(print_input(&expr, FR, |_| false).unwrap(), "LET(ſomme;LAMBDA(x;x*2);SOMME(3))");
+}
+
+#[test]
+fn french_conditional_extrema_use_the_excel_names() {
+    for (english, french) in [("MAXIFS", "MAX.SI.ENS"), ("MINIFS", "MIN.SI.ENS")] {
+        assert_eq!(FR.function_name(english), french);
+        assert_eq!(input(&format!("{french}(A1:A3;B1:B3;\">0\")")), format!("{english}(A1:A3,B1:B3,\">0\")"));
+    }
+}
+
+#[test]
+fn french_error_values_round_trip_without_rewriting_user_text() {
+    use gridcraft_core::CellError;
+    for (french, canonical) in [
+        ("SI(ESTERREUR(A1);#VALEUR!;A1)", "IF(ISERROR(A1),#VALUE!,A1)"),
+        ("SIERREUR(A1;#N/A)+#NOMBRE!", "IFERROR(A1,#N/A)+#NUM!"),
+        ("{#NOM?.#NUL!;#DIV/0!.#REF!}", "{#NAME?,#NULL!;#DIV/0!,#REF!}"),
+        ("#PROPAGATION!&#CALC!&#CHARGEMENT_DONNEES", "#SPILL!&#CALC!&#GETTING_DATA"),
+        ("SI(VRAI;\"#VALUE!\";'#VALEUR!'!A1)", "IF(TRUE,\"#VALUE!\",'#VALEUR!'!A1)"),
+        ("SOMME(A1#)", "SUM(A1#)"),
+    ] {
+        assert_eq!(input(french), canonical, "{french}");
+        assert_eq!(shown(canonical), french, "{canonical}");
+    }
+    for error in CellError::ALL {
+        let canonical = error.as_str();
+        let french = FR.error_name(error);
+        assert_eq!(input(&french.to_ascii_lowercase()), canonical);
+        assert_eq!(input(canonical), canonical);
+        assert_eq!(input(french), canonical);
+        assert_eq!(print_input(&parse(canonical).unwrap(), FormulaLocale::En, |_| false).unwrap(), canonical);
+        assert_eq!(print_input(&parse(canonical).unwrap(), FormulaLocale::Es, |_| false).unwrap(), canonical);
+    }
+    assert_eq!(FR.error_name(CellError::Circ), "#CIRC!");
+    for bad in ["#VALEUR", "#PROPAGATION", "#VALEUR!suffix", "#VALEUR!é"] {
+        assert!(parse_input(bad, FR, |_| false).is_err(), "{bad}");
+    }
+    assert!(parse("#VALEUR!").is_err());
+    assert!(parse_input("#VALEUR!", FormulaLocale::Es, |_| false).is_err());
+}

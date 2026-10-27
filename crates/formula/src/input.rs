@@ -1,6 +1,7 @@
 //! Localized aliases accepted at user-entry boundaries; file syntax stays English.
 
 use crate::{Expr, ParseError, parser};
+use gridcraft_core::CellError;
 
 /// Formula-entry syntax selected by the interface language. Other interface languages
 /// currently use the canonical English function table until a translation table is supplied.
@@ -183,6 +184,7 @@ const FRENCH: &[(&str, &str)] = &[
     ("PERCENTILE.EXC", "CENTILE.EXCLURE"),
     ("PERCENTILE.INC", "CENTILE.INCLURE"),
     ("PERCENTRANK", "RANG.POURCENTAGE"),
+    ("PERCENTOF", "POURCENTAGEDE"),
     ("PERCENTRANK.EXC", "RANG.POURCENTAGE.EXCLURE"),
     ("PERCENTRANK.INC", "RANG.POURCENTAGE.INCLURE"),
     ("PERMUT", "PERMUTATION"),
@@ -287,7 +289,7 @@ const FRENCH: &[(&str, &str)] = &[
     ("COLUMN", "COLONNE"),
     ("COLUMNS", "COLONNES"),
     ("DROP", "EXCLURE"),
-    ("EXPAND", "DEVELOPPER"),
+    ("EXPAND", "ETENDRE"),
     ("FILTER", "FILTRE"),
     ("FORMULATEXT", "FORMULETEXTE"),
     ("GROUPBY", "GROUPER.PAR"),
@@ -307,6 +309,8 @@ const FRENCH: &[(&str, &str)] = &[
     ("VSTACK", "ASSEMB.V"),
     ("WRAPCOLS", "ORGA.COLS"),
     ("WRAPROWS", "ORGA.LIGNES"),
+    ("TOCOL", "DANSCOL"),
+    ("TOROW", "DANSLIGNE"),
     ("XLOOKUP", "RECHERCHEX"),
     ("XMATCH", "EQUIVX"),
     // Information
@@ -450,6 +454,20 @@ const FRENCH: &[(&str, &str)] = &[
     ("WEBSERVICE", "SERVICEWEB"),
 ];
 
+/// French error spellings; GridCraft's own #CIRC! stays unchanged.
+const FRENCH_ERRORS: &[(CellError, &str)] = &[
+    (CellError::Null, "#NUL!"),
+    (CellError::Div0, "#DIV/0!"),
+    (CellError::Value, "#VALEUR!"),
+    (CellError::Ref, "#REF!"),
+    (CellError::Name, "#NOM?"),
+    (CellError::Num, "#NOMBRE!"),
+    (CellError::NA, "#N/A"),
+    (CellError::GettingData, "#CHARGEMENT_DONNEES"),
+    (CellError::Spill, "#PROPAGATION!"),
+    (CellError::Calc, "#CALC!"),
+];
+
 impl FormulaLocale {
     /// `(canonical English, localized)` function names; names absent from it are spelled alike.
     pub fn function_table(self) -> &'static [(&'static str, &'static str)] {
@@ -478,6 +496,17 @@ impl FormulaLocale {
     }
     pub fn canonical_name(self, localized: &str) -> &str {
         self.function_table().iter().find(|(_, local)| local.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized)
+    }
+    /// Localized error literals; unlisted errors keep their canonical spelling.
+    pub(crate) fn errors(self) -> &'static [(CellError, &'static str)] {
+        match self {
+            Self::Fr => FRENCH_ERRORS,
+            Self::En | Self::Es => &[],
+        }
+    }
+    /// The error spelling used when displaying a formula in this language.
+    pub fn error_name(self, error: CellError) -> &'static str {
+        self.errors().iter().find(|(e, _)| *e == error).map_or(error.as_str(), |(_, name)| *name)
     }
 }
 
@@ -538,6 +567,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
                 array_depth = array_depth.saturating_sub(1);
                 out.push_str(text);
             }
+            Tok::Error(e) => out.push_str(locale.error_name(e)),
             Tok::Number(_) => out.push_str(&text.replace('.', &locale.decimal_separator().to_string())),
             Tok::Comma => out.push(if array_depth > 0 { locale.array_column_separator() } else { locale.list_separator() }),
             _ => out.push_str(text),
@@ -574,9 +604,15 @@ fn normalize(
                 *expr = Expr::Name(alias.into());
             }
         }
-        Expr::Name(name) if !display && !bound(name, bindings) => {
-            if let Some(value) = boolean_alias(name, locale) {
+        Expr::Name(name) if !bound(name, bindings) => {
+            if !display && let Some(value) = boolean_alias(name, locale) {
                 *expr = Expr::Bool(value);
+            } else if locale == FormulaLocale::Fr {
+                // GROUPBY/PIVOTBY and LAMBDA helpers also take a function by its bare name.
+                let alias = if display { locale.function_name(name) } else { locale.canonical_name(name) };
+                if !display || !bound(alias, bindings) {
+                    *name = alias.to_string();
+                }
             }
         }
         Expr::Call(name, args) if name == "LET" && args.len() >= 3 && !args.len().is_multiple_of(2) => {

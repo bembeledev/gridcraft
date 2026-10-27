@@ -2063,6 +2063,36 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Le Solveur n'a pas trouvé de solution satisfaisant toutes les contraintes."
         }
         "The objective can grow without limit: the problem is unbounded." => "L'objectif peut croître sans limite : le problème n'est pas borné.",
+        // macOS menu bar (apps/gridcraft native_menu.rs).
+        "menu|Edit" => "Édition",
+        "Agent Control (MCP)…" => "Contrôle par agent (MCP)…",
+        "Cells…" => "Cellules…",
+        "Command Palette…" => "Palette de commandes…",
+        "Conditional Formatting…" => "Mise en forme conditionnelle…",
+        "Contributors…" => "Contributeurs…",
+        "Error Checking…" => "Vérification des erreurs…",
+        "Evaluate Formula…" => "Évaluation de formule…",
+        "Function…" => "Fonction…",
+        "GridCraft on getartcraft.com" => "GridCraft sur getartcraft.com",
+        "Help" => "Aide",
+        "Join the ArtCraft Discord…" => "Rejoindre le Discord ArtCraft…",
+        "Name…" => "Nom…",
+        "New from Sample…" => "Nouveau à partir d'un exemple…",
+        "Picture…" => "Image…",
+        "Properties…" => "Propriétés…",
+        "Remove Duplicates…" => "Supprimer les doublons…",
+        "Rename Sheet…" => "Renommer la feuille…",
+        "Save as Web Page…" => "Enregistrer comme page web…",
+        "Sheet" => "Feuille",
+        "Sparklines…" => "Graphiques sparkline…",
+        "Spelling…" => "Orthographe…",
+        "Subtotal…" => "Sous-total…",
+        "Text to Columns…" => "Convertir le texte en colonnes…",
+        "Services" => "Services",
+        "Hide GridCraft" => "Masquer GridCraft",
+        "Hide Others" => "Masquer les autres",
+        "Show All" => "Tout afficher",
+        "Quit GridCraft" => "Quitter GridCraft",
         // File import warnings (gridcraft-xlsx readers).
         "a cell picture has an external or invalid image relationship; kept its scalar fallback" => {
             "une image dans une cellule a une relation d'image externe ou non valide ; sa valeur de repli a été conservée"

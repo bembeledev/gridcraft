@@ -35,7 +35,7 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+                self.2 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
             }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
@@ -60,6 +60,11 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.1.show(&mut self.0, ui);
+        // A language chosen in this frame relabels the menu bar now, not on the next repaint.
+        #[cfg(target_os = "macos")]
+        if let Some(m) = &mut self.2 {
+            m.sync_language(&self.0);
+        }
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();

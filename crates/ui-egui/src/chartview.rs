@@ -519,7 +519,7 @@ fn turn_shape(shape: &mut egui::Shape, c: Pos2, deg: f32) {
     use egui::Shape;
     let t = |q: &mut Pos2| *q = crate::frame::turn(*q, c, deg);
     match shape {
-        Shape::Noop | Shape::Callback(_) => {}
+        Shape::Noop | Shape::Callback(_) | Shape::Band(_) => {}
         Shape::Vec(v) => v.iter_mut().for_each(|s| turn_shape(s, c, deg)),
         Shape::Circle(k) => t(&mut k.center),
         Shape::Ellipse(e) => {

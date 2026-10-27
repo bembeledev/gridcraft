@@ -232,10 +232,8 @@ impl Language {
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated != fallback {
+        // Exact lookup only: `tr`'s `context|label` fallback would swap a runtime message holding `|` for a label.
+        if let Some(translated) = self.lookup(&message) {
             return translated.to_owned();
         }
         // Messages built with `format!`: the template with the most literal text wins.
@@ -306,7 +304,7 @@ fn literal_len(template: &str) -> usize {
 }
 
 /// `translated` with its placeholders filled from `message`, if `message` matches `template`.
-/// Each placeholder captures the (non-empty) text up to the next literal; captures stay untranslated.
+/// Each placeholder captures the text up to the next literal; captures stay untranslated.
 fn fill_template(template: &str, message: &str, translated: &str) -> Option<String> {
     let (literals, names) = template_parts(template)?;
     let (first, rest) = literals.split_first()?;
@@ -319,9 +317,6 @@ fn fill_template(template: &str, message: &str, translated: &str) -> Option<Stri
         body = tail;
     }
     captures.push(body);
-    if captures.iter().any(|c| c.is_empty()) {
-        return None;
-    }
     // One pass over `translated`, so a capture that contains `{…}` is never substituted again.
     let (pieces, slots) = template_parts(translated)?;
     let mut out = String::new();
@@ -488,7 +483,9 @@ mod tests {
         assert_eq!(Language::Fr.tr_error("command `x`: no sheet named `Q1`"), "aucune feuille nommée « Q1 »");
         assert_eq!(Language::En.tr_error(&shown), shown);
         assert_eq!(Language::Fr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
-        assert_eq!(Language::Fr.tr_error("no sheet named ``"), "no sheet named ``", "an empty capture is no match");
+        assert_eq!(Language::Fr.tr_error("no sheet named ``"), "aucune feuille nommée «  »", "an empty capture still matches");
+        // A runtime message holding `|` is never swapped for the label after it.
+        assert_eq!(Language::Fr.tr_error("could not read draft|Outline"), "could not read draft|Outline");
         // File import warnings, plain and built with `format!`.
         assert_eq!(
             Language::Fr.tr_error("macros (VBA project) were kept but not executed"),

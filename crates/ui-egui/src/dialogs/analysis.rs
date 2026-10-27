@@ -253,7 +253,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             ui.label(lang.tr(label));
             let mut selected = d.values.get(*key).and_then(Json::as_str).unwrap_or("linear").to_string();
             let text = options.iter().find(|(value, _)| *value == selected).map(|(_, label)| lang.tr(label)).unwrap_or("");
-            egui::ComboBox::from_id_salt("regression-model").selected_text(text).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("regression-model").selected_text(text).show_ui(ui, |ui| {
                 for (value, label) in options {
                     ui.selectable_value(&mut selected, (*value).into(), lang.tr(label));
                 }

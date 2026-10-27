@@ -440,10 +440,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         if p.x < geo.cells.left() + edge * 0.5 && !matches!(app.grid.drag, Drag::ResizeCol { .. }) {
             auto.x = -30.0;
         }
-        let pc = CellRef::new(
-            geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
-            geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
-        );
+        let pc = cell_at_clamped_pointer(geo, sh, p);
         match app.grid.drag.clone() {
             Drag::DialogRange { document, sheet, start } => {
                 if sheet == wb.active_sheet() && app.session.active().is_some_and(|doc| doc.uid == document) {
@@ -549,7 +546,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                     && app.session.active().is_some_and(|doc| doc.uid == document)
                     && let Some(p) = pos
                 {
-                    crate::dialogs::update_dialog_range_picker(app, sheet, start, geo.cell_at(sh, p));
+                    crate::dialogs::update_dialog_range_picker(app, sheet, start, cell_at_clamped_pointer(geo, sh, p));
                 }
             }
             Drag::Select => {
@@ -639,6 +636,18 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         resp.request_focus();
     }
     keyboard(app, &ctx, resp, geo, sh);
+}
+
+/// Converts a pointer coordinate to a cell after clamping it to the visible worksheet area.
+fn cell_at_clamped_pointer(geo: &Geo, sh: &Sheet, p: egui::Pos2) -> CellRef {
+    let p = clamp_pointer_to_rect(geo.cells, p);
+    CellRef::new(geo.row_at(sh, p.y), geo.col_at(sh, p.x))
+}
+
+fn clamp_pointer_to_rect(rect: egui::Rect, p: egui::Pos2) -> egui::Pos2 {
+    let margin_x = 1.0_f32.min(rect.width() * 0.5);
+    let margin_y = 1.0_f32.min(rect.height() * 0.5);
+    egui::pos2(p.x.clamp(rect.left() + margin_x, rect.right() - margin_x), p.y.clamp(rect.top() + margin_y, rect.bottom() - margin_y))
 }
 
 /// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
@@ -930,4 +939,18 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
+}
+
+#[cfg(test)]
+mod range_picker_pointer_tests {
+    use super::*;
+
+    #[test]
+    fn range_picker_pointer_stays_inside_cell_viewport() {
+        let cells = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 220.0));
+        let margin = 1.0;
+        let point = egui::pos2(500.0, -50.0);
+        let clamped = clamp_pointer_to_rect(cells, point);
+        assert_eq!(clamped, egui::pos2(cells.right() - margin, cells.top() + margin));
+    }
 }

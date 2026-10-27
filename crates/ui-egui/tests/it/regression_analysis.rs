@@ -88,6 +88,7 @@ fn regression_output_picker_uses_one_cell_on_the_selected_sheet() {
 #[test]
 fn regression_control_and_ok_refuse_a_different_workbook() {
     let mut h = harness();
+    let analysis_window = h.state().session.active_window().unwrap_or_default();
     h.state_mut().session.new_workbook();
     let before = serde_json::to_value(&h.state().session.active().unwrap().wb).unwrap();
     let result = control(&mut h, "ui.dialog.confirm", json!({}));
@@ -97,7 +98,9 @@ fn regression_control_and_ok_refuse_a_different_workbook() {
     assert_eq!(control(&mut h, "ui.dialog.set", json!({"field":"inputY","value":"B1:B3"}))["ok"], false);
     h.run_steps(4);
     assert!(h.query_by_role_and_label(Role::Button, "OK").is_none());
-    h.get_by_role_and_label(Role::Button, "Cancel").click();
+    h.state_mut().session.execute("window.activate", json!({"window": analysis_window})).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, " Cancel ").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
 }

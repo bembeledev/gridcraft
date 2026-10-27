@@ -33,6 +33,15 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
     let events = ctx.input(|i| i.events.clone());
+    // egui-winit consumes Ctrl+V on press even when its text clipboard is empty.
+    // The matching key release remains available for native image-only clipboard data.
+    if events.iter().any(|e| matches!(e,egui::Event::Key {key:egui::Key::V,pressed:false,modifiers,..} if modifiers.command))
+        && !events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+        && app.system_clipboard_text().is_none()
+        && app.paste_chart_image()
+    {
+        return;
+    }
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -123,9 +132,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    Key::Delete if delete_selected_object(app, ctx, sh) => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
+                    Key::Backspace if delete_selected_object(app, ctx, sh) => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));

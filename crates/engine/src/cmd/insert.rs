@@ -17,7 +17,7 @@ mod objects;
 mod table;
 
 pub use chart::{build_chart, chart_kind, recommend_charts, scatter_x_from_first, series_from_range};
-use chart::{chart_delete, chart_set, chart_switch, insert_chart};
+use chart::{chart_delete, chart_duplicate, chart_export, chart_paste, chart_set, chart_switch, insert_chart};
 use cond_format::{add_cf, clear_cf, insert_icon, manage_cf};
 use links::{comment, delete_comment, insert_link, open_link, reply_comment, resolve_comment, show_note};
 use objects::{delete_object, insert_picture, insert_shape, insert_sparkline, move_object, set_anchor_mode, shape_set_text};
@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 1), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -105,12 +105,31 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat with axis, gridline, text, surface and series styling overrides}",
             has_doc,
             chart_set
         ),
         cmd!("chart.switchRowColumn", "Switch Row/Column", ["Chart Design", "Data"], None, "{chart?}", has_doc, chart_switch),
         cmd!("chart.delete", "Delete Chart", [], None, "{chart?}", has_doc, chart_delete),
+        cmd!(query "chart.export", "Save Chart as Picture", [], None, "{chart?, format?: png|svg (default png), scale?: 0.25..8 (default 2), transparent?, path?} → {base64?, path?, bytes, mime}", has_doc, chart_export),
+        cmd!(
+            "chart.duplicate",
+            "Duplicate Chart",
+            [],
+            None,
+            "{chart?, at?} → {chart}: editable copy within the same workbook",
+            has_doc,
+            chart_duplicate
+        ),
+        cmd!(
+            "chart.paste",
+            "Paste Chart",
+            [],
+            None,
+            "{snapshot: Chart, at?} → {chart}: editable copy within the same workbook",
+            has_doc,
+            chart_paste
+        ),
         cmd!(
             "insert.sparkline",
             "Sparklines",

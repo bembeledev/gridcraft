@@ -14,6 +14,7 @@ mod borders;
 mod cell_editor_caret;
 mod cell_pictures;
 mod cf_rule_pick;
+mod chart_font_routing;
 mod chart_resize;
 mod clipboard;
 mod comments_pane;

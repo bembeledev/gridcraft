@@ -4,6 +4,11 @@ impl SheetApp {
     /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        if self.selected_chart_snapshot().is_some() {
+            self.copy_chart(ctx, command == "edit.cut", false);
+            return;
+        }
+        self.chart_clipboard = None;
         // Only ask the engine for HTML when the host can publish it.
         let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
             Ok(result) => result,
@@ -32,6 +37,10 @@ impl SheetApp {
     /// clipboard is pasted instead, which reports "Nothing to paste.". Other text means the
     /// clipboard has moved on, so the cut's text is forgotten and pastes normally later.
     pub fn paste_external(&mut self, text: String) {
+        if text.is_empty() && self.paste_chart_image() {
+            return;
+        }
+        self.chart_clipboard = None;
         if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
             if self.session.clipboard.is_none() {
                 return self.run_or_alert("edit.paste", json!({}));
@@ -51,7 +60,11 @@ impl SheetApp {
     /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
     /// without publishing, GridCraft's own clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
-        match self.system_clipboard_text() {
+        let text = self.system_clipboard_text();
+        if text.is_none() && self.paste_chart_image() {
+            return;
+        }
+        match text {
             Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
             _ => self.run_or_alert("edit.paste", json!({})),
         }
@@ -59,7 +72,7 @@ impl SheetApp {
 
     /// The system clipboard's plain text, with the line endings of egui's `Event::Paste` text.
     /// `None` when it holds no text or the host can't read it.
-    pub(super) fn system_clipboard_text(&mut self) -> Option<String> {
+    pub(crate) fn system_clipboard_text(&mut self) -> Option<String> {
         self.services.paste_text.as_mut().and_then(|read| read()).filter(|t| !t.is_empty()).map(|t| t.replace("\r\n", "\n"))
     }
 

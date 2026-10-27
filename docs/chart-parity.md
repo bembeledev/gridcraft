@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-24 · **Change:** minor (100% stacked area charts) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** chart-formatting review fixes and 100% stacked line compatibility · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -9,13 +9,18 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 (layout and rendering), `crates/xlsx/src/chart.rs` (DrawingML chart parts), merged PRs #62, #116,
 #158 and #161, and issue #190.
 
+The current contribution adds primary-axis overrides, element selection and text formatting,
+series line/marker controls, independent major gridlines, movable overlay legends and trendline
+labels, chart-specific menus, and PNG/SVG export. See [chart editing and follow-up](chart-editing.md)
+for scope and limitations. The overall readiness estimate has not been remeasured.
+
 ## Chart types
 
 | Excel type | Excel subtypes | GridCraft | Notes |
 |---|---|---|---|
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
-| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
+| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 5 of 7 (line, with markers, stacked, 100% stacked, 100% stacked with markers) | no stacked with markers, no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX; smoothed lines landed (#62) |
 | Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | no exploded, pie of pie, bar of pie |
 | Area | area, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
@@ -31,28 +36,28 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
 | Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
-| **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
+| **Total** | ~60 subtypes | **28 (~47%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
 
 | Element | Excel | GridCraft |
 |---|---|---|
 | Move and resize the chart object | yes | yes (corner handle, Format Chart Area Size fields) |
-| Chart title, axis titles | text, linked to cells, full formatting | text only |
-| Legend | position, overlay, formatting, per-entry delete | position only |
+| Chart title, axis titles | text, linked to cells, full formatting | text and font controls through Home; cell links and full text-box formatting pending |
+| Legend | position, overlay, formatting, per-entry delete | standard positions, overlay, drag placement and font controls; individual entries pending |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
-| Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
+| Gridlines | major/minor per axis, formatting | independent major horizontal/vertical lines, color and width; minor gridlines pending |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | primary-axis bounds, units, base-10 log, reverse order, number format, major/minor ticks and stroke controls; crossing, display units and date axes pending |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
 | Secondary axis | any series | line series in combo charts |
-| Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
+| Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types modelled, drawn and saved; Format pane adds/removes trends and toggles equation/R²; draggable label position is kept. Individual trend editing and equation number formats remain pending |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | **missing** |
-| Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
+| Per-series / per-point fill, line, marker, effects | Format pane for every element | series line/fill/marker colors, transparency, widths, smoothing and marker types/sizes; point overrides and effects pending |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
-| Chart templates (`.crtx`) | yes | **missing** |
+| Chart templates (`.crtx`) | yes | **partial** — local named style templates can be applied to same-kind charts; `.crtx` import/export and workbook portability are missing |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
 | Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116) |
 | Recommended Charts | yes | partial (Insert ▸ Recommended) |
@@ -63,11 +68,10 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 ## XLSX round-trip
 
-Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
-**~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
-back.
+Charts are read from and written to DrawingML chart parts. Supported formatting uses native
+chart XML where implemented, with a GridCraft extension for the full formatting model. Unsupported
+label options, error bars and per-point formats can still be lost on save. Interoperability with
+external editors, especially edits that leave a stale GridCraft extension, needs further review.
 
 Series data, categories and names may refer to defined names, as dynamic (OFFSET) ranges do:
 Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it as the bare
@@ -90,6 +94,11 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | follow-up review | Fractional-minimum minor-tick lattice, remapped combo-series formatting, fontless native test setup |
+| 2026-10-23 | review follow-up | Resolved-font text fitting, category legend colors, offset minor ticks, automatic series colors and native borders, combo/ChartEx axes, one-step template insertion and chart-specific translations |
+| 2026-10-23 | local contribution | Element formatting, primary axes, tick strokes, markers, text fonts, overlay legend placement, chart menus and PNG/SVG export |
+| 2026-10-23 | review fixes | Browser PNG fallback fonts, clipped line labels, stable category-label ordering for fixed-order renderers, and independent category/value gridlines in horizontal-bar XLSX round-trips |
+| 2026-10-25 | minor | 100% Stacked Line and 100% Stacked Line with Markers: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |

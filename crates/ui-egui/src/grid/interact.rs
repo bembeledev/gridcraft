@@ -111,6 +111,32 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
             app.selected_chart = Some(id);
+            let mut label_drag = None;
+            if kind == "chart"
+                && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+            {
+                let element = crate::chartview::element_at(ui, wb, wb.active_sheet(), chart, rect, p);
+                crate::chartview::select_element(ui.ctx(), id, element);
+                use crate::chartview::ChartElement;
+                let legend = element == ChartElement::Legend;
+                if resp.drag_started() && (element == ChartElement::TrendlineText || (legend && chart.format.legend_overlay)) {
+                    let bounds = ui
+                        .ctx()
+                        .data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", id))))
+                        .map(|(_, r)| r.min)
+                        .unwrap_or_default();
+                    let position = if legend { chart.format.legend_position } else { chart.format.trendline_label_position }
+                        .unwrap_or([bounds.x / chart.anchor.width.max(1.0), bounds.y / chart.anchor.height.max(1.0)]);
+                    label_drag = Some(Drag::ChartLabel {
+                        id,
+                        legend,
+                        start: p,
+                        position,
+                        size: [rect.width().max(1.0), rect.height().max(1.0)],
+                        edited: false,
+                    });
+                }
+            }
             if kind == "shape"
                 && resp.double_clicked()
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
@@ -122,6 +148,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                 app.grid.pane = Some("formatChart".into());
             }
             if primary_drag {
+                if let Some(drag) = label_drag {
+                    app.grid.drag = drag;
+                    return;
+                }
                 let a = object_anchor(sh, kind, id);
                 let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
                 if let Some(a) = a {
@@ -137,9 +167,15 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
-        && let Some((kind, id, _)) = crate::chartview::hit(app, geo, sh, p)
+        && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_chart = Some(id);
+        if kind == "chart"
+            && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+        {
+            let element = crate::chartview::element_at(ui, wb, wb.active_sheet(), chart, rect, p);
+            crate::chartview::select_element(ui.ctx(), id, element);
+        }
         app.grid.object_menu = Some((geo.mirror_pos(p), kind, id));
         return;
     }
@@ -501,6 +537,24 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
             }
+            Drag::ChartLabel { id, legend, start, position, size, edited } => {
+                if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+                    let delta = p - start;
+                    let new = [(position[0] + delta.x / size[0]).clamp(0.0, 1.0), (position[1] + delta.y / size[1]).clamp(0.0, 1.0)];
+                    let mut format = chart.format.clone();
+                    if legend {
+                        format.legend_position = Some(new);
+                    } else {
+                        format.trendline_label_position = Some(new);
+                    }
+                    if app.run("chart.set", json!({"chart":id,"format":format})).is_ok() {
+                        if edited {
+                            coalesce_last_undo(app);
+                        }
+                        app.grid.drag = Drag::ChartLabel { id, legend, start, position, size, edited: true };
+                    }
+                }
+            }
             Drag::Object { kind, id, start, orig, resize } => {
                 let d = (p - start) / geo.z;
                 let (cell, dx, dy, w, h) = orig;
@@ -583,6 +637,17 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if resp.secondary_clicked()
         && let Some(p) = pos
     {
+        if let Some(("chart", id, rect)) = crate::chartview::hit(app, geo, sh, p)
+            && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+        {
+            app.selected_chart = Some(id);
+            crate::chartview::element_at(ui, wb, wb.active_sheet(), chart, rect, p);
+            app.grid.context_menu = Some(geo.mirror_pos(p));
+            app.grid.header_menu = None;
+            resp.request_focus();
+            return;
+        }
+        app.selected_chart = None;
         if in_cells && !sel.contains(geo.cell_at(sh, p)) {
             let _ = app.session.run("selection.set", json!({"cell": geo.cell_at(sh, p).a1()}));
         }
@@ -843,8 +908,36 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     }
 }
 
-pub(super) fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
+pub(super) fn delete_selected_object(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> bool {
     let Some(id) = app.selected_chart else { return false };
+    if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+        use crate::chartview::ChartElement;
+        match crate::chartview::selected_element(ctx, id) {
+            ChartElement::ChartArea => {}
+            ChartElement::Title => app.run_or_alert("chart.set", json!({"chart":id,"title":""})),
+            ChartElement::Legend => app.run_or_alert("chart.set", json!({"chart":id,"legend":"none"})),
+            ChartElement::XAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"xTitle":null})),
+            ChartElement::YAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"yTitle":null})),
+            ChartElement::Gridlines => {
+                let mut format = chart.format.clone();
+                format.vertical_gridlines = false;
+                app.run_or_alert("chart.set", json!({"chart":id,"gridlines":false,"format":format}));
+            }
+            ChartElement::Series(i) if chart.series.len() > 1 => app.run_or_alert("chart.selectData", json!({"chart":id,"removeSeries":[i]})),
+            ChartElement::Series(_) => {
+                app.message = Some(("Data Series".into(), "The last series cannot be removed. To delete the entire chart, select Chart Area.".into()))
+            }
+            ChartElement::XAxis | ChartElement::YAxis | ChartElement::PlotArea | ChartElement::DataLabels | ChartElement::TrendlineText => {
+                app.message = Some(("Chart Element".into(), "Deleting this element is not supported yet. The chart was kept.".into()))
+            }
+        }
+        if crate::chartview::selected_element(ctx, id) != ChartElement::ChartArea {
+            // Keep the element selected: a repeated Delete must not fall through to deleting
+            // the entire chart after the first key press removed its title or legend.
+            ctx.data_mut(|d| d.remove::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", id))));
+            return true;
+        }
+    }
     let kind = if sh.charts.iter().any(|object| object.id == id) {
         "chart"
     } else if sh.images.iter().any(|object| object.id == id) {

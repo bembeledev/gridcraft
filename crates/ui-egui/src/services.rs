@@ -26,6 +26,8 @@ pub struct Services {
     /// gets it from egui's `Event::Paste`). `None` from the host, or no service (web), pastes
     /// GridCraft's own clipboard.
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
+    /// Desktop: read a clipboard image for chart duplication or ordinary image paste.
+    pub paste_image: Option<Box<dyn FnMut() -> Option<egui::ColorImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.

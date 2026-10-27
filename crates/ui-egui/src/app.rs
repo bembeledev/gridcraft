@@ -3,6 +3,7 @@ use super::services::{Chrome, Services};
 use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 use super::*;
 
+mod chart_font;
 mod clipboard;
 mod commands;
 mod editing;
@@ -61,6 +62,8 @@ impl SheetApp {
             capture_geometry: None,
             capture_geometry_from_raw: false,
             selected_chart: None,
+            chart_context: None,
+            chart_clipboard: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
@@ -94,6 +97,7 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
+        self.chart_context = Some(ctx.clone());
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;

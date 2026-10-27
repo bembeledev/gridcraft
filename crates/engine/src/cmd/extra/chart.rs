@@ -211,6 +211,7 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
     with_chart(s, p, move |c| {
         if let Some((series, source, by_rows)) = rebuilt {
             c.series = series;
+            c.format.series.clear();
             crate::cmd::insert::scatter_x_from_first(c.kind, &mut c.series);
             c.source = Some(source);
             c.by_rows = by_rows;
@@ -218,6 +219,10 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         for i in remove.iter().rev() {
             if *i < c.series.len() && c.series.len() > 1 {
                 c.series.remove(*i);
+                c.format.series = std::mem::take(&mut c.format.series)
+                    .into_iter()
+                    .filter_map(|(index, style)| if index == *i { None } else { Some((if index > *i { index - 1 } else { index }, style)) })
+                    .collect();
             }
         }
         if let Some(cats) = categories {

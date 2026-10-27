@@ -131,6 +131,14 @@ pub enum Drag {
         orig: (CellRef, f32, f32, f32, f32),
         resize: bool,
     },
+    ChartLabel {
+        id: u32,
+        legend: bool,
+        start: Pos2,
+        position: [f32; 2],
+        size: [f32; 2],
+        edited: bool,
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo

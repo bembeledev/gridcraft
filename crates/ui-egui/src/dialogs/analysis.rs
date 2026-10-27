@@ -37,11 +37,11 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
 /// Edits one analysis range and toggles worksheet selection for that field with Select… / Finish.
 /// Typing cancels the active picker; editing `output` also selects range output. `single_cell`
 /// makes subsequent grid picking keep only the drag's starting cell, as report output requires.
-pub(super) fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_cell: bool) {
+pub(super) fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_cell: bool, label_id: egui::Id) {
     ui.push_id(key, |ui| {
         ui.horizontal(|ui| {
             let mut text = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
-            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(240.0));
+            let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(240.0)).labelled_by(label_id);
             take_first_focus(d, &edit);
             if edit.changed() {
                 d.values.insert(key.into(), json!(text));
@@ -51,7 +51,8 @@ pub(super) fn range_editor(ui: &mut egui::Ui, d: &mut Dialog, key: &str, single_
                 }
             }
             let picking = d.range_picker.as_ref().is_some_and(|picker| picker.key == key);
-            if ui.button(crate::widgets::tr(ui, if picking { "Finish" } else { "Select…" })).clicked() {
+            let select = ui.button(crate::widgets::tr(ui, if picking { "Finish" } else { "Select…" })).labelled_by(label_id);
+            if select.clicked() {
                 d.range_picker = if picking { None } else { Some(RangePicker { key: key.into(), single_cell }) };
             }
         })
@@ -197,8 +198,8 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
                 _ => None,
             })
             .unwrap_or("Output Range:");
-        ui.label(lang.tr(label));
-        range_editor(ui, d, &picker.key, picker.single_cell);
+        let label = ui.label(lang.tr(label));
+        range_editor(ui, d, &picker.key, picker.single_cell, label.id);
         return;
     }
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
@@ -276,11 +277,12 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
+            let radio = ui.radio(to == choice, text_label);
+            if radio.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
             }
             if choice == "range" {
-                range_editor(ui, d, key, true);
+                range_editor(ui, d, key, true, radio.id);
             } else {
                 let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                 if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {

@@ -520,8 +520,8 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                 }
                 Field::Range { key, label } => {
                     ui.vertical(|ui| {
-                        ui.label(lang.tr(label));
-                        range_editor(ui, d, key, false);
+                        let label = ui.label(lang.tr(label));
+                        range_editor(ui, d, key, false, label.id);
                     });
                 }
                 Field::Password { key, label } => {

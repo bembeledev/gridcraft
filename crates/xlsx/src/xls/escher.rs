@@ -23,6 +23,9 @@ const MAX_DEPTH: usize = 16;
 const MAX_PICTURE: usize = 64 * 1024 * 1024;
 /// Bytes of pictures (decompressed or converted) a whole workbook's store may hold.
 const MAX_STORE_BYTES: usize = 256 * 1024 * 1024;
+/// Pixels of bitmaps (DIB) a whole workbook's store may decode: each one is expanded to four
+/// bytes a pixel before it is re-encoded.
+const MAX_STORE_PIXELS: usize = 64 * 1024 * 1024;
 /// Most pictures kept for a workbook or a sheet.
 pub(super) const MAX_PICTURES: usize = 10_000;
 
@@ -98,7 +101,7 @@ fn walk(d: &[u8], depth: usize, count: &mut usize, leaf: &mut dyn FnMut(&Header,
 /// The picture store of a drawing group (the concatenated MsoDrawingGroup data).
 pub(super) fn read_store(group: &[u8]) -> Vec<Stored> {
     let mut out: Vec<Stored> = vec![];
-    let mut work = Work { raster: emf::RASTER_BUDGET, bytes: MAX_STORE_BYTES };
+    let mut work = Work { raster: emf::RASTER_BUDGET, bytes: MAX_STORE_BYTES, pixels: MAX_STORE_PIXELS };
     let mut count = 0;
     walk(group, 0, &mut count, &mut |h, body| {
         // BSE: btWin32, btMacOS, uid(16), tag, size, cRef, foDelay, unused, cbName, unused×2, name, blip.
@@ -114,6 +117,7 @@ pub(super) fn read_store(group: &[u8]) -> Vec<Stored> {
 struct Work {
     raster: usize,
     bytes: usize,
+    pixels: usize,
 }
 
 impl Work {
@@ -144,7 +148,7 @@ fn decode_blip(h: &Header, body: &[u8], work: &mut Work) -> Option<Blip> {
             Some(Blip { data: Arc::new(file.to_vec()), mime: if h.ty == 0xF01E { "image/png" } else { "image/jpeg" } })
         }
         0xF01F => {
-            let png = dib_to_png(body.get(uids + 1..)?)?;
+            let png = dib_to_png(body.get(uids + 1..)?, &mut work.pixels)?;
             work.charge(png.len())?;
             Some(Blip { data: Arc::new(png), mime: "image/png" })
         }
@@ -170,7 +174,7 @@ fn decode_blip(h: &Header, body: &[u8], work: &mut Work) -> Option<Blip> {
 
 /// A device-independent bitmap (a BITMAPINFOHEADER and pixels, no file header) as PNG. Only
 /// uncompressed 1, 4, 8, 24 and 32-bit bitmaps are read.
-fn dib_to_png(d: &[u8]) -> Option<Vec<u8>> {
+fn dib_to_png(d: &[u8], pixels_left: &mut usize) -> Option<Vec<u8>> {
     let u32_at = |o: usize| d.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let header = u32_at(0)? as usize;
     if header < 40 {
@@ -185,9 +189,12 @@ fn dib_to_png(d: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let (w, h) = (width as usize, height.unsigned_abs() as usize);
-    if w.checked_mul(h)? > 16 * 1024 * 1024 {
+    let count = w.checked_mul(h)?;
+    if count > 16 * 1024 * 1024 {
         return None;
     }
+    // Taken before the pixels are expanded, from the allowance of the whole store.
+    *pixels_left = pixels_left.checked_sub(count)?;
     if bits <= 8 && colors == 0 {
         colors = 1 << bits;
     }
@@ -296,6 +303,12 @@ mod tests {
         d
     }
 
+    /// One bitmap against a fresh allowance.
+    fn to_png(d: &[u8]) -> Option<Vec<u8>> {
+        let mut left = 16 * 1024 * 1024;
+        dib_to_png(d, &mut left)
+    }
+
     fn pixels(png: &[u8]) -> Vec<[u8; 4]> {
         image::load_from_memory(png).unwrap().to_rgba8().pixels().map(|p| p.0).collect()
     }
@@ -305,7 +318,7 @@ mod tests {
         // 2 x 2, rows padded to 4 bytes, stored bottom-up: the bottom row (red, blue) comes first.
         let palette = [[0, 0, 255], [255, 0, 0], [0, 255, 0]];
         let d = dib(2, 2, 8, &palette, &[&[0, 1, 0, 0], &[2, 0, 0, 0]]);
-        let px = pixels(&dib_to_png(&d).unwrap());
+        let px = pixels(&to_png(&d).unwrap());
         assert_eq!(px, [[0, 255, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 255]]);
     }
 
@@ -313,23 +326,35 @@ mod tests {
     fn small_bit_depths_and_true_colour_bitmaps_decode() {
         // 1 bit: eight pixels in a byte, the first in the top bit.
         let d = dib(2, 1, 1, &[[0, 0, 0], [255, 255, 255]], &[&[0b0100_0000, 0, 0, 0]]);
-        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 255, 255, 255]]);
+        assert_eq!(pixels(&to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 255, 255, 255]]);
         // 4 bits: two pixels in a byte.
         let d = dib(2, 1, 4, &[[0, 0, 0], [0, 0, 255]], &[&[0x01, 0, 0, 0]]);
-        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 0, 0, 255]]);
+        assert_eq!(pixels(&to_png(&d).unwrap()), [[0, 0, 0, 255], [255, 0, 0, 255]]);
         // 24 bits: B, G, R.
         let d = dib(1, 1, 24, &[], &[&[10, 20, 30, 0]]);
-        assert_eq!(pixels(&dib_to_png(&d).unwrap()), [[30, 20, 10, 255]]);
+        assert_eq!(pixels(&to_png(&d).unwrap()), [[30, 20, 10, 255]]);
     }
 
     #[test]
     fn broken_bitmaps_are_refused_not_a_crash() {
-        assert!(dib_to_png(&[]).is_none());
+        assert!(to_png(&[]).is_none());
         // A palette longer than the data, a header size near the top of u32, a bitmap too short.
-        assert!(dib_to_png(&dib(2, 2, 8, &[[0, 0, 0]], &[&[0, 0, 0, 0]])).is_none());
+        assert!(to_png(&dib(2, 2, 8, &[[0, 0, 0]], &[&[0, 0, 0, 0]])).is_none());
         let mut huge = dib(1, 1, 24, &[], &[&[0, 0, 0, 0]]);
         huge[..4].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert!(dib_to_png(&huge).is_none());
-        assert!(dib_to_png(&dib(60_000, 60_000, 24, &[], &[])).is_none());
+        assert!(to_png(&huge).is_none());
+        assert!(to_png(&dib(60_000, 60_000, 24, &[], &[])).is_none());
+    }
+
+    #[test]
+    fn bitmaps_share_one_pixel_allowance() {
+        let row = [0u8; 300];
+        let rows: Vec<&[u8]> = (0..100).map(|_| &row[..]).collect();
+        let d = dib(100, 100, 24, &[], &rows);
+        let mut left = 15_000;
+        assert!(dib_to_png(&d, &mut left).is_some());
+        assert_eq!(left, 5_000);
+        // The next 100 x 100 bitmap no longer fits.
+        assert!(dib_to_png(&d, &mut left).is_none());
     }
 }

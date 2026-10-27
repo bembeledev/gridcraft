@@ -66,7 +66,7 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, locale };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -106,7 +106,8 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
-    input: bool,
+    /// Entry syntax: any locale but English also accepts its TRUE/FALSE names in array constants.
+    locale: crate::FormulaLocale,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -293,10 +294,13 @@ impl Parser {
             }
             Tok::LBrace => self.array(),
             Tok::Func(name) => {
-                let name = normalize_function_name(&name);
+                let upper = normalize_function_name(&name);
+                // Turkish entry keeps the name as typed (`indis` is `İNDİS`, not `INDIS`); the
+                // alias pass upper-cases it by the locale's rules.
+                let name = if self.locale == crate::FormulaLocale::Tr && upper.eq_ignore_ascii_case(&name) { name } else { upper };
                 let mut args = self.args()?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
-                if name == "ANCHORARRAY"
+                if name.eq_ignore_ascii_case("ANCHORARRAY")
                     && let [Expr::Ref(Reference { kind: RefKind::Cell(_), .. })] = args.as_slice()
                     && let Some(r) = args.pop()
                 {
@@ -434,7 +438,7 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
+                Tok::Word(w) if self.locale != crate::FormulaLocale::En => crate::input::boolean_alias(self.locale, &w)
                     .map(Expr::Bool)
                     .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
                 Tok::Error(e) => Expr::Error(e),

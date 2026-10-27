@@ -2,3 +2,4 @@
 
 mod printer_roundtrip;
 mod spanish_input;
+mod turkish_input;

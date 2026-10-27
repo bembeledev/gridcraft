@@ -49,6 +49,12 @@ pub struct LexError {
     pub pos: usize,
 }
 
+/// A separator inside an array constant: `\` separates columns in Spanish and rows in Turkish, and
+/// would otherwise be read as part of a name.
+fn is_array_separator(c: char, locale: crate::FormulaLocale) -> bool {
+    c == locale.array_column_separator() || c == locale.array_row_separator()
+}
+
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\\' | '?')
 }
@@ -288,6 +294,10 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
+            c if array_depth > 0 && c == locale.array_row_separator() => {
+                push(&mut out, Tok::Semicolon, i + 1);
+                i += 1;
+            }
             ';' => {
                 push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
@@ -330,7 +340,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
             }
             c if is_word_char(c) => {
                 let mut j = i;
-                while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+                while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && is_array_separator(c, locale))) {
                     j += 1;
                 }
                 let w: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -340,7 +350,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 } else if ch(j) == Some(':') && {
                     // Sheet1:Sheet3!A1 — look ahead for word then '!'.
                     let mut k = j + 1;
-                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && is_array_separator(c, locale))) {
                         k += 1;
                     }
                     // `Sheet1!A1:Sheet1!B2` is a range whose second end repeats the sheet, not a span.
@@ -350,7 +360,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                     k > j + 1 && ch(k) == Some('!') && !repeats_sheet
                 } {
                     let mut k = j + 1;
-                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
+                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && is_array_separator(c, locale))) {
                         k += 1;
                     }
                     let w2: String = chars.get(j + 1..k).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();

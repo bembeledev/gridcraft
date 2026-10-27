@@ -220,14 +220,18 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_enters_and_shows_turkish_formulas() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    // Typed as in Turkish Excel (Turkish case rules, `;` arguments, decimal comma), stored in English.
+    assert!(enter(&mut app, "=eğer(DOĞRU;topla(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=EĞER(DOĞRU;TOPLA(1,5;2,25);0)");
+    assert!(enter(&mut app, "=indis({10;20;30};1;2)"));
+    assert_eq!(formula(&app), "INDEX({10,20,30},1,2)");
+    assert!(!enter(&mut app, "=TOPLA(1.5;2)"));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }

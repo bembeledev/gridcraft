@@ -10,7 +10,7 @@
 //! and the formulas that read one are evaluated again until the loop settles
 //! (`PassHost::iterate_loops`).
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
@@ -42,7 +42,45 @@ pub struct Calc {
     /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
-    spill_errors: BTreeSet<Key>,
+    spill_errors: SpillErrors,
+}
+
+/// A set of cells by row, each row's columns in their own set: a window of rows and columns is
+/// found by one column range per row that has an entry, so the cost follows the cells in the
+/// window, not those to the side of it in the same rows.
+#[derive(Clone, Debug, Default)]
+struct SpillErrors {
+    rows: BTreeMap<(usize, u32), BTreeSet<u32>>,
+}
+
+impl SpillErrors {
+    fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    fn insert(&mut self, (sheet, c): Key) {
+        self.rows.entry((sheet, c.row)).or_default().insert(c.col);
+    }
+
+    fn remove(&mut self, (sheet, c): &Key) {
+        if let Some(cols) = self.rows.get_mut(&(*sheet, c.row)) {
+            cols.remove(&c.col);
+            if cols.is_empty() {
+                self.rows.remove(&(*sheet, c.row));
+            }
+        }
+    }
+
+    /// The cells of `sheet` in `rows` x `cols` (both inclusive), in row-major order.
+    fn range(&self, sheet: usize, rows: (u32, u32), cols: (u32, u32)) -> impl Iterator<Item = CellRef> + '_ {
+        self.rows
+            .range((sheet, rows.0)..=(sheet, rows.1))
+            .flat_map(move |(&(_, row), set)| set.range(cols.0..=cols.1).map(move |&col| CellRef::new(row, col)))
+    }
 }
 
 impl Default for Calc {
@@ -53,7 +91,7 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
-            spill_errors: BTreeSet::new(),
+            spill_errors: SpillErrors::default(),
         }
     }
 }
@@ -205,12 +243,7 @@ impl Calc {
     /// show `#SPILL!`, in row-major order.
     fn spill_errors_in(&self, wb: &Workbook, sheet: usize, rows: (u32, u32), cols: (u32, u32)) -> Vec<CellRef> {
         let Some(sh) = wb.sheet(sheet) else { return Vec::new() };
-        self.spill_errors
-            .range((sheet, CellRef::new(rows.0, 0))..=(sheet, CellRef::new(rows.1, u32::MAX)))
-            .filter(|(_, c)| c.col >= cols.0 && c.col <= cols.1)
-            .filter(|(_, c)| sh.cells.get(*c).is_some_and(|x| x.value == Value::Error(CellError::Spill)))
-            .map(|(_, c)| *c)
-            .collect()
+        self.spill_errors.range(sheet, rows, cols).filter(|c| sh.cells.get(*c).is_some_and(|x| x.value == Value::Error(CellError::Spill))).collect()
     }
 
     /// The formulas showing `#SPILL!` on `sheet` at or above and to the left of `end`: what a

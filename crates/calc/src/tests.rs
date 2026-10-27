@@ -2302,3 +2302,51 @@ fn clearing_a_cell_unblocks_the_arrays_above_and_left_of_it() {
     t.set("B3", "");
     assert_eq!(t.num("B3"), 3.0);
 }
+
+/// A sheet with `#SPILL!` cells in rows 0..64, columns 100..16384 (as blocked arrays leave), none
+/// near column A.
+fn spill_error_field() -> T {
+    let mut t = T::new();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    for r in 0..64 {
+        for col in 100..16_384 {
+            sh.cells.set(CellRef::new(r, col), Cell::value(Value::Error(CellError::Spill)));
+        }
+    }
+    t.calc.recalc_all(&mut t.wb);
+    t
+}
+
+#[test]
+fn an_edit_far_left_of_many_spill_errors_does_not_disturb_them() {
+    let mut t = spill_error_field();
+    t.set("A65", "5");
+    assert_eq!(t.num("A65"), 5.0);
+    assert_eq!(t.get("CW1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("XFD64"), Value::Error(CellError::Spill));
+    // A blocked formula inside the window is still found when a cell to its right is cleared.
+    t.set("DA66", "7");
+    t.set("CZ66", "=SEQUENCE(1,3)");
+    assert_eq!(t.get("CZ66"), Value::Error(CellError::Spill));
+    t.wb.sheet_mut(0).unwrap().cells.remove(c("DA66"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("DA66"))]);
+    assert_eq!(t.num("DA66"), 2.0);
+}
+
+/// Probe: single-cell edits in column A below a block of `#SPILL!` cells to its right.
+/// `cargo test -p gridcraft-calc --release -- --ignored --nocapture spill_error_field_probe`
+#[test]
+#[ignore]
+#[allow(clippy::disallowed_methods)]
+fn spill_error_field_probe() {
+    let mut t = spill_error_field();
+    let mut best = std::time::Duration::MAX;
+    for i in 0..9 {
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            t.set("A65", &format!("{i}"));
+        }
+        best = best.min(start.elapsed());
+    }
+    eprintln!("100 edits of A65 beside 1,040,000 spill errors: best of 9 = {best:?}");
+}

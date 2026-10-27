@@ -2096,6 +2096,7 @@ dependencies = [
  "skrifa",
  "sys-locale",
  "toml",
+ "unicode-bidi",
  "web-sys",
  "zbus",
 ]

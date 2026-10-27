@@ -7,7 +7,7 @@ packs cover 100+), with localized function names, argument separators, number an
 right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
 
-## Where we are (measured from source on `main`, after the 2026-10-10 merges)
+## Where we are (baseline measured from source on `main` after the 2026-10-10 merges; updated through 2026-10-27)
 
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the

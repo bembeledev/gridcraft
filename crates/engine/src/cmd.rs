@@ -400,18 +400,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     // A saved From Web connection whose table is gone goes with it, whatever deleted the table
     // (deleted rows or columns collapsing its range, Convert to Range, a deleted sheet): a
-    // dangling id could later match a new table that reuses the id.
+    // dangling id could later match a new table that reuses the id. A set, not a sparse vector:
+    // ids come from opened files, so the allocation must depend on the table count, not the id.
     if !wb.web_queries.is_empty() {
-        let mut live = Vec::new();
-        for sh in wb.sheets.iter() {
-            for t in sh.tables.iter() {
-                if t.id as usize >= live.len() {
-                    live.resize(t.id as usize + 1, false);
-                }
-                live[t.id as usize] = true;
-            }
-        }
-        wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.get(id as usize).is_some_and(|l| *l)));
+        let live: std::collections::HashSet<u32> = wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.id)).collect();
+        wb.web_queries.retain(|q| q.table_id.is_none_or(|id| live.contains(&id)));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;

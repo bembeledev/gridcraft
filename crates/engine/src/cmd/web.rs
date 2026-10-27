@@ -471,11 +471,16 @@ fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
     let mut out = Vec::new();
     for t in raw.as_array().ok_or_else(|| EngineError::Other("`prefetched` must be an array of tables".into()))? {
         let name = t["name"].as_str().unwrap_or_default().to_string();
-        let rows = t["rows"]
+        // Empty rows are dropped, not kept as zero-cell rows: the widest row then always has
+        // at least one cell, so the width arithmetic below cannot underflow (an all-empty
+        // table reaches the existing "The table is empty." refusal instead).
+        let rows: Vec<Vec<String>> = t["rows"]
             .as_array()
             .map(|rs| {
                 rs.iter()
-                    .map(|r| r.as_array().map(|cs| cs.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default())
+                    .filter_map(|r| r.as_array())
+                    .map(|cs| cs.iter().map(|c| c.as_str().unwrap_or_default().to_string()).collect::<Vec<String>>())
+                    .filter(|r| !r.is_empty())
                     .collect()
             })
             .unwrap_or_default();
@@ -963,6 +968,18 @@ mod tests {
         let d = s.active().unwrap();
         assert!(d.wb.active().unwrap().tables.is_empty());
         assert!(d.wb.web_queries.is_empty());
+    }
+
+    #[test]
+    /// A prefetched table of only empty rows is refused, not a zero-width import: the width
+    /// arithmetic must never see an empty widest row (the u32 underflow CodeRabbit flagged).
+    fn prefetched_tables_with_only_empty_rows_are_refused() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let err = s
+            .execute("data.fromWeb", json!({"url": "https://example.com", "table": "t", "prefetched": [{"name": "t", "rows": [[], []]}]}))
+            .unwrap_err();
+        assert!(err.to_string().contains("The table is empty."));
     }
 
     #[test]

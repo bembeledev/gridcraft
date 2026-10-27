@@ -244,8 +244,15 @@ impl SheetApp {
                     }
                 }
             } else if self.fetch.is_some() {
-                // Join the finished worker so its result is freed, then drop it.
-                let _ = self.poll_fetch();
+                // Only the From Web dialogs poll a finished fetch into place; any other state
+                // (no dialog, a different dialog) joins the finished worker so its result is
+                // freed, then drops it.
+                let polls = self.dialog.as_ref().is_some_and(|d| matches!(d.name.as_str(), "fromWeb" | "queriesConnections"));
+                if polls {
+                    ctx.request_repaint();
+                } else {
+                    let _ = self.poll_fetch();
+                }
             }
         }
         widgets::message_box(self, &ctx);

@@ -74,7 +74,8 @@ fn native_call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !ctx.charge_work(units) {
         return Value::Error(CellError::Num);
     }
-    (spec.imp)(args, ctx)
+    let value = (spec.imp)(args, ctx);
+    if ctx.charge_work(0) { value } else { Value::Error(CellError::Num) }
 }
 
 pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
@@ -121,6 +122,10 @@ pub(crate) fn call_lifted(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Val
                 return Value::Error(CellError::Num);
             }
             let out = (spec.imp)(&cell_args, ctx);
+            // Observe a host-latched refusal inside the kernel, including the final position.
+            if !ctx.charge_work(0) {
+                return Value::Error(CellError::Num);
+            }
             data.push(match out {
                 Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
                 v => v,
@@ -206,6 +211,24 @@ mod tests {
         let mut reserve = BudgetCtx { remaining: 5, kernels: 0, rejected: false };
         assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0, 3.0])), n(1.0)], &mut reserve), Value::Error(CellError::Num));
         assert_eq!(reserve.kernels, 0);
+    }
+
+    #[test]
+    fn refusal_inside_the_final_broadcast_kernel_discards_the_whole_result() {
+        let spec = FnSpec {
+            imp: |args, ctx| {
+                ctx.random();
+                if !ctx.charge_work(1) {
+                    return Value::Error(CellError::Num);
+                }
+                crate::util::finish(add(args, ctx))
+            },
+            ..spec()
+        };
+        let mut ctx = BudgetCtx { remaining: 15, kernels: 0, rejected: false };
+        assert_eq!(crate::call(&spec, &[av(row(&[1.0, 2.0])), n(1.0)], &mut ctx), Value::Error(CellError::Num));
+        assert_eq!(ctx.kernels, 2);
+        assert!(ctx.rejected);
     }
 
     #[test]

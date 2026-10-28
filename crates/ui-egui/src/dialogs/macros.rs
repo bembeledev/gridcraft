@@ -35,7 +35,9 @@ pub(super) fn macros(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 } else {
                     let steps = it.get("steps").and_then(Json::as_u64).unwrap_or(0);
                     ui.weak(
-                        crate::i18n::current(ui.ctx()).tr(if steps == 1 { "— {n} step" } else { "— {n} steps" }).replace("{n}", &steps.to_string()),
+                        crate::i18n::current(ui.ctx())
+                            .tr(if steps == 1 { "— 1 step" } else { "— {steps} steps" })
+                            .replace("{steps}", &steps.to_string()),
                     );
                 }
             });

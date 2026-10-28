@@ -294,7 +294,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(app.ui.language.tr("Sheets: {names}").replace("{names}", &sheets.join(", "))),
+                        Note(app.ui.language.tr("Sheets: {sheets}").replace("{sheets}", &sheets.join(", "))),
                     ],
                     json!({"to": 0, "copy": false}),
                 );

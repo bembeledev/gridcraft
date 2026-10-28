@@ -103,6 +103,13 @@ impl Arg {
 
 /// Services a function may need from the host.
 pub trait Ctx {
+    /// Charges conservative work units before native calculation or allocation. Returning false
+    /// stops the call with `#NUM!`. Hosts may retain the failure even if a formula catches that
+    /// error. This cooperative checkpoint does not interrupt an indivisible native operation.
+    /// The default preserves existing hosts without imposing an engine dependency.
+    fn charge_work(&mut self, _units: u64) -> bool {
+        true
+    }
     fn date_system(&self) -> DateSystem;
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
@@ -258,6 +265,10 @@ pub fn all() -> &'static [FnSpec] {
 pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
         return Value::Error(CellError::Value);
+    }
+    let input_work = args.iter().fold(1u64, |units, arg| units.saturating_add(lift::value_work(&arg.value)));
+    if !ctx.charge_work(input_work) {
+        return Value::Error(CellError::Num);
     }
     lift::call_lifted(spec, args, ctx)
 }

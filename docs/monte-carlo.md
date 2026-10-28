@@ -175,6 +175,9 @@ a reservation per cell. Charges check the local limit, any ambient policy, then 
 bank; a rejected oversized native kernel does not reserve its rejected charge from the bank.
 Earlier accepted work and unused frame credit are not refunded. Sparse misses across many
 frames can therefore consume reserved capacity faster than their exact accepted work.
+A local cell or renderer refusal omits that optional look without marking the enclosing
+command as failed. Ambient work/cancellation refusal remains terminal and is still observed
+before local evaluation and after the local scope returns.
 
 A bounded 4,096-entry document cache reuses conditional looks, including `None`, across
 repaints for the same workbook identity/revision and sheet/cell, with a **cache-wide one-second TTL for every result**, including nonvolatile looks and
@@ -197,6 +200,11 @@ Run counters and zero-unit failure/cancellation checks use atomics. Small analys
 prepaid credit: clock reads and shared-window locking occur only on credit renewal or an
 explicit bank query. A renewal reserves up to 4,096 units, bounded by the run's actual remaining
 allowance and bank availability; a large native charge is fully reserved before its kernel runs.
+Sampling, trial evaluation and statistical finalization use the analysis run meter. The
+structural full-workbook recalculation during report publication instead uses the enclosing
+command allowance; it does not consume the analysis run or its shared bank. Run checks before
+and after publication, enclosing-command refusal and the atomic rollback barrier remain active.
+
 `workUsed` reports exact accepted run charges. `sharedWorkRemaining` reports unreserved bank
 capacity and can fall faster because unused reservations are not refunded. An observed window
 rollover changes the bank generation and expires prepaid old-window credit. A run consuming

@@ -71,7 +71,7 @@ pub(super) fn estimate(name: &str, args: &[Arg]) -> u64 {
         "ACT.COMPOUND.PMF" | "ACT.COMPOUND.VAR" | "ACT.COMPOUND.TVAR" => {
             let grid = size(args, 4, 0).saturating_add(1);
             let binomial = matches!(args.get(1).map(|a| &a.value), Some(Value::Text(f)) if f.trim().eq_ignore_ascii_case("binomial"));
-            product(&[grid, n.min(grid), if binomial { size(args, 2, 0) } else { 1 }, 16])
+            product(&[grid, n.min(grid), if binomial { size(args, 2, 0).max(1) } else { 1 }, 16])
         }
         "ACT.MARKOV.POWER" | "ACT.MARKOV.STATE" => {
             let matrix = if name.ends_with("STATE") { shape(args, 1).0 } else { rows };
@@ -114,6 +114,7 @@ pub(super) fn estimate(name: &str, args: &[Arg]) -> u64 {
         "ACT.REINSURANCE.OPTIMIZE" => product(&[n, cells(args, 2), cells(args, 3), 64]),
         "ACT.RESERVE.BOOTSTRAP.ODP" => product(&[rows, rows, rows, 32]),
         _ if name.starts_with("ACT.COPULA.") => 1_000_000,
+        "ACT.BAYES.BINOMIAL.PREDICT" => 100_000u64.saturating_add(size(args, 4, 0).saturating_mul(128)),
         _ if name.starts_with("ACT.BAYES.") || name == "ACT.LEV.GAMMA" => 100_000,
         _ => 0,
     };
@@ -237,5 +238,12 @@ mod tests {
         let mut larger = small.clone();
         larger[2] = av(col(&[0.1; 100]));
         assert!(estimate("ACT.COX.SURVIVAL", &larger) > estimate("ACT.COX.SURVIVAL", &small));
+    }
+    #[test]
+    fn degenerate_compound_models_still_reserve_their_requested_output_grid() {
+        let mut args = vec![av(col(&[0.0, 1.0])), t("binomial"), n(0.0), n(0.5), n(2.0)];
+        let small = estimate("ACT.COMPOUND.PMF", &args);
+        args[4] = n(4096.0);
+        assert!(estimate("ACT.COMPOUND.PMF", &args) > small);
     }
 }

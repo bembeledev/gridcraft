@@ -100,8 +100,9 @@ the copied target was cleaned before the final full-gate run.
 - [ ] Integrate the separately owned operational-limits/job-lifecycle implementation once committed.
 - [x] Implement the L1 `Ctx::charge_work` contract, generic/native/lift checkpoints and
   saturating ACT estimates with adaptive GLM/Cox/bootstrap/compound-tail checkpoints.
-  All 247 function-library tests and all-target Clippy passed. An independent reviewer
-  additionally ran all 99 actuarial tests and 14 accounting/lift tests against the real binary.
+  All 248 function-library tests and all-target Clippy passed. An independent reviewer
+  additionally ran 99 actuarial tests and 14 accounting/lift checks against the reviewed binary.
+  A further regression reserves output-grid work even for zero-count compound models.
   Two isolated source-mutation RED controls fail as expected when the ACT reservation or
   final-broadcast latch check is removed; the production checkout was unchanged.
 - [ ] Connect and validate the shared L1→calc→engine meter across native/lifted calls and

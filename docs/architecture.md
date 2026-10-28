@@ -1,8 +1,14 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-27 · **Change:** minor (Monte Carlo trial reuse) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (L1 actuarial/scientific extensions; earlier: Monte Carlo trial reuse) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
+
+The [actuarial extension](actuarial.md) lives entirely at L1 in `functions::actuarial`:
+deterministic financial/life, loss, reserving/pricing, Markov and
+[scientific-method functions](actuarial-scientific.md) use the existing
+formula registry. CLI/MCP and workbook uncertainty use existing engine commands; no MC sampler
+is copied or exposed. `ACT.*` names are GridCraft extensions, excluded from Excel parity counts.
 
 ## Workspace and layering
 

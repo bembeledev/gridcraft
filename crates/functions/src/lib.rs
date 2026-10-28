@@ -3,7 +3,7 @@
 //! Every function is described by a [`FnSpec`] (name, arity, category, which parameters take
 //! scalars, a signature and a one-line description) and implemented as a plain Rust function over
 //! already-evaluated arguments. The calculation engine looks functions up by name with
-//! [`lookup`] and invokes them through [`call`], which applies Excel's automatic array lifting:
+//! [`lookup()`] and invokes them through [`call`], which applies Excel's automatic array lifting:
 //! passing an array where a scalar is expected evaluates the function once per element.
 //!
 //! Special forms that need references, laziness or hidden-row information (ROW, OFFSET,
@@ -62,6 +62,7 @@ macro_rules! f {
     };
 }
 
+pub(crate) mod actuarial;
 pub(crate) mod criteria;
 pub(crate) mod database;
 pub(crate) mod date;
@@ -213,6 +214,7 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
             lookup::specs(),
             dynamic::specs(),
             financial::specs(),
+            actuarial::specs(),
             info::specs(),
             engineering::specs(),
             database::specs(),

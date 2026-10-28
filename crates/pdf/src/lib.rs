@@ -212,12 +212,34 @@ fn needs_cid(c: char) -> bool {
     !c.is_control() && c != '?' && win_ansi(c) == b'?' && ext_code(c).is_none()
 }
 
-/// The byte of `c` in the Latin Extended-A encoding (U+0100..=U+017F at 0x80..=0xFF), for
-/// characters WinAnsiEncoding lacks. These are set in the standard face with a `/Differences`
-/// encoding of standard glyph names, not in the CID font.
+/// The byte of `c` in the Latin Extended-A encoding (U+0100..=U+017F at 0x80..=0xFF, and the
+/// Romanian comma-below letters Ș ș Ț ț at 0x01..=0x04), for characters WinAnsiEncoding lacks.
+/// These are set in the standard face with a `/Differences` encoding of standard glyph names,
+/// not in the CID font.
 fn ext_code(c: char) -> Option<u8> {
     let u = c as u32;
-    ((0x100..=0x17F).contains(&u) && win_ansi(c) == b'?').then(|| (u - 0x80) as u8)
+    if (0x100..=0x17F).contains(&u) && win_ansi(c) == b'?' {
+        return u8::try_from(u - 0x80).ok();
+    }
+    // U+0218..=U+021B → 0x01..=0x04 (`comma_below` is `Some` only in that range).
+    metrics::comma_below(c).and_then(|_| u8::try_from(u.checked_sub(0x217)?).ok())
+}
+
+/// The character at `code` in the [`ext_code`] encoding, if any.
+fn ext_char(code: u8) -> Option<char> {
+    let u = match code {
+        1..=4 => 0x217 + u32::from(code),
+        0x80..=0xFF => u32::from(code) + 0x80,
+        _ => return None,
+    };
+    char::from_u32(u).filter(|&c| ext_code(c) == Some(code))
+}
+
+/// The `/Widths` of a face's [`ext_code`] resource, codes 1..=255. A viewer takes a standard
+/// font's advances from its own metrics by glyph name, and those lack `uni0219` and the like:
+/// without these widths ș and ț would advance by nothing and overprint the next letter.
+fn ext_widths(face: Font) -> String {
+    (1..=255u8).map(|code| ext_char(code).map_or(0, |c| face.char_width(c)).to_string()).collect::<Vec<_>>().join(" ")
 }
 
 /// How a character is encoded in a text run.
@@ -792,11 +814,14 @@ impl PdfDoc {
                 }
                 if let Some(face) = i.checked_sub(EXT_FONT).and_then(|f| Font::ALL.get(f)) {
                     let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
+                    let comma: Vec<&str> = metrics::COMMA_BELOW.iter().map(|(name, _)| *name).collect();
                     objects.push((
                         *id,
                         format!(
-                            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /Encoding << /Type /Encoding /Differences [128 /{}] >> >>",
+                            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /FirstChar 1 /LastChar 255 /Widths [{}] /Encoding << /Type /Encoding /Differences [1 /{} 128 /{}] >> >>",
                             face.base_name(),
+                            ext_widths(*face),
+                            comma.join(" /"),
                             names.join(" /")
                         )
                         .into_bytes(),

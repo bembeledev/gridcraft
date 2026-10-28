@@ -202,10 +202,22 @@ pub(crate) fn latin_ext_a(c: char) -> Option<(&'static str, char)> {
     LATIN_EXT_A.get((c as u32).checked_sub(0x100)? as usize).copied()
 }
 
+/// Romanian Ș ș Ț ț with a comma below (U+0218..=U+021B, Latin Extended-B): glyph name and an
+/// ASCII character of similar width. The names are the `uniXXXX` form: a viewer that substitutes
+/// a font finds the glyph either by that name (TeX Gyre Heros, for one, names them so and has no
+/// `scommaaccent`) or by the code point the name spells. The AGL names are not used: it maps
+/// `Tcommaaccent`/`tcommaaccent` to the cedilla letters U+0162/U+0163, which Romanian does not use.
+pub(crate) const COMMA_BELOW: [(&str, char); 4] = [("uni0218", 'S'), ("uni0219", 's'), ("uni021A", 'T'), ("uni021B", 't')];
+
+/// The [`COMMA_BELOW`] entry of `c`, if it is one of those letters.
+pub(crate) fn comma_below(c: char) -> Option<(&'static str, char)> {
+    COMMA_BELOW.get((c as u32).checked_sub(0x218)? as usize).copied()
+}
+
 /// Maps a non-ASCII character to an ASCII character of similar width, or `None` to use the
 /// font's default width.
 pub(crate) fn fold(c: char) -> Option<char> {
-    if let Some((_, base)) = latin_ext_a(c) {
+    if let Some((_, base)) = latin_ext_a(c).or_else(|| comma_below(c)) {
         return Some(base);
     }
     Some(match c {

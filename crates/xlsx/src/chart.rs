@@ -767,6 +767,25 @@ fn strip_book(link: &str) -> &str {
     link.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(link, |(_, rest)| rest)
 }
 
+/// Splits a combo chart's series into one group per kind, in the order each kind first appears.
+/// Columns, bars, lines and areas keep their own grouping and markers; 100% stacked lines share one group
+/// whose series write their own markers; other kinds are written as plain lines.
+fn combo_groups<'a>(series: &[(usize, &'a Series)], kind: impl Fn(usize, &Series) -> Option<ChartKind>) -> Vec<(G, Vec<(usize, &'a Series)>)> {
+    let mut groups: Vec<(G, Vec<(usize, &'a Series)>)> = vec![];
+    for &(i, x) in series {
+        let g = match kind(i, x).filter(|k| *k != ChartKind::Combo).map(group_for) {
+            Some(g @ (G::Bar { .. } | G::Line { .. } | G::Area { .. })) => g,
+            Some(G::Line100 { .. }) => G::Line100 { markers: true },
+            _ => G::Line { stacked: false, markers: false },
+        };
+        match groups.iter_mut().find(|(k, _)| *k == g) {
+            Some((_, members)) => members.push((i, x)),
+            None => groups.push((g, vec![(i, x)])),
+        }
+    }
+    groups
+}
+
 /// Chart part XML for a model chart on sheet `si`.
 pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
     let mut s = String::from(
@@ -806,34 +825,12 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
             s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
         }
-        // 100% stacked line series share one percentStacked group, each with its own markers.
-        let pct = |i: usize, x: &Series| matches!(kind(i, x).map(group_for), Some(G::Line100 { .. }));
-        let plain: Vec<(usize, &Series)> = lines.iter().filter(|(i, x)| !pct(*i, x)).copied().collect();
-        let stacked: Vec<(usize, &Series)> = lines.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
-        if !plain.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &plain, ch, (1, 2), wb, si));
+        for (g, members) in combo_groups(&lines, |i, x| kind(i, x)) {
+            s.push_str(&group_xml(g, &members, ch, (1, 2), wb, si));
         }
-        if !stacked.is_empty() {
-            s.push_str(&group_xml(G::Line100 { markers: true }, &stacked, ch, (1, 2), wb, si));
-        }
-        if !sec.is_empty() {
-            // Secondary bars, lines and 100% stacked lines each get their own group.
-            let bar_of = |x: &Series| match x.kind.map(group_for) {
-                Some(b @ G::Bar { .. }) => Some(b),
-                _ => None,
-            };
-            let sec_bars: Vec<(usize, &Series)> = sec.iter().filter(|(_, x)| bar_of(x).is_some()).copied().collect();
-            let sec_plain: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| bar_of(x).is_none() && !pct(*i, x)).copied().collect();
-            let sec_stacked: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
-            let bar_g = sec_bars.first().and_then(|(_, x)| bar_of(x)).unwrap_or(G::Bar { bar: false, grouping: "clustered" });
-            for (g, members) in
-                [(bar_g, sec_bars), (G::Line { stacked: false, markers: false }, sec_plain), (G::Line100 { markers: true }, sec_stacked)]
-            {
-                if !members.is_empty() {
-                    s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
-                    secondary.get_or_insert(g);
-                }
-            }
+        for (g, members) in combo_groups(&sec, |_, x| x.kind) {
+            s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
+            secondary.get_or_insert(g);
         }
     } else {
         primary_g = match group_for(ch.kind) {

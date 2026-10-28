@@ -712,7 +712,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         let _ = write!(s, " s=\"{style}\"");
     }
     if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture);
+        let vm = out.rich_values.picture(picture);
         let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
         return;
     }
@@ -729,8 +729,13 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // caches them). Like Excel, cache #VALUE! and keep the real error in an `_error` rich
+        // value the cell's value metadata points at.
+        Value::Error(e) if crate::richdata::is_rich_error(e) => {
+            let vm = out.rich_values.error(e);
+            let _ = write!(s, " vm=\"{vm}\"");
+            Value::Error(CellError::Value)
+        }
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would

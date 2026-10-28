@@ -474,6 +474,14 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             let t = &mut sh.tables[ti];
             t.columns = columns;
             t.range = new_range;
+            // Write each kept column's name into its new header cell before sync_headers runs:
+            // an empty header there would be renamed to a generated Column{n}, breaking the
+            // name the metadata (and the connection) still holds.
+            for (i, (_, col)) in kept.iter().enumerate() {
+                let c = CellRef::new(new_range.start.row, new_range.start.col + w as u32 + i as u32);
+                let style = sh.style_id(c);
+                sh.set_cell(c, gridcraft_model::Cell { value: gridcraft_core::Value::text(col.name.as_str()), style, ..Default::default() });
+            }
             cx.structural = true;
             Ok(())
         })?;
@@ -1130,6 +1138,8 @@ mod tests {
         assert_eq!(t.range.width(), 4, "the page's three columns plus the calculated one");
         assert_eq!(t.columns[2].name, "Volume", "the page's third column takes position 3");
         assert_eq!(t.columns[3].formula.as_deref(), Some("B2*2"), "the calculated column moved right, metadata kept");
+        assert_eq!(t.columns[3].name, "Total2", "sync_headers keeps the column's name");
+        assert_eq!(sh.value(gridcraft_core::CellRef::parse("D1").unwrap()), gridcraft_core::Value::text("Total2"), "the moved column's header cell holds its name");
         // The page's data landed in its columns and the calculated column's cells refilled.
         assert_eq!(sh.value(gridcraft_core::CellRef::parse("C2").unwrap()), gridcraft_core::Value::from(100.0));
         let d2 = sh.cell(gridcraft_core::CellRef::parse("D2").unwrap()).expect("the calculated column's new cell");

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (French interface catalog complete, French function help) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -96,7 +96,8 @@ added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
+The remaining dialogs, menus and messages are English. Spanish and French formula entry and display
+are localized (function names, `;`, `,`); number and date formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -106,7 +107,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
+| French | fr | every catalog key, function help | ~53% |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
@@ -135,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-26 | French translates every interface string the catalogs have (1,161, was 433) and the whole function help: every description and argument name in Insert Function, autocomplete and the argument hint |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-24 | Status bar: a right-click opens a menu that sets which selection statistics show (Average, Count and Sum by default; Numerical Count, Minimum and Maximum are new), kept with the preferences (`view.statusBar`) |
@@ -242,6 +244,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | French row and progress log: complete French catalog and function help |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |

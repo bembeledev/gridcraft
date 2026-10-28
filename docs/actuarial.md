@@ -250,7 +250,8 @@ cancellation. No dependency from the functions layer to the engine is introduced
 
 Every ACT registration checks this hook before parsing, copying input vectors or entering
 its numerical kernel. Estimates depend on input sizes, matrix dimensions and model horizons;
-saturated arithmetic prevents large dimensions from wrapping to a small charge. Adaptive
+saturated arithmetic prevents large dimensions from wrapping to a small charge. Closed copula
+formulas use smaller reserves than numerical quadrature or inverse searches. Adaptive
 GLM/Cox iterations, bootstrap replications/process draws and compound-tail extensions also
 charge before their next expensive block. Generic calls reserve input/output work and check
 each lifted/broadcast kernel, so many small invocations cannot bypass a host's shared bank.

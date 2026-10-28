@@ -58,6 +58,34 @@ fn feature_count(dimension: u64, degree: u64) -> u64 {
     count
 }
 
+/// Distinguishes closed copula formulas from quadrature and inverse searches. Cheap analytic
+/// families must not pay the elliptical integration reserve on every Monte Carlo trial.
+fn copula_work(name: &str, args: &[Arg]) -> u64 {
+    let index = if name == "ACT.COPULA.TAIL" { 0 } else { 2 };
+    let family = match args.get(index).map(|a| &a.value) {
+        Some(Value::Text(value)) => value.trim(),
+        _ => return 1_000_000,
+    };
+    let student = family.eq_ignore_ascii_case("student") || family.eq_ignore_ascii_case("t");
+    let gaussian = family.eq_ignore_ascii_case("gaussian") || family.eq_ignore_ascii_case("normal");
+    if name == "ACT.COPULA.TAIL" {
+        return if student { 100_000 } else { 256 };
+    }
+    if name == "ACT.COPULA.CONDITIONALINV" {
+        if student {
+            return 1_000_000;
+        }
+        if gaussian {
+            return 10_000;
+        }
+        if family.eq_ignore_ascii_case("independent") || family.eq_ignore_ascii_case("independence") || family.eq_ignore_ascii_case("frank") {
+            return 256;
+        }
+        return 10_000; // Bounded 80-step inversion for Clayton/Gumbel.
+    }
+    if student || gaussian { 1_000_000 } else { 512 }
+}
+
 /// Reserves shape-dependent scans, sorting, matrix products and bounded numerical iterations.
 /// Factors represent conservative work units; they are not a theorem about CPU instructions.
 /// Existing domain/allocation caps remain in force even for hosts with the default free bank.
@@ -113,7 +141,7 @@ pub(super) fn estimate(name: &str, args: &[Arg]) -> u64 {
         "ACT.SURROGATE.PREDICT" => product(&[shape(args, 1).0, 64, 64]),
         "ACT.REINSURANCE.OPTIMIZE" => product(&[n, cells(args, 2), cells(args, 3), 64]),
         "ACT.RESERVE.BOOTSTRAP.ODP" => product(&[rows, rows, rows, 32]),
-        _ if name.starts_with("ACT.COPULA.") => 1_000_000,
+        _ if name.starts_with("ACT.COPULA.") => copula_work(name, args),
         "ACT.BAYES.BINOMIAL.PREDICT" => 100_000u64.saturating_add(size(args, 4, 0).saturating_mul(128)),
         _ if name.starts_with("ACT.BAYES.") || name == "ACT.LEV.GAMMA" => 100_000,
         _ => 0,
@@ -245,5 +273,18 @@ mod tests {
         let small = estimate("ACT.COMPOUND.PMF", &args);
         args[4] = n(4096.0);
         assert!(estimate("ACT.COMPOUND.PMF", &args) > small);
+    }
+    #[test]
+    fn closed_copula_models_do_not_pay_the_elliptical_quadrature_reserve() {
+        let mut args = vec![n(0.2), n(0.7), t("independent"), n(0.0)];
+        let analytic = estimate("ACT.COPULA.CONDITIONALINV", &args);
+        args[2] = t("student");
+        let expensive = estimate("ACT.COPULA.CONDITIONALINV", &args);
+        assert!(expensive > analytic);
+        args[2] = t(" t ");
+        assert_eq!(estimate("ACT.COPULA.CONDITIONALINV", &args), expensive);
+        assert!(analytic < 1000, "closed independent transforms should permit practical simulation counts");
+        let cdf = vec![n(0.2), n(0.7), t("frank"), n(1.0)];
+        assert!(estimate("ACT.COPULA.CDF", &cdf) < 1000);
     }
 }

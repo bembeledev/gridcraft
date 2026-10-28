@@ -2,8 +2,10 @@
 //! Survival records are (entry, exit] intervals; zero means right censoring, positive causes
 //! mean mutually exclusive terminal events. These are not interval-censored observations.
 
+use super::optional_num as opt_num;
+
 use crate::special::{ln_beta, ln_gamma, norm_inv, reg_gamma_p, reg_gamma_q, reg_inc_beta};
-use crate::util::{R, arg, array_val, as_array, has, num, num_val, opt_num};
+use crate::util::{R, arg, array_val, as_array, has, num, num_val};
 use crate::{Arg, Ctx, FnSpec};
 use gridcraft_core::{CellError, Value};
 
@@ -1121,5 +1123,23 @@ mod tests {
         assert_eq!(ev("ACT.KAPLANMEIER", vec![n(f64::NAN), n(1.0)]), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.AALENJOHANSEN", vec![n(1.0), n(17.0)]), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.COX.FIT", vec![vec_arg(&[1.0, 2.0]), vec_arg(&[0.0, 0.0]), mat(&[&[0.0], &[1.0]])]), Value::Error(CellError::Num));
+    }
+
+    #[test]
+    fn skipped_credible_confidence_defaults_before_future_exposure_or_trials() {
+        let args = vec![n(0.0), n(0.0), n(1.0), n(1.0), empty(), n(2.0)];
+        let posterior = data(ev("ACT.BAYES.POISSON", args.clone()));
+        close(posterior[4], -0.975_f64.ln());
+        close(posterior[5], -0.025_f64.ln());
+        close(posterior[6], 2.0);
+        close(posterior[7], 6.0);
+        let beta = data(ev("ACT.BAYES.BINOMIAL", vec![n(0.0), n(0.0), n(1.0), n(1.0), empty(), n(10.0)]));
+        close(beta[4], 0.025);
+        close(beta[5], 0.975);
+        close(beta[6], 5.0);
+        close(beta[7], 10.0);
+        let mut referenced = args;
+        referenced[4] = Arg::reference(Value::Empty);
+        assert_eq!(ev("ACT.BAYES.POISSON", referenced), Value::Error(CellError::Num));
     }
 }

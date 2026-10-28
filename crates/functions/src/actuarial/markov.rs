@@ -1,7 +1,7 @@
 //! Finite homogeneous Markov chains and multi-state actuarial rewards.
 //! Row-stochastic convention: distributions are row vectors. No random simulation.
 
-use crate::util::{R, arg, array_val, as_array, num, num_val};
+use crate::util::{R, arg, array_val, as_array, has, num, num_val};
 use crate::{Arg, Ctx, FnSpec};
 use gridcraft_core::{CellError, Value};
 
@@ -251,7 +251,7 @@ fn reward(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let periods = integer(a, 3, 10_000)?;
-    let benefits = if a.len() > 4 { matrix(a, 4)? } else { vec![vec![0.0; n]; n] };
+    let benefits = if has(a, 4) { matrix(a, 4)? } else { vec![vec![0.0; n]; n] };
     if benefits.len() != n {
         return Err(CellError::Value);
     }
@@ -543,5 +543,13 @@ mod tests {
             assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-12);
             assert!((row[0] - 1.0 / 3.0).abs() < 1e-10);
         }
+    }
+
+    #[test]
+    fn skipped_transition_benefits_mean_no_transition_payment() {
+        let p = || mat(vec![vec![0.8, 0.2], vec![0.1, 0.9]]);
+        let rewards = || mat(vec![vec![1.0], vec![0.0]]);
+        close(ev("ACT.MARKOV.REWARD", vec![p(), rewards(), n(0.05), n(2.0), empty()]), &[1.0 + 0.8 / 1.05, 0.1 / 1.05]);
+        assert_eq!(ev("ACT.MARKOV.REWARD", vec![p(), rewards(), n(0.05), n(2.0), Arg::reference(Value::Empty)]), Value::Error(CellError::Value));
     }
 }

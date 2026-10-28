@@ -1,5 +1,7 @@
 //! Ordered occurrence excess-of-loss claims with finite aggregate reinstatement capacity.
-use crate::util::{R, S, arg, array_val, as_array, has, num, num_val, opt_num};
+use super::optional_num as opt_num;
+
+use crate::util::{R, S, arg, array_val, as_array, has, num, num_val};
 use crate::{Arg, Ctx, FnSpec};
 use gridcraft_core::{CellError, Value};
 
@@ -148,5 +150,18 @@ mod tests {
         assert_eq!(values[10], 27.5);
         assert_eq!(ev("ACT.REINSURANCE.REINSTATEMENTS", vec![v(&[50.0]), n(0.0), n(100.0), n(0.5), n(20.0)]), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.REINSURANCE.SURPLUS", vec![n(1000.0), n(200.0), n(3.0), n(100.0)]), nv(60.0));
+    }
+
+    #[test]
+    fn skipped_reinstatement_rate_defaults_to_one_with_later_time_options() {
+        let args = vec![v(&[50.0]), n(0.0), n(100.0), n(1.0), n(20.0), empty(), v(&[0.25]), n(1.0)];
+        let values = data(ev("ACT.REINSURANCE.REINSTATEMENTS", args.clone()));
+        assert_eq!(values[4], 7.5);
+        assert_eq!(values[10], 27.5);
+        let mut referenced = args;
+        referenced[5] = Arg::reference(Value::Empty);
+        let values = data(ev("ACT.REINSURANCE.REINSTATEMENTS", referenced));
+        assert_eq!(values[4], 0.0);
+        assert_eq!(values[10], 20.0);
     }
 }

@@ -6,7 +6,9 @@
 
 use gridcraft_core::{CellError, Value};
 
-use crate::util::{R, S, arg, array_val, as_array, num, num_val, opt_num, text};
+use super::optional_num as opt_num;
+
+use crate::util::{R, S, arg, array_val, as_array, has, num, num_val, text};
 use crate::{Arg, Ctx, FnSpec};
 
 const MAX_TRIANGLE: usize = 128;
@@ -292,7 +294,7 @@ fn mack(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         }))?;
         sigma.push(finite(residual / (count - 1) as f64)?);
     }
-    let last = if a.len() > 1 {
+    let last = if has(a, 1) {
         nonnegative(num(a, 1)?)?
     } else if n >= 4 {
         let previous = *sigma.last().ok_or(CellError::Num)?;
@@ -468,7 +470,7 @@ fn family(a: &[Arg], i: usize) -> R<Family> {
 
 /// Read an aligned optional offset/weight vector, using a constant vector only when omitted.
 fn aligned(a: &[Arg], i: usize, n: usize, default: f64) -> R<Vec<f64>> {
-    if a.len() <= i {
+    if !has(a, i) {
         return Ok(vec![default; n]);
     }
     let v = vector(a, i, MAX_OBSERVATIONS)?;
@@ -810,5 +812,19 @@ mod tests {
             ev("ACT.GLM.FIT", vec![av(col(&[1.0, 2.0])), av(col(&[1.0, 1.0])), t("poisson"), av(col(&[0.0, 0.0])), av(col(&[0.0, 1.0]))]),
             Value::Error(CellError::Num)
         );
+    }
+
+    #[test]
+    fn skipped_reserving_defaults_preserve_auto_sigma_and_aligned_glm_options() {
+        let result = data(ev("ACT.CHAINLADDER", vec![triangle(), empty()]));
+        near(result[5], 66.0);
+        near(result[8], 110.4);
+        assert_eq!(ev("ACT.MACK", vec![triangle(), empty()]), Value::Error(CellError::Num));
+        assert!(matches!(ev("ACT.MACK", vec![triangle(), Arg::reference(Value::Empty)]), Value::Array(_)));
+        let y = || av(col(&[0.0, 2.0, 4.0]));
+        let x = || av(col(&[1.0, 1.0, 1.0]));
+        let beta = data(ev("ACT.GLM.FIT", vec![y(), x(), t("poisson"), empty(), empty()]));
+        near(beta[0], 2.0_f64.ln());
+        assert_eq!(ev("ACT.GLM.FIT", vec![y(), x(), t("poisson"), Arg::reference(Value::Empty)]), Value::Error(CellError::Value));
     }
 }

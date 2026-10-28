@@ -2,8 +2,10 @@
 //! Parameterizations, numerical domains and uncertainty limitations are in the pack docs.
 //! No sampler, random-number generator or copied external implementation is used.
 
+use super::optional_num as opt_num;
+
 use crate::special::{norm_cdf, norm_inv, reg_inc_beta};
-use crate::util::{R, S, arg, array_val, as_array, num, num_val, opt_num, text};
+use crate::util::{R, S, arg, array_val, as_array, num, num_val, text};
 use crate::{Arg, Ctx, FnSpec};
 use gridcraft_core::{CellError, Value};
 
@@ -1266,5 +1268,21 @@ mod tests {
         args.push(n(1.0));
         assert_eq!(ev("ACT.COPULA.CDF", args), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.COPULA.CONDITIONALINV", cop_args(0.0, 0.5, "gaussian", 0.5)), Value::Error(CellError::Num));
+    }
+
+    #[test]
+    fn skipped_student_degrees_of_freedom_use_four_but_explicit_zero_is_invalid() {
+        let default = ev("ACT.COPULA.TAIL", vec![t("student"), n(0.5)]);
+        let skipped = ev("ACT.COPULA.TAIL", vec![t("student"), n(0.5), empty()]);
+        assert_eq!(default, skipped);
+        let Value::Array(values) = skipped else {
+            panic!("expected tail coefficients");
+        };
+        close(values.data[0].clone(), 0.2531699951003227, 1e-12);
+        assert_eq!(ev("ACT.COPULA.TAIL", vec![t("student"), n(0.5), Arg::reference(Value::Empty)]), Value::Error(CellError::Num));
+        assert_eq!(
+            ev("ACT.COPULA.CDF", vec![n(0.5), n(0.5), t("student"), n(0.5), empty()]),
+            ev("ACT.COPULA.CDF", vec![n(0.5), n(0.5), t("student"), n(0.5)])
+        );
     }
 }

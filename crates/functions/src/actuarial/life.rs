@@ -3,7 +3,7 @@
 
 use gridcraft_core::{CellError, Value};
 
-use crate::util::{R, S, arg, array_val, num, num_val, opt_num};
+use crate::util::{R, S, arg, array_val, has, num, num_val};
 use crate::{Arg, Ctx, FnSpec};
 
 const MAX_POINTS: usize = 10_000;
@@ -42,9 +42,9 @@ fn finite(x: f64) -> R<f64> {
 fn scalar(a: &[Arg], i: usize) -> R<f64> {
     finite(num(a, i)?)
 }
-/// Read an optional scalar with its documented default and require finiteness.
+/// Use the documented default for absent slots and empty literals, preserving blank-reference coercion.
 fn optional(a: &[Arg], i: usize, default: f64) -> R<f64> {
-    finite(opt_num(a, i, default)?)
+    finite(super::optional_num(a, i, default)?)
 }
 /// Validate an exact nonnegative horizon bounded by the mortality-table resource limit.
 fn integer(x: f64) -> R<usize> {
@@ -98,7 +98,7 @@ fn window(q: &[f64], start: usize, term: usize) -> R<&[f64]> {
 }
 /// Resolve an explicit term or a supplied whole-life horizon ending in terminal mortality one.
 fn whole_term(q: &[f64], a: &[Arg], i: usize, defer: usize) -> R<usize> {
-    if a.get(i).is_some() {
+    if has(a, i) {
         integer(scalar(a, i)?)
     } else if q.last() == Some(&1.0) {
         q.len().checked_sub(defer).ok_or(CellError::Num)
@@ -605,6 +605,21 @@ mod tests {
         close(ev("ACT.ANNUITY", vec![n(1.0), n(0.0)]), 1.0);
         close(ev("ACT.ANNUITY", vec![n(1.0), n(0.0), n(1.0), n(0.0)]), 0.0);
         close(ev("ACT.ANNUITY", vec![av(col(&[0.0, 0.0])), n(0.0), n(2.0), n(1.0), n(0.0), n(0.1)]), 2.1);
+    }
+
+    #[test]
+    fn skipped_optional_literals_use_contract_defaults_without_hiding_explicit_zero() {
+        let q = || av(col(&[0.2, 0.5, 1.0]));
+        let immediate = 0.8 / 1.1 + 0.4 / 1.21;
+        close(ev("ACT.ANNUITY", vec![q(), n(0.1), empty(), n(0.0)]), immediate);
+        close(ev("ACT.ANNUITY", vec![q(), n(0.1), n(2.0), empty(), n(1.0)]), immediate);
+        let insurance = 0.2 / 1.1 + 0.4 / 1.21 + 0.4 / 1.331;
+        close(ev("ACT.INSURANCE", vec![q(), n(0.1), empty(), n(1.0)]), insurance);
+        close(ev("ACT.PREMIUM", vec![q(), n(0.1), n(3.0), empty(), n(1.0)]), insurance / (1.0 + immediate));
+        close(ev("ACT.ANNUITY", vec![q(), n(0.1), n(0.0)]), 0.0);
+        close(ev("ACT.ANNUITY", vec![q(), n(0.1), Arg::reference(Value::Empty), n(0.0)]), 0.0);
+        close(ev("ACT.ANNUITY", vec![q(), n(0.1), n(3.0), Arg::reference(Value::Empty)]), immediate);
+        assert_eq!(ev("ACT.ANNUITY", vec![av(col(&[0.1, 0.2])), n(0.1), empty(), n(0.0)]), Value::Error(CellError::Num),);
     }
 
     #[test]

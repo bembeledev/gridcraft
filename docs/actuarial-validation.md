@@ -1,7 +1,5 @@
 # Actuarial validation evidence
 
-Tests: new regression for monetary/statistical calculations.
-
 Final verification completed 2026-10-28: **PASS** for the documented implemented scope.
 
 Integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
@@ -18,7 +16,7 @@ real portfolio. All fixtures are original synthetic data or independently calcul
   Bayesian prediction, Cox, EVT, dual sensitivities, reinsurance, ALM, validated surrogate,
   semi-Markov and externally supplied bootstrap replications. Also round-tripped through XLSX.
 - [Independent numerical reference cases](../crates/engine/tests/fixtures/actuarial-reference.json):
-  54 engine-boundary fixtures with closed-form/Decimal oracles, including intentionally invalid
+  62 engine-boundary fixtures with closed-form/Decimal oracles, including intentionally invalid
   models. Expected values are not copied from the product's observed outputs.
 - Mathematical unit tests in each `functions::actuarial` module cover model identities,
   invalid/hostile input, finite-work limits and numerical edge cases.
@@ -55,8 +53,7 @@ a RED control, and the same oracle cases are run against the corrected executabl
 
 The full CI passed i18n-report, formatting, Clippy, workspace tests, doctests, assets,
 dependency layers, WASM, command parity and generated keytips. The independent executable
-probes additionally verified the CLI/MCP path and deliberately invalid models. The archived
-54 engine-boundary cases preserve the closed-form/Decimal expectations in normal repository CI.
+probes additionally verified the CLI/MCP path and deliberately invalid models. The original 54 engine-boundary cases preserve the closed-form/Decimal expectations in normal repository CI.
 `cargo doc -p gridcraft-functions --no-deps --document-private-items` succeeded with zero
 diagnostics in the actuarial modules; preexisting financial/private-link warnings remain
 outside the extension. No mathematical defect reproduced by the independent reviewer remains open.
@@ -72,3 +69,41 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 An initial full debug build exhausted disk; its build artifacts were cleaned. The first
 compact sandboxed run hit local socket permissions. Neither attempt is counted as a pass.
 Final execution evidence is recorded only after the latest source passes the complete gate.
+
+## PR review follow-up: optional arguments and Monte Carlo keyboard handling
+
+The original full-gate results above describe the initial actuarial contribution `0a16c19`.
+Review follow-up results are recorded separately rather than attributed to that earlier run.
+
+- [x] ACT-only defaults now distinguish skipped empty literals from explicit zeros and blank
+  cell references. The shared Excel-compatible `util::opt_num` behavior is unchanged.
+- [x] Nine new registered-function regressions passed with all 238 function-library tests.
+  An independent consumer linked to the actual Rust library passed 15 closed-form/blank-reference
+  checks; ten defect controls were reproduced on the previous actual CLI executable.
+- [x] Removed the internal test-class note from this product-facing evidence document.
+- [x] Integrate only MC.3 `6247a59` and MC.4 `84036feb` in order: numerical Rustdoc,
+  Random/LHS dialog parameters and Enter/Shift+Enter handling. MC sampler/correlation contracts
+  are unchanged. Shared budgets, progress and cancellation are a separately tracked follow-up below.
+- [x] Extend the engine-boundary oracle fixture from 54 to 62 cases for parsed skipped
+  arguments and blank references. The ACT-only helper brings documented production methods to 275.
+- [x] Review fixes through MC.4: complete clean-target `cargo xtask ci` passed all ten gates,
+  including WASM and 2,648 workspace tests and doctest checks. This result does not cover
+  the newly requested operational integration listed below.
+
+The first combined follow-up attempt reused a copied Monte Carlo target and reported four
+engine failures (`ACT.*` names unavailable). It is not counted as a pass. Rebuilding with an
+independent target passed all four actuarial engine tests, including all 62 reference cases;
+the copied target was cleaned before the final full-gate run.
+
+## Requested integration: shared budgets, progress and cancellation
+
+- [ ] Integrate the separately owned operational-limits/job-lifecycle implementation once committed.
+- [ ] Account cumulatively for native/lifted function calls and Monte Carlo trials without
+  introducing a functions-to-engine dependency.
+- [ ] Verify progress, cooperative cancellation, exhausted budgets and atomic report publication
+  with actuarial workbook formulas, including the unchanged synchronous command path.
+- [ ] Review independently and pass the complete gate for the final integrated revision.
+
+This operational integration is requested but is not implemented or validated by the earlier
+95-function numerical evidence. Cancellation latency must be described in terms of actual
+checkpoints, not an unconditional interruption guarantee.

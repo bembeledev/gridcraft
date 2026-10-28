@@ -5,7 +5,9 @@ use std::collections::HashSet;
 
 use gridcraft_core::{CellError, Value};
 
-use crate::util::{R, arg, array_val, as_array, num, num_val, opt_num};
+use super::optional_num as opt_num;
+
+use crate::util::{R, arg, array_val, as_array, num, num_val};
 use crate::{Arg, Ctx, FnSpec};
 
 const MAX_POINTS: usize = 4096;
@@ -755,5 +757,28 @@ mod tests {
     #[test]
     fn scaled_rms_handles_large_finite_residuals() {
         close(rms([1e308, 1e308, 1e308, 1e308]).unwrap() / 1e308, 1.0);
+    }
+
+    #[test]
+    fn skipped_sensitivity_and_proxy_options_keep_their_nonzero_defaults() {
+        let q = || column(&[0.1, 0.2]);
+        let v = 1.0 / 1.05;
+        let insurance = 0.1 * v + 0.9 * v * v;
+        let annuity = 1.0 + 0.9 * v;
+        let premium = data(ev("ACT.PREMIUM.SENSITIVITY", vec![q(), n(0.05), n(2.0), empty(), n(1.0)]));
+        close(premium[0], insurance / annuity);
+        let reserve = data(ev("ACT.RESERVE.SENSITIVITY", vec![q(), n(0.05), n(2.0), n(0.0), n(0.1), n(1.0), empty()]));
+        close(reserve[0], insurance - 0.1 * annuity);
+        assert_eq!(ev("ACT.PREMIUM.SENSITIVITY", vec![q(), n(0.05), n(2.0), Arg::reference(Value::Empty), n(1.0)]), Value::Error(CellError::Div0));
+        let train = || mat(vec![vec![-2.0], vec![-1.0], vec![0.0], vec![1.0], vec![2.0]]);
+        let validation = || mat(vec![vec![-1.5], vec![-0.5], vec![0.5], vec![1.5]]);
+        let args = vec![train(), column(&[9.0, 2.0, 1.0, 6.0, 17.0]), validation(), column(&[4.75, 0.75, 2.75, 10.75]), empty(), n(0.95)];
+        let model = data(ev("ACT.SURROGATE.FIT", args.clone()));
+        close(model[2], 2.0);
+        close(model[19], 0.0);
+        let mut referenced = args;
+        referenced[4] = Arg::reference(Value::Empty);
+        let model = data(ev("ACT.SURROGATE.FIT", referenced));
+        close(model[2], 0.0);
     }
 }

@@ -57,7 +57,7 @@ fn nonhomogeneous_reward(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let benefits = if a.len() > 3 { matrix(a, 3)? } else { vec![vec![0.0; n]; n] };
+    let benefits = if has(a, 3) { matrix(a, 3)? } else { vec![vec![0.0; n]; n] };
     if benefits.len() != n {
         return Err(CellError::Value);
     }
@@ -80,7 +80,7 @@ fn nonhomogeneous_reward(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 fn duration_parameters(a: &[Arg], table: usize, horizon: usize, duration: usize) -> R<(Blocks, usize, usize)> {
     let data = blocks(a, table)?;
     let horizon = integer(a, horizon, MAX_PERIODS)?;
-    let duration = if a.len() > duration { integer(a, duration, MAX_PERIODS)? } else { 0 };
+    let duration = if has(a, duration) { integer(a, duration, MAX_PERIODS)? } else { 0 };
     let end = horizon.checked_add(duration).ok_or(CellError::Num)?;
     if end > data.matrices.len() || horizon.saturating_mul(end + 1).saturating_mul(data.n).saturating_mul(data.n) > MAX_WORK {
         return Err(CellError::Num);
@@ -157,7 +157,7 @@ fn semi_reward(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let benefits = if a.len() > 5 { matrix(a, 5)? } else { vec![vec![0.0; n]; n] };
+    let benefits = if has(a, 5) { matrix(a, 5)? } else { vec![vec![0.0; n]; n] };
     if benefits.len() != n {
         return Err(CellError::Value);
     }
@@ -288,5 +288,15 @@ mod tests {
         assert_eq!(ev("ACT.SEMIMARKOV.STATE", vec![homogeneous(2), m(vec![vec![1.0, 0.0]]), n(3.0)]), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.MARKOV.NONHOMOGENEOUS", vec![m(vec![vec![0.8, 0.2]])]), Value::Error(CellError::Value));
         assert_eq!(ev("ACT.SEMIMARKOV.STATE", vec![homogeneous(2), m(vec![vec![1.0, 1.0]]), n(1.0)]), Value::Error(CellError::Num));
+    }
+
+    #[test]
+    fn skipped_temporal_options_preserve_zero_rewards_and_zero_initial_duration() {
+        check(
+            ev("ACT.MARKOV.NONHOMOGENEOUS.REWARD", vec![homogeneous(2), m(vec![vec![1.0, 0.0], vec![1.0, 0.0]]), n(0.05), empty()]),
+            &[1.0 + 0.8 / 1.05, 0.1 / 1.05],
+        );
+        let value = ev("ACT.SEMIMARKOV.REWARD", vec![homogeneous(2), m(vec![vec![1.0], vec![0.0]]), n(0.05), n(2.0), empty(), empty()]);
+        check(value, &[1.0 + 0.8 / 1.05, 0.1 / 1.05]);
     }
 }

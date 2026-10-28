@@ -35,6 +35,12 @@ Strict numerical vectors preserve alignment: blank, text and boolean entries do 
 disappear from mortality ages, responses, weights or cash flows. Invalid shape gives a cell
 error; nonfinite/domain/resource/convergence failures give errors rather than plausible defaults.
 
+Optional ACT arguments use their documented defaults when absent or skipped as empty literal
+slots, for example `ACT.ANNUITY(qx,rate,,0)`. An explicit zero remains a supplied zero.
+References to blank cells remain supplied references: scalar coercion can produce zero,
+while strict vector/matrix contracts can reject them. This does not change coercion for
+existing Excel-compatible functions outside the ACT extension.
+
 ## Financial curves, life and pensions (15 functions)
 
 All interest rates are effective per period. Life periods are annual; `qx[0]` is the death

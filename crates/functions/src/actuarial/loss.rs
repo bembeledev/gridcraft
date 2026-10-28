@@ -8,8 +8,10 @@
 
 use gridcraft_core::{CellError, Value};
 
+use super::optional_num as opt_num;
+
 use crate::special::{norm_cdf, norm_inv, norm_pdf, reg_gamma_p, reg_gamma_q};
-use crate::util::{R, S, arg, array_val, as_array, has, num, num_val, opt_num, text};
+use crate::util::{R, S, arg, array_val, as_array, has, num, num_val, text};
 use crate::{Arg, Ctx, FnSpec};
 
 const MAX_OBSERVATIONS: usize = 100_000;
@@ -1245,5 +1247,17 @@ mod tests {
         }
         assert_eq!(ev("ACT.COMPOUND.PMF", compound_args("binomial", 2.5, 0.5, 2.0)), Value::Error(CellError::Num));
         assert_eq!(ev("ACT.VAR", vec![av(col(&[f64::NAN])), n(0.5)]), Value::Error(CellError::Num));
+    }
+
+    #[test]
+    fn skipped_optional_slots_preserve_layer_limit_and_lattice_defaults() {
+        close(ev("ACT.LAYER", vec![n(100.0), n(25.0), n(50.0), empty()]), 50.0);
+        close(ev("ACT.LAYER", vec![n(100.0), n(25.0), n(50.0), Arg::reference(Value::Empty)]), 0.0);
+        close(ev("ACT.STOPLOSS", vec![av(col(&[0.0, 100.0])), n(25.0), empty(), empty()]), 37.5);
+        close(ev("ACT.STOPLOSS", vec![av(col(&[0.0, 100.0])), n(25.0), empty(), n(0.0)]), 0.0);
+        let mut args = vec![av(col(&[0.0, 1.0])), t("poisson"), n(1.0), n(0.0), n(16.0), n(0.95), empty()];
+        close(ev("ACT.COMPOUND.VAR", args.clone()), 3.0);
+        args[6] = Arg::reference(Value::Empty);
+        assert_eq!(ev("ACT.COMPOUND.VAR", args), Value::Error(CellError::Num));
     }
 }

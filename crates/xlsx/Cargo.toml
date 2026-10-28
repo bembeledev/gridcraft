@@ -27,3 +27,5 @@ miniz_oxide = { workspace = true }
 
 [dev-dependencies]
 image = { workspace = true }
+# Every registered function name, for the formula file-spelling test.
+gridcraft-functions = { workspace = true }

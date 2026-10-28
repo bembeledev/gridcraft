@@ -52,7 +52,6 @@ impl SheetApp {
                 return;
             }
         };
-        let urls: Vec<String> = urls.iter().map(|s| s.to_string()).collect();
         let fetch_urls = urls.clone();
         let handle = std::thread::spawn(move || {
             // Each page lands under its own URL; a failed page records its error instead.

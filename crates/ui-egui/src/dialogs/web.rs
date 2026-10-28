@@ -298,20 +298,16 @@ pub(super) fn from_web(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, co
                 // A page can hold duplicate table names: which one was picked is which one to
                 // import, and the connection saves it so refreshes keep importing the same.
                 let occurrence = tables.iter().take(pick).filter(|o| o["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&t))).count();
-                let mut p = json!({"url": url.trim(), "table": t, "occurrence": occurrence});
-                // The page is already downloaded (the preview fetched it): hand the full tables
-                // over instead of fetching again.
-                if let Some(full) = d.values.get("full_tables") {
-                    p.as_object_mut().map(|o| o.insert("prefetched".into(), full.clone()));
-                }
-                p
+                json!({"url": url.trim(), "table": t, "occurrence": occurrence})
             }
             None => json!({"url": url.trim()}),
         };
         // The page is already downloaded whenever the preview fetched it — also when it found
         // no tables: hand the full tables over so Load never re-fetches on the UI thread.
-        if let (Some(full), Some(o)) = (d.values.get("full_tables"), params.as_object_mut()) {
-            o.entry("prefetched").or_insert_with(|| full.clone());
+        if let Some(full) = d.values.get("full_tables") {
+            if let Some(o) = params.as_object_mut() {
+                o.entry("prefetched").or_insert_with(|| full.clone());
+            }
         }
         match app.run("data.fromWeb", params) {
             Ok(r) => app.toast = Some((format!("Imported {} rows into {}", r["rows"], r["sheet"]), crate::now_ms())),

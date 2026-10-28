@@ -7,7 +7,7 @@ use serde_json::{Value as Json, json};
 use super::analysis::OVERWRITE_ERROR;
 use super::insert::write_totals;
 use super::*;
-use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, MAX_PAGE_CELLS, MAX_TEXT, WebRequest, WebTable};
+use crate::webquery::{DEFAULT_MAX_BYTES, DEFAULT_MAX_ROWS, MAX_COLS, MAX_PAGE_CELLS, MAX_TABLES, MAX_TEXT, WebRequest, WebTable};
 use gridcraft_core::MAX_ROWS;
 use gridcraft_model::{TableColumn, TotalsFn, Workbook};
 
@@ -94,10 +94,8 @@ fn from_web(s: &mut Session, p: &Json) -> Result<Json> {
     let tables = fetch_tables(s, &req, p)?;
     // The prefetched path gets the same `max_rows` cut the HTML path applies while parsing.
     let mut tables = tables;
-    if tables.iter().any(|t| t.rows.len() > req.max_rows) {
-        for t in &mut tables {
-            t.rows.truncate(req.max_rows);
-        }
+    for t in &mut tables {
+        t.rows.truncate(req.max_rows);
     }
     let table = pick_table(&tables, want, occurrence).ok_or_else(|| EngineError::Other(no_table_message(&tables)))?;
     let occurrence = tables.iter().take_while(|t| !std::ptr::eq(*t, table)).filter(|t| t.name.eq_ignore_ascii_case(&table.name)).count();
@@ -481,10 +479,13 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                     let Some(code) = col.formula.as_ref() else { continue };
                     let expr = gridcraft_formula::parse(code).map_err(|e| EngineError::Other(format!("The calculated column `{}` has a broken formula: {e}", col.name)))?;
                     let c0 = t.range.start.col + w as u32 + i as u32;
-                    let style = sh.style_id(CellRef::new(t.range.start.row, c0));
                     for row in (t.range.start.row + 1)..=t.range.end.row {
+                        let at = CellRef::new(row, c0);
+                        // Each cell keeps its own style (the header cell's format would be wrong
+                        // for the data rows, and one shared style would erase per-cell formats).
+                        let style = sh.style_id(at);
                         let shifted = gridcraft_formula::adjust::shift_relative(expr.clone(), row as i64 - (t.range.start.row as i64 + 1), 0);
-                        sh.set_cell(CellRef::new(row, c0), gridcraft_model::Cell { formula: Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(shifted))), value: gridcraft_core::Value::Empty, style });
+                        sh.set_cell(at, gridcraft_model::Cell { formula: Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(shifted))), value: gridcraft_core::Value::Empty, style });
                     }
                 }
                 cx.structural = true;
@@ -560,7 +561,7 @@ fn prefetched_tables(p: &Json) -> Result<Vec<WebTable>> {
         }
         page_budget = page_budget.saturating_sub(cells);
         out.push(WebTable { name, rows });
-        if page_budget == 0 {
+        if page_budget == 0 || out.len() >= MAX_TABLES {
             break;
         }
     }

@@ -1101,6 +1101,39 @@ fn fitting_text_prefix(
     Ok((ends.get(count.saturating_sub(1)).copied().unwrap_or(0), count))
 }
 
+/// Find the longest fitting prefix of word-boundary candidates without shaping every prefix.
+/// Each probe still measures the complete accumulated text, preserving run shaping context.
+fn fitting_candidate_count(
+    candidate_count: usize,
+    width: f32,
+    mut measure: impl FnMut(usize) -> std::result::Result<f32, String>,
+) -> std::result::Result<usize, String> {
+    if candidate_count == 0 {
+        return Ok(0);
+    }
+    let mut low = 0usize;
+    let mut high = 1usize;
+    loop {
+        if measure(high)? > width {
+            break;
+        }
+        low = high;
+        if high == candidate_count {
+            return Ok(low);
+        }
+        high = high.saturating_mul(2).min(candidate_count);
+    }
+    while low.saturating_add(1) < high {
+        let mid = low + (high - low) / 2;
+        if measure(mid)? <= width {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    Ok(low)
+}
+
 fn wrap_shaped(
     text: &str,
     catalog: &FontCatalog,
@@ -1133,7 +1166,8 @@ fn wrap_shaped(
     for paragraph in text.split('\n') {
         let mut line = String::new();
         let mut line_clusters = 0usize;
-        for word in paragraph.split_inclusive(char::is_whitespace) {
+        let mut words = paragraph.split_inclusive(char::is_whitespace).peekable();
+        while let Some(word) = words.next() {
             let mut remaining = word;
             while !remaining.is_empty() {
                 if line_clusters >= MAX_GRAPHEMES_PER_LINE {
@@ -1172,6 +1206,51 @@ fn wrap_shaped(
                     return Err("grapheme boundary is outside wrapped PDF text".to_string());
                 };
                 let combined_clusters = line_clusters.saturating_add(segment_clusters);
+
+                // Gather complete following words up to the line's grapheme cap, then search
+                // their boundaries with complete-line shaping. This keeps the same greedy wrap
+                // boundary while avoiding one full-line shape for every short segment.
+                if segment_end == remaining.len() {
+                    let mut additions = segment.to_string();
+                    let mut endpoints = vec![(additions.len(), segment_clusters)];
+                    let mut added_clusters = segment_clusters;
+                    let mut lookahead = words.clone();
+                    while added_clusters < capacity {
+                        let Some(next_word) = lookahead.next() else { break };
+                        let (next_end, next_clusters) = prefix_for_clusters(next_word, capacity.saturating_sub(added_clusters));
+                        if next_end != next_word.len() || next_clusters == 0 {
+                            break;
+                        }
+                        additions.push_str(next_word);
+                        added_clusters = added_clusters.saturating_add(next_clusters);
+                        endpoints.push((additions.len(), added_clusters));
+                    }
+                    if endpoints.len() > 1 {
+                        let fitting = fitting_candidate_count(endpoints.len(), width, |count| {
+                            let end = endpoints.get(count.saturating_sub(1)).map(|(end, _)| *end).unwrap_or(0);
+                            let addition = additions.get(..end).ok_or("word boundary is outside wrapped PDF text")?;
+                            let candidate = format!("{line}{addition}");
+                            shaped_width(catalog, family, bold, italic, candidate.trim_end_matches(char::is_whitespace), size)
+                        })?;
+                        if fitting == 0 {
+                            out.push(take_wrapped_line(&mut line));
+                            line_clusters = 0;
+                            if out.len() >= 2000 {
+                                return Ok(out);
+                            }
+                            continue;
+                        }
+                        let (end, clusters) = endpoints.get(fitting - 1).copied().ok_or("word boundary is outside wrapped PDF text")?;
+                        let addition = additions.get(..end).ok_or("word boundary is outside wrapped PDF text")?;
+                        line.push_str(addition);
+                        line_clusters = line_clusters.saturating_add(clusters);
+                        for _ in 1..fitting {
+                            let _ = words.next();
+                        }
+                        remaining = "";
+                        continue;
+                    }
+                }
                 let candidate = format!("{line}{segment}");
                 let fits = shaped_width(catalog, family, bold, italic, candidate.trim_end_matches(char::is_whitespace), size)? <= width;
                 if fits {
@@ -2479,6 +2558,18 @@ mod tests {
         assert!(lines.len() > 1 && lines.concat() == long, "{lines:?}");
         // Paragraphs stay separate.
         assert_eq!(wrap_shaped("a\nb", &catalog, "Calibri", false, false, 11.0, 200.0).unwrap(), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn word_boundary_search_uses_logarithmic_complete_line_probes() {
+        let mut probes = 0usize;
+        let fitting = fitting_candidate_count(8192, 6000.0, |count| {
+            probes = probes.saturating_add(1);
+            Ok(count as f32)
+        })
+        .unwrap();
+        assert_eq!(fitting, 6000);
+        assert!(probes <= 26, "binary search should shape only logarithmically many full-line candidates: {probes}");
     }
 
     #[test]

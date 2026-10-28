@@ -72,6 +72,13 @@ fn request(p: &Json) -> Result<WebRequest> {
     if !url.starts_with("https://") {
         return Err(EngineError::Other("Only https:// addresses can be imported.".into()));
     }
+    // Userinfo (`https://user:pass@host/`) would be sent as basic auth and stored verbatim in
+    // the saved connection, so a secret typed into the URL ends up in the workbook. Refuse it:
+    // a secret belongs in a source the workbook never saves.
+    let authority = url.trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err(EngineError::Other("Web addresses with user and password (`user:pass@host`) can't be imported: the secret would be saved with the workbook.".into()));
+    }
     let max_rows = p
         .get("maxRows")
         .and_then(Json::as_u64)
@@ -1004,6 +1011,19 @@ mod tests {
         let d = s.active().unwrap();
         assert!(d.wb.active().unwrap().tables.is_empty());
         assert!(d.wb.web_queries.is_empty());
+    }
+
+    #[test]
+    /// Userinfo in the URL (`user:pass@host`) is refused: ureq would send it as basic auth and
+    /// the saved connection would store the secret verbatim in the workbook.
+    fn a_url_with_userinfo_is_refused() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        for url in ["https://user:pass@example.com", "https://user@example.com"] {
+            let err = s.execute("data.fromWeb", json!({"url": url})).unwrap_err();
+            assert!(err.to_string().contains("can't be imported"), "{url}: {err}");
+            assert!(s.active().unwrap().wb.web_queries.is_empty());
+        }
     }
 
     #[test]

@@ -86,7 +86,10 @@ impl SheetApp {
         }
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
-        if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
+        if id == "file.exportPdf"
+            && (self.services.pick_save.is_some() || self.services.pick_save_async.is_some())
+            && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty)
+        {
             return self.export_pdf_with_picker(params);
         }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
@@ -299,6 +302,8 @@ impl SheetApp {
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
+                } else if let Some(start) = &self.services.pick_open_async {
+                    start();
                 } else if let Some(pick) = &self.services.pick_open
                     && let Some(path) = pick()
                 {
@@ -306,11 +311,13 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
+                // An open CSV is titled `kit-prod.csv`. Save As writes a workbook, so the panel
+                // is offered `kit-prod.xlsx` and Excel Workbook is the first format (#2790).
+                let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                let suggested = format!("{}.xlsx", super::save_pick::file_stem(&title));
+                if self.services.pick_save_async.is_some() || self.services.pick_save.is_some() {
+                    if let Some(doc) = self.session.active().map(|d| d.uid) {
+                        self.start_save(&suggested, super::save_pick::SaveFollow::SaveAs { doc });
                     }
                 } else if self.services.download.is_some()
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))

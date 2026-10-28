@@ -272,21 +272,36 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         // A bare name has no folder: written as typed it would land in the
                         // process's working directory (`/` from the Finder, the install folder on
                         // Windows), never where the user looks. The picker chooses the folder.
-                        let pick = app.services.pick_save.as_ref();
-                        let target = if path.is_empty() {
-                            pick.and_then(|f| f(&format!("Copy.{fmt}")))
-                        } else if let Some(f) = pick.filter(|_| std::path::Path::new(&path).is_relative()) {
-                            f(&if path.ends_with(&format!(".{fmt}")) { path } else { format!("{path}.{fmt}") })
+                        let suggested = if path.is_empty() {
+                            format!("Copy.{fmt}")
+                        } else if !path.ends_with(&format!(".{fmt}")) && std::path::Path::new(&path).extension().is_none() {
+                            format!("{path}.{fmt}")
                         } else {
-                            Some(path)
+                            path.clone()
                         };
-                        if let Some(t) = target {
+                        let relative = path.is_empty() || std::path::Path::new(&path).is_relative();
+                        let has_picker = app.services.pick_save.is_some() || app.services.pick_save_async.is_some();
+                        if relative && has_picker {
+                            if let Some(doc) = app.session.active().map(|d| d.uid) {
+                                let follow = if fmt == "xlsx" {
+                                    crate::SaveFollow::SaveAs { doc }
+                                } else {
+                                    let command = match fmt.as_str() {
+                                        "csv" => "file.exportCsv",
+                                        "html" => "file.exportHtml",
+                                        _ => "file.saveAs",
+                                    };
+                                    crate::SaveFollow::Export { doc, command: command.to_string(), ext: fmt.clone() }
+                                };
+                                app.start_save(&suggested, follow);
+                            }
+                        } else if !relative {
                             let id = match fmt.as_str() {
                                 "csv" => "file.exportCsv",
                                 "html" => "file.exportHtml",
                                 _ => "file.saveAs",
                             };
-                            app.run_or_alert(id, json!({"path": t}));
+                            app.run_or_alert(id, json!({"path": suggested}));
                         }
                     }
                 }

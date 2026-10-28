@@ -2,7 +2,10 @@
 //! Duration is the number of completed periods in the current state; a state change resets
 //! it to zero. Supplied duration tables must cover every possible path over the horizon.
 
-use super::*;
+use super::{
+    Arg, CellError, Ctx, FnSpec, MAX_STATES, Matrix, R, Value, arg, array_val, as_array, has, identity, integer, matrix, multiply, normalize, number,
+    scalar, spill, stochastic, vector,
+};
 
 const MAX_PERIODS: usize = 1000;
 const MAX_WORK: usize = 20_000_000;
@@ -240,8 +243,8 @@ pub(super) fn specs() -> Vec<FnSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::util::testutil::*;
+    use super::{Arg, CellError, Value, number};
+    use crate::util::testutil::{arr, av, empty, ev, n, nv};
     fn m(rows: Vec<Vec<f64>>) -> Arg {
         av(arr(rows.into_iter().map(|r| r.into_iter().map(nv).collect()).collect()))
     }

@@ -188,7 +188,12 @@ impl<'h> Evaluator<'h> {
                 match self.eval(&args[0]) {
                     Ev::R(a) => {
                         if name == "SHEET" {
-                            a.first().map_or(err(CellError::Ref), |a| Ev::V(Value::number(a.sheet as f64 + 1.0)))
+                            // A sheet of a linked workbook has no number in this one.
+                            match a.first() {
+                                Some(a) if linked_parts(a.sheet).is_some() => err(CellError::NA),
+                                Some(a) => Ev::V(Value::number(a.sheet as f64 + 1.0)),
+                                None => err(CellError::Ref),
+                            }
                         } else {
                             let mut s: Vec<usize> = a.iter().map(|x| x.sheet).collect();
                             s.dedup();
@@ -315,6 +320,17 @@ impl<'h> Evaluator<'h> {
             {
                 criteria = Some(*area);
             }
+            // Range parameters of the *IF(S) family take only references, and not references into
+            // a linked workbook: Excel answers `#VALUE!` (or the cell's error) while the source
+            // workbook is closed. A written error (`#REF!` left by a deleted range, here or in a
+            // linked workbook: `[1]Data!#REF!`) is that error.
+            let linked = matches!(&ev, Ev::R(areas) if areas.iter().any(|x| linked_parts(x.sheet).is_some()));
+            if takes_reference(spec.name, i) && (linked || matches!(a, Expr::Error(_) | Expr::LinkedRefError(_))) {
+                return err(match self.deref(ev) {
+                    Value::Error(e) => e,
+                    _ => CellError::Value,
+                });
+            }
             if resizes_sum_range(name, args.len()) {
                 if i == 0 {
                     criteria_shape = ev_shape(&ev);
@@ -371,7 +387,8 @@ impl<'h> Evaluator<'h> {
 
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
-        if !a.range.is_single() {
+        // Linked workbooks' saved values are read through `area_value`.
+        if !a.range.is_single() && linked_parts(a.sheet).is_none() {
             let mut error = None;
             let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,

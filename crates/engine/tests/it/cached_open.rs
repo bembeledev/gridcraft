@@ -1,4 +1,6 @@
 //! Synthetic, in-memory XLSX lifecycle checks: no Office-authored fixtures or filesystem I/O.
+use std::io::{Cursor, Read, Write};
+
 use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_engine::Session;
 use gridcraft_model::{CalcMode, Cell, Formula, Workbook};
@@ -153,4 +155,46 @@ fn cached_open_respects_manual_calculation_after_open() {
     assert_eq!(value(&s, "F1"), Value::Number(999.0));
     s.execute("cell.set", json!({"cell": "F1", "input": "=A1+1"})).unwrap();
     assert_eq!(value(&s, "F1"), Value::Number(21.0));
+}
+
+/// The stale-result notice stays visible when an XLSX also produces many import warnings.
+#[test]
+fn cached_open_shows_cache_notice_before_import_warning_overflow() {
+    let params = fixture();
+    let bytes = gridcraft_engine::io::base64_decode(params["base64"].as_str().unwrap()).unwrap();
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..source.len() {
+        let mut part = source.by_index(index).unwrap();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        if part.name() == "xl/worksheets/sheet1.xml" {
+            let xml = String::from_utf8(data).unwrap();
+            let rules = (0..6)
+                .map(|n| format!(r#"<conditionalFormatting sqref="A1"><cfRule type="synthetic{n}" priority="{}"/></conditionalFormatting>"#, n + 1))
+                .collect::<String>();
+            data = xml.replace("</worksheet>", &format!("{rules}</worksheet>")).into_bytes();
+        }
+        output.start_file(part.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    let bytes = output.finish().unwrap().into_inner();
+    let mut s = Session::new();
+    let opened = s.execute("file.open", json!({"name": "synthetic-warnings.xlsx", "base64": gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+    let warnings = opened["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 7);
+    for n in 0..6 {
+        assert!(warnings.iter().any(|w| w.as_str().unwrap().contains(&format!("synthetic{n}"))));
+    }
+    let messages = s
+        .take_ui_requests()
+        .into_iter()
+        .filter_map(|request| match request {
+            gridcraft_engine::UiRequest::Message(message) => Some(message),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].contains("Saved formula results were kept and may be out of date"));
+    assert!(messages[0].contains("2 additional import warnings."));
 }

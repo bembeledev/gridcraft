@@ -18,7 +18,7 @@ saved formula results and calculates missing ones, warns that caches may be stal
 accepts `recalculate: true` for the previous full-recalc behavior. Unresolved calls are
 not made implicitly volatile solely because the function is absent. Static argument
 dependencies still invalidate normally; conservative name/dynamic invalidation remains.
-Eight synthetic engine lifecycle tests cover missing chains, unrelated/related edits,
+Nine synthetic engine lifecycle tests cover missing chains, unrelated/related edits,
 XLSX save/reopen, explicit recalculation and live dynamic/defined-function references.
 Structural edits and explicit full recalculation can still replace unsupported results;
 this is not complete #2770 coverage or a real-world workbook qualification.
@@ -195,6 +195,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
 | 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |

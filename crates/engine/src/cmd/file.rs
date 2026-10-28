@@ -89,7 +89,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // Someone else may have made the file: its active content asks before it runs.
     let recalculate = bool_param(p, "recalculate").unwrap_or(false);
     if !recalculate && wb.sheets.iter().any(|sheet| sheet.cells.iter().any(|(_, cell)| cell.formula.is_some() && !cell.value.is_empty())) {
-        warnings.push("Saved formula results were kept and may be out of date. Missing results were calculated. Editing formulas or their inputs, structural edits and Calculate Now recalculate with GridCraft's supported functions; unsupported results can become errors.".into());
+        warnings.insert(0, "Saved formula results were kept and may be out of date. Missing results were calculated. Editing formulas or their inputs, structural edits and Calculate Now recalculate with GridCraft's supported functions; unsupported results can become errors.".into());
     }
     let mut doc = if recalculate {
         DocState::new(wb, path, title, crate::Trust::FromFile)

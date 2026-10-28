@@ -50,6 +50,16 @@ pub enum Field {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct SortChoicesCache {
+    pub(crate) doc_uid: Option<u64>,
+    pub(crate) sheet_index: Option<usize>,
+    pub(crate) revision: Option<u64>,
+    pub(crate) range: Option<String>,
+    pub(crate) header: bool,
+    pub(crate) choices: Vec<(String, String, bool)>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Dialog {
     pub name: String,
     pub title: String,
@@ -73,6 +83,9 @@ pub struct Dialog {
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
+    /// The exact selection to restore when Sort closes, including ranges and shift anchor.
+    selection_restore: Option<gridcraft_engine::Selection>,
+    pub(crate) sort_choices_cache: Option<SortChoicesCache>,
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -131,6 +144,15 @@ impl Dialog {
         self.pick.is_some()
     }
 
+    pub(crate) fn restore_selection(&mut self, session: &mut gridcraft_engine::Session) {
+        if self.name == "sort"
+            && let Some(selection) = self.selection_restore.take()
+            && let Some(doc) = session.active_mut()
+        {
+            doc.selection = selection;
+        }
+    }
+
     /// A click (`extend` false) or a drag reaching `cell`: writes the absolute reference at the
     /// formula box's caret, replacing the reference the press inserted, as in the formula bar's
     /// point mode. An empty box starts with `=`. After an operand there is no place for a
@@ -184,6 +206,8 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            selection_restore: None,
+            sort_choices_cache: None,
         }
     }
 
@@ -205,11 +229,14 @@ impl Dialog {
             back: None,
             focus_initialized: false,
             pick: None,
+            selection_restore: None,
+            sort_choices_cache: None,
         }
     }
 
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
+        let sort_selection = app.session.active().map(|d| d.selection.clone());
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
@@ -878,9 +905,27 @@ impl Dialog {
                 json!({"kind": "blanks"}),
             ),
             "sort" => {
-                // Seed "Sort by" from the column the user is actually in (#1906).
-                let col = app.session.active().map(|d| gridcraft_engine::core::col_to_letters(d.selection.active.col)).unwrap_or_else(|| "A".into());
-                Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
+                let ctx = gridcraft_engine::cmd::data::sort_context(&app.session, &params).ok();
+                let (range, header) = ctx.map_or((None, true), |(r, h)| (Some(r), h));
+                let active_col = app.session.active().map(|d| d.selection.active.col);
+                let first = range
+                    .map(|r| {
+                        let c = active_col.filter(|c| *c >= r.start.col && *c <= r.end.col).unwrap_or(r.start.col);
+                        gridcraft_engine::core::col_to_letters(c)
+                    })
+                    .unwrap_or_else(|| active_col.map(gridcraft_engine::core::col_to_letters).unwrap_or_else(|| "A".into()));
+                if header
+                    && let Some(r) = range
+                    && r.height() > 1
+                {
+                    let body = RangeRef::new(CellRef::new(r.start.row + 1, r.start.col), r.end);
+                    let _ = app.run("selection.set", json!({"range": body.a1()}));
+                }
+                Dialog::custom(
+                    "sort",
+                    "Sort",
+                    json!({"header": header, "range": range.map(|r| r.a1()), "levels": [{"column": first, "order": "asc"}]}),
+                )
             }
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
             "pasteName" => {
@@ -1021,6 +1066,10 @@ impl Dialog {
             }
             _ => return None,
         };
+        let mut d = d;
+        if d.name == "sort" {
+            d.selection_restore = sort_selection;
+        }
         Some(d)
     }
 }

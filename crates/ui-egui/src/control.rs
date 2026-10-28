@@ -282,7 +282,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => {
-            app.dialog = None;
+            if let Some(mut dialog) = app.dialog.take() {
+                dialog.restore_selection(&mut app.session);
+            }
             ok(Json::Null)
         }
         "ui.message.dismiss" => {

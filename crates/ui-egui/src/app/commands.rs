@@ -330,7 +330,12 @@ impl SheetApp {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
             }
-            other => self.dialog = dialogs::Dialog::open(self, other, params),
+            other => {
+                if let Some(mut current) = self.dialog.take() {
+                    current.restore_selection(&mut self.session);
+                }
+                self.dialog = dialogs::Dialog::open(self, other, params);
+            }
         }
     }
 

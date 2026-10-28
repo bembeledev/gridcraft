@@ -1438,6 +1438,7 @@ fn recalc_all_after_load() {
     assert_eq!(t.num("A3"), 12.0);
 }
 
+/// Saved numbers, errors and formula metadata survive missing-only recalculation.
 #[test]
 fn recalc_missing_preserves_cached_results_and_formula_metadata() {
     let mut t = T::new();
@@ -1477,6 +1478,7 @@ fn recalc_missing_preserves_cached_results_and_formula_metadata() {
     assert_eq!(t.get("B5"), Value::Error(CellError::Null));
 }
 
+/// Missing chains propagate formula errors and remove obsolete spill results.
 #[test]
 fn recalc_missing_evaluates_chains_and_missing_formula_errors() {
     let mut t = T::new();
@@ -1512,6 +1514,7 @@ fn recalc_missing_evaluates_chains_and_missing_formula_errors() {
     assert!(!s.spill.contains_key(&c("B3")));
 }
 
+/// Cached dynamic arrays and their dependents remain intact across recalculation rounds.
 #[test]
 fn recalc_missing_preserves_cached_spills_and_dependents_across_rounds() {
     let mut t = T::new();
@@ -1546,6 +1549,7 @@ fn recalc_missing_preserves_cached_spills_and_dependents_across_rounds() {
     assert_eq!(s.spill_ranges.get(&c("H1")), Some(&gridcraft_core::RangeRef::new(c("H1"), c("H3"))));
 }
 
+/// Repeated missing-only recalculations keep the dependency graph live for later input edits.
 #[test]
 fn recalc_missing_is_repeatable_and_restores_incremental_editing() {
     let mut t = T::new();
@@ -1565,6 +1569,7 @@ fn recalc_missing_is_repeatable_and_restores_incremental_editing() {
     assert_eq!((t.num("B1"), t.num("C1")), (6.0, 7.0));
 }
 
+/// Dynamic dependency cycles remain detected after rebuilding the cached workbook graph.
 #[test]
 fn recalc_missing_retains_detected_dynamic_cycles_after_rebuilding() {
     let mut t = T::new();

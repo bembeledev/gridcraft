@@ -1,8 +1,9 @@
 # Actuarial validation evidence
 
 Latest integrated verification completed 2026-10-28: **PASS** for the documented implemented scope.
-The final `cargo xtask ci` passed all ten gates with 2,707 native tests across 24 binaries
-(one preexisting ignored test), including WASM compilation, on upstream release 0.13.0.
+All ten quality gates passed with 2,714 native tests across 24 binaries (one preexisting
+ignored test), including WASM on upstream release 0.13.0. Validation resumed in unchanged-source
+stages after a linker disk-space failure, as recorded in the final review follow-up below.
 
 Initial numerical integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
 `feat/actuarial-pack`. The supported estimands/domains are defined in
@@ -183,7 +184,7 @@ misses in many frames can consume reserved capacity faster than accepted formula
 controls provide cooperative workload containment; they do not establish a CPU deadline or
 cross-tenant hosting isolation.
 
-## Upstream 0.13.0 and final command-policy integration
+## Upstream 0.13.0 and command-policy integration (`5083959`)
 
 The contribution preserves published actuarial history through `03dbb8c` and integrates
 MC.7 `df9d947` with upstream functional base `55b5a45` in `2f306ae`. The MC.8 policy
@@ -195,7 +196,7 @@ versions to 0.13.0; the final gate below was rerun against that release.
   including nested queries and locally trusted workbooks. Neither consumes the analysis bank.
 - [x] Measure actual `SUM` evaluation on dense 16/64-row models and verify a conservative
   50,000-row charge of 1,250,825,000 units against the production meter. This gate checks
-  the policy without performing 1.25 billion range visits in every CI run.
+  the policy without making 1.25 billion visits over ranges in every CI run.
 - [x] Verify nested query refusal remains terminal and parent charging occurs exactly once;
   retain finite ceilings and the shared analysis and renderer limits.
 - [x] Clarify that the one-second conditional-look cache TTL covers all stored results.
@@ -220,3 +221,34 @@ An optional end-to-end 50,000-row CLI/MCP experiment reached its 180-second watc
 during model setup. No final value, explicit recalculation, edit or import result was
 obtained; that experiment is not counted as a pass or a quota-refusal control. The
 50,000-row gate above validates conservative accounting policy, not completion time.
+
+## CodeRabbit follow-up: scoped CF refusal and report publication
+
+Generic commit `6eb103c` corrects two control-flow defects without changing ACT formulas
+or sampling algorithms. Optional conditional-format evaluation now keeps its own sticky
+refusal latch while checking the enclosing policy and forwarding actual work to it. A local
+cell/frame refusal omits optional styling; a real enclosing refusal still terminates the
+command. Statistical finalization retains analysis accounting, then report publication
+releases that scope so structural source recalculation uses the enclosing command allowance.
+The later trial check, publication boundary and rollback checks remain active.
+
+- [x] Seven new regressions cover local refusal/reentry, real parent refusal, neighbouring
+  cell styling, exhausted-frame fallback, both publication modes and parent-budget rollback.
+- [x] All ten gates pass on byte-identical reviewed sources: 2,714 native tests in 24 binaries,
+  one preexisting ignored test, plus formatting, Clippy with warnings denied, doctests, assets,
+  layers, WASM, parity, keytips and the i18n report. The initial combined invocation passed
+  formatting/Clippy but ran out of disk while linking tests. After cleanup, the native gate
+  and the remaining six gates completed in stages with no source changes.
+- [x] A separate reviewer reran 21 compiled focal tests: 16 CF, two publication and three
+  work-hook tests, including all seven new regressions.
+- [x] Six real CLI RED/GREEN controls compare the previous executable with the corrected
+  one: synchronous publication, incremental publication/undo and command-driven PDF export.
+  The source cells retain the independently expected values 10, 20 and 2,001,000.
+- [x] PDF content and raster inspection confirm that the inexpensive neighbouring cell B2
+  retains its fill while the costly B1 conditional rule is omitted. The old executable could
+  leave a parseable PDF while returning a work-limit error; the corrected command succeeds.
+
+The focused source regressions can be replayed with `cargo test -p gridcraft-engine --lib
+cf::tests`, `cargo test -p gridcraft-engine --lib publication_recalculation` and
+`cargo test -p gridcraft-calc --lib work::tests`. The optional 50,000-row experiment above
+remains inconclusive and is not counted among these successful controls.

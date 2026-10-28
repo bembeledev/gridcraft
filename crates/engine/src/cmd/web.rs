@@ -374,13 +374,33 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
         return Err(EngineError::Other("The table is empty.".into()));
     }
     let w = table.rows.iter().map(Vec::len).max().unwrap_or(1);
-    // Calculated columns the user added to the right of the imported data are theirs, not the
-    // page's: the ones beyond the fetched width with a column formula are kept in place, so a
-    // refresh never deletes them (Excel keeps query-table calculated columns the same way).
-    let kept: Vec<TableColumn> = {
+    // The fetched header names, as the edit below spells them.
+    let page_headers: Vec<String> = (0..w)
+        .map(|i| {
+            table
+                .rows
+                .first()
+                .and_then(|row| row.get(i))
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| format!("Column{}", i + 1))
+        })
+        .collect();
+    // Calculated columns the user added are theirs, not the page's: the ones with a column
+    // formula whose name the fetched headers do not supply are kept, wherever the page's width
+    // leaves room (a wider page moves them right, a narrower one left, like Excel). Selection is
+    // by name, not position: a page that grows into a calculated column's old position must
+    // move it, not overwrite it. Each one's old column is remembered so the clash check below
+    // can tell its own cells from foreign content at the new place.
+    let kept: Vec<(u32, TableColumn)> = {
         let sh = d.wb.sheet(sheet).ok_or_else(|| EngineError::Other(format!("The sheet of the connection `{}` is gone.", q.name)))?;
         let Some(t) = sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname)) else { return Err(EngineError::Other(format!("The table of the connection `{}` is gone.", q.name))) };
-        t.columns.iter().skip(w).filter(|c| c.formula.is_some()).cloned().collect()
+        t.columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.formula.is_some() && !page_headers.iter().any(|h| h.eq_ignore_ascii_case(&c.name)))
+            .map(|(i, c)| (i as u32, c.clone()))
+            .collect()
     };
     let total_w = w + kept.len();
     let (Some(end_row), Some(end_col)) = (
@@ -397,17 +417,15 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
     if let Some(sh) = d.wb.sheet(sheet) {
         let totals_row = sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname)).is_some_and(|t| t.totals_row);
         let last_row = if totals_row { (new_range.end.row + 1).min(MAX_ROWS - 1) } else { new_range.end.row };
-        // The kept calculated columns' own cells are expected, not a clash — but only where
-        // they already are: when the page's width is unchanged they sit exactly in the kept
-        // strip. A width change moves them, and content at the new place still refuses.
-        let kept_in_place = old.width() == w as u32;
-        let kept_start = old.start.col + w as u32;
+        // The kept calculated columns' own cells (at their old columns, within the old rows) are
+        // expected, not a clash; the new places they move to must be empty, or the refresh
+        // refuses rather than overwrite whatever sits there.
         let outside = new_range.height() > old.height() || new_range.width() > old.width() || totals_row;
         let clash = outside
             && (new_range.start.row..=last_row).any(|row| {
                 sh.cells.row(row, new_range.start.col, new_range.end.col).any(|(c, cell)| {
                     (row < old.start.row || row > old.end.row || c < old.start.col || c > old.end.col)
-                        && !(kept_in_place && row <= old.end.row && c >= kept_start && c < kept_start + kept.len() as u32)
+                        && !(row <= old.end.row && kept.iter().any(|(i, _)| old.start.col + i == c))
                         && (!cell.value.is_empty() || cell.formula.is_some())
                 })
             });
@@ -437,18 +455,8 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             // The names come from the fetched header row, not the cells: a numeric header
             // (`2024`) is a number in the cell, and reading it as text would miss the column
             // and drop its settings on every refresh. sync_headers writes them back as text.
-            let headers: Vec<String> = (0..w)
-                .map(|i| {
-                    table
-                        .rows
-                        .first()
-                        .and_then(|row| row.get(i))
-                        .map(|t| t.trim().to_string())
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or_else(|| format!("Column{}", i + 1))
-                })
-                .collect();
-            let mut columns: Vec<TableColumn> = headers
+            let mut columns: Vec<TableColumn> = page_headers
+                .clone()
                 .into_iter()
                 .map(|name| {
                     old_cols.iter().find(|col| col.name.eq_ignore_ascii_case(&name)).cloned().unwrap_or(TableColumn {
@@ -462,7 +470,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
                 })
                 .collect();
             // The user's calculated columns beyond the page's width stay, with their metadata.
-            columns.extend(kept.iter().cloned());
+            columns.extend(kept.iter().map(|(_, c)| c.clone()));
             let t = &mut sh.tables[ti];
             t.columns = columns;
             t.range = new_range;
@@ -475,7 +483,7 @@ fn rewrite_table(s: &mut Session, q: &gridcraft_model::WebQuery, table: &WebTabl
             edit(s, |cx| {
                 let sh = cx.sheet_mut(sheet)?;
                 let Some(t) = sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&tname)).cloned() else { return Ok(()) };
-                for (i, col) in kept.iter().enumerate() {
+                for (i, (_, col)) in kept.iter().enumerate() {
                     let Some(code) = col.formula.as_ref() else { continue };
                     let expr = gridcraft_formula::parse(code).map_err(|e| EngineError::Other(format!("The calculated column `{}` has a broken formula: {e}", col.name)))?;
                     let c0 = t.range.start.col + w as u32 + i as u32;
@@ -1085,6 +1093,48 @@ mod tests {
         let c2 = sh.cell(gridcraft_core::CellRef::parse("C2").unwrap()).expect("the calculated column's cell");
         assert!(c2.formula.is_some(), "the formula is refilled");
         assert_eq!(c2.value, gridcraft_core::Value::from(25.0));
+    }
+
+    #[test]
+    /// A wider page moves the user's calculated column right instead of overwriting it: the
+    /// selection is by name, so the page's new third column takes position 3 and the calculated
+    /// column (and its refilled formulas) moves to position 4.
+    fn a_wider_page_moves_the_calculated_column_not_deletes_it() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com/markets", "sheet": "Markets"})).unwrap();
+        // The user's calculated column, third of three.
+        s.execute("cell.set", json!({"cell": "C2", "input": "=B2*2"})).unwrap();
+        super::super::edit(&mut s, |cx| {
+            let sh = cx.sheet_mut(cx.wb.sheet_index("Markets").ok_or_else(|| EngineError::Other("no Markets sheet".into()))?)?;
+            let ti = sh.tables.iter().position(|t| t.name == "prices").expect("the table");
+            while sh.tables[ti].columns.len() < 3 {
+                let n = sh.tables[ti].columns.len();
+                sh.tables[ti].columns.push(gridcraft_model::TableColumn { name: format!("Total{}", n), totals: TotalsFn::None, totals_label: None, formula: Some("B2*2".into()), unique_name: None, xml: None });
+            }
+            cx.structural = true;
+            Ok(())
+        })
+        .unwrap();
+        // A page three columns wide: the third column would sit where the calculated column is.
+        s.web_source = Some(Arc::new(|req: &WebRequest| {
+            Ok(crate::webquery::extract_tables(
+                "<table id=\"prices\"><tr><th>Sym</th><th>Price</th><th>Volume</th></tr><tr><td>ABCD</td><td>12.50</td><td>100</td></tr></table>",
+                req.max_rows,
+                req.max_cols,
+            ))
+        }));
+        s.execute("data.webRefresh", json!({})).unwrap();
+        let d = s.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = sh.tables.iter().find(|t| t.name == "prices").unwrap();
+        assert_eq!(t.range.width(), 4, "the page's three columns plus the calculated one");
+        assert_eq!(t.columns[2].name, "Volume", "the page's third column takes position 3");
+        assert_eq!(t.columns[3].formula.as_deref(), Some("B2*2"), "the calculated column moved right, metadata kept");
+        // The page's data landed in its columns and the calculated column's cells refilled.
+        assert_eq!(sh.value(gridcraft_core::CellRef::parse("C2").unwrap()), gridcraft_core::Value::from(100.0));
+        let d2 = sh.cell(gridcraft_core::CellRef::parse("D2").unwrap()).expect("the calculated column's new cell");
+        assert!(d2.formula.is_some(), "the formula is refilled at the new place");
+        assert_eq!(d2.value, gridcraft_core::Value::from(25.0));
     }
 
     #[test]

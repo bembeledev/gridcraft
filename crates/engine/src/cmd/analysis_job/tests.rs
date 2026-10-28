@@ -11,6 +11,61 @@ fn fixture() -> (Session, Json) {
     (s, p)
 }
 
+/// Analysis exhaustion cannot disable ordinary edits/recalc or bill imports to the old workbook.
+#[test]
+fn exhausted_analysis_bank_leaves_ordinary_commands_and_file_open_independent() {
+    let (mut s, params) = fixture();
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let budget = s.doc().unwrap().analysis_budget.clone();
+    for _ in 0..3 {
+        crate::workload::Meter::new(budget.clone()).charge(crate::workload::MAX_RUN_WORK).unwrap();
+    }
+    assert_eq!(budget.remaining().unwrap(), 0);
+    s.execute("cell.set", json!({"cell":"A1","input":"11"})).unwrap();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)).as_f64(), Some(22.));
+    assert!(s.execute("data.monteCarlo", params).is_err());
+    s.execute("file.open", json!({"name":"independent.xlsx","base64":crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)).as_f64(), Some(20.));
+    assert_eq!(budget.remaining().unwrap(), 0);
+    assert_eq!(s.doc().unwrap().analysis_budget.remaining().unwrap(), crate::workload::MAX_WINDOW_WORK);
+    let mut empty = Session::new();
+    empty.execute("file.open", json!({"name":"first.xlsx","base64":crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(empty.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)).as_f64(), Some(20.));
+    assert_eq!(empty.doc().unwrap().analysis_budget.remaining().unwrap(), crate::workload::MAX_WINDOW_WORK);
+}
+
+/// Ordinary commands still have a logical cap and an installed hook even without a document.
+#[test]
+fn ordinary_work_cap_is_independent_and_also_covers_commands_without_a_document() {
+    /// Simulates a hostile kernel; its ignored refusal must still reach the execute barrier.
+    fn excessive(_: &mut Session, _: &Json) -> Result<Json> {
+        let hook = gridcraft_calc::WorkHook::current().expect("ordinary scope must exist without a doc");
+        assert!(!hook.charge(crate::workload::MAX_COMMAND_WORK + 1));
+        Ok(json!(true))
+    }
+    crate::register_test_command("test.work.ordinaryCap", excessive);
+    let mut s = Session::new();
+    assert!(s.execute("test.work.ordinaryCap", json!({})).is_err());
+    let (mut s, _) = fixture();
+    let original = s.doc().unwrap().wb.clone();
+    assert!(s.execute("test.work.ordinaryCap", json!({})).is_err());
+    assert!(Arc::ptr_eq(&original, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().analysis_budget.remaining().unwrap(), crate::workload::MAX_WINDOW_WORK);
+}
+
+/// Discovery exposes the supported budget bound and a small seeded model still fits 1,000 units.
+#[test]
+fn discovery_documents_max_work_and_small_simulations_keep_their_exact_run_limit() {
+    let (mut s, mut params) = fixture();
+    assert!(crate::find_command("data.monteCarlo").unwrap().params.contains("maxWork?: positive integer ≤ 100000000"));
+    params["iterations"] = json!(2);
+    params["samples"] = json!(true);
+    params["maxWork"] = json!(1000);
+    s.execute("data.monteCarlo", params).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+}
+
 /// Completes a tiny job with explicit batches, avoiding assumptions about elapsed execution time.
 fn ready(s: &mut Session, id: &Json) {
     for _ in 0..20 {

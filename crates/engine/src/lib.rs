@@ -660,8 +660,7 @@ impl Session {
         }
         // A neutral scoped hook also reaches standalone formula evaluation (CLI/MCP queries),
         // while trial scopes override it with their long-lived shared run meter.
-        let command_meter =
-            if gridcraft_calc::WorkHook::current().is_none() { self.active().map(|d| workload::Meter::new(d.analysis_budget.clone())) } else { None };
+        let command_meter = if gridcraft_calc::WorkHook::current().is_none() { Some(workload::Meter::ordinary()) } else { None };
         let _work_scope = match &command_meter {
             Some(meter) => Some(meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?),
             None => None,

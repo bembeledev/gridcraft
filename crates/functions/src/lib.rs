@@ -3,7 +3,7 @@
 //! Every function is described by a [`FnSpec`] (name, arity, category, which parameters take
 //! scalars, a signature and a one-line description) and implemented as a plain Rust function over
 //! already-evaluated arguments. The calculation engine looks functions up by name with
-//! [`lookup`] and invokes them through [`call`], which applies Excel's automatic array lifting:
+//! [`lookup()`] and invokes them through [`call`], which applies Excel's automatic array lifting:
 //! passing an array where a scalar is expected evaluates the function once per element.
 //!
 //! Special forms that need references, laziness or hidden-row information (ROW, OFFSET,
@@ -62,6 +62,7 @@ macro_rules! f {
     };
 }
 
+pub(crate) mod actuarial;
 pub(crate) mod criteria;
 pub(crate) mod database;
 pub(crate) mod date;
@@ -102,6 +103,13 @@ impl Arg {
 
 /// Services a function may need from the host.
 pub trait Ctx {
+    /// Charges conservative work units before native calculation or allocation. Returning false
+    /// stops the call with `#NUM!`. Budgeted hosts must latch refusals through the logical run,
+    /// including zero-unit checks and formula error handling. This cooperative checkpoint does not interrupt an indivisible native operation.
+    /// The default preserves existing hosts without imposing an engine dependency.
+    fn charge_work(&mut self, _units: u64) -> bool {
+        true
+    }
     fn date_system(&self) -> DateSystem;
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
@@ -213,6 +221,7 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
             lookup::specs(),
             dynamic::specs(),
             financial::specs(),
+            actuarial::specs(),
             info::specs(),
             engineering::specs(),
             database::specs(),
@@ -256,6 +265,10 @@ pub fn all() -> &'static [FnSpec] {
 pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
         return Value::Error(CellError::Value);
+    }
+    let input_work = args.iter().fold(1u64, |units, arg| units.saturating_add(lift::value_work(&arg.value)));
+    if !ctx.charge_work(input_work) {
+        return Value::Error(CellError::Num);
     }
     lift::call_lifted(spec, args, ctx)
 }

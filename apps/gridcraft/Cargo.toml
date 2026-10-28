@@ -24,8 +24,17 @@ chrono = { workspace = true }
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Retain X11 fallback; draw Wayland client-side controls without bundled title fonts.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
+# Same craft-libs revision as the workspace's craft-update and craft-window (see the root
+# Cargo.toml).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }
@@ -57,7 +66,3 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 [[test]]
 name = "mac_menu_appkit"
 harness = false
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# GNOME/Wayland client-side controls without a bundled title font.
-winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita-notitle"] }

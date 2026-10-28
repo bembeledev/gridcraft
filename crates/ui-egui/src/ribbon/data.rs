@@ -27,8 +27,12 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let urls: Vec<String> = app.session.active().map(|d| d.wb.web_queries.iter().map(|q| q.url.clone()).collect()).unwrap_or_default();
-                let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-                app.start_fetch(&refs, ("data.webRefresh", json!({})));
+                if urls.is_empty() {
+                    app.message = Some(("Refresh All".into(), "No saved connections. Import a table with Data ▸ From Web to create one.".into()));
+                } else {
+                    let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+                    app.start_fetch(&refs, ("data.webRefresh", json!({})));
+                }
             }
             #[cfg(target_arch = "wasm32")]
             match app.run("data.webRefresh", json!({})) {

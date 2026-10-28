@@ -27,7 +27,11 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
-        let mut cell = Cell::formula(Formula::from_expr(expr));
+        let formula = match wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()) {
+            Some(previous) => previous.rewrite_input_expr(expr),
+            None => Formula::from_expr(expr),
+        };
+        let mut cell = Cell::formula(formula);
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
         if wb.styles.get(style).num_fmt.as_str() == "General" {
@@ -248,6 +252,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count}))
 }
 
+/// Fill a range with adjusted formulas while retaining imported call namespaces.
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -277,7 +282,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewrite_expr(shifted)));
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 sh.set_cell(at, cell);

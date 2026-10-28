@@ -1,0 +1,122 @@
+//! Synthetic imported-formula namespaces survive actual command and save paths, in memory.
+use gridcraft_core::{CellRef, Value};
+use gridcraft_engine::Session;
+use gridcraft_model::{Cell, FileFunctionPrefix, Formula, Workbook};
+use serde_json::json;
+use std::io::Read;
+
+/// Open a serialized workbook so tests exercise the real XLSX reader, not only a model flag.
+fn session() -> Session {
+    let mut wb = Workbook::new();
+    let mut formula = Formula::new("SYNTHETICFUTURE(A1)");
+    formula.file_functions.insert("SYNTHETICFUTURE".into(), vec![Some(FileFunctionPrefix::Xlfn)]);
+    wb.sheet_mut(0).unwrap().set_cell(CellRef::parse("B1").unwrap(), Cell::formula(formula));
+    wb.sheet_mut(0).unwrap().set_value(CellRef::parse("A1").unwrap(), Value::Number(1.0));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name":"synthetic-prefixes.xlsx","base64":gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+    s
+}
+
+/// Independently inspect the saved XML after a command sequence.
+fn saved_xml(s: &mut Session) -> String {
+    let encoded = s.execute("file.saveBytes", json!({"format":"xlsx"})).unwrap();
+    let bytes = gridcraft_engine::io::base64_decode(encoded["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    zip.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    xml
+}
+
+/// An unrelated edit and a JSON save/reopen preserve the source namespace.
+#[test]
+fn imported_prefix_survives_unrelated_edit_and_json_roundtrip() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"Z20","input":"1"})).unwrap();
+    let encoded = s.execute("file.saveBytes", json!({"format":"json"})).unwrap();
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name":"synthetic.json","base64":encoded["base64"]})).unwrap();
+    assert!(saved_xml(&mut reopened).contains("_xlfn.SYNTHETICFUTURE(A1)"));
+}
+
+/// Copying and filling adjust references while carrying the imported function spelling.
+#[test]
+fn imported_prefix_survives_copy_and_fill() {
+    let mut s = session();
+    s.execute("edit.copy", json!({"range":"B1"})).unwrap();
+    s.execute("edit.paste", json!({"at":"B2"})).unwrap();
+    assert!(saved_xml(&mut s).contains("_xlfn.SYNTHETICFUTURE(A2)"));
+    s.execute("edit.fillDown", json!({"range":"B1:B3"})).unwrap();
+    assert!(saved_xml(&mut s).contains("_xlfn.SYNTHETICFUTURE(A3)"));
+}
+
+/// Row insertion and sheet renaming must not turn imported calls into unprefixed calls.
+#[test]
+fn imported_prefix_survives_structural_edits_and_undo() {
+    let mut s = session();
+    s.execute("home.insertRows", json!({"rows":"1:1"})).unwrap();
+    assert!(saved_xml(&mut s).contains("_xlfn.SYNTHETICFUTURE(A2)"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(saved_xml(&mut s).contains("_xlfn.SYNTHETICFUTURE(A1)"));
+    s.execute("sheet.rename", json!({"name":"Synthetic renamed"})).unwrap();
+    assert!(saved_xml(&mut s).contains("_xlfn.SYNTHETICFUTURE(A1)"));
+}
+
+/// Replacing a formula with a new expression discards the imported spelling of the old call.
+#[test]
+fn replacing_a_formula_does_not_keep_stale_namespace_metadata() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"B1","input":"=SUM(A1,1)"})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert!(!xml.contains("SYNTHETICFUTURE"));
+    assert!(xml.contains("SUM(A1,1)"));
+}
+
+/// Confirming the existing formula or changing only its arguments keeps its imported namespace.
+#[test]
+fn confirming_or_editing_imported_formula_arguments_keeps_the_namespace() {
+    for argument in ["A1", "A2"] {
+        let mut s = session();
+        s.execute("cell.set", json!({"cell":"B1","input":format!("=SYNTHETICFUTURE({argument})")})).unwrap();
+        assert!(saved_xml(&mut s).contains(&format!("_xlfn.SYNTHETICFUTURE({argument})")));
+    }
+}
+
+/// Sorting and arithmetic paste rebuild expressions without losing their function namespaces.
+#[test]
+fn imported_prefix_survives_sort_and_paste_operations() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"A1","input":"2"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A2","input":"1"})).unwrap();
+    s.execute("edit.copy", json!({"range":"B1"})).unwrap();
+    s.execute("edit.paste", json!({"at":"B2"})).unwrap();
+    s.execute("data.sortAscending", json!({"range":"A1:B2","column":"A"})).unwrap();
+    assert_eq!(saved_xml(&mut s).matches("_xlfn.SYNTHETICFUTURE(").count(), 2);
+    s.execute("edit.copy", json!({"range":"A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"at":"B1","operation":"multiply"})).unwrap();
+    assert_eq!(saved_xml(&mut s).matches("_xlfn.SYNTHETICFUTURE(").count(), 2);
+}
+
+/// Table and header renames retain the namespace while updating structured references.
+#[test]
+fn imported_prefix_survives_table_and_header_rename() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"A1","input":"Amount"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A2","input":"1"})).unwrap();
+    s.execute("insert.table", json!({"range":"A1:A2","header":true,"name":"SyntheticTable"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"=SYNTHETICFUTURE(SyntheticTable[Amount])"})).unwrap();
+    s.execute("table.rename", json!({"table":"SyntheticTable","name":"SyntheticRenamed"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1","input":"Changed"})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert!(xml.contains("_xlfn.SYNTHETICFUTURE(SyntheticRenamed[Changed])"));
+}
+
+/// A replacement that binds the old function name locally must not inherit its global namespace.
+#[test]
+fn imported_prefix_does_not_retarget_a_new_local_lambda_call() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"B1","input":"=LET(SYNTHETICFUTURE,LAMBDA(x,x),SYNTHETICFUTURE(A1))"})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert!(!xml.contains("_xlfn.SYNTHETICFUTURE("));
+    assert!(xml.contains("_xlpm.SYNTHETICFUTURE("));
+}

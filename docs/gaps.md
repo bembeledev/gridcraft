@@ -1,6 +1,19 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (preserve imported function namespaces through cell edits and XLSX saves) · **Target:** Microsoft Excel (Microsoft 365)
+
+### Imported cell-function namespaces (#2775)
+
+Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
+cannot recreate. The evaluator still sees normalized names; this does not implement the
+functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
+structural edits and sheet/table renaming retain the metadata. New replacement expressions
+keep only prefixes for calls still present. This complements #2793's default spellings for
+newly entered functions. Defined-name, validation and conditional-format formula strings do
+not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
+LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
+call. Synthetic regression checks do not qualify arbitrary
+Excel-authored workbooks or native Excel calculation.
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -183,6 +196,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

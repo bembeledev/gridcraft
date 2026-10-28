@@ -2,14 +2,15 @@
 //! prefixes for newer functions).
 
 use gridcraft_formula::Expr;
-use gridcraft_model::Formula;
+use gridcraft_model::{FileFunctionPrefix, Formula};
+use std::collections::BTreeMap;
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
-        Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
-        Some(e) => expr_to_file(Expr::clone(&e)),
+        Some(e) if f.file_functions.is_empty() && !needs_file_spelling(&e) => gridcraft_formula::print(&e),
+        Some(e) => restore_call_prefixes(&expr_to_file(Expr::clone(&e)), &f.file_functions),
         None => f.text.clone(),
     }
 }
@@ -100,6 +101,7 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
     }
 }
 
+/// Canonical file spelling for formulas that have no imported namespace overrides.
 fn expr_to_file(e: Expr) -> String {
     let e = prefix_params(e, &[]);
     let e = e.map(&mut |x| match x {
@@ -134,6 +136,88 @@ fn strip_param_prefix(n: String) -> String {
         (Some(p), Some(rest)) if p.eq_ignore_ascii_case(PARAM_PREFIX) => rest.to_string(),
         _ => n,
     }
+}
+
+/// Canonical call key, including a LET/LAMBDA call whose file spelling uses `_xlpm.`.
+fn call_key(raw: &str) -> String {
+    strip_param_prefix(gridcraft_formula::normalize_function_name(raw)).to_ascii_uppercase()
+}
+
+/// Restore namespaces per occurrence after standard file spelling and LET/LAMBDA rewriting.
+fn restore_call_prefixes(text: &str, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> String {
+    if prefixes.is_empty() {
+        return text.to_string();
+    }
+    let Ok(tokens) = gridcraft_formula::lexer::tokenize(text) else { return text.to_string() };
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for token in tokens {
+        let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
+        let name = call_key(&raw);
+        let Some(sequence) = prefixes.get(&name) else { continue };
+        let index = counts.entry(name.clone()).or_default();
+        let prefix = sequence.get(*index);
+        *index = index.saturating_add(1);
+        let Some(prefix) = prefix else { continue };
+        let replacement = match prefix {
+            Some(prefix) => prefix.apply(&name),
+            None if raw.to_ascii_uppercase().starts_with("_XLPM.") => raw.clone(),
+            None => name,
+        };
+        if replacement == raw {
+            continue;
+        }
+        let Some(end) = token.start.checked_add(raw.len()) else { return text.to_string() };
+        let (Some(before), Some(original)) = (text.get(cursor..token.start), text.get(token.start..end)) else { return text.to_string() };
+        if original != raw {
+            return text.to_string();
+        }
+        out.push_str(before);
+        out.push_str(&replacement);
+        cursor = end;
+    }
+    let Some(rest) = text.get(cursor..) else { return text.to_string() };
+    out.push_str(rest);
+    out
+}
+
+/// Read a cell formula and retain explicit namespaces the known-function table cannot recreate.
+pub(crate) fn cell_from_file(text: &str) -> Formula {
+    let mut formula = Formula::new(&from_file(text));
+    if formula.expr.is_none()
+        || text.len() > gridcraft_formula::MAX_FORMULA_LEN
+        || !text.as_bytes().windows(b"_xlfn.".len()).any(|part| part.eq_ignore_ascii_case(b"_xlfn."))
+    {
+        return formula;
+    }
+    let mut calls: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
+    let mut overrides = std::collections::BTreeSet::new();
+    if let Ok(tokens) = gridcraft_formula::lexer::tokenize(text) {
+        for token in tokens {
+            let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
+            let name = call_key(&raw);
+            if matches!(name.as_str(), "SINGLE" | "ANCHORARRAY" | "_TRO_ALL" | "_TRO_LEADING" | "_TRO_TRAILING") {
+                continue;
+            }
+            let upper = raw.to_ascii_uppercase();
+            let prefix = if upper.starts_with("_XLFN._XLWS.") {
+                Some(FileFunctionPrefix::XlfnXlws)
+            } else if upper.starts_with("_XLFN.") {
+                Some(FileFunctionPrefix::Xlfn)
+            } else {
+                None
+            };
+            if let Some(prefix) = prefix
+                && crate::tables::file_function_name(&name).as_deref() != Some(prefix.apply(&name).as_str())
+            {
+                overrides.insert(name.clone());
+            }
+            calls.entry(name).or_default().push(prefix);
+        }
+    }
+    formula.file_functions = calls.into_iter().filter(|(name, _)| overrides.contains(name)).collect();
+    formula
 }
 
 /// Formula text read from a file → model text (strips prefixes when it parses).

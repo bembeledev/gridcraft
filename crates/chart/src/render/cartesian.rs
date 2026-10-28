@@ -53,6 +53,11 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
 }
 
+/// Line kinds that draw a marker at each point.
+fn has_markers(k: ChartKind) -> bool {
+    matches!(k, ChartKind::LineMarkers | ChartKind::LineStacked100Markers)
+}
+
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
     // Totals for 100% stacking, per axis and family (100% columns, lines and areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
@@ -321,7 +326,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
-                    if matches!(k, ChartKind::LineMarkers | ChartKind::LineStacked100Markers) && cw >= 3.0 {
+                    if has_markers(k) && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
                     }
                     if labels_on {

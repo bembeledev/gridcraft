@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Monte Carlo…",
         ["Data", "Analysis"],
         None,
-        "{inputs: [{cell: \"Inputs!B2\", distribution: uniform|triangular|normal, min?, mode?, max?, mean?, stdDev?}], outputs: [\"Model!F30\", ..], iterations?: 1000 (2–100000, ≤1000000 sampled cells), seed?: 0, samples?: true, newSheet?: name, method?: random|latinHypercube, replicates?: 1 (LHS default 8, at least 2), correlation?: [[1,0.5],[0.5,1]] (Gaussian latent correlation, input order)}. Includes Monte Carlo error estimates and convergence; formula outputs are recalculated on isolated workbook copies. Creates a static report with P10/P50/P90, probability > 0, samples and a conditional Monte Carlo tornado for the first output. Source inputs remain unchanged. Seed controls input sampling, not volatile formulas.",
+        "{inputs: [{cell: \"Inputs!B2\", distribution: uniform|triangular|normal, min?, mode?, max?, mean?, stdDev?}], outputs: [\"Model!F30\", ..], iterations?: 1000 (2–100000, ≤1000000 sampled cells), seed?: 0, samples?: true, maxWork?: positive integer ≤ 100000000, newSheet?: name, method?: random|latinHypercube, replicates?: 1 (LHS default 8, at least 2), correlation?: [[1,0.5],[0.5,1]] (Gaussian latent correlation, input order)}. Includes Monte Carlo error estimates and convergence; formula outputs are recalculated on isolated workbook copies. Creates a static report with P10/P50/P90, probability > 0, samples and a conditional Monte Carlo tornado for the first output. Source inputs remain unchanged. Seed controls input sampling, not volatile formulas.",
         has_doc,
         run
     )]

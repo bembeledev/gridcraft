@@ -155,12 +155,25 @@ XLSX round-trip tests use synthetic workbooks built in Rust.
 
 ## Operational limits and atomic failure
 
-Each logical command/run has a ceiling of **100,000,000 estimated work units**. Optional
-`maxWork` in simulation parameters lowers that ceiling. An open workbook also shares
-**300,000,000 units per fixed 60-second window**, including retries and failed/cancelled work.
-Clones retain that bank; reopening creates a new bank. Clock rollback or an unavailable clock
-does not refill it. These are conservative workload estimates, not measured CPU time or a
-process/tenant security sandbox.
+Each analysis run has a ceiling of **100,000,000 estimated work units**. Optional `maxWork`
+is a positive integer no greater than 100,000,000 and lowers that ceiling. What-if trials alone
+share **300,000,000 reserved units per open workbook per fixed 60-second window**, including
+retries and failed/cancelled work. Ordinary commands have an independent **1,000,000,000-unit
+logical-command cap**; edits/recalculation do not use the analysis bank. `file.open` receives
+that independent protection even without an existing document and never bills the old document.
+Clones retain the analysis bank; reopening creates a new bank. Clock rollback or an unavailable
+clock does not refill it. These are conservative workload estimates, not measured CPU time or
+a process/tenant security sandbox.
+
+Run counters and zero-unit failure/cancellation checks use atomics. Small analysis charges use
+prepaid credit: clock reads and shared-window locking occur only on credit renewal or an
+explicit bank query. A renewal reserves up to 4,096 units, bounded by the run's actual remaining
+allowance and bank availability; a large native charge is fully reserved before its kernel runs.
+`workUsed` reports exact accepted run charges. `sharedWorkRemaining` reports unreserved bank
+capacity and can fall faster because unused reservations are not refunded. An observed window
+rollover changes the bank generation and expires prepaid old-window credit. A run consuming
+already-paid credit observes elapsed time when it next renews; these are reservation windows,
+not a strict per-second CPU execution limit. A 1,000-unit run never requires a 4,096-unit grant.
 
 Charges cover trial setup, expressions, materialized ranges, native function calls, lifted
 broadcast inputs/outputs and kernels, sampling, diagnostics and report preparation. Functions
@@ -196,3 +209,4 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 | 2026-10-28 | Documented numerical contracts and limited replica controls to LHS. |
 | 2026-10-28 | Kept Enter/Shift+Enter inside multiline configuration fields. |
 | 2026-10-28 | Shared work budgets, cooperative jobs/progress/cancellation, growth limits and terminal rollback. |
+| 2026-10-28 | Atomic hot-path counters, bounded prepaid analysis credit and independent ordinary-command caps; expose maxWork in discovery. |

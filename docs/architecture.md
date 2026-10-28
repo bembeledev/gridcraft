@@ -1,6 +1,12 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+`gridcraft-odbc` is an isolated L2 connector: connection settings and SQL produce
+bounded typed tables, including calendar dates/times. It owns driver safety and
+does not depend on the engine, UI or workbook persistence. See
+[`crates/odbc/README.md`](../crates/odbc/README.md). Saved query/refresh design is
+deferred to [#431](https://github.com/storytold/gridcraft/issues/431).
+
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (standalone typed ODBC connector) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -150,6 +156,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Separate the typed ODBC connector from engine/UI and saved-query persistence pending #431. |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

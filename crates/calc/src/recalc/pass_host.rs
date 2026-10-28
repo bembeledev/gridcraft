@@ -64,12 +64,15 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    pub(super) work: Option<crate::WorkHook>,
 }
 
 impl<'a> PassHost<'a> {
+    /// Captures the current host policy once for a recalculation pass and its native kernels.
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
         PassHost {
             wb,
+            work: crate::WorkHook::current(),
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
             pending: exprs.keys().copied().collect(),
@@ -393,6 +396,10 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 }
 
 impl Host for PassHost<'_> {
+    /// Propagates the same work policy through native calls, broadcasts and formula evaluation.
+    fn charge_work(&mut self, units: u64) -> bool {
+        self.work.as_ref().is_none_or(|hook| hook.charge(units))
+    }
     fn workbook(&self) -> &Workbook {
         self.wb
     }
@@ -441,7 +448,11 @@ impl Host for PassHost<'_> {
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
+    /// Reserves rectangular materialization work before allocating values, including blanks.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        if !self.charge_work(range.count()) {
+            return vec![Value::Error(CellError::Num)];
+        }
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
@@ -513,7 +524,19 @@ impl Host for PassHost<'_> {
         }
         out
     }
+    /// Charges stored cells and spill traversal without billing virtual whole-column blanks.
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
+        // Sparse aggregations must charge the work they visit, not millions of virtual blanks.
+        // Spills are scanned separately below, so their full index size is a conservative cost.
+        let visited = if self.work.is_some() {
+            self.wb.sheet(sheet).map_or(0, |sh| sh.cells.iter_range(range).count().saturating_add(sh.spill.len())) as u64
+        } else {
+            0
+        };
+        if !self.charge_work(visited.saturating_add(1)) {
+            f(&Value::Error(CellError::Num));
+            return true;
+        }
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
         // Formula cells first, in row-major order like `range_values`: reading one calculates it

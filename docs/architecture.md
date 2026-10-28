@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (bounded rendering, safe import admission and upstream integration) · **Target:** GridCraft native engine, CLI/MCP and WASM
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -21,7 +21,7 @@ including tests, 2026-10-10.
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
-| L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
+| L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 361 runtime commands, checked through CLI discovery) with the Excel ribbon catalog (`catalog.rs`) |
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
 | L6 | `mcp` | ~1.4k | MCP server over stdio (hand-written JSON-RPC), headless or bridged to a running app |
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` | ~2.2k | Desktop (eframe/wgpu), CLI (`info`, `convert`, `eval`, `cat`, `run`, `commands`, `functions`, `mcp`, `send`), web (WASM via trunk) |
@@ -133,6 +133,28 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
 - MCP: `gridcraft-cli mcp`, headless or `--connect` to a running app, see [`mcp.md`](mcp.md).
 - CLI: [`cli.md`](cli.md).
 
+## Monte Carlo analysis
+
+`data.monteCarlo` reuses `whatif::Trial` for seeded sampling over arbitrary workbook formulas.
+Trials do not modify the source document; only the final static report becomes an undo step.
+The engine owns random/replicated-LHS sampling, Gaussian dependence, stable summaries,
+sampling-error diagnostics and sample-derived tornado sensitivity; the egui dialog
+only edits command parameters and drives the shared `analysis.*` job lifecycle for progress
+and cancellation. Synchronous callers retain `data.monteCarlo`. A neutral calc `WorkHook`
+connects `functions::Ctx`/calc accounting to an engine-owned persistent meter, including nested
+commands and uses atomic run counters. What-if trials alone debit the per-workbook reservation
+bank through bounded prepaid blocks, keeping clock/locks out of the per-node hot path.
+Ordinary commands stay independent of the analysis bank: queries have a 1B-unit cap and
+edits/recalculation/imports a finite 10B cap, including file opening without a document. Nested
+queries retain their own cap and charge the parent operation; document trust never raises it. Terminal work failure
+uses the command rollback barrier; report publication stays one atomic undoable edit.
+Imports recalculate a local document and check admission before replacing a blank or adding a
+window. Conditional-formatting formulas have an independent document-owned renderer bank,
+per-cell limit and bounded revision/identity/time-aware cache; painting does not consume the
+analysis allowance. These runtime controls are shared by native and WASM front ends.
+See [`monte-carlo.md`](monte-carlo.md) for limits and the
+reproducibility contract. No plugin host or external runtime is introduced.
+
 ## Platforms and builds
 
 macOS universal, Windows x64/x86/arm64, Linux x86_64/aarch64/riscv64 (AppImage, Flatpak, deb,
@@ -150,6 +172,11 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Bounded conditional-format rendering, safe file-open admission and integration with upstream Clippy conventions |
+| 2026-10-28 | minor | Atomic work accounting, expiring prepaid analysis credit and independent ordinary-command limits |
+| 2026-10-28 | minor | Shared analysis work accounting, atomic terminal rollback and portable progress/cancellation lifecycle |
+| 2026-10-28 | minor | Clarify native GridCraft analysis and document Monte Carlo numerical contracts |
+| 2026-10-27 | minor | Monte Carlo reuses isolated what-if trials; generic command, report and thin UI |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

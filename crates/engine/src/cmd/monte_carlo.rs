@@ -558,6 +558,9 @@ impl Job {
         sensitivity.sort_by(|a, b| b.span.total_cmp(&a.span));
         let diagnostics = Diagnostics::new(&plan, &inputs, &outputs, &xs, &ys)?;
         trial.check()?;
+        // Structural publication recalculates the source under the enclosing command policy,
+        // after sampling/finalization have finished charging the analysis run and shared bank.
+        drop(_scope);
         crate::workload::report_capacity(&s.doc()?.wb, report_cells)?;
         trial.meter.cancellation.begin_commit()?;
         let publication = write_report(

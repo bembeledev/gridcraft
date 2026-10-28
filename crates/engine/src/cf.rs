@@ -329,7 +329,7 @@ impl CfCache {
         let combined = gridcraft_calc::WorkHook::new(move |units| {
             local.charge(units).is_ok() && parent.as_ref().is_none_or(|policy| policy.charge(units)) && frame.charge(units).is_ok()
         });
-        let _scope = combined.enter()?;
+        let _scope = combined.enter_local()?;
         if !gridcraft_calc::WorkHook::allowed() {
             return None;
         }
@@ -552,6 +552,64 @@ mod tests {
         assert!(d.render_budget.remaining().unwrap() > 990_000);
         assert!(cache.frame_meter.check().is_ok(), "a local refusal must not poison the frame meter");
         assert!(cache.look(&d.wb, 0, CellRef::parse("B2").unwrap()).is_some());
+    }
+
+    /// Optional CF refusal must not fail a real command or suppress its inexpensive neighbour.
+    #[test]
+    fn local_refusal_under_a_command_keeps_parent_and_neighbour_healthy() {
+        /// Exercises the same ambient work scope used by command-driven printing.
+        fn paint(s: &mut crate::Session, _: &serde_json::Value) -> crate::Result<serde_json::Value> {
+            let d = s.doc()?;
+            let mut cache = CfCache::with_budget(d.render_budget.clone());
+            let refused = cache.look(&d.wb, 0, CellRef::new(0, 1)).is_none();
+            let neighbour = cache.look(&d.wb, 0, CellRef::new(1, 1)).is_some();
+            Ok(json!([refused, neighbour, gridcraft_calc::WorkHook::allowed()]))
+        }
+        crate::register_test_command("test.cf.localRefusal", paint);
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range":"B2","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+        assert_eq!(s.execute("test.cf.localRefusal", json!({})).unwrap(), json!([true, true, true]));
+    }
+
+    /// Exhausting only the rendering frame omits CF without rejecting its enclosing command.
+    #[test]
+    fn frame_refusal_under_a_command_keeps_parent_healthy() {
+        /// A tiny frame allowance refuses the style while the command still has work credit.
+        fn paint(s: &mut crate::Session, _: &serde_json::Value) -> crate::Result<serde_json::Value> {
+            let d = s.doc()?;
+            let mut cache = CfCache::with_budget(d.render_budget.clone());
+            cache.frame_meter.set_limit(1)?;
+            let refused = cache.look(&d.wb, 0, CellRef::default()).is_none();
+            Ok(json!([refused, gridcraft_calc::WorkHook::allowed()]))
+        }
+        crate::register_test_command("test.cf.frameRefusal", paint);
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}})).unwrap();
+        assert_eq!(s.execute("test.cf.frameRefusal", json!({})).unwrap(), json!([true, true]));
+    }
+
+    /// A true ambient work refusal must still stop the command despite CF's local isolation.
+    #[test]
+    fn real_parent_refusal_during_a_look_remains_terminal() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range":"A1:A2","rule":{"type":"expression","formula":"=1+1=2","preset":"lightRedFill"}}))
+            .unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::with_budget(d.render_budget.clone());
+        let parent = crate::workload::Meter::ordinary();
+        parent.set_limit(1).unwrap();
+        {
+            let _scope = parent.hook().enter().unwrap();
+            assert!(cache.look(&d.wb, 0, CellRef::default()).is_none());
+            assert!(!gridcraft_calc::WorkHook::allowed());
+            assert!(cache.look(&d.wb, 0, CellRef::new(1, 0)).is_none());
+        }
+        assert!(parent.check().is_err());
+        assert_eq!(s.execute("formulas.evaluate", json!({"formula":"=1+1"})).unwrap(), json!(2.0));
     }
 
     /// Hits, including cached fallback, do not reserve credit; misses retain terminal bank failure.

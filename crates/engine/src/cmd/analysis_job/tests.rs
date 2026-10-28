@@ -208,6 +208,62 @@ fn finish_matches_synchronous_results_and_undo() {
     assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
 }
 
+/// An unrelated source formula is cheap to leave clean during trials, but costs more than the
+/// run limit when structural publication recalculates it. That work belongs to the command.
+#[test]
+fn publication_recalculation_uses_command_credit_in_both_execution_modes() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    for incremental in [false, true] {
+        let (mut s, mut p) = fixture();
+        s.execute("cell.set", json!({"cell":"C1","input":"=SUM(SEQUENCE(2000))"})).unwrap();
+        p["maxWork"] = json!(1000);
+        p["iterations"] = json!(2);
+        let before = s.doc().unwrap().undo.len();
+        let units = Arc::new(AtomicU64::new(0));
+        let seen = units.clone();
+        let parent = gridcraft_calc::WorkHook::new(move |n| {
+            seen.fetch_add(n, Ordering::Relaxed);
+            true
+        });
+        let _scope = parent.enter().unwrap();
+        let result = if incremental {
+            let id = s.execute("analysis.start", json!({"params":p})).unwrap()["job"].clone();
+            ready(&mut s, &id);
+            s.execute("analysis.finish", json!({"job":id}))
+        } else {
+            s.execute("data.monteCarlo", p)
+        };
+        assert!(result.is_ok(), "publication should use enclosing command credit: {result:?}");
+        assert!(units.load(Ordering::Relaxed) > 1000, "source recalculation must reach the enclosing policy");
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+        assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 2)).as_f64(), Some(2_001_000.));
+        assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+        assert_eq!(s.journal.last().unwrap().0, "data.monteCarlo");
+    }
+}
+
+/// Releasing analysis credit must not bypass the enclosing command's own refusal/rollback.
+#[test]
+fn publication_recalculation_still_obeys_parent_refusal() {
+    let (mut s, mut p) = fixture();
+    s.execute("cell.set", json!({"cell":"C1","input":"=SUM(SEQUENCE(2000))"})).unwrap();
+    p["maxWork"] = json!(1000);
+    p["iterations"] = json!(2);
+    let source = s.doc().unwrap().wb.clone();
+    let undo = s.doc().unwrap().undo.len();
+    let journal = s.journal.len();
+    let parent = crate::workload::Meter::ordinary();
+    parent.set_limit(1000).unwrap();
+    {
+        let _scope = parent.hook().enter().unwrap();
+        assert!(s.execute("data.monteCarlo", p).is_err());
+    }
+    assert!(parent.check().is_err());
+    assert!(Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+    assert_eq!(s.journal.len(), journal);
+}
+
 /// External cancellation and edits through an embedding API cannot be silently overwritten.
 #[test]
 fn cancellation_handles_and_source_conflicts_are_checked() {

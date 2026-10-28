@@ -58,6 +58,24 @@ impl WorkHook {
             })
         })
     }
+
+    /// Enters an optional, locally fallible scope without sharing its refusal latch with the
+    /// enclosing operation. The enclosing policy is still polled for terminal refusal; the
+    /// callback must explicitly forward positive work charges to it when composing policies.
+    /// Use `enter` for work whose failure must stop the enclosing operation.
+    pub fn enter_local(&self) -> Option<WorkScope> {
+        CURRENT.with(|slot| {
+            slot.try_borrow_mut().ok().map(|mut value| {
+                let parent = value.clone();
+                let source = self.clone();
+                let local = Self {
+                    checkpoint: Arc::new(move |units| parent.as_ref().is_none_or(|hook| hook.charge(0)) && source.charge(units)),
+                    failed: self.failed.clone(),
+                };
+                WorkScope { previous: value.replace(local), thread_bound: PhantomData }
+            })
+        })
+    }
 }
 
 impl std::fmt::Debug for WorkHook {
@@ -103,5 +121,39 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         drop(outer);
         assert!(WorkHook::current().is_none());
+    }
+
+    /// Optional child refusal remains sticky locally without poisoning the enclosing operation.
+    #[test]
+    fn local_refusal_does_not_poison_parent_or_reset_on_reentry() {
+        let parent = WorkHook::new(|_| true);
+        let _outer = parent.enter().unwrap();
+        let child = WorkHook::new(|units| units == 0);
+        {
+            let _inner = child.enter_local().unwrap();
+            assert!(!WorkHook::current().unwrap().charge(1));
+            assert!(!WorkHook::allowed());
+        }
+        assert!(WorkHook::allowed());
+        {
+            let _inner = child.enter_local().unwrap();
+            assert!(!WorkHook::allowed());
+        }
+        assert!(WorkHook::allowed());
+    }
+
+    /// A local scope still observes an actual enclosing refusal and cannot clear it on return.
+    #[test]
+    fn local_scope_observes_real_parent_refusal() {
+        let parent = WorkHook::new(|units| units == 0);
+        let _outer = parent.enter().unwrap();
+        let child = WorkHook::new(|_| true);
+        {
+            let _inner = child.enter_local().unwrap();
+            assert!(WorkHook::allowed());
+            assert!(!parent.charge(1));
+            assert!(!WorkHook::allowed());
+        }
+        assert!(!WorkHook::allowed());
     }
 }

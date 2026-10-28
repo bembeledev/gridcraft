@@ -88,7 +88,10 @@ impl Plan {
         let mut rng = Rng(seed);
         let mut xs = (0..d).map(|_| Vec::with_capacity(total)).collect::<Vec<_>>();
         if !self.latin && self.factor.is_none() {
-            for _ in 0..total {
+            for row in 0..total {
+                if row.is_multiple_of(128) && !gridcraft_calc::WorkHook::allowed() {
+                    return Err(bad(CMD, "sampling stopped by work limit or cancellation"));
+                }
                 for (input, column) in inputs.iter().zip(&mut xs) {
                     let x = input.distribution.sample(&mut rng);
                     if !x.is_finite() {
@@ -100,6 +103,9 @@ impl Plan {
             return Ok(xs);
         }
         for _ in 0..self.replicates {
+            if !gridcraft_calc::WorkHook::allowed() {
+                return Err(bad(CMD, "sampling stopped by work limit or cancellation"));
+            }
             let mut uniforms = Vec::with_capacity(d);
             for _ in 0..d {
                 let mut column = if self.latin {
@@ -116,6 +122,9 @@ impl Plan {
                 uniforms.push(column);
             }
             for k in 0..n {
+                if k.is_multiple_of(128) && !gridcraft_calc::WorkHook::allowed() {
+                    return Err(bad(CMD, "sampling stopped by work limit or cancellation"));
+                }
                 let z = if self.factor.is_some() {
                     uniforms.iter().map(|c| normal_inverse(c.get(k).copied().unwrap_or(0.5))).collect::<Result<Vec<_>>>()?
                 } else {

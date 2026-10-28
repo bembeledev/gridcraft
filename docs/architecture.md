@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (Monte Carlo numerical contracts) · **Target:** GridCraft native engine, CLI/MCP and WASM
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (analysis work budgets and cooperative lifecycle) · **Target:** GridCraft native engine, CLI/MCP and WASM
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -139,7 +139,12 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
 Trials do not modify the source document; only the final static report becomes an undo step.
 The engine owns random/replicated-LHS sampling, Gaussian dependence, stable summaries,
 sampling-error diagnostics and sample-derived tornado sensitivity; the egui dialog
-only edits command parameters. See [`monte-carlo.md`](monte-carlo.md) for limits and the
+only edits command parameters and drives the shared `analysis.*` job lifecycle for progress
+and cancellation. Synchronous callers retain `data.monteCarlo`. A neutral calc `WorkHook`
+connects `functions::Ctx`/calc accounting to an engine-owned persistent meter, including nested
+commands, per-run limits and a shared per-workbook fixed-window bank. Terminal work failure
+uses the command rollback barrier; report publication stays one atomic undoable edit.
+See [`monte-carlo.md`](monte-carlo.md) for limits and the
 reproducibility contract. No plugin host or external runtime is introduced.
 
 ## Platforms and builds
@@ -159,6 +164,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Shared analysis work accounting, atomic terminal rollback and portable progress/cancellation lifecycle |
 | 2026-10-28 | minor | Clarify native GridCraft analysis and document Monte Carlo numerical contracts |
 | 2026-10-27 | minor | Monte Carlo reuses isolated what-if trials; generic command, report and thin UI |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |

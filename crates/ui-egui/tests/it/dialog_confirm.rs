@@ -61,6 +61,7 @@ fn monte_carlo_dialog_confirms_a_generic_model_and_preserves_inputs() {
     let result = control(&mut h, "ui.dialog.confirm", json!({}));
     assert_eq!(result["ok"], true, "{result}");
     assert!(h.state().dialog.is_none());
+    h.run_steps(8); // cooperative preparation, trials and one report publication
     let d = h.state().session.doc().unwrap();
     assert_eq!(d.wb.sheets.len(), 2);
     assert_eq!(d.wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(0, 0)).as_f64(), Some(10.0));
@@ -95,9 +96,32 @@ fn monte_carlo_multiline_enter_inserts_a_line_without_confirming() {
             assert_eq!(h.state().session.doc().unwrap().wb.sheets.len(), 1);
             assert!(h.get_by_role_and_label(Role::MultilineTextInput, label).value().is_some_and(|v| v.contains('\n')));
             h.get_by_label("   OK   ").click();
-            h.run_steps(4);
+            h.run_steps(8);
             assert!(h.state().dialog.is_none());
             assert_eq!(h.state().session.doc().unwrap().wb.sheets.len(), 2);
         }
     }
+}
+
+/// The real progress UI can cancel a running job without source edits, reports or extra undo.
+#[test]
+fn monte_carlo_progress_cancel_preserves_the_workbook() {
+    let mut h = harness();
+    h.state_mut().run("cell.set", json!({"cell":"A1","input":"10"})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+    let source = h.state().session.doc().unwrap().wb.clone();
+    let undo = h.state().session.doc().unwrap().undo.len();
+    control(&mut h, "ui.dialog", json!({"name":"monteCarlo"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"outputs","value":"B1"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"iterations","value":"50000"}));
+    control(&mut h, "ui.dialog.confirm", json!({}));
+    assert!(h.state().session.analysis_active());
+    h.run_steps(4);
+    h.get_by_label("Cancel simulation").click();
+    h.run_steps(4);
+    assert!(!h.state().session.analysis_active());
+    let d = h.state().session.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&source, &d.wb));
+    assert_eq!(d.undo.len(), undo);
+    assert_eq!(d.wb.sheets.len(), 1);
 }

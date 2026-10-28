@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** document numerical contracts and LHS-only replica controls
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** shared work accounting, cooperative progress/cancellation and atomic failure
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -23,7 +23,10 @@ or financial-model template is required.
 5. Optionally enter a correlation matrix: rows on separate lines, numbers separated by spaces.
    The matrix follows input order and specifies **latent Gaussian correlation**, not the
    Pearson correlation of non-normal sampled variables.
-6. Run. The source inputs remain unchanged; adding the report is one undoable action.
+6. Run. The dialog shows progress and **Cancel simulation** (also Escape). The source inputs
+   remain unchanged; adding the completed report is one undoable action. Workbook editing is
+   disabled while a job is pending. In action recording or an undo group the dialog retains
+   the synchronous command behavior.
 
 The report contains mean, sample standard deviation, minimum, P10/P50/P90, maximum, probability
 above zero, raw samples when requested, and a conditional tornado for the **first output**.
@@ -50,6 +53,29 @@ gridcraft-cli run \
 In MCP, call `execute_command` with `command: "data.monteCarlo"` and the same JSON as `params`.
 Omitting `newSheet` creates a unique `Monte Carlo` report name. An explicit existing or invalid
 sheet name is rejected. Reuse the report's configuration, or record the action as an automation.
+
+### Cooperative jobs over MCP, control or CLI
+
+`data.monteCarlo` remains synchronous for existing callers. For explicit progress and cancellation,
+use the following engine commands through the same `execute_command` interface:
+
+1. `analysis.start` with `{"params":{...simulation configuration...}}` returns a positive `job`
+   identity. Optional `autoAdvance: true` lets an attached UI drive it; the default is false.
+2. `analysis.step` with `{"job":1,"trials":512}` advances work without publishing. The first
+   step prepares samples; later steps evaluate up to 1–2048 trials, yielding between trials
+   after approximately 8 ms or 250,000 charged units. Poll `analysis.status` with that identity
+   for `stage`, `completed`, `total`, `progress`, `workUsed` and limits.
+3. When `state` is `ready`, `analysis.finish` with `{"job":1}` publishes one report/undo step.
+   An early finish returns an error and retains the job. The journal stores the canonical
+   `data.monteCarlo` configuration, so replay does not depend on a transient job identity.
+4. Alternatively, `analysis.cancel` with `{"job":1}` discards pending work without a report,
+   journal entry or source change. Stale identities never control a newer job.
+
+There is one pending job per session. Start outside nested scripts, action recording and undo
+groups. Editing/switching commands are refused while it is pending; read-only queries remain
+available. Source revision and workbook identity are checked again before publication. Embedding
+hosts can retain `Session::analysis_cancellation()` and signal it from another thread; cancellation
+is cooperative, and requests after the publication boundary return false.
 
 ## What the tornado means
 
@@ -107,8 +133,8 @@ References (mathematical descriptions, no implementation code copied):
 
 ## Limits and reproducibility
 
-- Discrete distributions, non-Gaussian copulas, background execution/cancellation and percentile
-  fan charts are future work. The report supports up to 64 formula outputs for monthly forecasts.
+- Discrete distributions, non-Gaussian copulas and percentile fan charts are future work.
+  The report supports up to 64 formula outputs for monthly forecasts.
 - At most 32 inputs, 64 outputs, 2–100,000 iterations, and 1,000,000 input/output sample cells.
   Limits apply even when the sample table is omitted. Large formula models may take time.
 - The seed controls the input RNG. Workbook formulas such as `RAND`/`NOW`, external data and
@@ -127,14 +153,46 @@ Distribution moments, analytic covariance, singular/invalid matrices, LHS strata
 reference values, high-offset numerical stability, repeatability, cross-sheet/manual recalculation, error atomicity, undo/redo and
 XLSX round-trip tests use synthetic workbooks built in Rust.
 
-## Follow-up hardening
+## Operational limits and atomic failure
 
-These are planned shared analysis improvements; the current command remains synchronous with
-the per-run limits above.
+Each logical command/run has a ceiling of **100,000,000 estimated work units**. Optional
+`maxWork` in simulation parameters lowers that ceiling. An open workbook also shares
+**300,000,000 units per fixed 60-second window**, including retries and failed/cancelled work.
+Clones retain that bank; reopening creates a new bank. Clock rollback or an unavailable clock
+does not refill it. These are conservative workload estimates, not measured CPU time or a
+process/tenant security sandbox.
 
-- [ ] Define a shared workload budget for expensive analysis commands, including formula
-  evaluation cost and repeated automation requests.
-- [ ] Add cooperative cancellation and progress at a shared evaluator boundary. Cancellation
-  before report publication must preserve source cells and leave no partial report.
-- [ ] Exercise cumulative report/history growth and end-to-end interruption through the
-  control/MCP paths, including the behavior of volatile or externally backed formulas.
+Charges cover trial setup, expressions, materialized ranges, native function calls, lifted
+broadcast inputs/outputs and kernels, sampling, diagnostics and report preparation. Functions
+can supply model-specific estimates/checkpoints through the neutral `Ctx::charge_work` hook;
+the function crate's default context accepts work, while the engine connects it to the shared
+meter. Nested commands inherit the enclosing logical run instead of resetting its allowance.
+A refusal stays latched through later zero-unit checks, even if `IFERROR` handles the worksheet
+`#NUM` value. An optional pack's cost model belongs to that pack, without a functions-to-engine
+dependency or a second simulation RNG.
+
+Cancellation and work refusal leave no partial report or source edit. The command boundary
+restores workbook, selection, revision, undo/redo and journal on terminal work failure, including
+handlers that directly replace the workbook. A failed start also discards its newly retained
+runtime job. Accepted cancellation occurs before the atomic publication boundary.
+
+Progress uses bounded batches on native and WASM front ends. Checkpoints also run during
+sampling and report preparation. They do **not** interrupt an indivisible native call, sort,
+allocation or workbook copy; one such operation may exceed the between-trial 8 ms target.
+This release does not promise a strict wall-clock deadline or worker-thread isolation.
+
+Report creation is refused above **128 total sheets** or **2,000,000 stored cells**, including
+source sheets and a conservative report reservation. Existing history entry/retained-byte caps
+remain separate. Tests cover repeated report growth, source/error atomicity, volatile/erroring
+formulas, cancellation through UI/MCP, sync/stepped equivalence, nested-meter inheritance,
+terminal rollback and cancellation/publication ordering. External services are not exercised;
+unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than network requests.
+
+## Revision history
+
+| Date | Change |
+| --- | --- |
+| 2026-10-27 | Native Monte Carlo, correlation matrix, numerical diagnostics and conditional tornado report. |
+| 2026-10-28 | Documented numerical contracts and limited replica controls to LHS. |
+| 2026-10-28 | Kept Enter/Shift+Enter inside multiline configuration fields. |
+| 2026-10-28 | Shared work budgets, cooperative jobs/progress/cancellation, growth limits and terminal rollback. |

@@ -6,9 +6,11 @@
 pub mod eval;
 pub mod recalc;
 mod trimrange;
+pub mod work;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
 pub use recalc::{Calc, Key, evaluate, now_serial};
+pub use work::WorkHook;
 
 #[cfg(test)]
 mod tests;

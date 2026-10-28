@@ -90,6 +90,10 @@ pub(crate) fn stack_position() -> usize {
 
 /// What the evaluator needs from its surroundings.
 pub trait Host {
+    /// Default-compatible checkpoint for hosts without an execution policy.
+    fn charge_work(&mut self, _units: u64) -> bool {
+        true
+    }
     fn workbook(&self) -> &Workbook;
     /// The current value of a cell (evaluating it first if it is dirty).
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value;
@@ -150,6 +154,10 @@ struct FnCtx<'a, 'h> {
 }
 
 impl Ctx for FnCtx<'_, '_> {
+    /// Native functions/lift charge the same persistent policy as their enclosing formula trial.
+    fn charge_work(&mut self, units: u64) -> bool {
+        self.ev.host.charge_work(units)
+    }
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
     }
@@ -295,7 +303,11 @@ impl<'h> Evaluator<'h> {
         RangeRef::new(a.range.start, CellRef::new(r1, c1))
     }
 
+    /// Evaluates one expression after charging its node; refused work becomes #NUM.
     pub fn eval(&mut self, e: &Expr) -> Ev {
+        if !self.host.charge_work(1) {
+            return err(CellError::Num);
+        }
         let here = stack_position();
         if self.depth == 0 {
             self.stack_top = self.host.stack_top().unwrap_or(here);

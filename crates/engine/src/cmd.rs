@@ -2,6 +2,7 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod analysis_job;
 pub mod data;
 pub mod draw;
 pub mod edit;
@@ -154,6 +155,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(forecast::specs());
         v.extend(analysis::specs());
         v.extend(monte_carlo::specs());
+        v.extend(analysis_job::specs());
         v.extend(print::specs());
         v
     })
@@ -352,6 +354,7 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+/// Publishes a recalculated edit only while its logical work policy still permits it.
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
     // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
@@ -388,6 +391,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", t0.elapsed());
+    }
+    if !gridcraft_calc::WorkHook::allowed() {
+        d.calc.rebuild(&d.wb);
+        return Err(EngineError::Other("Calculation stopped by its work limit or cancellation; source cells were preserved.".into()));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;

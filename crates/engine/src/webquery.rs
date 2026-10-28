@@ -44,6 +44,22 @@ pub struct WebTable {
 /// Fetches a page and returns its tables. Implementations must honour the caps and never panic.
 pub type WebFetch = std::sync::Arc<dyn Fn(&WebRequest) -> Result<Vec<WebTable>, String> + Send + Sync>;
 
+/// The address a fetch is allowed to use: https, and no userinfo. A URL deserialized from a
+/// saved workbook reaches the fetch path too, so every caller validates through here before a
+/// `WebRequest` is built — a credential typed into the address (`user:pass@host`) would be sent
+/// as basic auth and stored verbatim with the connection, and neither may happen.
+pub fn validate_url(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    if !url.starts_with("https://") {
+        return Err("Only https:// addresses can be imported.".into());
+    }
+    let authority = url.trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err("Web addresses with user and password (`user:pass@host`) can't be imported: the secret would be saved with the workbook.".into());
+    }
+    Ok(())
+}
+
 /// The tables of `html`, in document order. Nested tables are flattened into the cell text of
 /// the enclosing table (like Excel's detection, a table inside a cell stays part of the cell).
 /// `max_rows`/`max_cols` cap each table's size; longer tables are reported truncated. A page

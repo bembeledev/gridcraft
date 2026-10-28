@@ -69,16 +69,9 @@ fn request(p: &Json) -> Result<WebRequest> {
     // HTTPS only, like the fetch provider itself: a plain-http address must be refused before
     // the prefetched paths too, or a caller-supplied page bypasses the https-only contract.
     let url = str_param(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or_else(|| bad(ID, "missing `url`"))?;
-    if !url.starts_with("https://") {
-        return Err(EngineError::Other("Only https:// addresses can be imported.".into()));
-    }
-    // Userinfo (`https://user:pass@host/`) would be sent as basic auth and stored verbatim in
-    // the saved connection, so a secret typed into the URL ends up in the workbook. Refuse it:
-    // a secret belongs in a source the workbook never saves.
-    let authority = url.trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.contains('@') {
-        return Err(EngineError::Other("Web addresses with user and password (`user:pass@host`) can't be imported: the secret would be saved with the workbook.".into()));
-    }
+    // HTTPS only and no userinfo, like the fetch provider itself: both are refused before the
+    // prefetched paths too, or a caller-supplied page bypasses the provider's contract.
+    crate::webquery::validate_url(url).map_err(EngineError::Other)?;
     let max_rows = p
         .get("maxRows")
         .and_then(Json::as_u64)
@@ -340,6 +333,12 @@ fn web_refresh(s: &mut Session, p: &Json) -> Result<Json> {
     let mut refreshed = 0;
     let mut errors: Vec<Json> = Vec::new();
     for q in queries {
+        // The URL comes from the saved connection, so a workbook the model deserialized could
+        // hold one no fresh import would accept: validate before the fetch, like `request` does.
+        if let Err(e) = crate::webquery::validate_url(&q.url) {
+            errors.push(json!({"table": q.name, "error": e}));
+            continue;
+        }
         let req = WebRequest { url: q.url.clone(), max_rows: DEFAULT_MAX_ROWS, max_cols: MAX_COLS, max_bytes: DEFAULT_MAX_BYTES };
         // A background worker's downloads come through `fetch_tables` (keyed by URL); without
         // them, the fetch runs here.
@@ -1024,6 +1023,26 @@ mod tests {
             assert!(err.to_string().contains("can't be imported"), "{url}: {err}");
             assert!(s.active().unwrap().wb.web_queries.is_empty());
         }
+    }
+
+    #[test]
+    /// A persisted connection whose deserialized URL holds userinfo — the JSON workbook model
+    /// can carry one — is refused on refresh too: the guard lives in the shared fetch path, so
+    /// the native provider never forwards the embedded credential, whatever stored the URL.
+    fn a_persisted_userinfo_url_is_refused_on_refresh() {
+        let mut s = session_with_source();
+        s.execute("data.fromWeb", json!({"url": "https://example.com/markets", "sheet": "Markets"})).unwrap();
+        // A deserialized workbook's connection: written as the JSON model would deliver it.
+        super::super::edit(&mut s, |cx| {
+            let q = cx.wb.web_queries.iter_mut().find(|q| q.sheet == "Markets").expect("the connection");
+            q.url = "https://user:pass@example.com/markets".into();
+            cx.structural = true;
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute("data.webRefresh", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 0, "the userinfo refresh must not run: {r}");
+        assert!(r["errors"].as_array().is_some_and(|e| e.iter().any(|e| e["error"].as_str().is_some_and(|m| m.contains("can't be imported")))), "{r}");
     }
 
     #[test]

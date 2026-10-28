@@ -51,6 +51,12 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     if !req.url.trim_start().starts_with("https://") {
         return Err("Only https:// addresses can be imported.".into());
     }
+    // Userinfo (`https://user:pass@host/`) would be sent as basic auth: check it here too, so
+    // the provider never forwards an embedded credential even if a caller skipped validation.
+    let authority = req.url.trim_start().trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err("Web addresses with user and password (`user:pass@host`) can't be imported: the secret would be saved with the workbook.".into());
+    }
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder().max_redirects(0).timeout_global(Some(std::time::Duration::from_secs(30))).build(),
     );

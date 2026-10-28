@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, control_keytip, keytip, menu_items, sep, theme_colors};
 use super::galleries::{paint_table_swatch, table_gallery};
 use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, icon_button, json, keytip_table, vec2};
 
@@ -179,5 +179,92 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "chart.delete", json!({"chart": id}));
         app.selected_chart = None;
+    }
+}
+
+/// Contextual actions available for a selected picture; image editing is still a separate gap.
+pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.images.iter().any(|image| image.id == id));
+    if !exists {
+        return;
+    }
+    selection_pane_button(app, ui);
+    sep(ui);
+    let properties = big_button(ui, Icon::Settings, "Cell\nPlacement", "Picture placement relative to cells", true);
+    egui::Popup::menu(&properties).show(|ui| {
+        for (label, mode) in [
+            ("Move and size with cells", "moveAndSize"),
+            ("Move but don't size with cells", "moveOnly"),
+            ("Don't move or size with cells", "absolute"),
+        ] {
+            if ui.button(app.ui.language.tr(label)).clicked() {
+                act(app, "object.setAnchorMode", json!({"kind": "image", "id": id, "mode": mode}));
+                ui.close();
+            }
+        }
+    });
+    if big_button(ui, Icon::Delete, "Delete\nPicture", "Delete selected picture", false).clicked() {
+        act(app, "object.delete", json!({"kind": "image", "id": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Contextual actions available for a selected shape.
+pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.shapes.iter().any(|shape| shape.id == id));
+    if !exists {
+        return;
+    }
+    selection_pane_button(app, ui);
+    sep(ui);
+    let fill = big_button(ui, Icon::Fill, "Shape\nFill", "Change shape fill color", true);
+    egui::Popup::menu(&fill).show(|ui| {
+        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+            && color != "none"
+        {
+            act(app, "chart.shapeFill", json!({"kind": "shape", "id": id, "color": color}));
+            ui.close();
+        }
+    });
+    let outline = big_button(ui, Icon::Borders, "Shape\nOutline", "Change shape outline color", true);
+    egui::Popup::menu(&outline).show(|ui| {
+        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+            && color != "none"
+        {
+            act(app, "chart.shapeOutline", json!({"kind": "shape", "id": id, "color": color}));
+            ui.close();
+        }
+    });
+    if big_button(ui, Icon::Delete, "Delete\nShape", "Delete selected shape", false).clicked() {
+        act(app, "object.delete", json!({"kind": "shape", "id": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Contextual filter actions for a selected slicer.
+pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.slicers.iter().any(|slicer| slicer.id == id));
+    if !exists {
+        return;
+    }
+    let clear = big_button(ui, Icon::Filter, "Clear\nFilter", "Clear this slicer's filter", false);
+    control_keytip(app, ui, &clear, "slicer.clear");
+    if clear.clicked() {
+        act(app, "slicer.clear", json!({"slicer": id}));
+    }
+    sep(ui);
+    if big_button(ui, Icon::Delete, "Delete\nSlicer", "Delete selected slicer", false).clicked() {
+        act(app, "slicer.delete", json!({"slicer": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Opens the Selection Pane without implying cross-type stacking order the renderer doesn't yet support.
+fn selection_pane_button(app: &mut SheetApp, ui: &mut Ui) {
+    if big_button(ui, Icon::Settings, "Selection\nPane", "Open Selection Pane", false).clicked() {
+        app.grid.pane = Some("selection".into());
     }
 }

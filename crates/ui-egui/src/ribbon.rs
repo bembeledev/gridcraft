@@ -25,7 +25,7 @@ mod title_bar;
 mod view;
 
 use automate::automate;
-use contextual::{chart_design, table_design};
+use contextual::{chart_design, picture_format, shape_format, slicer_tools, table_design};
 pub(crate) use controls::{ComboResult, editable_combo};
 use controls::{act, keytip};
 use data::data;
@@ -153,6 +153,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
+                            "Picture Format" => picture_format(app, ui),
+                            "Shape Format" => shape_format(app, ui),
+                            "Slicer" => slicer_tools(app, ui),
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
@@ -272,7 +275,7 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
+const CONTEXTUAL_TABS: [&str; 6] = ["Table Design", "Chart Design", "Picture Format", "Shape Format", "Slicer", crate::paper_view::TAB];
 
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
@@ -284,6 +287,15 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         }
         if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
+        }
+        if app.selected_chart.is_some_and(|id| sh.images.iter().any(|image| image.id == id)) {
+            v.push("Picture Format");
+        }
+        if app.selected_chart.is_some_and(|id| sh.shapes.iter().any(|shape| shape.id == id)) {
+            v.push("Shape Format");
+        }
+        if app.selected_chart.is_some_and(|id| sh.slicers.iter().any(|slicer| slicer.id == id)) {
+            v.push("Slicer");
         }
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);

@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** bounded rendering, safe document admission and upstream compatibility
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** bounded work policies and explicit UI/print rendering allowances
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -183,6 +183,16 @@ Weak workbook identity preserves copy-on-write. Missing/backward clocks invalida
 cache invalidation or a new frame never replenishes the renderer bank. Refused evaluations
 omit the conditional look even when a formula handles its numeric error.
 
+Print/PDF rendering currently uses a **separate fresh 1,000,000-unit bank per laid-out
+sheet per render call**, shared across that sheet's pages, with the same 100,000-unit
+per-cell look limit. It does not debit the UI document's persistent rendering bank or
+reuse its result cache; repeated exports receive fresh sheet allowances. When rendering
+runs through a session command, conditional expressions also charge the enclosing command
+policy. A direct `render_pdf` library caller must supply its own ambient hook if it needs
+that enclosing limit. These allowances do not establish a cross-workbook, process-wide
+or service-wide quota. Sharing the persistent UI bank with printing remains a possible
+policy change, rather than a control implemented by this contribution.
+
 Run counters and zero-unit failure/cancellation checks use atomics. Small analysis charges use
 prepaid credit: clock reads and shared-window locking occur only on credit renewal or an
 explicit bank query. A renewal reserves up to 4,096 units, bounded by the run's actual remaining
@@ -235,3 +245,4 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 | 2026-10-28 | Shared work budgets, cooperative jobs/progress/cancellation, growth limits and terminal rollback. |
 | 2026-10-28 | Atomic hot-path counters, bounded prepaid analysis credit and independent ordinary-command caps; expose maxWork in discovery. |
 | 2026-10-28 | Independent conditional-format rendering limits/cache; admit imported documents only after successful recalculation; integrate current upstream rules. |
+| 2026-10-28 | Clarified the separate per-sheet print/PDF allowance, ambient command accounting and lack of cross-workbook containment. |

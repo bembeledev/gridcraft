@@ -45,7 +45,13 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     d.list_index = i;
                 }
                 ui.label(n.get("value").map(|v| v.to_string()).unwrap_or_default().chars().take(30).collect::<String>());
-                ui.label(field(n, "refersTo"));
+                let refers = field(n, "refersTo");
+                ui.label(
+                    app.session
+                        .active()
+                        .map(|d| crate::formula_locale::display(&refers, lang.formula_locale(), &d.wb, d.wb.active_sheet()))
+                        .unwrap_or(refers),
+                );
                 // The scope is a sheet name, or the word "Workbook".
                 let scope = field(n, "scope");
                 ui.label(if scope == "Workbook" { lang.tr("Workbook") } else { &scope });

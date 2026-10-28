@@ -943,6 +943,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Radar" => "Radar",
         "Range password:" => "Mot de passe de la plage :",
         "Ranges that stay editable when the sheet is protected:" => "Plages qui restent modifiables lorsque la feuille est protégée :",
+        "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
+            "Le verrouillage des cellules ou le masquage des formules n'a aucun effet tant que la feuille n'est pas protégée (Révision › Protéger la feuille)."
+        }
         "Rank and Percentile" => "Rang et centile",
         "Recent Colors" => "Couleurs récentes",
         "Recommended Charts" => "Graphiques recommandés",
@@ -1036,6 +1039,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sort Ascending" => "Trier par ordre croissant",
         "Sort Descending" => "Trier par ordre décroissant",
         "Sort by" => "Trier par",
+        "Sort On" => "Trier sur",
         "Source:" => "Source :",
         "Space" => "Espace",
         "Special…" => "Spécial…",
@@ -1217,6 +1221,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Constraint Cell Reference" => "Référence de cellule de la contrainte",
         "Constraint Value" => "Valeur de la contrainte",
+        "Constraint Operator" => "Opérateur de la contrainte",
         "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
             "{count} commandes du moteur sont disponibles. Voir docs/mcp.md et docs/control-protocol.md."
         }
@@ -1523,6 +1528,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Settings" => "Paramètres",
         "Paste Names" => "Coller des noms",
         "Paste Names…" => "Coller des noms…",
+        "Paste Name" => "Coller un nom",
+        "Paste name" => "Coller un nom",
+        "Paste List" => "Coller une liste",
         "Pen" => "Stylet",
         "Picture" => "Image",
         "PivotChart" => "Graphique croisé dynamique",

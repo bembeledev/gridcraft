@@ -129,7 +129,13 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
             let cell = w["cell"].as_str().unwrap_or("").to_string();
             ui.label(&cell);
             ui.label(w["value"].as_str().unwrap_or(""));
-            ui.label(w["formula"].as_str().unwrap_or(""));
+            let formula = w["formula"].as_str().unwrap_or("");
+            ui.label(
+                app.session
+                    .active()
+                    .map(|d| crate::formula_locale::display(formula, lang.formula_locale(), &d.wb, d.wb.active_sheet()))
+                    .unwrap_or_else(|| formula.to_string()),
+            );
             if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 let _ = app.session.run("formulas.watchWindow", json!({"remove": cell}));
             }

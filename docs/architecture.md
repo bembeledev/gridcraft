@@ -144,7 +144,9 @@ and cancellation. Synchronous callers retain `data.monteCarlo`. A neutral calc `
 connects `functions::Ctx`/calc accounting to an engine-owned persistent meter, including nested
 commands and uses atomic run counters. What-if trials alone debit the per-workbook reservation
 bank through bounded prepaid blocks, keeping clock/locks out of the per-node hot path.
-Ordinary commands have a separate cap, including file opening without a document. Terminal work failure
+Ordinary commands stay independent of the analysis bank: queries have a 1B-unit cap and
+edits/recalculation/imports a finite 10B cap, including file opening without a document. Nested
+queries retain their own cap and charge the parent operation; document trust never raises it. Terminal work failure
 uses the command rollback barrier; report publication stays one atomic undoable edit.
 Imports recalculate a local document and check admission before replacing a blank or adding a
 window. Conditional-formatting formulas have an independent document-owned renderer bank,

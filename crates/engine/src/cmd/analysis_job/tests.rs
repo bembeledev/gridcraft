@@ -12,6 +12,90 @@ fn fixture() -> (Session, Json) {
     (s, p)
 }
 
+/// Measure real small prefix-sum recalculations, then gate the conservative large bound without
+/// visiting 1.25 billion cells. This covers a new logical recalculation rather than many small calls.
+#[test]
+fn prefix_sum_work_measurement_and_bulk_policy_cover_the_large_model_shape() {
+    /// Records the actual evaluator/visitor charges and verifies the resulting sum.
+    fn measured(rows: u32) -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let mut s = Session::new();
+        s.new_workbook();
+        let values = (1..=rows).map(|row| json!([1, format!("=SUM($A$1:A{row})")])).collect::<Vec<_>>();
+        s.execute("range.setValues", json!({"range":"A1","values":values})).unwrap();
+        let units = Arc::new(AtomicU64::new(0));
+        let seen = units.clone();
+        let hook = gridcraft_calc::WorkHook::new(move |n| {
+            seen.fetch_add(n, Ordering::Relaxed);
+            true
+        });
+        {
+            let _scope = hook.enter().unwrap();
+            s.execute("formulas.calculateNow", json!({})).unwrap();
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(rows - 1, 1)).as_f64(), Some(f64::from(rows)));
+        units.load(Ordering::Relaxed)
+    }
+    for rows in [16u32, 64] {
+        let actual = measured(rows);
+        let n = u64::from(rows);
+        let triangular = n * (n + 1) / 2;
+        assert!(actual >= triangular);
+        assert!(actual <= triangular + 16 * n, "real SUM charge exceeded the conservative fixture: {rows}/{actual}");
+    }
+    let rows = 50_000u64;
+    let bound = rows * (rows + 1) / 2 + 16 * rows;
+    let bulk = crate::workload::Meter::command(true, false).unwrap();
+    bulk.charge(bound).unwrap();
+    assert!(crate::workload::Meter::command(false, false).unwrap().charge(bound).is_err());
+    for id in ["formulas.calculateNow", "formulas.calculateSheet", "file.open", "cell.set"] {
+        let spec = crate::find_command(id).unwrap();
+        assert!(spec.journal || spec.undoable, "bulk metadata missing for {id}");
+    }
+    let query = crate::find_command("formulas.evaluate").unwrap();
+    assert!(!query.journal && !query.undoable);
+}
+
+/// Real dispatch preserves the query ceiling for either trust state and when nested in bulk work.
+#[test]
+fn query_dispatch_caps_local_and_imported_books_and_nested_bulk_calls() {
+    const BOUND: u64 = 1_250_825_000;
+    /// Models the measured large workload without doing billions of actual visits.
+    fn bounded(_: &mut Session, _: &Json) -> Result<Json> {
+        let allowed = gridcraft_calc::WorkHook::current().unwrap().charge(BOUND);
+        Ok(json!({"allowed":allowed}))
+    }
+    /// A bulk caller deliberately handles the query error; the enclosing latch must still fail.
+    fn nested(s: &mut Session, _: &Json) -> Result<Json> {
+        let _ = s.execute("test.work.readOnlyPrefix", json!({}));
+        Ok(json!(true))
+    }
+    crate::register_test_command("test.work.bulkPrefix", bounded);
+    crate::register_test_command("test.work.nestedPrefix", nested);
+    let spec = Box::leak(Box::new(CommandSpec {
+        id: "test.work.readOnlyPrefix",
+        label: "query budget probe",
+        menu: &[],
+        shortcut: None,
+        params: "{}",
+        enabled: |_| Ok(()),
+        run: bounded,
+        journal: false,
+        undoable: false,
+    }));
+    crate::cmd::test_commands().push(spec);
+    for trust in [crate::Trust::Local, crate::Trust::FromFile] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.doc_mut().unwrap().trust = trust;
+        let before = s.doc().unwrap().wb.clone();
+        assert_eq!(s.execute("test.work.bulkPrefix", json!({})).unwrap()["allowed"], true);
+        assert!(s.execute("test.work.readOnlyPrefix", json!({})).is_err());
+        assert!(s.execute("test.work.nestedPrefix", json!({})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+    }
+}
+
 /// Analysis exhaustion cannot disable ordinary edits/recalc or bill imports to the old workbook.
 #[test]
 fn exhausted_analysis_bank_leaves_ordinary_commands_and_file_open_independent() {
@@ -42,7 +126,7 @@ fn ordinary_work_cap_is_independent_and_also_covers_commands_without_a_document(
     /// Simulates a hostile kernel; its ignored refusal must still reach the execute barrier.
     fn excessive(_: &mut Session, _: &Json) -> Result<Json> {
         let hook = gridcraft_calc::WorkHook::current().expect("ordinary scope must exist without a doc");
-        assert!(!hook.charge(crate::workload::MAX_COMMAND_WORK + 1));
+        assert!(!hook.charge(crate::workload::MAX_EDIT_WORK + 1));
         Ok(json!(true))
     }
     crate::register_test_command("test.work.ordinaryCap", excessive);

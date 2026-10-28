@@ -675,9 +675,12 @@ impl Session {
         }
         // A neutral scoped hook also reaches standalone formula evaluation (CLI/MCP queries),
         // while trial scopes override it with their long-lived shared run meter.
-        let command_meter = if gridcraft_calc::WorkHook::current().is_none() { Some(workload::Meter::ordinary()) } else { None };
+        let inherited_work = gridcraft_calc::WorkHook::current();
+        let command_meter = workload::Meter::command(spec.journal || spec.undoable, inherited_work.is_some());
         let _work_scope = match &command_meter {
-            Some(meter) => Some(meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?),
+            Some(meter) => {
+                Some(meter.hook_with_parent(inherited_work).enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?)
+            }
             None => None,
         };
         if self.depth == 0 {

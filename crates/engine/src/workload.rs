@@ -8,8 +8,10 @@ use crate::{EngineError, Result, Workbook};
 
 /// Maximum estimated work units consumed by one trial sequence, including preparation.
 pub const MAX_RUN_WORK: u64 = 100_000_000;
-/// Independent logical-command cap; ordinary recalculation never consumes analysis credit.
+/// Finite allowance for a read-only query, including queries against locally trusted books.
 pub const MAX_COMMAND_WORK: u64 = 1_000_000_000;
+/// Larger finite allowance for edits, full recalculation and explicit imports, never analysis credit.
+pub const MAX_EDIT_WORK: u64 = 10_000_000_000;
 /// Small charges share prepaid credit; large native kernels reserve their full cost first.
 const WORK_CHUNK: u64 = 4096;
 /// Estimated work units available per open workbook in a fixed sixty-second window.
@@ -191,9 +193,24 @@ impl Meter {
         Self::with_bank(Some(budget), MAX_RUN_WORK)
     }
 
-    /// Independent logical-command protection, including commands issued without an active doc.
+    /// Finite query/local protection; command metadata selects the separate bulk allowance.
     pub fn ordinary() -> Self {
         Self::with_bank(None, MAX_COMMAND_WORK)
+    }
+
+    /// Selects policy from command metadata, never document trust. Nested mutations reuse their
+    /// parent's meter; nested queries retain a local 1B ceiling as well as the parent's ceiling.
+    pub fn command(mutating: bool, inherited: bool) -> Option<Self> {
+        if mutating && inherited { None } else { Some(Self::with_bank(None, if mutating { MAX_EDIT_WORK } else { MAX_COMMAND_WORK })) }
+    }
+
+    /// A nested query charges both limits before work and propagates refusal to the parent latch.
+    pub fn hook_with_parent(&self, parent: Option<gridcraft_calc::WorkHook>) -> gridcraft_calc::WorkHook {
+        let own = self.hook();
+        match parent {
+            Some(parent) => gridcraft_calc::WorkHook::new(move |units| own.charge(units) && parent.charge(units)),
+            None => own,
+        }
     }
 
     /// Creates shared exact counters; the optional bank is used exclusively by analysis trials.
@@ -323,6 +340,38 @@ pub(crate) fn report_capacity(wb: &Workbook, additional_cells: usize) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A conservative 50k prefix-sum bound fits bulk work while both entry policies stay finite.
+    #[test]
+    fn prefix_sum_bulk_allowance_is_larger_without_raising_the_query_cap() {
+        let rows = 50_000u64;
+        let bound = rows * (rows + 1) / 2 + 16 * rows;
+        let bulk = Meter::command(true, false).unwrap();
+        bulk.charge(bound).unwrap();
+        assert_eq!(bulk.spent().unwrap(), bound);
+        assert!(bulk.charge(MAX_EDIT_WORK - bound + 1).is_err());
+        assert!(bulk.charge(0).is_err());
+        let query = Meter::command(false, false).unwrap();
+        assert!(query.charge(bound).is_err());
+        assert!(query.charge(0).is_err());
+        assert!(Meter::command(true, true).is_none(), "nested mutations must not reset the parent");
+    }
+
+    /// A nested query charges its parent and retains its own ceiling even inside a bulk scope.
+    #[test]
+    fn nested_queries_keep_their_ceiling_and_parent_accounting() {
+        let parent = Meter::command(true, false).unwrap();
+        let _outer = parent.hook().enter().unwrap();
+        let query = Meter::command(false, true).unwrap();
+        {
+            let _inner = query.hook_with_parent(gridcraft_calc::WorkHook::current()).enter().unwrap();
+            assert!(gridcraft_calc::WorkHook::current().unwrap().charge(64));
+            assert!(!gridcraft_calc::WorkHook::current().unwrap().charge(MAX_COMMAND_WORK));
+        }
+        assert_eq!(parent.spent().unwrap(), 64);
+        assert_eq!(query.spent().unwrap(), 64);
+        assert!(!gridcraft_calc::WorkHook::allowed(), "a handled child refusal must stay terminal");
+    }
 
     /// Cheap checkpoints amortize shared reservations and zero polling performs no renewal.
     #[test]

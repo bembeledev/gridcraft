@@ -158,8 +158,11 @@ XLSX round-trip tests use synthetic workbooks built in Rust.
 Each analysis run has a ceiling of **100,000,000 estimated work units**. Optional `maxWork`
 is a positive integer no greater than 100,000,000 and lowers that ceiling. What-if trials alone
 share **300,000,000 reserved units per open workbook per fixed 60-second window**, including
-retries and failed/cancelled work. Ordinary commands have an independent **1,000,000,000-unit
-logical-command cap**; edits/recalculation do not use the analysis bank. `file.open` receives
+retries and failed/cancelled work. Read-only queries have an independent **1,000,000,000-unit cap**; edits, full recalculation
+and explicit imports have a larger finite **10,000,000,000-unit logical-command cap**.
+Both kinds stay outside the analysis bank. Selection follows command metadata, not document
+trust: a query remains capped even against a locally trusted workbook. A nested query also
+charges its enclosing operation and cannot escape either limit. `file.open` receives
 that independent protection even without an existing document and never bills the old document.
 Clones retain the analysis bank; reopening creates a new bank. Clock rollback or an unavailable
 clock does not refill it. These are conservative workload estimates, not measured CPU time or
@@ -174,8 +177,8 @@ Earlier accepted work and unused frame credit are not refunded. Sparse misses ac
 frames can therefore consume reserved capacity faster than their exact accepted work.
 
 A bounded 4,096-entry document cache reuses conditional looks, including `None`, across
-repaints for the same workbook identity/revision and sheet/cell, with a one-second TTL for
-volatile formulas. Cached hits check the ambient policy without reserving renderer credit.
+repaints for the same workbook identity/revision and sheet/cell, with a **cache-wide one-second TTL for every result**, including nonvolatile looks and
+fallback `None` results. All entries expire together; this also bounds volatile-result staleness. Cached hits check the ambient policy without reserving renderer credit.
 Weak workbook identity preserves copy-on-write. Missing/backward clocks invalidate results;
 cache invalidation or a new frame never replenishes the renderer bank. Refused evaluations
 omit the conditional look even when a formula handles its numeric error.
@@ -189,6 +192,12 @@ capacity and can fall faster because unused reservations are not refunded. An ob
 rollover changes the bank generation and expires prepaid old-window credit. A run consuming
 already-paid credit observes elapsed time when it next renews; these are reservation windows,
 not a strict per-second CPU execution limit. A 1,000-unit run never requires a 4,096-unit grant.
+
+A dense 50,000-row family of prefix sums has at least 1,250,075,000 estimated units before
+additional AST work. It can exceed the query allowance while fitting the finite bulk-recalculation
+allowance. Tests measure real small prefix-sum recalculations (16/64 rows), then charge a
+conservative 50k bound to the real meters without traversing billions of cells. The estimate is
+a policy regression fixture, not an exact cost or wall-clock measurement for the large workbook.
 
 Charges cover trial setup, expressions, materialized ranges, native function calls, lifted
 broadcast inputs/outputs and kernels, sampling, diagnostics and report preparation. Functions

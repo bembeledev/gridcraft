@@ -259,7 +259,8 @@ impl CfCache {
         Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: None }
     }
 
-    /// Reuses results across frames for one revision, with a one-second TTL for volatile formulas.
+    /// Reuses results for one revision under a cache-wide one-second TTL for every look,
+    /// including nonvolatile and fallback results; this also bounds volatile-result staleness.
     pub fn with_cache(budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64) -> Self {
         Self::with_cache_at(budget, results, wb, revision, gridcraft_core::date::unix_now_ms())
     }

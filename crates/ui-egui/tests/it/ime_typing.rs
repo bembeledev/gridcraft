@@ -18,12 +18,30 @@ fn harness() -> Harness {
     h
 }
 
-/// One frame, with the app's queued events first, as eframe's `raw_input_hook` gives them.
+/// One frame, its input through the app's `raw_input_hook` as eframe gives it.
 fn step(h: &mut Harness) {
-    if let Some(batch) = h.state_mut().synthetic.pop_front() {
-        h.input_mut().events.extend(batch);
-    }
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().raw_input_hook(&ctx, &mut raw);
+    *h.input_mut() = raw;
     h.run_steps(1);
+}
+
+/// `events` in one frame's input, as the integration batches them.
+fn batch(h: &mut Harness, events: impl IntoIterator<Item = Event>) {
+    h.input_mut().events.extend(events);
+}
+
+fn editor_text(h: &Harness) -> Option<String> {
+    h.state().editor.as_ref().map(|e| e.text.clone())
+}
+
+/// Enter, then the text A1 holds.
+fn enter(h: &mut Harness) -> String {
+    h.key_press(Key::Enter);
+    step(h);
+    step(h);
+    a1(h)
 }
 
 fn preedit(text: &str) -> Event {
@@ -100,4 +118,44 @@ fn a_finished_word_without_a_composition_is_typed_into_the_cell() {
     h.key_press(Key::Enter);
     step(&mut h);
     assert_eq!(a1(&h), "Đà");
+}
+
+/// A composition and the commit that finishes it in one batch: the commit is not lost with the
+/// rest of the batch when the first composition opens the editor.
+#[test]
+fn a_composition_finished_in_the_same_batch_reaches_the_cell() {
+    let mut h = harness();
+    batch(&mut h, [preedit("đ"), preedit(""), Event::Ime(ImeEvent::Commit("đ".into()))]);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    assert_eq!(editor_text(&h).as_deref(), Some("đ"));
+    assert_eq!(enter(&mut h), "đ");
+}
+
+/// Two finished words in one batch: the second follows the first into the editor.
+#[test]
+fn two_finished_words_in_one_batch_both_reach_the_cell() {
+    let mut h = harness();
+    batch(&mut h, [Event::Ime(ImeEvent::Commit("Cà".into())), Event::Ime(ImeEvent::Commit(" Mau".into()))]);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    assert_eq!(editor_text(&h).as_deref(), Some("Cà Mau"));
+    assert_eq!(enter(&mut h), "Cà Mau");
+}
+
+/// The input method finishes the word while the editor is still taking the focus: the first
+/// composition reaches the editor before that commit, so no stale composition is left after it.
+#[test]
+fn a_word_finished_while_the_editor_opens_is_not_composed_again() {
+    let mut h = harness();
+    batch(&mut h, [preedit("k")]);
+    step(&mut h);
+    batch(&mut h, [preedit(""), Event::Ime(ImeEvent::Commit("k".into()))]);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    assert_eq!(editor_text(&h).as_deref(), Some("k"));
+    assert_eq!(enter(&mut h), "k");
 }

@@ -64,7 +64,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
-    for ev in events {
+    let mut events = events.into_iter();
+    while let Some(ev) = events.next() {
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -89,22 +90,24 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 }
                 return;
             }
-            // A word an input method finished without composing it goes in as typed text.
+            // A word an input method finished without composing it goes in as typed text; what
+            // the input method sent after it follows it into the editor.
             egui::Event::Ime(egui::ImeEvent::Commit(text)) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {
                     ed.caret = ed.text.chars().count();
                 }
+                hand_over_to_the_editor(app, ctx, Vec::new(), events);
                 return;
             }
             // The first word being composed opens the cell's editor, empty, and is handed to it
-            // once it has the focus (the frame after next): from then on the editor shows the
-            // composition in the cell, in the cell's font, as it does for the rest of the word.
+            // once it has the focus (the frame after next), with what followed it: from then on
+            // the editor shows the composition in the cell, in the cell's font, as it does for the
+            // rest of the word.
             egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) if !text.is_empty() && text.chars().all(|c| !c.is_control()) => {
                 app.begin_edit(Some(String::new()), false);
-                keep_composition_through_focus_move(ctx);
-                app.synthetic.push_back(Vec::new());
-                app.synthetic.push_back(vec![egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars })]);
+                let first = egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars });
+                hand_over_to_the_editor(app, ctx, vec![first], events);
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
@@ -192,6 +195,19 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// Hands `first` and the typing in the rest of this frame's `events` to the cell's editor the
+/// grid just opened, in their original order, once it has the focus ([`ImeHandoff`]); what the
+/// input method sends meanwhile follows them. The editor opens in this pass, so the typing is
+/// taken out of the pass's input as well: it would otherwise reach the editor twice.
+fn hand_over_to_the_editor(app: &mut SheetApp, ctx: &egui::Context, first: Vec<egui::Event>, events: impl Iterator<Item = egui::Event>) {
+    let mut held = first;
+    held.extend(events.filter(ImeHandoff::holds));
+    ctx.input_mut(|i| i.events.retain(|e| !ImeHandoff::holds(e)));
+    app.grid.ime_handoff = Some(ImeHandoff { events: held, frames: 2 });
+    keep_composition_through_focus_move(ctx);
+    ctx.request_repaint();
 }
 
 /// Keeps the input method's composition through the focus move to the cell's editor: egui

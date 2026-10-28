@@ -166,12 +166,54 @@ impl Trace {
     }
 }
 
+/// Keyboard and input method events held back while the cell's editor an input method opened
+/// takes the focus (the frame after next), then handed to it in their original order: a commit
+/// in the same batch as the first composition, or one the input method sends meanwhile, must
+/// neither be lost nor arrive before the composition it finishes. They go one input method event
+/// a frame: `TextEdit` takes a composition as such only from the next frame, so a composition and
+/// its commit in one frame would put the word in twice.
+pub struct ImeHandoff {
+    events: Vec<egui::Event>,
+    /// Frames until the editor has the focus.
+    frames: u8,
+}
+
+impl ImeHandoff {
+    /// Whether `ev` is typing the editor takes over.
+    pub(crate) fn holds(ev: &egui::Event) -> bool {
+        matches!(ev, egui::Event::Ime(_) | egui::Event::Text(_) | egui::Event::Key { .. })
+    }
+}
+
+impl GridState {
+    /// Holds this frame's typing back for the editor an input method opened, and hands it over
+    /// once the editor has the focus. Called from `raw_input_hook`.
+    pub(crate) fn hand_typing_to_the_editor(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(h) = self.ime_handoff.as_mut() else { return };
+        let (held, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut raw.events).into_iter().partition(ImeHandoff::holds);
+        raw.events = rest;
+        h.events.extend(held);
+        h.frames = h.frames.saturating_sub(1);
+        if h.frames == 0 {
+            let n = h.events.iter().position(|e| matches!(e, egui::Event::Ime(_))).map_or(h.events.len(), |i| i + 1);
+            raw.events.extend(h.events.drain(..n));
+        }
+        if h.frames == 0 && h.events.is_empty() {
+            self.ime_handoff = None;
+        } else {
+            ctx.request_repaint();
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
     /// The input method context of the grid itself, on at the active cell while no editor has the
     /// focus (typing with an input method straight into a cell).
     pub ime: egui::ime_context::ImeContextTracker,
+    /// Typing on its way to the cell's editor an input method opened (see [`ImeHandoff`]).
+    pub ime_handoff: Option<ImeHandoff>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).

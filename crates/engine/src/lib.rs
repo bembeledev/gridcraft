@@ -24,6 +24,7 @@ pub mod sample;
 pub mod selection;
 pub mod tables;
 pub mod windows;
+pub mod workload;
 
 use std::sync::Arc;
 
@@ -176,6 +177,8 @@ pub enum Mode {
 pub struct DocState {
     pub wb: Arc<Workbook>,
     pub calc: Calc,
+    /// Runtime-only work bank shared by isolated analyses, never serialized into the workbook.
+    pub analysis_budget: workload::AnalysisBudget,
     pub selection: Selection,
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
@@ -218,6 +221,15 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 /// few opens of a large workbook keep tens of MB alive.
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+
+/// Journal rollback is normally length-only; preserve the original bounded prefix lazily only
+/// if a nested push is about to trim it. Normal single commands never clone the journal.
+struct JournalRollback {
+    mark: usize,
+    bytes: usize,
+    recording: Option<usize>,
+    backup: Option<(Vec<(String, Json)>, Vec<usize>)>,
+}
 
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     let mut bytes = std::mem::size_of::<Workbook>();
@@ -291,6 +303,7 @@ impl DocState {
             saved: wb.clone(),
             wb,
             calc,
+            analysis_budget: workload::AnalysisBudget::default(),
             selection: sel,
             undo: vec![],
             redo: vec![],
@@ -428,6 +441,9 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 
 #[derive(Default)]
 pub struct Session {
+    /// Cooperative job state, independent of UI threads and never serialized into a workbook.
+    analysis_job: Option<cmd::monte_carlo::Job>,
+    next_analysis_job: u64,
     docs: Vec<DocState>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
@@ -446,6 +462,7 @@ pub struct Session {
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
     journal_sizes: Vec<usize>,
     journal_bytes: usize,
+    journal_rollback: Option<JournalRollback>,
     pub ui_requests: Vec<UiRequest>,
     /// Format painter source style (sticky when double-clicked).
     pub format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
@@ -558,11 +575,7 @@ impl Session {
     /// keeps pointing at the same entry (the steps the trim dropped are lost).
     fn push_journal(&mut self, id: &str, params: Json) {
         let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
-        // `journal` is public: if it was changed from outside, measure it again.
-        if self.journal_sizes.len() != self.journal.len() {
-            self.journal_sizes = self.journal.iter().map(size).collect();
-            self.journal_bytes = self.journal_sizes.iter().sum();
-        }
+        self.refresh_journal_sizes();
         let entry = (id.to_string(), params);
         let entry_size = size(&entry);
         self.journal.push(entry);
@@ -579,10 +592,42 @@ impl Session {
             }
         }
         if n > 0 {
+            if self.depth > 0 {
+                let mark = self.journal_rollback.as_ref().filter(|checkpoint| checkpoint.backup.is_none()).map(|checkpoint| checkpoint.mark);
+                if let Some(mark) = mark {
+                    let backup = (self.journal.iter().take(mark).cloned().collect(), self.journal_sizes.iter().take(mark).copied().collect());
+                    if let Some(checkpoint) = &mut self.journal_rollback {
+                        checkpoint.backup = Some(backup);
+                    }
+                }
+            }
             self.journal.drain(..n);
             self.journal_sizes.drain(..n);
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
+    /// Keeps externally mutable journal metadata accurate before taking a rollback checkpoint.
+    fn refresh_journal_sizes(&mut self) {
+        if self.journal_sizes.len() != self.journal.len() {
+            self.journal_sizes = self.journal.iter().map(|entry| serde_json::to_vec(entry).map_or(0, |v| v.len())).collect();
+            self.journal_bytes = self.journal_sizes.iter().sum();
+        }
+    }
+
+    /// Restores the outer command's journal even when nested pushes crossed a trimming boundary.
+    fn rollback_journal(&mut self) {
+        if let Some(checkpoint) = self.journal_rollback.take() {
+            if let Some((entries, sizes)) = checkpoint.backup {
+                self.journal = entries;
+                self.journal_sizes = sizes;
+            } else {
+                self.journal.truncate(checkpoint.mark);
+                self.journal_sizes.truncate(checkpoint.mark);
+            }
+            self.journal_bytes = checkpoint.bytes;
+            self.recording = checkpoint.recording;
         }
     }
 
@@ -594,10 +639,41 @@ impl Session {
     /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        // Target before history capture so finishing a job from another window still gives the
+        // source document one normal undo step and never overwrites the caller's workbook.
+        if id == "analysis.finish"
+            && let Some(job) = self.analysis_job.as_ref().filter(|job| params.get("job").and_then(Json::as_u64) == Some(job.id))
+            && self.active().is_none_or(|d| d.uid != job.source_doc())
+        {
+            let target = Target::Doc(job.source_doc());
+            return self.with_target(target, |s| s.execute(id, params))?;
+        }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if self.analysis_active() && !id.starts_with("analysis.") && (spec.journal || spec.undoable) {
+            return Err(EngineError::Disabled(id.into(), "finish or cancel the active analysis before editing or switching workbooks".into()));
+        }
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
+        if !gridcraft_calc::WorkHook::allowed() {
+            return Err(EngineError::Other("The logical operation has already stopped at its work/cancellation limit.".into()));
+        }
+        // A neutral scoped hook also reaches standalone formula evaluation (CLI/MCP queries),
+        // while trial scopes override it with their long-lived shared run meter.
+        let command_meter =
+            if gridcraft_calc::WorkHook::current().is_none() { self.active().map(|d| workload::Meter::new(d.analysis_budget.clone())) } else { None };
+        let _work_scope = match &command_meter {
+            Some(meter) => Some(meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?),
+            None => None,
+        };
+        if self.depth == 0 {
+            self.refresh_journal_sizes();
+            self.journal_rollback =
+                Some(JournalRollback { mark: self.journal.len(), bytes: self.journal_bytes, recording: self.recording, backup: None });
+        }
+        let revision_before = self.active().map(|d| d.revision);
+        let sheet_selections_before = self.active().map(|d| d.sheet_selections.clone());
+        let analysis_job_before = self.analysis_job.as_ref().map(|job| job.id);
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let (first_group, group_epoch) = (self.next_group, self.group_epoch);
@@ -636,14 +712,37 @@ impl Session {
         if marked.is_some() {
             self.marks.pop();
         }
-        let result = match result {
-            Ok(r) => r,
+        // Work refusal is a terminal control failure, not an ordinary worksheet #NUM that a
+        // handler/IFERROR may hide. Use the same rollback barrier as escaped panics before any
+        // success journaling, undo collapse or revision increment.
+        let guarded = match result {
+            Ok(r) => match command_meter.as_ref().map(workload::Meter::check).transpose() {
+                Err(error) => Err(error),
+                Ok(_) if !gridcraft_calc::WorkHook::allowed() => {
+                    Err(EngineError::Other("Calculation stopped by its work limit or cancellation.".into()))
+                }
+                Ok(_) => Ok(r),
+            },
             Err(p) => {
                 let msg = p
                     .downcast_ref::<&str>()
                     .map(ToString::to_string)
                     .or_else(|| p.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "panic".into());
+                Err(EngineError::Internal(id.to_string(), msg))
+            }
+        };
+        let result = match guarded {
+            Ok(r) => r,
+            Err(failure) => {
+                // Runtime state is not part of a workbook snapshot. A failed start may have
+                // retained a new job before an inherited policy refused the post-handler check.
+                let created_job = self.analysis_job.as_ref().map(|job| job.id) != analysis_job_before;
+                if (created_job || id == "analysis.step")
+                    && let Some(job) = self.analysis_job.take()
+                {
+                    job.cancellation().cancel();
+                }
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
@@ -653,6 +752,12 @@ impl Session {
                 {
                     d.wb = wb.clone();
                     d.selection = sel.clone();
+                    if let Some(revision) = revision_before {
+                        d.revision = revision;
+                    }
+                    if let Some(selections) = sheet_selections_before {
+                        d.sheet_selections = selections;
+                    }
                     if let Some((undo, redo)) = history_before {
                         d.undo = undo;
                         d.redo = redo;
@@ -672,8 +777,9 @@ impl Session {
                 if self.depth == 0 {
                     self.trim_history();
                     self.group_step = None;
+                    self.rollback_journal();
                 }
-                return Err(EngineError::Internal(id.to_string(), msg));
+                return Err(failure);
             }
         };
         // A command that fails leaves none of its own undo groups open (a `?` between
@@ -761,6 +867,9 @@ impl Session {
             self.group_step = None;
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
+        }
+        if self.depth == 0 {
+            self.journal_rollback = None;
         }
         result
     }

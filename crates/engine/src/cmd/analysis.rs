@@ -221,6 +221,10 @@ fn n_or_div0(x: f64) -> Value {
 struct FnHost;
 
 impl gridcraft_functions::Ctx for FnHost {
+    /// Statistical helpers honor an enclosing analysis policy without depending on its engine type.
+    fn charge_work(&mut self, units: u64) -> bool {
+        gridcraft_calc::WorkHook::current().is_none_or(|hook| hook.charge(units))
+    }
     fn date_system(&self) -> DateSystem {
         DateSystem::D1900
     }

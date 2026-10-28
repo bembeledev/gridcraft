@@ -259,156 +259,325 @@ impl Sensitivity {
 /// Validates the bounded simulation plan, evaluates isolated what-if trials, and publishes
 /// a static report only after all finite-output and diagnostic checks succeed. Errors leave
 /// source cells unchanged; report publication is one undoable edit.
-fn run(s: &mut Session, p: &Json) -> Result<Json> {
-    let d = s.doc()?;
-    if d.wb.protected_structure {
-        return Err(bad(CMD, "the workbook structure is protected"));
-    }
-    let raw_inputs =
-        p.get("inputs").and_then(Json::as_array).filter(|a| !a.is_empty() && a.len() <= MAX_INPUTS).ok_or_else(|| bad(CMD, "give 1–32 inputs"))?;
-    let raw_outputs = p
-        .get("outputs")
-        .and_then(Json::as_array)
-        .filter(|a| !a.is_empty() && a.len() <= MAX_OUTPUTS)
-        .ok_or_else(|| bad(CMD, "give 1–64 output cells"))?;
-    let iterations = integer(p, "iterations", 1000, MAX_ITERATIONS)? as usize;
-    if iterations < 2 {
-        return Err(bad(CMD, "iterations must be at least 2"));
-    }
-    if iterations.saturating_mul(raw_inputs.len() + raw_outputs.len()) > MAX_SAMPLE_CELLS {
-        return Err(bad(CMD, "too many sampled cells (at most 1000000)"));
-    }
-    let seed = integer(p, "seed", 0, u64::MAX)?;
-    let keep_samples = match p.get("samples") {
-        None => true,
-        Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "samples must be a boolean"))?,
-    };
-    let name = match p.get("newSheet") {
-        Some(Json::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
-        None | Some(Json::String(_)) => (1..=100_000)
-            .map(|i| if i == 1 { "Monte Carlo".to_string() } else { format!("Monte Carlo {i}") })
-            .find(|n| d.wb.sheet_index(n).is_none())
-            .ok_or_else(|| bad(CMD, "no report sheet name available"))?,
-        _ => return Err(bad(CMD, "newSheet must be a string")),
-    };
-    d.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
-    let mut used = HashSet::new();
-    let mut inputs = Vec::with_capacity(raw_inputs.len());
-    for item in raw_inputs {
-        let text = str_param(item, "cell").ok_or_else(|| bad(CMD, "each input needs a cell"))?;
-        let (sheet, cell, label) = address(&d.wb, text)?;
-        if !used.insert((sheet, cell)) {
-            return Err(bad(CMD, "input cells must be unique"));
+/// Incremental simulation state. Only publication changes the source session; stepping and
+/// cancellation are portable to native and WASM hosts without worker-thread requirements.
+pub(crate) struct Job {
+    pub id: u64,
+    pub auto_advance: bool,
+    source: Arc<Workbook>,
+    doc: u64,
+    revision: u64,
+    name: String,
+    config: Json,
+    seed: u64,
+    iterations: usize,
+    keep_samples: bool,
+    inputs: Vec<Input>,
+    outputs: Vec<Output>,
+    plan: Plan,
+    xs: Option<Vec<Vec<f64>>>,
+    ys: Vec<Vec<f64>>,
+    trial: Trial,
+    completed: usize,
+    sample_work: u64,
+    finish_work: u64,
+    report_cells: usize,
+    work_limit: u64,
+}
+
+impl Job {
+    /// Parses the same configuration for synchronous and incremental execution, rejecting
+    /// excessive work/report growth before copying calculation state or allocating samples.
+    pub(crate) fn prepare(s: &Session, p: &Json) -> Result<Self> {
+        let d = s.doc()?;
+        if d.wb.protected_structure {
+            return Err(bad(CMD, "the workbook structure is protected"));
         }
-        let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-        if sh.cell(cell).is_some_and(|c| c.formula.is_some()) || !matches!(sh.value(cell),Value::Number(n) if n.is_finite()) {
-            return Err(bad(CMD, format!("input `{label}` must be a numeric constant")));
+        let raw_inputs = p
+            .get("inputs")
+            .and_then(Json::as_array)
+            .filter(|a| !a.is_empty() && a.len() <= MAX_INPUTS)
+            .ok_or_else(|| bad(CMD, "give 1–32 inputs"))?;
+        let raw_outputs = p
+            .get("outputs")
+            .and_then(Json::as_array)
+            .filter(|a| !a.is_empty() && a.len() <= MAX_OUTPUTS)
+            .ok_or_else(|| bad(CMD, "give 1–64 output cells"))?;
+        let iterations = integer(p, "iterations", 1000, MAX_ITERATIONS)? as usize;
+        if iterations < 2 {
+            return Err(bad(CMD, "iterations must be at least 2"));
         }
-        inputs.push(Input { sheet, cell, label, distribution: Distribution::parse(item)? });
-    }
-    let mut outputs = Vec::with_capacity(raw_outputs.len());
-    let mut seen_outputs = HashSet::new();
-    for item in raw_outputs {
-        let text = item.as_str().ok_or_else(|| bad(CMD, "outputs must be cell references"))?;
-        let (sheet, cell, label) = address(&d.wb, text)?;
-        if !seen_outputs.insert((sheet, cell)) {
-            return Err(bad(CMD, "output cells must be unique"));
+        if iterations.saturating_mul(raw_inputs.len() + raw_outputs.len()) > MAX_SAMPLE_CELLS {
+            return Err(bad(CMD, "too many sampled cells (at most 1000000)"));
         }
-        outputs.push(Output { sheet, cell, label });
+        let seed = integer(p, "seed", 0, u64::MAX)?;
+        let keep_samples = match p.get("samples") {
+            None => true,
+            Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "samples must be a boolean"))?,
+        };
+        let name = match p.get("newSheet") {
+            Some(Json::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
+            None | Some(Json::String(_)) => (1..=100_000)
+                .map(|i| if i == 1 { "Monte Carlo".to_string() } else { format!("Monte Carlo {i}") })
+                .find(|n| d.wb.sheet_index(n).is_none())
+                .ok_or_else(|| bad(CMD, "no report sheet name available"))?,
+            _ => return Err(bad(CMD, "newSheet must be a string")),
+        };
+        d.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
+        let mut used = HashSet::new();
+        let mut inputs = Vec::with_capacity(raw_inputs.len());
+        for item in raw_inputs {
+            let text = str_param(item, "cell").ok_or_else(|| bad(CMD, "each input needs a cell"))?;
+            let (sheet, cell, label) = address(&d.wb, text)?;
+            if !used.insert((sheet, cell)) {
+                return Err(bad(CMD, "input cells must be unique"));
+            }
+            let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+            if sh.cell(cell).is_some_and(|c| c.formula.is_some()) || !matches!(sh.value(cell),Value::Number(n) if n.is_finite()) {
+                return Err(bad(CMD, format!("input `{label}` must be a numeric constant")));
+            }
+            inputs.push(Input { sheet, cell, label, distribution: Distribution::parse(item)? });
+        }
+        let mut outputs = Vec::with_capacity(raw_outputs.len());
+        let mut seen_outputs = HashSet::new();
+        for item in raw_outputs {
+            let text = item.as_str().ok_or_else(|| bad(CMD, "outputs must be cell references"))?;
+            let (sheet, cell, label) = address(&d.wb, text)?;
+            if !seen_outputs.insert((sheet, cell)) {
+                return Err(bad(CMD, "output cells must be unique"));
+            }
+            outputs.push(Output { sheet, cell, label });
+        }
+        // Canonical cross-sheet refs let the report retain a reusable model even when active sheet changes.
+        let mut config = p.clone();
+        if let Some(c) = config.as_object_mut() {
+            c.remove("newSheet");
+            c.insert("seed".into(), json!(seed));
+            c.insert("iterations".into(), json!(iterations));
+            let canonical = raw_inputs
+                .iter()
+                .zip(&inputs)
+                .map(|(p, i)| {
+                    let mut p = p.clone();
+                    if let Some(o) = p.as_object_mut() {
+                        o.insert("cell".into(), json!(i.label));
+                    }
+                    p
+                })
+                .collect::<Vec<_>>();
+            c.insert("inputs".into(), json!(canonical));
+            c.insert("outputs".into(), json!(outputs.iter().map(|o| &o.label).collect::<Vec<_>>()));
+        }
+        let plan = Plan::parse(p, inputs.len(), iterations)?;
+        if let Some(c) = config.as_object_mut() {
+            c.insert("method".into(), json!(plan.method_name()));
+            c.insert("replicates".into(), json!(plan.replicates));
+        }
+        let width = inputs.len().saturating_add(outputs.len()).saturating_add(1);
+        let report_cells = 50_000usize.saturating_add(if keep_samples { iterations.saturating_add(1).saturating_mul(width) } else { 0 });
+        crate::workload::report_capacity(&d.wb, report_cells)?;
+        let work_limit = integer(p, "maxWork", crate::workload::MAX_RUN_WORK, crate::workload::MAX_RUN_WORK)?;
+        if work_limit == 0 {
+            return Err(bad(CMD, "maxWork must be positive"));
+        }
+        let dimensions = inputs.len() as u64;
+        let sample_work = (iterations as u64).saturating_mul(dimensions).saturating_mul(if plan.matrix.is_some() { dimensions + 3 } else { 2 });
+        let logarithm = (usize::BITS - iterations.leading_zeros()) as u64 + 2;
+        let report_work = 64u64
+            .saturating_add((outputs.len() as u64).saturating_mul(128))
+            .saturating_add(dimensions.saturating_mul(dimensions).saturating_mul(8))
+            .saturating_add(if keep_samples { (iterations as u64 + 1).saturating_mul(width as u64) } else { 0 });
+        let finish_work = (iterations as u64)
+            .saturating_mul((width as u64).saturating_mul(logarithm).saturating_add(dimensions.saturating_mul(dimensions).saturating_mul(4)))
+            .saturating_add(report_work)
+            .saturating_add(d.calc.formula_count() as u64);
+        let trial_work = d.calc.formula_count().saturating_add(inputs.len()).saturating_add(outputs.len()).saturating_add(1) as u64;
+        let estimate = sample_work.saturating_add(finish_work).saturating_add(trial_work.saturating_mul(iterations as u64));
+        if estimate > work_limit {
+            return Err(bad(CMD, format!("estimated analysis work {estimate} exceeds maxWork {work_limit}; reduce model size/iterations")));
+        }
+        let trial = Trial::new(d);
+        trial.meter.set_limit(work_limit)?;
+        Ok(Self {
+            id: 0,
+            auto_advance: false,
+            source: d.wb.clone(),
+            doc: d.uid,
+            revision: d.revision,
+            name,
+            config,
+            seed,
+            iterations,
+            keep_samples,
+            inputs,
+            outputs,
+            plan,
+            xs: None,
+            ys: (0..raw_outputs.len()).map(|_| Vec::with_capacity(iterations)).collect(),
+            trial,
+            completed: 0,
+            sample_work,
+            finish_work,
+            report_cells,
+            work_limit,
+        })
     }
-    // Canonical cross-sheet refs let the report retain a reusable model even when active sheet changes.
-    let mut config = p.clone();
-    if let Some(c) = config.as_object_mut() {
-        c.remove("newSheet");
-        c.insert("seed".into(), json!(seed));
-        c.insert("iterations".into(), json!(iterations));
-        let canonical = raw_inputs
-            .iter()
-            .zip(&inputs)
-            .map(|(p, i)| {
-                let mut p = p.clone();
-                if let Some(o) = p.as_object_mut() {
-                    o.insert("cell".into(), json!(i.label));
+
+    /// Refuses stale jobs if an embedding host edited or closed the source outside command guards.
+    pub fn check_source(&self, s: &Session) -> Result<()> {
+        let unchanged = s.documents().iter().any(|d| d.uid == self.doc && d.revision == self.revision && Arc::ptr_eq(&d.wb, &self.source));
+        if unchanged { Ok(()) } else { Err(bad(CMD, "source workbook changed or closed; the analysis was discarded")) }
+    }
+
+    /// Stable source identity for targeted publication without changing another workbook.
+    pub fn source_doc(&self) -> u64 {
+        self.doc
+    }
+
+    /// Canonical synchronous parameters for journal replay without ephemeral job identities.
+    pub fn configuration(&self) -> Json {
+        self.config.clone()
+    }
+
+    /// Reports progress without publishing results or claiming that sampling is business certainty.
+    pub fn status(&self) -> Json {
+        json!({"job":self.id,"doc":self.doc,"state":if self.ready(){"ready"}else{"running"},"stage":if self.ready(){"ready"}else if self.xs.is_none(){"sampling"}else{"simulating"},"completed":self.completed,"total":self.iterations,"progress":self.completed as f64/self.iterations as f64,"workUsed":self.trial.meter.spent().ok(),"maxWork":self.work_limit,"autoAdvance":self.auto_advance})
+    }
+
+    /// A clone can request cooperative cancellation while an embedding caller owns the session.
+    pub fn cancellation(&self) -> crate::workload::Cancellation {
+        self.trial.meter.cancellation.clone()
+    }
+
+    /// Whether all formula trials completed; statistical finalization/publication is still pending.
+    pub fn ready(&self) -> bool {
+        self.completed == self.iterations
+    }
+
+    /// Advances one bounded batch, checking cancellation and shared work before each trial.
+    /// The eight-millisecond target is checked between trials, not inside arbitrary formulas.
+    /// The initial bounded sampling phase yields separately before any formula trials.
+    pub fn advance(&mut self, max_trials: usize) -> Result<()> {
+        self.trial.check()?;
+        let _scope = self.trial.meter.hook().enter().ok_or_else(|| bad(CMD, "cannot enter simulation work scope"))?;
+        if self.xs.is_none() {
+            self.trial.charge(self.sample_work)?;
+            self.xs = Some(self.plan.sample(&self.inputs, self.seed)?);
+            return self.trial.check();
+        }
+        let started = gridcraft_core::date::unix_now_ms();
+        let initial_work = self.trial.meter.spent()?;
+        let reads = self.outputs.iter().map(|o| (o.sheet, o.cell)).collect::<Vec<_>>();
+        let xs = self.xs.as_ref().ok_or_else(|| bad(CMD, "missing prepared samples"))?;
+        for _ in 0..max_trials.clamp(1, 2048) {
+            if self.ready() {
+                break;
+            }
+            let k = self.completed;
+            let sets = self
+                .inputs
+                .iter()
+                .zip(xs)
+                .map(|(i, values)| (i.sheet, i.cell, Value::Number(values.get(k).copied().unwrap_or(0.0))))
+                .collect::<Vec<_>>();
+            let values = self.trial.run(&sets, &reads)?;
+            for ((output, column), value) in self.outputs.iter().zip(&mut self.ys).zip(values) {
+                match value {
+                    Value::Number(n) if n.is_finite() => column.push(n),
+                    _ => return Err(bad(CMD, format!("output `{}` is not a finite number at iteration {}", output.label, k + 1))),
                 }
-                p
-            })
-            .collect::<Vec<_>>();
-        c.insert("inputs".into(), json!(canonical));
-        c.insert("outputs".into(), json!(outputs.iter().map(|o| &o.label).collect::<Vec<_>>()));
-    }
-    let plan = Plan::parse(p, inputs.len(), iterations)?;
-    if let Some(c) = config.as_object_mut() {
-        c.insert("method".into(), json!(plan.method_name()));
-        c.insert("replicates".into(), json!(plan.replicates));
-    }
-    let xs = plan.sample(&inputs, seed)?;
-    let reads = outputs.iter().map(|o| (o.sheet, o.cell)).collect::<Vec<_>>();
-    let mut trial = Trial::new(d);
-    let mut ys = (0..outputs.len()).map(|_| Vec::with_capacity(iterations)).collect::<Vec<_>>();
-    for k in 0..iterations {
-        let sets =
-            inputs.iter().zip(&xs).map(|(i, values)| (i.sheet, i.cell, Value::Number(values.get(k).copied().unwrap_or(0.0)))).collect::<Vec<_>>();
-        let values = trial.run(&sets, &reads);
-        for ((output, column), value) in outputs.iter().zip(&mut ys).zip(values) {
-            match value {
-                Value::Number(n) if n.is_finite() => column.push(n),
-                _ => return Err(bad(CMD, format!("output `{}` is not a finite number at iteration {}", output.label, k + 1))),
+            }
+            self.completed += 1;
+            let elapsed = started.zip(gridcraft_core::date::unix_now_ms()).is_some_and(|(a, b)| b - a >= 8.0);
+            if elapsed || self.trial.meter.spent()?.saturating_sub(initial_work) >= 250_000 {
+                break;
             }
         }
+        self.trial.check()
     }
-    let mut summaries = Vec::with_capacity(outputs.len());
-    for (output, values) in outputs.iter().zip(&ys) {
-        let ordered = sorted(values);
-        let n = iterations as f64;
-        let (mean, sd) = statistics::moments(values)?;
-        let summary = Summary {
-            label: output.label.clone(),
-            mean,
-            sd,
-            min: ordered.first().copied().unwrap_or(0.0),
-            p10: quantile(&ordered, 0.1),
-            median: quantile(&ordered, 0.5),
-            p90: quantile(&ordered, 0.9),
-            max: ordered.last().copied().unwrap_or(0.0),
-            above: values.iter().filter(|x| **x > 0.0).count() as f64 / n,
-        };
-        if !mean.is_finite() || !sd.is_finite() {
-            return Err(bad(CMD, "summary statistics overflowed; rescale the model"));
+
+    /// Finalizes a complete job and publishes one undoable report only after all checks succeed.
+    pub fn publish(self, s: &mut Session) -> Result<Json> {
+        self.check_source(s)?;
+        if !self.ready() {
+            return Err(bad(CMD, "analysis is not ready to publish"));
         }
-        summaries.push(summary);
-    }
-    let first = ys.first().ok_or_else(|| bad(CMD, "missing output samples"))?;
-    let center = quantile(&sorted(first), 0.5);
-    let output_ranks = ranks(first);
-    let mut sensitivity = Vec::with_capacity(inputs.len());
-    for (input, values) in inputs.iter().zip(&xs) {
-        let ordered = sorted(values);
-        let (p10, p90) = (quantile(&ordered, 0.1), quantile(&ordered, 0.9));
-        let low = values.iter().zip(first).filter_map(|(x, y)| (*x <= p10).then_some(*y)).collect::<Vec<_>>();
-        let high = values.iter().zip(first).filter_map(|(x, y)| (*x >= p90).then_some(*y)).collect::<Vec<_>>();
-        let (lm, hm) = (quantile(&sorted(&low), 0.5), quantile(&sorted(&high), 0.5));
-        let (a, b) = (lm - center, hm - center);
-        if !a.is_finite() || !b.is_finite() || !(hm - lm).is_finite() {
-            return Err(bad(CMD, "tornado statistics overflowed; rescale the model"));
+        let Self { name, config, seed, iterations, keep_samples, inputs, outputs, plan, xs, ys, mut trial, finish_work, report_cells, .. } = self;
+        let _scope = trial.meter.hook().enter().ok_or_else(|| bad(CMD, "cannot enter finalization work scope"))?;
+        trial.charge(finish_work)?;
+        let xs = xs.ok_or_else(|| bad(CMD, "missing samples"))?;
+        let mut summaries = Vec::with_capacity(outputs.len());
+        for (output, values) in outputs.iter().zip(&ys) {
+            trial.check()?;
+            let ordered = sorted(values);
+            let n = iterations as f64;
+            let (mean, sd) = statistics::moments(values)?;
+            let summary = Summary {
+                label: output.label.clone(),
+                mean,
+                sd,
+                min: ordered.first().copied().unwrap_or(0.0),
+                p10: quantile(&ordered, 0.1),
+                median: quantile(&ordered, 0.5),
+                p90: quantile(&ordered, 0.9),
+                max: ordered.last().copied().unwrap_or(0.0),
+                above: values.iter().filter(|x| **x > 0.0).count() as f64 / n,
+            };
+            if !mean.is_finite() || !sd.is_finite() {
+                return Err(bad(CMD, "summary statistics overflowed; rescale the model"));
+            }
+            summaries.push(summary);
         }
-        sensitivity.push(Sensitivity {
-            input: input.label.clone(),
-            low: lm,
-            high: hm,
-            low_n: low.len(),
-            high_n: high.len(),
-            spearman: correlation(&ranks(values), &output_ranks),
-            adverse: a.min(b).min(0.0),
-            favorable: a.max(b).max(0.0),
-            span: (hm - lm).abs(),
-        });
+        let first = ys.first().ok_or_else(|| bad(CMD, "missing output samples"))?;
+        let center = quantile(&sorted(first), 0.5);
+        let output_ranks = ranks(first);
+        let mut sensitivity = Vec::with_capacity(inputs.len());
+        for (input, values) in inputs.iter().zip(&xs) {
+            trial.check()?;
+            let ordered = sorted(values);
+            let (p10, p90) = (quantile(&ordered, 0.1), quantile(&ordered, 0.9));
+            let low = values.iter().zip(first).filter_map(|(x, y)| (*x <= p10).then_some(*y)).collect::<Vec<_>>();
+            let high = values.iter().zip(first).filter_map(|(x, y)| (*x >= p90).then_some(*y)).collect::<Vec<_>>();
+            let (lm, hm) = (quantile(&sorted(&low), 0.5), quantile(&sorted(&high), 0.5));
+            let (a, b) = (lm - center, hm - center);
+            if !a.is_finite() || !b.is_finite() || !(hm - lm).is_finite() {
+                return Err(bad(CMD, "tornado statistics overflowed; rescale the model"));
+            }
+            sensitivity.push(Sensitivity {
+                input: input.label.clone(),
+                low: lm,
+                high: hm,
+                low_n: low.len(),
+                high_n: high.len(),
+                spearman: correlation(&ranks(values), &output_ranks),
+                adverse: a.min(b).min(0.0),
+                favorable: a.max(b).max(0.0),
+                span: (hm - lm).abs(),
+            });
+        }
+        sensitivity.sort_by(|a, b| b.span.total_cmp(&a.span));
+        let diagnostics = Diagnostics::new(&plan, &inputs, &outputs, &xs, &ys)?;
+        trial.check()?;
+        crate::workload::report_capacity(&s.doc()?.wb, report_cells)?;
+        trial.meter.cancellation.begin_commit()?;
+        let publication =
+            write_report(s, &name, &config, seed, iterations, keep_samples, &inputs, &outputs, &xs, &ys, &summaries, &sensitivity, &diagnostics);
+        trial.meter.cancellation.complete();
+        trial.check()?;
+        publication?;
+        Ok(
+            json!({"sheet":name,"iterations":iterations,"seed":seed,"static":true,"independentInputs":plan.independent(),"sampling":plan.method_name(),"replicates":plan.replicates,"accuracy":diagnostics.accuracy_json(),"convergence":diagnostics.first_trace_json(),"config":config,"outputs":summaries.iter().map(Summary::json).collect::<Vec<_>>(),"tornadoOutput":outputs.first().map(|o|&o.label),"tornado":sensitivity.iter().map(Sensitivity::json).collect::<Vec<_>>()}),
+        )
     }
-    sensitivity.sort_by(|a, b| b.span.total_cmp(&a.span));
-    let diagnostics = Diagnostics::new(&plan, &inputs, &outputs, &xs, &ys)?;
-    write_report(s, &name, &config, seed, iterations, keep_samples, &inputs, &outputs, &xs, &ys, &summaries, &sensitivity, &diagnostics)?;
-    Ok(
-        json!({"sheet":name,"iterations":iterations,"seed":seed,"static":true,"independentInputs":plan.independent(),"sampling":plan.method_name(),"replicates":plan.replicates,"accuracy":diagnostics.accuracy_json(),"convergence":diagnostics.first_trace_json(),"config":config,"outputs":summaries.iter().map(Summary::json).collect::<Vec<_>>(),"tornadoOutput":outputs.first().map(|o|&o.label),"tornado":sensitivity.iter().map(Sensitivity::json).collect::<Vec<_>>()}),
-    )
+}
+
+/// Preserves the synchronous command contract while reusing the incremental evaluator exactly.
+fn run(s: &mut Session, p: &Json) -> Result<Json> {
+    let mut job = Job::prepare(s, p)?;
+    while !job.ready() {
+        job.advance(2048)?;
+    }
+    job.publish(s)
 }
 
 /// Publishes summary, conditional sensitivity, diagnostics, optional samples and two native

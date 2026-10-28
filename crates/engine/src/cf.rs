@@ -44,6 +44,7 @@ pub struct CfCache {
 }
 
 impl Default for CfCache {
+    /// Standalone hosts get a bounded bank; UI frames explicitly reuse their document's bank.
     fn default() -> Self {
         Self::with_budget(crate::workload::AnalysisBudget::rendering())
     }
@@ -159,6 +160,95 @@ fn lerp(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
 
 pub use gridcraft_model::icon_count;
 
+struct RuleEval<'a> {
+    wb: &'a Workbook,
+    sheet: usize,
+    cell: CellRef,
+    first: CellRef,
+    value: &'a Value,
+    text: &'a str,
+    stats: &'a RuleStats,
+}
+
+fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Style> {
+    let RuleEval { wb, sheet, cell, first, value, text, stats } = ctx;
+    match rule {
+        CfRule::CellIs { op, a, b, style } => {
+            let eval = |f: &str| gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(f, *first, *cell));
+            let av = eval(a);
+            let matches = match op {
+                CfOperator::Between | CfOperator::NotBetween => {
+                    let bv = b.as_deref().map(eval).unwrap_or_default();
+                    let (lo, hi) = if compare(&av, &bv) == std::cmp::Ordering::Greater { (bv, av) } else { (av, bv) };
+                    let within = compare(value, &lo) != std::cmp::Ordering::Less && compare(value, &hi) != std::cmp::Ordering::Greater;
+                    if *op == CfOperator::Between { within } else { !within }
+                }
+                CfOperator::Equal => compare(value, &av) == std::cmp::Ordering::Equal,
+                CfOperator::NotEqual => compare(value, &av) != std::cmp::Ordering::Equal,
+                CfOperator::Greater => compare(value, &av) == std::cmp::Ordering::Greater,
+                CfOperator::Less => compare(value, &av) == std::cmp::Ordering::Less,
+                CfOperator::GreaterOrEqual => compare(value, &av) != std::cmp::Ordering::Less,
+                CfOperator::LessOrEqual => compare(value, &av) != std::cmp::Ordering::Greater,
+            };
+            (matches && !value.is_error()).then_some(style.as_ref())
+        }
+        CfRule::Expression { formula, style } => {
+            gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(formula, *first, *cell)).to_bool().unwrap_or(false).then_some(style.as_ref())
+        }
+        CfRule::ContainsText { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::NotContainsText { text: needle, style } => {
+            (value.is_error() || !text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::BeginsWith { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().starts_with(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::EndsWith { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().ends_with(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::Blanks { style } => (value.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
+        CfRule::NoBlanks { style } => (!value.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
+        CfRule::Errors { style } => value.is_error().then_some(style.as_ref()),
+        CfRule::NoErrors { style } => (!value.is_error()).then_some(style.as_ref()),
+        CfRule::Duplicate { style } => {
+            (!value.is_empty() && stats.counts.get(&text.to_lowercase()).copied().unwrap_or(0) > 1).then_some(style.as_ref())
+        }
+        CfRule::Unique { style } => {
+            (!value.is_empty() && stats.counts.get(&text.to_lowercase()).copied().unwrap_or(0) == 1).then_some(style.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn time_period_matches(wb: &Workbook, period: &str, serial: f64) -> bool {
+    let today = gridcraft_core::date::serial_in_system(wb.date_system, gridcraft_calc::now_serial()).floor();
+    let day = serial.floor();
+    let date = |serial| gridcraft_core::date::datetime_from_serial(wb.date_system, serial);
+    let week_start = today - date(today).map(|value| value.weekday as f64).unwrap_or(0.0);
+    let (year, month) = date(today).map(|value| (value.year, value.month)).unwrap_or((2026, 1));
+    let year_month = date(day).map(|value| (value.year, value.month));
+    let month_matches = |offset: i32| {
+        let shifted_month = month as i32 + offset;
+        let shifted_year = year + (shifted_month - 1).div_euclid(12);
+        let shifted_month = (shifted_month - 1).rem_euclid(12) + 1;
+        year_month == Some((shifted_year, shifted_month as u32))
+    };
+    match period {
+        "yesterday" => day == today - 1.0,
+        "today" => day == today,
+        "tomorrow" => day == today + 1.0,
+        "last7Days" => day > today - 7.0 && day <= today,
+        "lastWeek" => day >= week_start - 7.0 && day < week_start,
+        "thisWeek" => day >= week_start && day < week_start + 7.0,
+        "nextWeek" => day >= week_start + 7.0 && day < week_start + 14.0,
+        "lastMonth" => month_matches(-1),
+        "thisMonth" => month_matches(0),
+        "nextMonth" => month_matches(1),
+        _ => false,
+    }
+}
+
 impl CfCache {
     pub fn new() -> Self {
         Self::default()
@@ -169,11 +259,14 @@ impl CfCache {
         Self { stats: HashMap::new(), frame_meter: crate::workload::Meter::new(budget), results: None }
     }
 
-    /// Reuses results across frames for one revision, with a one-second TTL for volatile formulas.
+    /// Reuses results for one revision under a cache-wide one-second TTL for every look,
+    /// including nonvolatile and fallback results; this also bounds volatile-result staleness.
     pub fn with_cache(budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64) -> Self {
         Self::with_cache_at(budget, results, wb, revision, gridcraft_core::date::unix_now_ms())
     }
 
+    /// Invalidates stale results using an explicit clock without replenishing the shared bank.
+    /// Unknown/backward clocks and changed workbook identity/revision never serve old styles.
     fn with_cache_at(budget: crate::workload::AnalysisBudget, results: RenderCache, wb: &Arc<Workbook>, revision: u64, now: Option<f64>) -> Self {
         let now = now.filter(|time| time.is_finite());
         let usable = if let Ok(mut stored) = results.0.lock() {
@@ -219,6 +312,8 @@ impl CfCache {
         value
     }
 
+    /// Evaluates a miss under local, ambient and shared-frame work policies. Any refusal omits
+    /// its conditional look instead of publishing a style derived from a handled numeric error.
     fn look_uncached(&mut self, wb: &Workbook, sheet: usize, c: CellRef) -> Option<CfLook> {
         let sh = wb.sheet(sheet)?;
         if sh.cond_formats.is_empty() {
@@ -252,52 +347,8 @@ impl CfCache {
                 None => &no_stats,
             };
             let text = v.display();
-            let matched_style: Option<&Style> = match &cf.rule {
-                CfRule::CellIs { op, a, b, style } => {
-                    let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, c, &relative(f, first, c));
-                    let av = eval(a);
-                    let ok = match op {
-                        CfOperator::Between | CfOperator::NotBetween => {
-                            let bv = b.as_deref().map(eval).unwrap_or_default();
-                            let (lo, hi) = if compare(&av, &bv) == std::cmp::Ordering::Greater { (bv, av) } else { (av, bv) };
-                            let inside = compare(&v, &lo) != std::cmp::Ordering::Less && compare(&v, &hi) != std::cmp::Ordering::Greater;
-                            if *op == CfOperator::Between { inside } else { !inside }
-                        }
-                        CfOperator::Equal => compare(&v, &av) == std::cmp::Ordering::Equal,
-                        CfOperator::NotEqual => compare(&v, &av) != std::cmp::Ordering::Equal,
-                        CfOperator::Greater => compare(&v, &av) == std::cmp::Ordering::Greater,
-                        CfOperator::Less => compare(&v, &av) == std::cmp::Ordering::Less,
-                        CfOperator::GreaterOrEqual => compare(&v, &av) != std::cmp::Ordering::Less,
-                        CfOperator::LessOrEqual => compare(&v, &av) != std::cmp::Ordering::Greater,
-                    };
-                    // As in Excel, a blank cell compares as 0 (or ""), and an error never matches.
-                    (ok && !v.is_error()).then_some(style.as_ref())
-                }
-                CfRule::Expression { formula, style } => {
-                    gridcraft_calc::evaluate(wb, sheet, c, &relative(formula, first, c)).to_bool().unwrap_or(false).then_some(style.as_ref())
-                }
-                // As in Excel, an error value never contains, begins or ends with anything (its rule
-                // formulas SEARCH/LEFT/RIGHT fail on it), so it always "does not contain" (#1162).
-                CfRule::ContainsText { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::NotContainsText { text: t, style } => {
-                    (v.is_error() || !text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::BeginsWith { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().starts_with(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::EndsWith { text: t, style } => (!v.is_error() && text.to_lowercase().ends_with(&t.to_lowercase())).then_some(style.as_ref()),
-                CfRule::Blanks { style } => (v.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
-                CfRule::NoBlanks { style } => (!v.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
-                CfRule::Errors { style } => v.is_error().then_some(style.as_ref()),
-                CfRule::NoErrors { style } => (!v.is_error()).then_some(style.as_ref()),
-                CfRule::Duplicate { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) > 1).then_some(style.as_ref())
-                }
-                CfRule::Unique { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) == 1).then_some(style.as_ref())
-                }
+            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st };
+            let matched_style = simple_rule_style(&context, &cf.rule).or_else(|| match &cf.rule {
                 CfRule::Top10 { bottom, percent, rank, style } => match v.as_f64() {
                     Some(n) if !st.sorted.is_empty() => {
                         let k = if *percent { ((st.sorted.len() as f64) * (*rank as f64) / 100.0).floor().max(1.0) as usize } else { *rank as usize };
@@ -320,36 +371,8 @@ impl CfCache {
                     None => None,
                 },
                 CfRule::TimePeriod { period, style } => match v.as_f64() {
-                    Some(n) => {
-                        let today = gridcraft_core::date::serial_in_system(wb.date_system, gridcraft_calc::now_serial()).floor();
-                        let d = n.floor();
-                        let wd = gridcraft_core::date::datetime_from_serial(wb.date_system, today).map(|x| x.weekday as f64).unwrap_or(0.0);
-                        let week_start = today - wd;
-                        let (ty, tm) =
-                            gridcraft_core::date::datetime_from_serial(wb.date_system, today).map(|x| (x.year, x.month)).unwrap_or((2026, 1));
-                        let ym = gridcraft_core::date::datetime_from_serial(wb.date_system, d).map(|x| (x.year, x.month));
-                        let month_off = |k: i32| {
-                            let m = tm as i32 + k;
-                            let y = ty + (m - 1).div_euclid(12);
-                            let m = (m - 1).rem_euclid(12) + 1;
-                            ym == Some((y, m as u32))
-                        };
-                        let ok = match period.as_str() {
-                            "yesterday" => d == today - 1.0,
-                            "today" => d == today,
-                            "tomorrow" => d == today + 1.0,
-                            "last7Days" => d > today - 7.0 && d <= today,
-                            "lastWeek" => d >= week_start - 7.0 && d < week_start,
-                            "thisWeek" => d >= week_start && d < week_start + 7.0,
-                            "nextWeek" => d >= week_start + 7.0 && d < week_start + 14.0,
-                            "lastMonth" => month_off(-1),
-                            "thisMonth" => month_off(0),
-                            "nextMonth" => month_off(1),
-                            _ => false,
-                        };
-                        ok.then_some(style.as_ref())
-                    }
-                    None => None,
+                    Some(n) if time_period_matches(wb, period, n) => Some(style.as_ref()),
+                    _ => None,
                 },
                 CfRule::ColorScale { stops } => {
                     if let Some(n) = v.as_f64() {
@@ -420,7 +443,8 @@ impl CfCache {
                     }
                     None
                 }
-            };
+                _ => None,
+            });
             if !gridcraft_calc::WorkHook::allowed() {
                 return None;
             }
@@ -519,7 +543,7 @@ mod tests {
         s.new_workbook();
         let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
         s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
-        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(ACT.GPD.FIT.MLE($A$1:$A$2048),1,1),TRUE)","preset":"lightRedFill"}}))
+        s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}}))
             .unwrap();
         s.execute("home.conditionalFormat", json!({"range":"B2","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
         let d = s.doc().unwrap();
@@ -603,14 +627,14 @@ mod tests {
 
     /// Workbook paint expressions are bounded without a command and cannot style a refused value.
     #[test]
-    fn rendering_gpd_refusal_has_safe_fallback_even_with_iferror() {
+    fn rendering_native_broadcast_refusal_has_safe_fallback_even_with_iferror() {
         let mut s = crate::Session::new();
         s.new_workbook();
         let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
         s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
         for rule in [
-            json!({"type":"expression","formula":"=IFERROR(INDEX(ACT.GPD.FIT.MLE($A$1:$A$2048),1,1),TRUE)","preset":"lightRedFill"}),
-            json!({"type":"cellIs","operator":"notEqual","value":"=ACT.GPD.FIT.MLE($A$1:$A$2048)","preset":"lightRedFill"}),
+            json!({"type":"expression","formula":"=IFERROR(INDEX(NORM.S.DIST(SEQUENCE(100001),TRUE),1,1),TRUE)","preset":"lightRedFill"}),
+            json!({"type":"cellIs","operator":"notEqual","value":"=NORM.S.DIST(SEQUENCE(100001),TRUE)","preset":"lightRedFill"}),
         ] {
             s.execute("home.conditionalFormat", json!({"range":"B1:B2","rule":rule})).unwrap();
             let d = s.doc().unwrap();

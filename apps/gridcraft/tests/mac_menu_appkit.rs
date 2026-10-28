@@ -7,7 +7,11 @@
 // unit tests compile here too without a harness to run them).
 #[cfg(target_os = "macos")]
 #[path = "../src/native_menu.rs"]
-#[allow(unused_imports, dead_code)]
+#[expect(
+    unused_imports,
+    dead_code,
+    reason = "This install-only harness embeds the app module; event polling and unit helpers are exercised by other targets."
+)]
 mod native_menu;
 
 #[cfg(target_os = "macos")]

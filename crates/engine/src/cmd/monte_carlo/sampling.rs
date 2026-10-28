@@ -1,6 +1,6 @@
 //! Independent randomized Latin hypercubes, optionally transformed by a Gaussian copula.
 //! LHS stratification is on the independent driving uniforms, before the copula transform.
-use super::*;
+use super::{CMD, Distribution, Input, Json, Result, Rng, Value, bad, integer};
 
 const MATRIX_TOLERANCE: f64 = 1e-10;
 

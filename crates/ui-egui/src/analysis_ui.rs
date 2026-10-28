@@ -1,5 +1,5 @@
 //! Cooperative analysis driving and progress UI over the engine's shared job commands.
-use crate::*;
+use crate::SheetApp;
 use serde_json::json;
 
 /// Advances at most one bounded batch per frame and publishes a completed UI-owned job.

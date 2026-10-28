@@ -1,5 +1,5 @@
 //! Thin editor for the engine's generic Monte Carlo command.
-use super::*;
+use super::{Dialog, Json, Map, json};
 
 /// Edits a labeled textual parameter while retaining typed numeric values until an actual edit.
 /// Engine validation receives invalid text unchanged instead of silently substituting a default.

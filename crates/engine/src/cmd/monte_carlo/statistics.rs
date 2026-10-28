@@ -1,6 +1,6 @@
 //! Stable summaries and sampling-error diagnostics. LHS inference uses independent replicas.
 use super::sampling::worksheet_number;
-use super::*;
+use super::{CMD, Input, Json, Output, Plan, Result, StyleId, Value, bad, json, ranks};
 
 /// Accumulates bounded finite terms using Neumaier compensation to retain rounding residuals.
 fn sum(values: impl Iterator<Item = f64>) -> f64 {

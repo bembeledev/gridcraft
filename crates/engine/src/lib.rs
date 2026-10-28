@@ -232,7 +232,13 @@ struct JournalRollback {
     mark: usize,
     bytes: usize,
     recording: Option<usize>,
-    backup: Option<(Vec<(String, Json)>, Vec<usize>)>,
+    backup: Option<JournalBackup>,
+}
+
+/// Original journal entries and their serialized sizes retained only across nested trimming.
+struct JournalBackup {
+    entries: Vec<(String, Json)>,
+    sizes: Vec<usize>,
 }
 
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
@@ -601,7 +607,10 @@ impl Session {
             if self.depth > 0 {
                 let mark = self.journal_rollback.as_ref().filter(|checkpoint| checkpoint.backup.is_none()).map(|checkpoint| checkpoint.mark);
                 if let Some(mark) = mark {
-                    let backup = (self.journal.iter().take(mark).cloned().collect(), self.journal_sizes.iter().take(mark).copied().collect());
+                    let backup = JournalBackup {
+                        entries: self.journal.iter().take(mark).cloned().collect(),
+                        sizes: self.journal_sizes.iter().take(mark).copied().collect(),
+                    };
                     if let Some(checkpoint) = &mut self.journal_rollback {
                         checkpoint.backup = Some(backup);
                     }
@@ -625,7 +634,7 @@ impl Session {
     /// Restores the outer command's journal even when nested pushes crossed a trimming boundary.
     fn rollback_journal(&mut self) {
         if let Some(checkpoint) = self.journal_rollback.take() {
-            if let Some((entries, sizes)) = checkpoint.backup {
+            if let Some(JournalBackup { entries, sizes }) = checkpoint.backup {
                 self.journal = entries;
                 self.journal_sizes = sizes;
             } else {
@@ -666,9 +675,12 @@ impl Session {
         }
         // A neutral scoped hook also reaches standalone formula evaluation (CLI/MCP queries),
         // while trial scopes override it with their long-lived shared run meter.
-        let command_meter = if gridcraft_calc::WorkHook::current().is_none() { Some(workload::Meter::ordinary()) } else { None };
+        let inherited_work = gridcraft_calc::WorkHook::current();
+        let command_meter = workload::Meter::command(spec.journal || spec.undoable, inherited_work.is_some());
         let _work_scope = match &command_meter {
-            Some(meter) => Some(meter.hook().enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?),
+            Some(meter) => {
+                Some(meter.hook_with_parent(inherited_work).enter().ok_or_else(|| EngineError::Other("Cannot enter command work scope.".into()))?)
+            }
             None => None,
         };
         if self.depth == 0 {

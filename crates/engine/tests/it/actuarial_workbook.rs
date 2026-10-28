@@ -247,3 +247,42 @@ fn lifted_actuarial_work_exhaustion_is_terminal_even_when_iferror_catches_num() 
     assert_eq!(s.doc().unwrap().undo.len(), undo);
     assert_eq!(s.journal.len(), journal);
 }
+
+/// ACT-specific paint formulas retain their quota oracles when generic MC tests use normal CDFs.
+#[test]
+fn actuarial_conditional_formulas_do_not_style_refused_gpd_results() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
+    for rule in [
+        json!({"type":"expression","formula":"=IFERROR(INDEX(ACT.GPD.FIT.MLE($A$1:$A$2048),1,1),TRUE)","preset":"lightRedFill"}),
+        json!({"type":"cellIs","operator":"notEqual","value":"=ACT.GPD.FIT.MLE($A$1:$A$2048)","preset":"lightRedFill"}),
+    ] {
+        s.execute("home.conditionalFormat", json!({"range":"B1:B2","rule":rule})).unwrap();
+        let d = s.doc().unwrap();
+        let before = d.analysis_budget.remaining().unwrap();
+        for _ in 0..3 {
+            let mut paint = gridcraft_engine::cf::CfCache::with_budget(d.render_budget.clone());
+            assert!(paint.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_none());
+            assert!(paint.look(&d.wb, 0, CellRef::parse("B2").unwrap()).is_none());
+        }
+        assert_eq!(d.analysis_budget.remaining().unwrap(), before);
+    }
+}
+
+/// A costly ACT formula cannot consume its frame's bank before the local cell cap rejects it.
+#[test]
+fn actuarial_render_refusal_keeps_credit_for_inexpensive_neighbouring_cells() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let values = (1..=2048).map(|n| json!([n])).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range":"A1:A2048","values":values})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range":"B1","rule":{"type":"expression","formula":"=IFERROR(INDEX(ACT.GPD.FIT.MLE($A$1:$A$2048),1,1),TRUE)","preset":"lightRedFill"}})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range":"B2","rule":{"type":"expression","formula":"=TRUE","preset":"lightRedFill"}})).unwrap();
+    let d = s.doc().unwrap();
+    let mut paint = gridcraft_engine::cf::CfCache::with_budget(d.render_budget.clone());
+    assert!(paint.look(&d.wb, 0, CellRef::parse("B1").unwrap()).is_none());
+    assert!(d.render_budget.remaining().unwrap() > 990_000);
+    assert!(paint.look(&d.wb, 0, CellRef::parse("B2").unwrap()).is_some());
+}

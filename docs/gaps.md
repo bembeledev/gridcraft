@@ -72,8 +72,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
-  formats, merges, sizes, names); fonts, fills, borders, charts, pictures, comments, conditional
-  formats, validation and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
+  formats, merges, sizes, names, then fonts, fills, borders, alignment and pictures); charts, shapes,
+  comments, conditional formats, validation and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
   `.xlsx` workbooks (Agile and Standard encryption) open with their password since #11, but are
   saved without it: GridCraft can't write an encrypted file yet. Encrypted `.xls` (FILEPASS) and
   RC4-encrypted files are still refused with a message.

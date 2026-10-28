@@ -250,6 +250,19 @@ fn html_export_of_latin_ltr_sheet_is_unchanged() {
 }
 
 #[test]
+fn xml_opens_as_a_table_not_as_csv_text() {
+    let xml = "<?xml version=\"1.0\"?><list><item id=\"1\"><name>a,b</name></item><item id=\"2\"><name>c</name></item></list>";
+    let (wb, _) = open_bytes("notes.xml", xml.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), gridcraft_core::Value::text("id"));
+    assert_eq!(sh.value(CellRef::new(1, 1)), gridcraft_core::Value::text("a,b"));
+    assert_eq!(sh.value(CellRef::new(2, 0)), gridcraft_core::Value::Number(2.0));
+    assert_eq!(sh.tables.len(), 1);
+    // Import only: saving under an .xml name is refused rather than written as something else.
+    assert!(save_bytes(&wb, "notes.xml").is_err());
+}
+
+#[test]
 fn html_export_fails_instead_of_dropping_cells_past_the_row_limit() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();

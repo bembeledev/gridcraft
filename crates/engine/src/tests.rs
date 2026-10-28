@@ -3340,6 +3340,8 @@ fn xls_import_keeps_formulas_and_never_saves_back_to_xls() {
     let mut s = s();
     let r = s.execute("file.open", json!({"name": "legacy.xls", "base64": crate::io::base64_encode(&bytes)})).unwrap();
     assert!(r["warnings"][0].as_str().unwrap().contains("97-2003"));
+    // The overview is for the info bar: no message box to dismiss for a clean import.
+    assert!(!s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
     assert_eq!(r["sheets"], json!(["Old"]));
     let d = s.doc().unwrap();
     assert!(d.path.is_none());
@@ -5116,4 +5118,13 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     saved.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
+}
+
+#[test]
+fn xml_import_is_imported_so_save_asks_for_a_new_file() {
+    let mut s = s();
+    s.execute("file.open", json!({"name": "nfe.xml", "path": "C:/x/nfe.xml", "base64": crate::io::base64_encode(b"<r><a>1</a></r>")})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.path.is_none());
+    assert_eq!(d.display_title(), "nfe (imported).xlsx");
 }

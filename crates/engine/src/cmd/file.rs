@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, xml import as a table, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
@@ -68,8 +68,10 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         None => Some(std::path::PathBuf::from(&name)),
     };
     let imported =
-        matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
-            || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
+        matches!(
+            crate::io::FileKind::from_path(&name),
+            Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls | crate::io::FileKind::Xml)
+        ) || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
     let title = if imported {
         format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book"))
     } else {
@@ -91,8 +93,13 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
-    // The decrypted-workbook notice is for the info bar, not a message box.
-    let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
+    // The decrypted-workbook and .xls overview notices are for the info bar, not a message box.
+    let is_xls = matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Xls));
+    let shown: Vec<&str> = warnings
+        .iter()
+        .map(String::as_str)
+        .filter(|w| *w != crate::io::DECRYPTED_NOTICE && !(is_xls && gridcraft_xlsx::xls_is_feature_gap(w)))
+        .collect();
     if !shown.is_empty() {
         let mut message = shown.iter().take(5).copied().collect::<Vec<_>>().join("\n\n");
         if shown.len() > 5 {

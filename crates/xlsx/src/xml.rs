@@ -213,9 +213,19 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
+/// [`parse`] with its own limit on the elements kept, for a document that is itself the data (an
+/// `.xml` file opened as a table) and so may hold far more than an XLSX part does.
+pub fn parse_with_node_limit(xml: &[u8], max_nodes: usize) -> Result<El, IoError> {
+    parse_inner(xml, &[], &mut |_| Ok(()), max_nodes)
+}
+
 /// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
 /// kept in the returned tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    parse_inner(xml, split, cb, MAX_XML_NODES)
+}
+
+fn parse_inner(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>, max_nodes: usize) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
@@ -240,6 +250,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         split: &[&str],
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
         kept: &mut usize,
+        max_nodes: usize,
     ) -> Result<(), IoError> {
         match stack.last_mut() {
             Some(parent) => {
@@ -247,8 +258,8 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     cb(el)?;
                 } else {
                     *kept = kept.saturating_add(1);
-                    if *kept > MAX_XML_NODES {
-                        return Err(IoError::Xml(format!("the part holds more than {MAX_XML_NODES} elements")));
+                    if *kept > max_nodes {
+                        return Err(IoError::Xml(format!("the part holds more than {max_nodes} elements")));
                     }
                     parent.children.push(el);
                 }
@@ -272,11 +283,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept, max_nodes)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept, max_nodes)?;
                 }
             }
             Event::Text(t) => {
@@ -315,7 +326,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+        finish(&mut stack, &mut root, el, split, cb, &mut kept, max_nodes)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }

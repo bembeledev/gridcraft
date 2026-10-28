@@ -60,6 +60,7 @@ mod keyboard_shortcuts;
 mod keytips_generated;
 mod menu_hover;
 mod merged_cells;
+mod middle_pan;
 mod more_colors;
 mod native_print;
 mod nowrap_line_breaks;

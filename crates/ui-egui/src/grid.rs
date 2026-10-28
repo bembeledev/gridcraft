@@ -248,6 +248,9 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// The middle mouse button held on the grid (AutoCAD's pan): the sheet follows the pointer
+    /// instead of selecting.
+    pub middle_pan: bool,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and

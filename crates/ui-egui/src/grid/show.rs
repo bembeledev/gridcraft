@@ -56,7 +56,17 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         Geo::new(sh, rect, scroll)
     };
     // Scrolling.
-    let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    let (scroll_delta, zoom_delta, modifiers, now, middle_pressed, middle_down, pointer_delta) = ui.input(|i| {
+        (
+            i.smooth_scroll_delta,
+            i.zoom_delta(),
+            i.modifiers,
+            i.time,
+            i.pointer.button_pressed(egui::PointerButton::Middle),
+            i.pointer.button_down(egui::PointerButton::Middle),
+            i.pointer.delta(),
+        )
+    });
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -99,6 +109,26 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 d = vec2(d.y, 0.0);
             }
             view.scroll -= d / z;
+        }
+    }
+    // AutoCAD's pan: holding the middle button drags the sheet with the pointer. It starts on the
+    // press, not after egui's drag threshold, so the content follows from the first point, and it
+    // stops dead on release (no inertia). Nothing selects while it is held. A cell, text box or
+    // header/footer editor keeps the middle click: X11 pastes PRIMARY with it.
+    let editing = app.editor.is_some() || app.text_box_editor.is_some() || app.grid.hf_edit.is_some();
+    if middle_pressed && !editing && (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
+        app.grid.middle_pan = true;
+    }
+    if app.grid.middle_pan {
+        if middle_down {
+            let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
+            let mut d = pointer_delta;
+            if sh.right_to_left {
+                d.x = -d.x;
+            }
+            view.scroll -= d / z;
+        } else {
+            app.grid.middle_pan = false;
         }
     }
     // A one-finger touch drag pans the sheet, the content following the finger; it doesn't select.
@@ -333,7 +363,9 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         if !resp.dragged() {
             app.grid.touch_pan = false;
         }
-    } else {
+    } else if !app.grid.middle_pan {
+        // A held middle button pans the sheet and clicks nothing (its release frame reaches
+        // `interact` with no button down and does nothing).
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }

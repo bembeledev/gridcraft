@@ -1,6 +1,8 @@
 //! Thin editor for the engine's generic Monte Carlo command.
 use super::*;
 
+/// Edits a labeled textual parameter while retaining typed numeric values until an actual edit.
+/// Engine validation receives invalid text unchanged instead of silently substituting a default.
 fn text(ui: &mut egui::Ui, values: &mut Map<String, Json>, key: &str, label: &str) {
     ui.horizontal(|ui| {
         let label = ui.label(label);
@@ -17,6 +19,8 @@ fn text(ui: &mut egui::Ui, values: &mut Map<String, Json>, key: &str, label: &st
     });
 }
 
+/// Draws the bounded input editor, sampling settings, matrix and outputs without evaluating
+/// formulas. Replica settings apply only to LHS; confirmation delegates validation to the engine.
 pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     ui.label(
         "Choose numeric input cells and formula outputs. Source values are kept unchanged; optional correlation is on latent Gaussian variables.",
@@ -86,8 +90,10 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
             })
             .response
             .labelled_by(label.id);
+        if method == "latinHypercube" {
+            text(ui, &mut d.values, "replicates", "Independent replicas:");
+        }
         d.values.insert("method".into(), json!(method));
-        text(ui, &mut d.values, "replicates", "Independent replicas:");
     });
     let matrix_label = ui.label("Correlation matrix in input order (blank = independent). Rows on separate lines, numbers separated by spaces. Gaussian latent correlations, not marginal Pearson targets.");
     let mut matrix = match d.values.get("correlation") {
@@ -121,8 +127,13 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
 }
 
 /// Invalid typed numbers stay strings so the engine rejects them instead of silently defaulting.
+/// Replica counts are sent only for LHS, allowing arbitrary valid random iteration counts;
+/// output references stay line-delimited and correlation rows preserve invalid numeric tokens.
 pub(super) fn params(d: &Dialog) -> Json {
     let mut values = d.values.clone();
+    if values.get("method").and_then(Json::as_str) != Some("latinHypercube") {
+        values.remove("replicates");
+    }
     for key in ["iterations", "seed", "replicates"] {
         if let Some(n) = values.get(key).and_then(Json::as_str).and_then(|s| s.trim().parse::<u64>().ok()) {
             values.insert(key.into(), json!(n));
@@ -168,6 +179,7 @@ pub(super) fn params(d: &Dialog) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Invalid numeric text must survive UI conversion so the engine can report it to the user.
     #[test]
     fn monte_carlo_dialog_builds_typed_params_without_hiding_invalid_input() {
         let d = Dialog::custom(
@@ -181,5 +193,30 @@ mod tests {
         assert_eq!(p["inputs"][0]["mean"], 10.0);
         assert_eq!(p["inputs"][0]["stdDev"], "bad");
         assert_eq!(p["outputs"].as_array().map(Vec::len), Some(2));
+    }
+
+    /// Switching a dialog from LHS to random must remove the stale replica restriction.
+    /// Exercise the resulting command as well as the serialized parameters for odd trial counts.
+    #[test]
+    fn monte_carlo_random_dialog_accepts_iterations_not_divisible_by_lhs_replicates() {
+        for iterations in [1001, 1500] {
+            let mut d = Dialog::custom(
+                "monteCarlo",
+                "Monte Carlo",
+                json!({"method":"latinHypercube","replicates":"8","iterations":iterations.to_string(),"inputs":[{"cell":"A1","min":"0","max":"1"}],"outputs":"B1","samples":false}),
+            );
+            let lhs = params(&d);
+            assert_eq!(lhs["replicates"], 8);
+            d.values.insert("method".into(), json!("random"));
+            let p = params(&d);
+            assert!(p.get("replicates").is_none());
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            session.execute("cell.set", json!({"cell":"A1","input":"0.5"})).unwrap();
+            session.execute("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+            let result = session.execute("data.monteCarlo", p).unwrap();
+            assert_eq!(result["iterations"], iterations);
+            assert_eq!(result["replicates"], 1);
+        }
     }
 }

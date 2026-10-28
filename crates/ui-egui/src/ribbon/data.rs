@@ -1,6 +1,8 @@
 use super::controls::{act, control_keytip, keytip, menu_items, sep};
 use super::*;
 
+/// Draws Data-tab controls, dispatching direct commands or opening their parameter dialogs.
+/// Analysis dialogs, including Monte Carlo, defer workbook changes until confirmation.
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");

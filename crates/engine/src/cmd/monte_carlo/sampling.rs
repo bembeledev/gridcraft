@@ -4,15 +4,18 @@ use super::*;
 
 const MATRIX_TOLERANCE: f64 = 1e-10;
 
+/// Reuses the worksheet's statistical implementation and rejects errors or non-finite results.
 pub(super) fn worksheet_number(name: &str, args: &[Value]) -> Result<f64> {
     super::super::analysis::call(name, args)
         .as_f64()
         .filter(|n| n.is_finite())
         .ok_or_else(|| bad(CMD, format!("{name} could not evaluate a sampling statistic")))
 }
+/// Evaluates the standard-normal quantile, clamping endpoints to finite f64 tail probabilities.
 pub(super) fn normal_inverse(p: f64) -> Result<f64> {
     worksheet_number("NORM.S.INV", &[Value::Number(p.clamp(f64::EPSILON / 2.0, 1.0 - f64::EPSILON / 2.0))])
 }
+/// Evaluates the worksheet's standard-normal CDF for mapping latent draws to other marginals.
 fn normal_cdf(z: f64) -> Result<f64> {
     worksheet_number("NORM.S.DIST", &[Value::Number(z), Value::Bool(true)])
 }
@@ -25,6 +28,9 @@ pub(super) struct Plan {
     factor: Option<Vec<Vec<f64>>>,
 }
 impl Plan {
+    /// Validates the sampling method, complete replicas and optional latent correlation matrix.
+    /// LHS needs at least two independent replicas; every replica needs at least two samples.
+    /// Matrices must be finite, square, symmetric, unit-diagonal and positive semidefinite.
     pub fn parse(p: &Json, dimensions: usize, iterations: usize) -> Result<Self> {
         let latin = match p.get("method") {
             None => false,
@@ -63,12 +69,18 @@ impl Plan {
         let factor = matrix.as_ref().map(|m| cholesky(m)).transpose()?;
         Ok(Self { latin, replicates, per_replica: iterations / replicates, matrix, factor })
     }
+    /// Returns the command/configuration spelling of the selected sampling method.
     pub fn method_name(&self) -> &'static str {
         if self.latin { "latinHypercube" } else { "random" }
     }
+    /// Reports whether inputs have no nonzero latent cross-correlation; this does not
+    /// assert independence between the stratified rows within an LHS replica.
     pub fn independent(&self) -> bool {
         self.matrix.as_ref().is_none_or(|m| m.iter().enumerate().all(|(i, row)| row.iter().enumerate().all(|(j, v)| i == j || *v == 0.0)))
     }
+    /// Generates input-major sample columns in consecutive, independently randomized replicas.
+    /// LHS stratifies driving uniforms before the optional Gaussian-copula transform, which
+    /// need not preserve final marginal strata. Draw failures and non-finite samples are errors.
     pub fn sample(&self, inputs: &[Input], seed: u64) -> Result<Vec<Vec<f64>>> {
         let n = self.per_replica;
         let d = inputs.len();

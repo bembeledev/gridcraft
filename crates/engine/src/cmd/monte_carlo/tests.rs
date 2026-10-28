@@ -1,5 +1,6 @@
 use super::*;
 
+/// Builds a deterministic two-input workbook so simulation results can be checked analytically.
 fn model() -> Session {
     let mut s = Session::new();
     s.new_workbook();
@@ -7,13 +8,16 @@ fn model() -> Session {
     s.execute("cell.set", json!({"cell":"C1","input":"=3*A1-B1"})).unwrap();
     s
 }
+/// Supplies reusable seeded uniform/triangular assumptions for the synthetic workbook.
 fn params() -> Json {
     json!({"inputs":[{"cell":"A1","distribution":"uniform","min":0,"max":100},{"cell":"B1","distribution":"triangular","min":0,"mode":10,"max":20}],"outputs":["C1"],"iterations":1000,"seed":42})
 }
+/// Reads a known fixture cell without depending on the report's active-sheet selection.
 fn value(s: &Session, sheet: usize, cell: &str) -> Value {
     s.doc().unwrap().wb.sheet(sheet).unwrap().value(CellRef::parse(cell).unwrap())
 }
 
+/// Repeated seeds must reproduce outcomes while report undo/redo and XLSX preserve source cells.
 #[test]
 fn monte_carlo_reproduces_samples_preserves_model_and_undoes_report() {
     let mut s = model();
@@ -47,6 +51,7 @@ fn monte_carlo_reproduces_samples_preserves_model_and_undoes_report() {
     assert_eq!(reopened.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(10.0));
 }
 
+/// Isolated trials must recalculate cross-sheet outputs even when the source uses manual mode.
 #[test]
 fn monte_carlo_manual_mode_cross_sheet_and_multiple_outputs() {
     let mut s = model();
@@ -62,6 +67,7 @@ fn monte_carlo_manual_mode_cross_sheet_and_multiple_outputs() {
     assert_eq!(s.doc().unwrap().wb.calc.mode, gridcraft_model::CalcMode::Manual);
 }
 
+/// Invalid addresses, assumptions and resource requests must leave the original workbook intact.
 #[test]
 fn monte_carlo_rejects_invalid_params_without_changes() {
     for p in [
@@ -98,6 +104,7 @@ fn monte_carlo_rejects_invalid_params_without_changes() {
     assert!(s.execute(CMD, p).is_err());
 }
 
+/// A formula error during a trial must abort before publishing any report or source mutation.
 #[test]
 fn monte_carlo_erroring_trial_is_atomic() {
     let mut s = model();
@@ -108,6 +115,7 @@ fn monte_carlo_erroring_trial_is_atomic() {
     assert_eq!(value(&s, 0, "A1"), Value::Number(10.0));
 }
 
+/// Checks analytic marginal moments, interpolated percentiles and average-rank tie handling.
 #[test]
 fn monte_carlo_distribution_moments_and_ranks() {
     let mut rng = Rng(42);
@@ -127,6 +135,7 @@ fn monte_carlo_distribution_moments_and_ranks() {
     assert_eq!(correlation(&[0., 0.], &[1., 2.]), None);
 }
 
+/// A 24-month formula forecast must retain distinct outputs over 10,000 shared input draws.
 #[test]
 fn monte_carlo_ten_thousand_trials_and_monthly_outputs() {
     let mut s = model();
@@ -143,6 +152,7 @@ fn monte_carlo_ten_thousand_trials_and_monthly_outputs() {
     assert!((result["outputs"][23]["mean"].as_f64().unwrap() - 1190.0).abs() < 30.0);
 }
 
+/// Correlated standard normals must reproduce the analytic variance of their sum and their seed.
 #[test]
 fn monte_carlo_gaussian_correlation_matches_analytic_covariance() {
     let mut s = model();
@@ -158,6 +168,7 @@ fn monte_carlo_gaussian_correlation_matches_analytic_covariance() {
     assert!(first["accuracy"][0]["meanCI95"].is_array());
 }
 
+/// Matrix validation must reject invalid/indefinite inputs while accepting singular ±1 dependence.
 #[test]
 fn monte_carlo_rejects_invalid_correlation_matrices_and_accepts_singular() {
     for matrix in [
@@ -189,6 +200,7 @@ fn monte_carlo_rejects_invalid_correlation_matrices_and_accepts_singular() {
     }
 }
 
+/// LHS must cover every driving stratum and infer error from replicas, including degenerate tails.
 #[test]
 fn monte_carlo_latin_hypercubes_preserve_strata_and_use_replica_error() {
     let plan = sampling::Plan::parse(&json!({"method":"latinHypercube","replicates":8}), 1, 1024).unwrap();
@@ -218,6 +230,7 @@ fn monte_carlo_latin_hypercubes_preserve_strata_and_use_replica_error() {
     }
 }
 
+/// Compensated/scaled statistics must retain small offsets and mixed-sign cancellation residuals.
 #[test]
 fn monte_carlo_stable_moments_handle_large_offsets_and_extreme_ranges() {
     for values in [[1e16, -1e16, 1.0], [1.0, 1e16, -1e16], [-1e16, 1.0, 1e16]] {
@@ -234,6 +247,7 @@ fn monte_carlo_stable_moments_handle_large_offsets_and_extreme_ranges() {
     assert!((correlation + 1.).abs() < 1e-12);
 }
 
+/// Combining LHS and a Gaussian copula must retain the expected covariance and seeded draws.
 #[test]
 fn monte_carlo_correlated_lhs_matches_normal_sum_variance_and_preserves_seed() {
     let inputs = [

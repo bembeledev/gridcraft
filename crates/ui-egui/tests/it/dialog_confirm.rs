@@ -47,6 +47,7 @@ fn confirming_text_to_columns_splits_on_the_ticked_delimiter() {
     assert_eq!(read["values"], json!([["a", "b"], ["c", "d"]]), "{read}");
 }
 
+/// Confirming the generic simulation dialog must create both charts without changing its inputs.
 #[test]
 fn monte_carlo_dialog_confirms_a_generic_model_and_preserves_inputs() {
     let mut h = harness();

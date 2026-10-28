@@ -169,6 +169,9 @@ impl Trace {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// The input method context of the grid itself, on at the active cell while no editor has the
+    /// focus (typing with an input method straight into a cell).
+    pub ime: egui::ime_context::ImeContextTracker,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).

@@ -172,10 +172,10 @@ fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Sty
             gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(formula, *first, *cell)).to_bool().unwrap_or(false).then_some(style.as_ref())
         }
         CfRule::ContainsText { text: needle, style } => {
-            (!value.is_error() && text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+            (!value.is_error() && gridcraft_functions::wildcard_find(needle, text, 0).is_some()).then_some(style.as_ref())
         }
         CfRule::NotContainsText { text: needle, style } => {
-            (value.is_error() || !text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+            (value.is_error() || gridcraft_functions::wildcard_find(needle, text, 0).is_none()).then_some(style.as_ref())
         }
         CfRule::BeginsWith { text: needle, style } => {
             (!value.is_error() && text.to_lowercase().starts_with(&needle.to_lowercase())).then_some(style.as_ref())

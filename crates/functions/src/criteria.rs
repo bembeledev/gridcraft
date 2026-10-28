@@ -327,8 +327,9 @@ fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Option<us
 }
 
 /// SEARCH-style find: the char index (0-based) of the first position at or after `start` where
-/// the wildcard pattern matches, case-insensitively.
-pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
+/// the wildcard pattern matches, case-insensitively. `*` matches any run of characters, `?`
+/// matches one character, and `~` escapes the next character. Matching has a bounded work budget.
+pub fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
     let p = tokenize(pattern);
     let t = lower_chars(text);
     // A leading run of stars never matters for a prefix match (it consumes nothing), so

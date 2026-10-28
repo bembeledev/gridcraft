@@ -10,11 +10,19 @@
 //! codes.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::*;
-use gridcraft_pdf::{Font, FontCatalog, Page, PdfDoc, PdfFont, Rgb};
+#[cfg(test)]
+use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId, StyleTable,
+    Underline, VAlign, Visibility, Workbook,
+};
+use gridcraft_pdf::{Font, FontCatalog, Page, PdfDoc, PdfFont, Point, Rect, Rgb};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
+
+/// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
+type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -59,6 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Sheet geometry is in pixels at 96 dpi; PDF units are points.
 pub(crate) const PX_TO_PT: f32 = 0.75;
+type Bands = Vec<(u32, u32)>;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 /// Cells in a page block above which only stored cells are visited (not every grid position).
@@ -353,7 +362,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
 /// Splits a layout's area into row and column bands that fit its pages (at most `cap` of each),
 /// honouring manual breaks (when `lay.manual_breaks`), print headings and repeated titles. The
 /// one pagination rule shared by printing, PDF export, Page Break Preview and Page Layout view.
-pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Vec<(u32, u32)>, Vec<(u32, u32)>) {
+pub(crate) fn split_bands(sh: &Sheet, lay: &SheetLayout, cap: usize) -> (Bands, Bands) {
     let k = lay.k();
     let (aw, ah) = lay.avail();
     let (aw, ah) = (aw / k, ah / k);
@@ -810,7 +819,7 @@ fn draw_prims(pg: &mut Page, catalog: &FontCatalog, prims: &[gridcraft_chart::Pr
                         *rotation,
                     )?;
                 } else {
-                    pg.text_rotated(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs, size, font, blend(*color), text, *rotation);
+                    pg.text_rotated(Point::new(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs), size, font, blend(*color), text, *rotation);
                 }
             }
         }
@@ -914,6 +923,7 @@ fn border_dash(style: BorderStyle, k: f32) -> Vec<f32> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // The four coordinates, scale and workbook describe the border placement and appearance.
 fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x1: f32, y1: f32, k: f32) {
     if b.is_none() {
         return;
@@ -928,7 +938,7 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
         return;
     }
     let lw = (b.style.width() * k).clamp(0.25, 6.0);
-    pg.stroke_line_dashed(x0, y0, x1, y1, lw, color, &border_dash(b.style, k));
+    pg.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), lw, color, &border_dash(b.style, k));
 }
 
 enum TextRunFont {
@@ -1026,7 +1036,7 @@ fn draw_text_runs(pg: &mut Page, runs: Vec<TextRun>, x: f32, y: f32, size: f32, 
                     let id = pg.register_unicode_font(font);
                     pg.text_unicode_rotated_without_actual_text(origin.0, origin.1, size, id, color, &run.text, angle)?;
                 }
-                TextRunFont::Standard(font) => pg.text_rotated(origin.0, origin.1, size, font, color, &run.text, angle),
+                TextRunFont::Standard(font) => pg.text_rotated(Point::new(origin.0, origin.1), size, font, color, &run.text, angle),
             }
             origin = advance_text_baseline(origin.0, origin.1, run.width, angle);
         }
@@ -1037,6 +1047,7 @@ fn draw_text_runs(pg: &mut Page, runs: Vec<TextRun>, x: f32, y: f32, size: f32, 
     Ok(total_width)
 }
 
+#[allow(clippy::too_many_arguments)] // Keeps the text run, placement, style and transform explicit at rendering call sites.
 fn draw_shaped_text(
     pg: &mut Page,
     catalog: &FontCatalog,
@@ -1482,7 +1493,7 @@ fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: 
         image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
     let fit = (w / iw as f32).min(h / ih as f32);
     let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
-    pg.image_rgba(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph, image.as_raw(), image.width(), image.height());
+    pg.image_rgba(Rect::new(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph), image.as_raw(), [image.width(), image.height()]);
 }
 
 /// Is a cell free for text to overflow into?
@@ -1505,6 +1516,7 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
+#[allow(clippy::too_many_arguments)] // Cell text layout consumes the cell geometry, style and wrapping limits as one operation.
 fn draw_text(
     pg: &mut Page,
     catalog: &FontCatalog,
@@ -1728,7 +1740,7 @@ fn draw_objects(
     si: usize,
     sh: &Sheet,
     b: &Block,
-    pics: &mut std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>,
+    pics: &mut PicCache,
 ) -> std::result::Result<(), String> {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
@@ -1750,7 +1762,7 @@ fn draw_objects(
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(x, y, w, h, px, *pw, *ph);
+            pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
         }
     }
     for shp in &sh.shapes {
@@ -1961,6 +1973,7 @@ fn draw_header_footer(
 }
 
 /// Builds a block for rows × cols positioned at (x, y) on the page.
+#[allow(clippy::too_many_arguments)] // Block construction passes through the sheet, ranges, origin and layout used by drawing.
 fn make_block<'a>(wb: &'a Workbook, si: usize, sh: &'a Sheet, rows: (u32, u32), cols: (u32, u32), x: f32, y: f32, lay: &SheetLayout) -> Block<'a> {
     let k = lay.k();
     let mut xs = Vec::with_capacity((cols.1 - cols.0 + 2) as usize);
@@ -2018,7 +2031,7 @@ fn render_pdf_with_catalog(
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
-    let mut pics: std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>> = std::collections::HashMap::new();
+    let mut pics = PicCache::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
@@ -2079,7 +2092,7 @@ fn render_pdf_with_catalog(
             && let Some(page) = doc.page_mut(link.page)
         {
             let (lx, ly, w, h) = link.rect;
-            page.link_page(lx, ly, w, h, target_page, x, y);
+            page.link_page(Rect::new(lx, ly, w, h), target_page, Point::new(x, y));
         }
     }
     let n = doc.page_count();

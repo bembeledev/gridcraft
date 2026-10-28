@@ -1,5 +1,5 @@
 use super::layout::SheetLayout;
-use super::*;
+use super::{Font, Page, Value, Workbook};
 use std::sync::Arc;
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.

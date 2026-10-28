@@ -1,8 +1,8 @@
 # Actuarial validation evidence
 
 Latest integrated verification completed 2026-10-28: **PASS** for the documented implemented scope.
-The final `cargo xtask ci` passed all ten gates with 2,693 native tests across 24 binaries
-(one preexisting ignored test), including WASM compilation.
+The final `cargo xtask ci` passed all ten gates with 2,707 native tests across 24 binaries
+(one preexisting ignored test), including WASM compilation, on upstream release 0.13.0.
 
 Initial numerical integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
 `feat/actuarial-pack`. The supported estimands/domains are defined in
@@ -182,3 +182,36 @@ Render cache hits do not reserve new credit. Unused frame credit is not refunded
 misses in many frames can consume reserved capacity faster than accepted formula work. These
 controls provide cooperative workload containment; they do not establish a CPU deadline or
 cross-tenant hosting isolation.
+
+## Upstream 0.13.0 and final command-policy integration
+
+The contribution preserves published actuarial history through `03dbb8c` and integrates
+MC.7 `df9d947` with upstream functional base `55b5a45` in `2f306ae`. The MC.8 policy
+is also published separately as `029a158`. Upstream `43284377` changes only workspace
+versions to 0.13.0; the final gate below was rerun against that release.
+
+- [x] Separate finite command allowances by command metadata: journaled/undoable edits,
+  imports and recalculation receive 10 billion units; read-only queries retain one billion,
+  including nested queries and locally trusted workbooks. Neither consumes the analysis bank.
+- [x] Measure actual `SUM` evaluation on dense 16/64-row models and verify a conservative
+  50,000-row charge of 1,250,825,000 units against the production meter. This gate checks
+  the policy without performing 1.25 billion range visits in every CI run.
+- [x] Verify nested query refusal remains terminal and parent charging occurs exactly once;
+  retain finite ceilings and the shared analysis and renderer limits.
+- [x] Clarify that the one-second conditional-look cache TTL covers all stored results.
+- [x] Final release `cargo xtask ci`: all ten gates, 2,707 native tests in 24 binaries,
+  one preexisting ignored test, all 251 function-library tests, nine actuarial workbook tests,
+  doctests, assets, layers, WASM, parity and keytips.
+- [x] Independent review reruns 156 focal native cases against the 0.13.0 binaries.
+  Runtime controls confirm CLI and MCP server version 0.13.0, discovery of
+  95 ACT functions among 609 functions, 361 unique commands and the `maxWork` parameter.
+  Numerical oracles, skipped defaults, mathematical `IFERROR`, terminal quota refusal and
+  subsequent-command recovery pass. The same 1.1-billion-unit estimated formula is rejected
+  as a query and accepted as a cell edit, with independently expected result 275.
+- [x] The exact external import-admission consumer passes again against the new 0.13.0
+  libraries: the blank document retains its UID, workbook `Arc` and document count; an empty
+  session retains zero documents. Both cases reach a positive work checkpoint before refusal.
+
+The policy is based on the operation, not document trust. A high finite edit allowance does
+not exempt a nested query or establish a CPU deadline. See [the operational contract](monte-carlo.md#operational-limits-and-atomic-failure)
+for separate screen-rendering and print/PDF allowances and embedding responsibilities.

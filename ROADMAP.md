@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (regional DATEVALUE/TIMEVALUE and runtime configuration aligned with current main and shared workbook windows; AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -156,6 +156,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
 | 2026-10-19 | Linux: "Use system setting" for the theme keeps following the desktop when the XDG Desktop Portal stops answering: each read gives up after 2 s and the next poll reconnects, where one unanswered call stalled the watcher for the rest of the session |
+| 2026-10-18 | DATEVALUE/TIMEVALUE use the shared Region parser; native/CLI `--region` applies before opening, and `app.region` recalculates dependents while preserving dirty/undo state ([repro](docs/date-order-repro.md)) |
 | 2026-10-16 | Memory: undo steps share a sheet's picture bytes and the workbook's VBA project instead of copying them: 50 edits on a sheet with a 20 MB picture keep 22 MB instead of 992 MB |
 | 2026-10-16 | Memory: floating pictures are decoded at about the size they are drawn, with limits, into a cache bounded by bytes and dropped with their workbook, instead of at full size into one that never let go; two open workbooks no longer show each other's picture. 12 large pictures scrolled through keep 40 MB of textures instead of 258 MB, and none once the workbook closes |
 | 2026-10-16 | The web app keeps its preferences between visits (#1562): theme (dark mode), interface size, language, editing options and the rest of what the desktop app saves in `ui.json` and `prefs.json` are kept in the browser's `localStorage`, written as soon as they change |
@@ -242,6 +243,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Native regional overrides remain per-launch; grouped rollback preserves effective Region and real save points without creating undo steps for application options |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
@@ -254,6 +256,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
 | 2026-10-19 | trivial | Progress log: desktop theme portal read timeout |
+| 2026-10-18 | minor | Regional date-text formulas use Region from #1524 / region-typed-input, with pre-open configuration and runtime invalidation; generated January pivot regression |
 | 2026-10-16 | minor | Progress log: undo steps share picture and macro bytes |
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |

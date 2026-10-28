@@ -22,6 +22,8 @@ mod percent_entry;
 mod pivot_unknown_func;
 mod pivotchart_link;
 mod range_fill_formats;
+mod region_dates;
+mod region_loading;
 mod row_autofit;
 mod sheet_name_quoting;
 mod sparse_clear_invalidation;

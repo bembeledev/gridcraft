@@ -1050,3 +1050,51 @@ fn a_linked_paste_carries_the_files_trust_whatever_it_pastes() {
     assert!(sheet(&s).cell(b1).is_some_and(|c| c.formula.is_some()), "a linked paste of formats writes a formula");
     assert_eq!(trust(&s), Trust::FromFile);
 }
+
+/// A failed undoable command rolls back its unclosed group before comparing regional snapshots.
+#[test]
+fn failed_command_with_open_group_keeps_region_and_saved_state() {
+    crate::cmd::register_undoable_test_command("test.regionGroupThenFail", |s, _| {
+        let _group = s.group_begin("Temporary regional edits")?;
+        s.execute("cell.set", json!({"cell":"B1","input":5}))?;
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        Err(EngineError::Other("synthetic failed step".into()))
+    });
+    let mut s = s();
+    set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+    let d = s.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    d.undo.clear();
+    assert!(s.execute("test.regionGroupThenFail", json!({})).is_err());
+    assert_eq!(s.region().tag, "it-IT");
+    assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+    assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+    assert_eq!(v(&s, "B1"), crate::core::Value::Empty);
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(s.doc().unwrap().undo.is_empty());
+    assert!(s.groups.is_empty());
+    assert!(s.region_frames.is_empty());
+}
+
+/// Panic recovery restores the current regional identity and drops all temporary command frames.
+#[test]
+fn panicking_region_command_preserves_clean_state_and_releases_frames() {
+    crate::cmd::register_undoable_test_command("test.regionThenPanic", |s, _| {
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        panic!("synthetic panic after a regional option change");
+    });
+    let mut s = s();
+    set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+    let d = s.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    d.undo.clear();
+    assert!(s.execute("test.regionThenPanic", json!({})).is_err());
+    assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+    assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(s.doc().unwrap().undo.is_empty());
+    assert!(s.region_frames.is_empty());
+    s.execute("cell.set", json!({"cell":"B1","input":5})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.doc().unwrap().is_dirty());
+}

@@ -279,9 +279,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         } else {
                             path.clone()
                         };
-                        let relative = path.is_empty() || std::path::Path::new(&path).is_relative();
+                        let relative = !path.is_empty() && std::path::Path::new(&path).is_relative();
                         let has_picker = app.services.pick_save.is_some() || app.services.pick_save_async.is_some();
-                        if relative && has_picker {
+                        if (path.is_empty() || relative) && has_picker {
                             if let Some(doc) = app.session.active().map(|d| d.uid) {
                                 let follow = if fmt == "xlsx" {
                                     crate::SaveFollow::SaveAs { doc }
@@ -295,7 +295,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                                 };
                                 app.start_save(&suggested, follow);
                             }
-                        } else if !relative {
+                        } else if relative && app.services.download.is_some() {
+                            // The web host has no picker, and WASM cannot write a relative path.
+                            download_copy(app, &fmt, &suggested);
+                        } else if !path.is_empty() {
                             let id = match fmt.as_str() {
                                 "csv" => "file.exportCsv",
                                 "html" => "file.exportHtml",
@@ -423,6 +426,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.dialog = Some(d);
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
+    }
+}
+
+/// Web Save Copy: the browser downloads the bytes. WASM cannot write the relative path.
+fn download_copy(app: &mut SheetApp, fmt: &str, name: &str) {
+    match app.run("file.saveBytes", json!({"format": fmt})) {
+        Ok(r) => {
+            let bytes = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode);
+            if let (Some(bytes), Some(download)) = (bytes, &app.services.download) {
+                download(name, &bytes);
+            }
+        }
+        Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
     }
 }
 

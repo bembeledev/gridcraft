@@ -6,6 +6,9 @@
 
 use super::*;
 
+/// Shown when close or quit would drop a workbook whose save sheet is still open.
+pub(crate) const SAVE_SHEET_BUSY: &str = "Finish the save dialog that's already open.";
+
 /// What to do with the path the save panel returns.
 pub(crate) enum SaveFollow {
     /// `file.save`. A path with no extension is written as `.xlsx`.
@@ -27,7 +30,7 @@ impl SheetApp {
     pub(crate) fn start_save(&mut self, suggested: &str, follow: SaveFollow) -> bool {
         if self.services.pick_save_async.is_some() {
             if self.save_follow.is_some() {
-                self.message = Some(("GridCraft".into(), "Finish the save dialog that's already open.".into()));
+                self.message = Some(("GridCraft".into(), SAVE_SHEET_BUSY.into()));
                 return false;
             }
             self.save_follow = Some(follow);
@@ -67,6 +70,34 @@ impl SheetApp {
                 self.finish_save(follow, path);
             }
         }
+    }
+
+    /// The workbook a save sheet is waiting on.
+    pub(crate) fn pending_save_doc(&self) -> Option<u64> {
+        match self.save_follow.as_ref() {
+            Some(SaveFollow::SaveAs { doc } | SaveFollow::Export { doc, .. } | SaveFollow::ExportPdf { doc, .. }) => Some(*doc),
+            None => None,
+        }
+    }
+
+    /// Close and quit wait while a save sheet is open. `None` is a quit: it closes every workbook.
+    /// A window close passes the workbook it would drop. Returns whether the close was refused.
+    pub(crate) fn refuse_close_for_save_sheet(&mut self, doc: Option<u64>) -> bool {
+        let blocked = match self.pending_save_doc() {
+            None => false,
+            Some(_) if doc.is_none() => true,
+            Some(pending) => doc == Some(pending),
+        };
+        if blocked {
+            self.message = Some(("GridCraft".into(), SAVE_SHEET_BUSY.into()));
+        }
+        blocked
+    }
+
+    /// Programmatic quit does not ask. Drop the sheet's follow-up so a path that arrives as the
+    /// process leaves is not written.
+    pub(crate) fn cancel_pending_save(&mut self) {
+        self.save_follow = None;
     }
 
     fn finish_save(&mut self, follow: SaveFollow, path: String) -> bool {

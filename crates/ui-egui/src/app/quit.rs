@@ -8,6 +8,10 @@ impl SheetApp {
             return;
         }
         // A cell still being edited is part of the workbook, as for File › Close.
+        if self.refuse_close_for_save_sheet(None) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         if !self.commit_edit(0, 0, false, false) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
@@ -37,6 +41,9 @@ impl SheetApp {
                 self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
             }
             None => {
+                if self.refuse_close_for_save_sheet(None) {
+                    return;
+                }
                 self.allow_close = true;
                 ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             }
@@ -50,6 +57,9 @@ impl SheetApp {
     pub fn answer_save_changes(&mut self, answer: SaveAnswer, quitting: bool, ctx: &egui::Context) -> bool {
         match answer {
             SaveAnswer::Cancel => {}
+            SaveAnswer::DontSave | SaveAnswer::Save if self.refuse_close_for_save_sheet(self.session.active().map(|d| d.uid)) => {
+                return false;
+            }
             SaveAnswer::DontSave => {
                 self.run_or_alert("file.close", json!({"force": true, "document": true}));
                 if quitting {
@@ -84,6 +94,9 @@ impl SheetApp {
             }
         }
         if self.settle_drafts().is_err() {
+            return;
+        }
+        if self.refuse_close_for_save_sheet(None) {
             return;
         }
         if let Some(d) = self.dialog.as_mut().filter(|d| d.name() == "saveChanges") {

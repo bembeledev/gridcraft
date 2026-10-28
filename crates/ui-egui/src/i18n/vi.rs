@@ -419,12 +419,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Maximum Iterations:" => "Số lần lặp tối đa:",
         "Maximum Change:" => "Mức thay đổi tối đa:",
-        "Maximum Iterations must be a whole number from 1 to 32767." => {
-            "Số lần lặp tối đa phải là số nguyên từ 1 đến 32767."
-        }
-        "Maximum Change must be a number of 0 or more." => {
-            "Mức thay đổi tối đa phải là một số lớn hơn hoặc bằng 0."
-        }
+        "Maximum Iterations must be a whole number from 1 to 32767." => "Số lần lặp tối đa phải là số nguyên từ 1 đến 32767.",
+        "Maximum Change must be a number of 0 or more." => "Mức thay đổi tối đa phải là một số lớn hơn hoặc bằng 0.",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng với sổ làm việc.",
         // Dialogs, menus, context menus and tooltips.
         "OK" => "OK",

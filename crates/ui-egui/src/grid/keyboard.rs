@@ -3,6 +3,14 @@ use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
+/// The status bar draws before the grid handles keys, so a change repaints to show "End Mode" at once.
+fn set_end_mode(app: &mut SheetApp, ctx: &egui::Context, on: bool) {
+    if app.grid.end_mode != on {
+        app.grid.end_mode = on;
+        ctx.request_repaint();
+    }
+}
+
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
@@ -23,6 +31,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
     {
+        // Keys typed elsewhere count as "another key": End mode does not wait for the grid's return.
+        set_end_mode(app, ctx, false);
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -67,8 +77,14 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 }
                 return;
             }
-            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers: m, .. } => {
                 use egui::Key;
+                // End mode lasts for one key: only an unmodified End press arms it, and any other key
+                // (a shortcut included) ends it before it runs.
+                let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
+                if key != Key::End || !m.is_none() {
+                    set_end_mode(app, ctx, false);
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
@@ -77,7 +93,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
-                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
+                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
                     app.grid.ensure_visible = true;
                     app.grid.reveal_moving_end = shift;
                     app.grid.reveal_from = from;
@@ -103,6 +119,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
                         app.grid.ensure_visible = true;
                     }
+                    // A held End key repeats; only the first press toggles.
+                    Key::End if m.is_none() && !repeat => set_end_mode(app, ctx, !app.grid.end_mode),
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
                         let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));

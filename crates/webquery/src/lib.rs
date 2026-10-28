@@ -75,15 +75,13 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     }
     // Read up to the cap, then check for one more byte: a truncated page can look complete
     // (a whole table before the cutoff) and import wrong data in good conscience.
-    let body = resp.into_body();
     // The page's own charset (windows-1252 pages are common): without it, every non-ASCII byte
-    // would come back as a replacement character. Decode only after the cap and the overflow
-    // check, so `max_bytes` still bounds the bytes read, and fall back to UTF-8.
-    let encoding = body
-        .charset()
-        .and_then(|charset| encoding_rs::Encoding::for_label(charset.as_bytes()))
-        .unwrap_or(encoding_rs::UTF_8);
-    let mut reader = body.into_reader();
+    // would come back as a replacement character. ureq's own `charset()` only matches the exact
+    // lowercase `charset=` and keeps the quotes, so parse the header here — case-insensitive,
+    // quotes stripped. Decode only after the cap and the overflow check, so `max_bytes` still
+    // bounds the bytes read, and fall back to UTF-8.
+    let encoding = charset_from(&content_type).and_then(|c| encoding_rs::Encoding::for_label(c.as_bytes())).unwrap_or(encoding_rs::UTF_8);
+    let mut reader = resp.into_body().into_reader();
     let mut bytes: Vec<u8> = Vec::new();
     let _ = reader.by_ref().take(req.max_bytes as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     let mut extra = [0u8; 1];
@@ -91,4 +89,40 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
         return Err(format!("The page exceeds the {} byte limit.", req.max_bytes));
     }
     Ok(encoding.decode(&bytes).0.into_owned())
+}
+
+/// The `Content-Type` header's `charset` value, if it names one: parameter names match
+/// case-insensitively and a quoted value loses its quotes, both of which ureq's own
+/// `Body::charset()` leaves as-is (exact lowercase `charset=`, quotes kept), so a quoted or
+/// capitalised label would silently fall back to UTF-8.
+fn charset_from(content_type: &str) -> Option<String> {
+    content_type
+        .split(';')
+        .filter_map(|p| p.trim().split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .map(|(_, value)| value.trim().trim_matches('"').trim_matches('\'').to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Parameter names match case-insensitively and quotes are stripped, where ureq's own
+    /// lookup would miss both and fall back to UTF-8.
+    fn the_charset_parameter_is_parsed_case_insensitively_and_unquoted() {
+        assert_eq!(charset_from("text/html; charset=windows-1252").as_deref(), Some("windows-1252"));
+        assert_eq!(charset_from("text/html; Charset=ISO-8859-1").as_deref(), Some("ISO-8859-1"));
+        assert_eq!(charset_from("text/html; charset=\"windows-1252\"").as_deref(), Some("windows-1252"));
+        assert_eq!(charset_from("text/html; charset='utf-8'").as_deref(), Some("utf-8"));
+        assert_eq!(charset_from("text/html").as_deref(), None);
+        assert_eq!(charset_from("text/html; boundary=none").as_deref(), None);
+    }
+
+    #[test]
+    /// A quoted windows-1252 label resolves to that encoding, not the UTF-8 fallback.
+    fn a_quoted_charset_resolves_to_its_encoding() {
+        let c = charset_from("text/html; charset=\"windows-1252\"").unwrap();
+        assert_eq!(encoding_rs::Encoding::for_label(c.as_bytes()), Some(encoding_rs::WINDOWS_1252));
+    }
 }

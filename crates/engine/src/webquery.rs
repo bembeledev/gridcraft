@@ -12,6 +12,11 @@ pub const DEFAULT_MAX_ROWS: usize = 1_048_575;
 pub const MAX_COLS: usize = 16_384;
 /// Page size and download timeout, in bytes and seconds, when the caller gives none.
 pub const DEFAULT_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// The largest page `extract_tables` accepts, decoded: a `DEFAULT_MAX_BYTES` download in a
+/// single-byte charset can grow up to four bytes per character when decoded to UTF-8, so the
+/// extractor's bound is the download cap times that, keeping the memory bound coordinated with
+/// the fetch's own cap instead of rejecting exactly the pages a non-UTF-8 decode produces.
+pub const MAX_DECODED_BYTES: usize = DEFAULT_MAX_BYTES * 4;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// Longest text a cell holds (Excel's limit).
 pub const MAX_TEXT: usize = 32_767;
@@ -68,7 +73,7 @@ pub fn validate_url(url: &str) -> Result<(), String> {
 /// thousands of tables or `colspan` padding.
 pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTable> {
     let mut out: Vec<WebTable> = Vec::new();
-    if html.len() > DEFAULT_MAX_BYTES {
+    if html.len() > MAX_DECODED_BYTES {
         return out;
     }
     let mut rest = html;

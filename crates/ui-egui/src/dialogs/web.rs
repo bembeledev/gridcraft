@@ -58,6 +58,9 @@ pub(super) fn poll_preview_fetch(app: &mut SheetApp, d: &mut Dialog, url: &str, 
                 }
             }
             Err(e) => {
+                // The fetch is gone (the workbook changed under it, say): a stale snapshot must
+                // not survive either, or Load would import the old preview into the new workbook.
+                d.values.remove("full_tables");
                 app.message = Some(("From Web".into(), crate::clean_error(&e)));
                 d.values.insert("tables".into(), Json::Null);
             }

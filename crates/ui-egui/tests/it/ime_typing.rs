@@ -159,3 +159,18 @@ fn a_word_finished_while_the_editor_opens_is_not_composed_again() {
     assert_eq!(editor_text(&h).as_deref(), Some("k"));
     assert_eq!(enter(&mut h), "k");
 }
+
+/// Synthetic typing (`ui.text`) while the editor an input method opened takes the focus waits for
+/// the typing held for the editor, so it comes after the words the input method finished.
+#[test]
+fn synthetic_typing_while_the_editor_opens_follows_the_held_words() {
+    let mut h = harness();
+    batch(&mut h, [Event::Ime(ImeEvent::Commit("Cà".into())), Event::Ime(ImeEvent::Commit(" Mau".into()))]);
+    step(&mut h);
+    h.state_mut().synthetic.push_back(vec![Event::Text("!".into())]);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    assert_eq!(editor_text(&h).as_deref(), Some("Cà Mau!"));
+    assert_eq!(enter(&mut h), "Cà Mau!");
+}

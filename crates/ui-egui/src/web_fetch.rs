@@ -10,6 +10,9 @@ use crate::SheetApp;
 /// One in-flight fetch: the URLs to download and the command its results feed.
 pub struct PendingFetch {
     urls: Vec<String>,
+    /// The document the fetch was started for: if the user switches workbooks while the page
+    /// downloads, the result must not run its command against the newly active one.
+    document_uid: Option<u64>,
     /// The command the results feed (`data.webPreview`, `data.webRefresh`).
     pub(crate) command: (String, Json),
     handle: Option<std::thread::JoinHandle<Json>>,
@@ -60,7 +63,7 @@ impl SheetApp {
             }
             Json::Object(map)
         });
-        self.fetch = Some(PendingFetch { urls, command: (command.0.to_string(), command.1), handle: Some(handle) });
+        self.fetch = Some(PendingFetch { urls, document_uid: self.session.active().map(|d| d.uid), command: (command.0.to_string(), command.1), handle: Some(handle) });
     }
 
     /// True while a fetch is still downloading, for a spinner and repaints.
@@ -96,6 +99,11 @@ impl SheetApp {
         let (id, mut params) = fetch.command;
         match pages {
             Some(pages) => {
+                // The workbook the fetch was started for: if another is active now, the import
+                // would land in it instead. Report the mismatch without running the command.
+                if self.session.active().map(|d| d.uid) != fetch.document_uid {
+                    return Some((pages, Err("The workbook changed while the page was loading.".into())));
+                }
                 params.as_object_mut().map(|o| o.insert("prefetchedByUrl".into(), pages.clone()));
                 Some((pages, self.run(&id, params)))
             }

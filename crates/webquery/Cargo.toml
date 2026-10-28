@@ -13,6 +13,7 @@ log = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+encoding_rs = "0.8"
 
 [lints]
 workspace = true

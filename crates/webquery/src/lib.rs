@@ -75,12 +75,20 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
     }
     // Read up to the cap, then check for one more byte: a truncated page can look complete
     // (a whole table before the cutoff) and import wrong data in good conscience.
-    let mut reader = resp.into_body().into_reader();
+    let body = resp.into_body();
+    // The page's own charset (windows-1252 pages are common): without it, every non-ASCII byte
+    // would come back as a replacement character. Decode only after the cap and the overflow
+    // check, so `max_bytes` still bounds the bytes read, and fall back to UTF-8.
+    let encoding = body
+        .charset()
+        .and_then(|charset| encoding_rs::Encoding::for_label(charset.as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8);
+    let mut reader = body.into_reader();
     let mut bytes: Vec<u8> = Vec::new();
     let _ = reader.by_ref().take(req.max_bytes as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     let mut extra = [0u8; 1];
     if reader.read(&mut extra).map_err(|e| e.to_string())? != 0 {
         return Err(format!("The page exceeds the {} byte limit.", req.max_bytes));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(encoding.decode(&bytes).0.into_owned())
 }

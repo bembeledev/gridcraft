@@ -93,7 +93,7 @@ fn surplus(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Register occurrence reinstatement and surplus-share reinsurance worksheet contracts.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.REINSURANCE.REINSTATEMENTS",
             5,
             8,
@@ -103,7 +103,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Ordered occurrence XOL recoveries and paid reinstatements with finite aggregate capacity.",
             reinstate
         ),
-        f!(
+        act!(
             "ACT.REINSURANCE.SURPLUS",
             4,
             4,

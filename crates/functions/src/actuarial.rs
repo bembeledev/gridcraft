@@ -3,6 +3,33 @@
 //! `ACT.*` is a GridCraft extension, not an Excel-compatible function namespace.
 //! See `docs/actuarial.md` for probability, timing and truncation conventions.
 
+// Keep the operational wrapper inside L1: neither the registry nor the kernels import engine.
+macro_rules! act {
+    ($name:literal, $min:expr, $max:expr, $cat:ident, $scalar:expr, $sig:literal, $desc:literal, $imp:expr) => {
+        crate::FnSpec {
+            name: $name,
+            min_args: $min,
+            max_args: $max,
+            category: crate::Category::$cat,
+            volatile: false,
+            scalar_args: $scalar,
+            value_args: &[],
+            signature: $sig,
+            description: $desc,
+            imp: {
+                /// Checks the host's operational bank before allocating or entering an ACT kernel.
+                fn bounded(a: &[crate::Arg], c: &mut dyn crate::Ctx) -> gridcraft_core::Value {
+                    if let Err(error) = crate::actuarial::work::charge(c, crate::actuarial::work::estimate($name, a)) {
+                        return gridcraft_core::Value::Error(error);
+                    }
+                    crate::util::finish(($imp)(a, c))
+                }
+                bounded
+            },
+        }
+    };
+}
+
 mod bootstrap;
 mod decision;
 mod extreme;
@@ -12,6 +39,7 @@ mod loss;
 mod markov;
 mod reinsurance;
 mod reserving;
+mod work;
 
 use crate::FnSpec;
 

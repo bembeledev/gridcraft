@@ -580,11 +580,12 @@ fn solve(matrix: Vec<Vec<f64>>, rhs: Vec<f64>) -> R<Vec<f64>> {
 }
 /// Fits Cox coefficients by bounded Newton updates with step halving.
 /// No intercept, hidden ridge or dropped covariate is introduced; singular/nonconverged fits fail.
-fn cox_fit(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
+fn cox_fit(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let data = cox_data(a, 3)?;
     let mut beta = vec![0.0; data.p];
     let mut stats = cox_stats(&data, &beta)?;
     for _ in 0..60 {
+        super::work::charge(ctx, super::work::product(&[data.p as u64, data.p as u64, data.p as u64, 32]))?;
         let delta = solve(stats.information.clone(), stats.score.clone())?;
         let change = delta.iter().zip(&beta).map(|(d, b)| d.abs() / (1.0 + b.abs())).fold(0.0_f64, f64::max);
         let score = stats.score.iter().map(|s| s.abs()).fold(0.0_f64, f64::max);
@@ -594,6 +595,10 @@ fn cox_fit(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
         let mut accepted = None;
         let mut step = 1.0;
         for _ in 0..30 {
+            super::work::charge(
+                ctx,
+                super::work::product(&[data.records.len() as u64, data.records.len() as u64, data.p as u64, data.p as u64, 32]),
+            )?;
             let candidate: Vec<f64> = beta.iter().zip(&delta).map(|(b, d)| b + step * d).collect();
             if let Ok(next) = cox_stats(&data, &candidate)
                 && next.likelihood >= stats.likelihood - 1e-12 * (1.0 + stats.likelihood.abs())
@@ -761,7 +766,7 @@ fn brier(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Registers deterministic survival, conjugate inference, Cox and validation worksheet contracts.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.KAPLANMEIER",
             2,
             4,
@@ -771,7 +776,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Censored/delayed-entry survival: time/risk/events/censors/S/plug-in Greenwood SE/log-log bounds (blank at S=0/1).",
             kaplan_meier
         ),
-        f!(
+        act!(
             "ACT.AALENJOHANSEN",
             2,
             3,
@@ -781,7 +786,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Competing-risk product integral: time/risk/events/censors/survival/one CIF per positive cause.",
             aalen_johansen
         ),
-        f!(
+        act!(
             "ACT.AALENJOHANSEN.MATRIX",
             2,
             3,
@@ -791,7 +796,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Multi-state occupation product integral from ordered risk sets and stacked off-diagonal event counts.",
             aalen_johansen_matrix
         ),
-        f!(
+        act!(
             "ACT.BAYES.POISSON",
             4,
             6,
@@ -801,7 +806,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Gamma posterior shape/rate/mean/variance/credible bounds and predictive count mean/variance.",
             bayes_poisson
         ),
-        f!(
+        act!(
             "ACT.BAYES.BINOMIAL",
             4,
             6,
@@ -811,7 +816,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Beta posterior alpha/beta/mean/variance/credible bounds and beta-binomial predictive moments.",
             bayes_binomial
         ),
-        f!(
+        act!(
             "ACT.BAYES.POISSON.PREDICT",
             5,
             7,
@@ -821,7 +826,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Exact Gamma-Poisson posterior predictive count PMF or CDF.",
             bayes_poisson_predict
         ),
-        f!(
+        act!(
             "ACT.BAYES.BINOMIAL.PREDICT",
             6,
             7,
@@ -831,7 +836,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Exact beta-binomial posterior predictive count PMF or CDF.",
             bayes_binomial_predict
         ),
-        f!(
+        act!(
             "ACT.COX.FIT",
             3,
             4,
@@ -841,7 +846,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Breslow-tie Cox partial-likelihood coefficients; no intercept; singular/nonconvergent fits rejected.",
             cox_fit
         ),
-        f!(
+        act!(
             "ACT.COX.BASELINE",
             4,
             5,
@@ -851,7 +856,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Breslow baseline: event time, hazard increment, cumulative hazard.",
             cox_baseline
         ),
-        f!(
+        act!(
             "ACT.COX.COVARIANCE",
             4,
             5,
@@ -861,7 +866,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Inverse observed Cox partial-likelihood information, conditional on supplied coefficients.",
             cox_covariance
         ),
-        f!(
+        act!(
             "ACT.COX.SURVIVAL",
             3,
             3,
@@ -871,7 +876,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Cox survival: subject rows by supplied ordered cumulative baseline hazards.",
             cox_survival
         ),
-        f!(
+        act!(
             "ACT.CALIBRATION",
             2,
             3,
@@ -881,7 +886,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Holdout count calibration: n/observed/predicted/O:E/bias/MAE/RMSE/Poisson deviance.",
             calibration
         ),
-        f!(
+        act!(
             "ACT.BRIER.IPCW",
             4,
             4,

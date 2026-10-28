@@ -185,7 +185,7 @@ fn semi_reward(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Register calendar-dependent transition products and duration-dependent state/reward functions.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.MARKOV.NONHOMOGENEOUS",
             1,
             1,
@@ -195,7 +195,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Ordered product of calendar-specific transition matrices stacked vertically.",
             nonhomogeneous
         ),
-        f!(
+        act!(
             "ACT.MARKOV.NONHOMOGENEOUS.REWARD",
             3,
             4,
@@ -205,7 +205,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Prospective values for calendar-specific transitions and period/state advance payments.",
             nonhomogeneous_reward
         ),
-        f!(
+        act!(
             "ACT.SEMIMARKOV.STATE",
             3,
             4,
@@ -215,7 +215,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Duration-dependent state distribution; a state change resets duration to zero.",
             semi_state
         ),
-        f!(
+        act!(
             "ACT.SEMIMARKOV.TRACE",
             3,
             4,
@@ -225,7 +225,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "State probability path including time zero for a bounded duration-dependent model.",
             semi_trace
         ),
-        f!(
+        act!(
             "ACT.SEMIMARKOV.REWARD",
             4,
             6,

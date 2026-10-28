@@ -538,7 +538,7 @@ fn surrogate_predict(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Register dual sensitivities, finite-candidate decisions, ALM matching and validated proxy functions.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.LIFE.SENSITIVITY",
             3,
             4,
@@ -548,7 +548,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Forward-dual insurance/annuity values and rate/mortality-scale derivatives; covered qx<1.",
             life_sensitivity
         ),
-        f!(
+        act!(
             "ACT.PREMIUM.SENSITIVITY",
             3,
             5,
@@ -558,7 +558,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Forward-dual equivalence premium and rate/mortality-scale derivatives.",
             premium_sensitivity
         ),
-        f!(
+        act!(
             "ACT.RESERVE.SENSITIVITY",
             5,
             7,
@@ -568,7 +568,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Forward-dual prospective reserve derivatives with contractual premium held fixed.",
             reserve_sensitivity
         ),
-        f!(
+        act!(
             "ACT.REINSURANCE.OPTIMIZE",
             7,
             7,
@@ -578,7 +578,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Best finite-set layer by retained-plus-premium TVaR under an expected-premium budget.",
             reinsurance_optimize
         ),
-        f!(
+        act!(
             "ACT.ALM.IMMUNIZE",
             4,
             5,
@@ -588,7 +588,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Two-instrument units matching liability PV and dollar duration.",
             immunize
         ),
-        f!(
+        act!(
             "ACT.SURROGATE.FIT",
             4,
             6,
@@ -598,7 +598,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Scaled multivariate polynomial fit with disjoint held-out diagnostics and bounded training domain.",
             surrogate_fit
         ),
-        f!(
+        act!(
             "ACT.SURROGATE.PREDICT",
             3,
             3,

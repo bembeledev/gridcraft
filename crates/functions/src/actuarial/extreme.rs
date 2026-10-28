@@ -976,7 +976,7 @@ fn copula_fit(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Registers Generalized Pareto inference, portfolio tails and deterministic copula transformations.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.GPD.CDF",
             3,
             3,
@@ -986,7 +986,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Generalized Pareto excess CDF; shape may be negative with finite upper endpoint.",
             gpd_cdf
         ),
-        f!(
+        act!(
             "ACT.GPD.INV",
             3,
             3,
@@ -996,7 +996,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Generalized Pareto excess quantile, including exponential limit.",
             gpd_inv
         ),
-        f!(
+        act!(
             "ACT.GPD.MEAN",
             2,
             2,
@@ -1006,7 +1006,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Generalized Pareto excess mean; undefined moment gives #NUM!.",
             gpd_mean
         ),
-        f!(
+        act!(
             "ACT.GPD.TVAR",
             3,
             3,
@@ -1016,7 +1016,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Generalized Pareto conditional-excess tail mean; shape must be below one.",
             gpd_tvar
         ),
-        f!(
+        act!(
             "ACT.POT.VAR",
             5,
             5,
@@ -1026,7 +1026,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Unconditional portfolio tail quantile from threshold exceedance frequency and GPD excesses.",
             pot_var
         ),
-        f!(
+        act!(
             "ACT.POT.TVAR",
             5,
             5,
@@ -1036,7 +1036,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Portfolio tail mean above a supported peaks-over-threshold confidence level.",
             pot_tvar
         ),
-        f!(
+        act!(
             "ACT.GPD.FIT.PWM",
             1,
             1,
@@ -1046,7 +1046,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "PWM fit: shape/scale/n/loglik/jackknife SE shape/SE scale/covariance; uncertainty blank for shape>=0.5.",
             gpd_fit_pwm
         ),
-        f!(
+        act!(
             "ACT.GPD.FIT.MLE",
             1,
             1,
@@ -1056,7 +1056,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Bounded regular GPD MLE (shape -0.49..2) with observed-information uncertainty; rejects boundary fits.",
             gpd_fit_mle
         ),
-        f!(
+        act!(
             "ACT.GPD.THRESHOLDS",
             2,
             2,
@@ -1066,7 +1066,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Threshold/exceedances/fraction/mean excess/PWM shape/PWM scale; no automatic threshold selection.",
             gpd_thresholds
         ),
-        f!(
+        act!(
             "ACT.COPULA.CDF",
             4,
             5,
@@ -1076,7 +1076,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Bivariate independent/Gaussian/Student/Clayton/Gumbel/Frank copula with bounded quadrature.",
             copula_cdf
         ),
-        f!(
+        act!(
             "ACT.COPULA.JOINTTAIL",
             4,
             5,
@@ -1086,7 +1086,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Joint probability that both uniform margins exceed supplied thresholds.",
             copula_joint
         ),
-        f!(
+        act!(
             "ACT.COPULA.CONDITIONALINV",
             4,
             5,
@@ -1096,7 +1096,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Inverse conditional uniform margin; deterministic Rosenblatt step from supplied u and z.",
             copula_cond_inv
         ),
-        f!(
+        act!(
             "ACT.COPULA.TAIL",
             2,
             3,
@@ -1106,7 +1106,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Lower and upper asymptotic tail-dependence coefficients, not Pearson correlation.",
             copula_tail
         ),
-        f!(
+        act!(
             "ACT.KENDALL.TAU",
             2,
             2,
@@ -1116,7 +1116,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Tie-adjusted Kendall tau-b, bounded pair enumeration.",
             kendall_tau
         ),
-        f!(
+        act!(
             "ACT.COPULA.FIT",
             3,
             3,

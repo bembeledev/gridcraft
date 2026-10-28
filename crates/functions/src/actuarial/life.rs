@@ -409,7 +409,7 @@ fn pension(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 /// Register deterministic life, pension and term-structure worksheet functions with scalar/range masks.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.DISCOUNT",
             2,
             2,
@@ -419,7 +419,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Discount factor using an annual effective rate and nonnegative time.",
             discount
         ),
-        f!(
+        act!(
             "ACT.CURVEPV",
             3,
             3,
@@ -429,7 +429,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Present value on annual effective spot rates; one rate or a matching vector.",
             curve_pv
         ),
-        f!(
+        act!(
             "ACT.CURVEDURATION",
             3,
             3,
@@ -439,7 +439,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Present-value-weighted cash-flow time (Macaulay duration), including signed flows.",
             curve_duration
         ),
-        f!(
+        act!(
             "ACT.CURVECONVEXITY",
             3,
             3,
@@ -449,7 +449,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "PV-normalized second derivative for a parallel additive effective spot-rate shift.",
             curve_convexity
         ),
-        f!(
+        act!(
             "ACT.SURVIVAL",
             2,
             3,
@@ -459,7 +459,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Conditional term survival from supplied annual mortality probabilities at start.",
             survival
         ),
-        f!(
+        act!(
             "ACT.DEATH",
             2,
             3,
@@ -469,7 +469,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Conditional probability of death during term years from start.",
             death
         ),
-        f!(
+        act!(
             "ACT.LIFEEXPECTANCY",
             1,
             3,
@@ -479,7 +479,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Restricted curtate expectancy, or complete expectancy under UDD; truncated at term.",
             expectancy
         ),
-        f!(
+        act!(
             "ACT.ANNUITY",
             2,
             6,
@@ -489,7 +489,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Life annuity EPV; due defaults true; omitted term requires terminal qx=1.",
             annuity
         ),
-        f!(
+        act!(
             "ACT.INSURANCE",
             2,
             5,
@@ -499,7 +499,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Unit end-of-death-year insurance EPV, with optional survival endowment.",
             insurance
         ),
-        f!(
+        act!(
             "ACT.PREMIUM",
             3,
             5,
@@ -509,7 +509,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Level annual net premium by equivalence; premiums payable in advance while alive.",
             premium
         ),
-        f!(
+        act!(
             "ACT.RESERVE",
             5,
             7,
@@ -519,7 +519,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Prospective unit net reserve just before the premium or maturity payment at elapsed.",
             reserve
         ),
-        f!(
+        act!(
             "ACT.JOINTANNUITY",
             4,
             7,
@@ -529,7 +529,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Independent joint-life or last-survivor unit annuity EPV.",
             joint_annuity
         ),
-        f!(
+        act!(
             "ACT.MORTALITYIMPROVE",
             3,
             3,
@@ -539,7 +539,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Project every qx by a proportional annual improvement, including the terminal entry.",
             improve
         ),
-        f!(
+        act!(
             "ACT.GOMPERTZSURVIVAL",
             5,
             5,
@@ -549,7 +549,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Survival under nonnegative Makeham plus Gompertz force of mortality; base >= 1.",
             gompertz
         ),
-        f!(
+        act!(
             "ACT.PENSION",
             6,
             9,

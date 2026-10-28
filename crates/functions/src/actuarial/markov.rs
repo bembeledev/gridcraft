@@ -382,7 +382,7 @@ fn continuous_fit(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Register deterministic homogeneous, calendar-dependent and semi-Markov worksheet contracts.
 pub(super) fn specs() -> Vec<FnSpec> {
     let mut result = vec![
-        f!(
+        act!(
             "ACT.MARKOV.POWER",
             2,
             2,
@@ -392,7 +392,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Multi-period row-stochastic transition matrix; integer horizon.",
             markov_power
         ),
-        f!(
+        act!(
             "ACT.MARKOV.STATE",
             3,
             3,
@@ -402,7 +402,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Row-vector distribution after a discrete-time Markov horizon.",
             state
         ),
-        f!(
+        act!(
             "ACT.MARKOV.STATIONARY",
             1,
             1,
@@ -412,7 +412,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Unique stationary distribution; nonunique or ill-conditioned systems return #NUM!.",
             stationary
         ),
-        f!(
+        act!(
             "ACT.MARKOV.ABSORPTION",
             2,
             2,
@@ -422,7 +422,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Expected absorption steps and absorption probabilities; transient states first.",
             absorption
         ),
-        f!(
+        act!(
             "ACT.MARKOV.REWARD",
             4,
             5,
@@ -432,7 +432,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Finite-horizon multi-state values: state payments in advance, transition payments in arrears.",
             reward
         ),
-        f!(
+        act!(
             "ACT.MARKOV.FIT",
             1,
             1,
@@ -442,7 +442,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Row-normalized empirical transition counts; empty exposure rows are rejected.",
             fit
         ),
-        f!(
+        act!(
             "ACT.CTMC.TRANSITION",
             2,
             2,
@@ -452,7 +452,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Continuous-time transition probabilities by bounded uniformization and scaling/squaring.",
             continuous
         ),
-        f!(
+        act!(
             "ACT.CTMC.FIT",
             2,
             2,

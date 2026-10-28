@@ -98,12 +98,18 @@ the copied target was cleaned before the final full-gate run.
 ## Requested integration: shared budgets, progress and cancellation
 
 - [ ] Integrate the separately owned operational-limits/job-lifecycle implementation once committed.
-- [ ] Account cumulatively for native/lifted function calls and Monte Carlo trials without
-  introducing a functions-to-engine dependency.
+- [x] Implement the L1 `Ctx::charge_work` contract, generic/native/lift checkpoints and
+  saturating ACT estimates with adaptive GLM/Cox/bootstrap/compound-tail checkpoints.
+  All 247 function-library tests and all-target Clippy passed. An independent reviewer
+  additionally ran all 99 actuarial tests and 14 accounting/lift tests against the real binary.
+  Two isolated source-mutation RED controls fail as expected when the ACT reservation or
+  final-broadcast latch check is removed; the production checkout was unchanged.
+- [ ] Connect and validate the shared L1→calc→engine meter across native/lifted calls and
+  Monte Carlo trials, retaining failure outside formula error handling.
 - [ ] Verify progress, cooperative cancellation, exhausted budgets and atomic report publication
   with actuarial workbook formulas, including the unchanged synchronous command path.
 - [ ] Review independently and pass the complete gate for the final integrated revision.
 
-This operational integration is requested but is not implemented or validated by the earlier
-95-function numerical evidence. Cancellation latency must be described in terms of actual
+The L1 accounting layer is implemented; the engine/UI integration remains pending and is not
+validated by the earlier 95-function numerical evidence. Cancellation latency must be described in terms of actual
 checkpoints, not an unconditional interruption guarantee.

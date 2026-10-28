@@ -163,7 +163,8 @@ fn uniforms(a: &[Arg], index: usize, columns: usize) -> R<Vec<Vec<f64>>> {
 
 /// Gamma process inverse with a checked relative tail residual. The mathematical model is
 /// Gamma(mean/phi, scale=phi); its first two moments match ODP, its shape is an extra assumption.
-fn gamma_draw(u: f64, mean: f64, phi: f64) -> R<f64> {
+fn gamma_draw(u: f64, mean: f64, phi: f64, ctx: &mut dyn Ctx) -> R<f64> {
+    super::work::charge(ctx, 64)?;
     if mean == 0.0 || phi == 0.0 || u == 0.0 {
         return Ok(if phi == 0.0 { mean } else { 0.0 });
     }
@@ -177,28 +178,31 @@ fn gamma_draw(u: f64, mean: f64, phi: f64) -> R<f64> {
     }
     let upper = u > 0.5;
     let target = if upper { 1.0 - u } else { u };
-    let tail = |x: f64| if upper { reg_gamma_q(shape, x) } else { reg_gamma_p(shape, x) };
+    let mut tail = |x: f64| -> R<f64> {
+        super::work::charge(ctx, 20_000)?;
+        Ok(if upper { reg_gamma_q(shape, x) } else { reg_gamma_p(shape, x) })
+    };
     let mut hi = shape.max(1.0);
     for _ in 0..64 {
-        let value = finite(tail(hi))?;
+        let value = finite(tail(hi)?)?;
         if (upper && value <= target) || (!upper && value >= target) {
             break;
         }
         hi = finite(hi * 2.0)?;
     }
-    let high_value = tail(hi);
+    let high_value = tail(hi)?;
     if (upper && high_value > target) || (!upper && high_value < target) {
         return Err(CellError::Num);
     }
     let mut lo_log = f64::MIN_POSITIVE.ln();
-    let low_value = tail(f64::MIN_POSITIVE);
+    let low_value = tail(f64::MIN_POSITIVE)?;
     if (upper && low_value < target) || (!upper && low_value > target) {
         return Err(CellError::Num);
     }
     let mut hi_log = hi.ln();
     for _ in 0..160 {
         let mid = (0.5 * (lo_log + hi_log)).exp();
-        let value = finite(tail(mid))?;
+        let value = finite(tail(mid)?)?;
         if (value - target).abs() <= 1e-9 * target {
             let result = finite(mid * phi)?;
             return if result > 0.0 { Ok(result) } else { Err(CellError::Num) };
@@ -215,7 +219,7 @@ fn gamma_draw(u: f64, mean: f64, phi: f64) -> R<f64> {
 /// Replays batched Pearson-residual reserve bootstrap draws from explicit uniform inputs.
 /// Each row contains per-origin parameter means and total, optional Gamma predictive reserves
 /// and total, then original dispersion; absent process draws produce blank predictive cells.
-fn bootstrap(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
+fn bootstrap(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let original = triangle(a)?;
     let n = original.len();
     let observed = n * (n + 1) / 2;
@@ -236,8 +240,10 @@ fn bootstrap(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
         None
     };
     let columns = 2 * n + 3;
+    super::work::charge(ctx, (count as u64).saturating_mul(columns as u64))?;
     let mut out = Vec::with_capacity(count * columns);
     for (replicate, draws) in resampling.iter().enumerate() {
+        super::work::charge(ctx, super::work::product(&[n as u64, n as u64, n as u64, 32]))?;
         let mut cursor = 0;
         let mut pseudo = Vec::with_capacity(n);
         for row in &model.fitted {
@@ -273,7 +279,7 @@ fn bootstrap(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
                 expected_reserve = finite(expected_reserve + mean)?;
                 if let Some(u) = &process {
                     let draw = u.get(replicate).and_then(|r| r.get(future_cursor)).copied().ok_or(CellError::Value)?;
-                    sampled_reserve = finite(sampled_reserve + gamma_draw(draw, mean, model.phi)?)?;
+                    sampled_reserve = finite(sampled_reserve + gamma_draw(draw, mean, model.phi, ctx)?)?;
                 }
                 latest = cumulative;
                 future_cursor += 1;
@@ -298,7 +304,7 @@ fn bootstrap(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 
 /// Registers the externally driven ODP-moment reserve bootstrap without introducing an RNG.
 pub(super) fn specs() -> Vec<FnSpec> {
-    vec![f!(
+    vec![act!(
         "ACT.RESERVE.BOOTSTRAP.ODP",
         2,
         3,
@@ -363,13 +369,13 @@ mod tests {
     }
     #[test]
     fn gamma_process_draws_have_published_mean_variance_parameterization() {
-        let value = gamma_draw(0.75, 50.0, 50.0).unwrap();
+        let value = gamma_draw(0.75, 50.0, 50.0, &mut TestCtx::default()).unwrap();
         assert!((value + 50.0 * 0.25_f64.ln()).abs() < 1e-12);
         let result = raw(ev("ACT.RESERVE.BOOTSTRAP.ODP", vec![triangle_noisy(), u(1, 6, 0.4), u(1, 3, 0.5)]));
         close(&result[3], 940.0);
         assert!(numeric(&result[7]).unwrap() > 0.0);
         assert_ne!(result[3], result[7]);
-        assert_eq!(gamma_draw(0.0, 50.0, 50.0).unwrap(), 0.0);
+        assert_eq!(gamma_draw(0.0, 50.0, 50.0, &mut TestCtx::default()).unwrap(), 0.0);
     }
     #[test]
     fn uniforms_dimensions_process_domains_and_entire_residual_support_are_checked() {
@@ -382,6 +388,6 @@ mod tests {
             vec![nv(100.0), Value::Empty, Value::Empty],
         ]));
         assert_eq!(ev("ACT.RESERVE.BOOTSTRAP.ODP", vec![invalid, u(1, 6, 0.4)]), Value::Error(CellError::Num));
-        assert_eq!(gamma_draw(0.5, 1.0, 1000.0), Err(CellError::Num));
+        assert_eq!(gamma_draw(0.5, 1.0, 1000.0, &mut TestCtx::default()), Err(CellError::Num));
     }
 }

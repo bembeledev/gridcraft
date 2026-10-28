@@ -544,7 +544,7 @@ fn compound_var(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 
 /// Compute compound TVaR from positive upper contributions with a certified omitted-moment bound.
 /// The grid can extend within resource limits; unresolved truncation returns `#NUM!` instead of false precision.
-fn compound_tvar(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
+fn compound_tvar(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let model = compound(a, 6)?;
     let alpha = probability(number(a, 5)?)?;
     if alpha == 1.0 {
@@ -557,7 +557,7 @@ fn compound_tvar(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
     // may extend that grid internally, but cannot turn an insufficient VaR grid into success.
     compound_quantile(&model, alpha)?;
     let initial_grid = model.probabilities.len().saturating_sub(1);
-    let model = tvar_grid(model, 1.0 - alpha)?;
+    let model = tvar_grid(model, 1.0 - alpha, ctx)?;
     let mut remaining = 1.0 - alpha;
     let mut upper_mean = Sum::default();
     let mut threshold = 0;
@@ -615,7 +615,7 @@ fn chernoff_log_moment(model: &Compound, t: f64) -> R<f64> {
 /// this omitted first moment divided by beta=1-alpha. Since `TVaR >= E[Z]`, require
 /// `bound/beta <= 1e-10 E[Z]`. We search a bounded positive t grid, then recompute once
 /// to the smallest certified K. Failure to certify within 4096/20M terms is #NUM!.
-fn tvar_grid(model: Compound, beta: f64) -> R<Compound> {
+fn tvar_grid(model: Compound, beta: f64, ctx: &mut dyn Ctx) -> R<Compound> {
     let current = model.probabilities.len().saturating_sub(1);
     if let Some(maximum) = model.maximum
         && maximum <= current
@@ -623,6 +623,7 @@ fn tvar_grid(model: Compound, beta: f64) -> R<Compound> {
         return Ok(model);
     }
     let bound_work = CHERNOFF_EXPONENTS.saturating_mul(model.severity.len());
+    super::work::charge(ctx, (bound_work as u64).saturating_mul(32))?;
     let base_work = model.work.saturating_add(bound_work);
     if base_work > MAX_OPERATIONS {
         return Err(CellError::Num);
@@ -651,6 +652,7 @@ fn tvar_grid(model: Compound, beta: f64) -> R<Compound> {
         }
     }
     let required = best.ok_or(CellError::Num)?;
+    super::work::charge(ctx, (compound_work(model.count, model.severity.len(), required) as u64).saturating_mul(16))?;
     compound_grid(model.severity, model.count, required, model.unit)
 }
 
@@ -832,7 +834,7 @@ fn ruin_exponential(a: &[Arg], _: &mut dyn Ctx) -> R<Value> {
 /// Register deterministic compound-loss, contract-layer and economic-risk worksheet functions.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.AGGREGATE.MEAN",
             2,
             2,
@@ -842,7 +844,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Mean aggregate loss for independent iid severities and count.",
             aggregate_mean
         ),
-        f!(
+        act!(
             "ACT.AGGREGATE.VARIANCE",
             4,
             4,
@@ -852,7 +854,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Compound loss variance under independent count and iid severity.",
             aggregate_variance
         ),
-        f!(
+        act!(
             "ACT.VAR",
             2,
             3,
@@ -862,7 +864,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Left-inverse quantile of a complete empirical weighted loss distribution.",
             value_at_risk
         ),
-        f!(
+        act!(
             "ACT.TVAR",
             2,
             3,
@@ -872,7 +874,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Upper quantile-integral mean, with partial mass at VaR; alpha in [0,1).",
             tail_value_at_risk
         ),
-        f!(
+        act!(
             "ACT.LAYER",
             3,
             4,
@@ -882,7 +884,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Per-loss indemnity: share times min(max(loss-deductible,0),limit).",
             layer
         ),
-        f!(
+        act!(
             "ACT.QUOTASHARE",
             2,
             2,
@@ -892,7 +894,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Loss ceded under a proportional quota-share treaty.",
             quota_share
         ),
-        f!(
+        act!(
             "ACT.STOPLOSS",
             2,
             4,
@@ -902,7 +904,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Expected aggregate stop-loss layer over complete weighted aggregate-loss observations.",
             stop_loss
         ),
-        f!(
+        act!(
             "ACT.LEV.EXPONENTIAL",
             2,
             2,
@@ -912,7 +914,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Expected minimum of an exponential loss and a finite limit.",
             lev_exponential
         ),
-        f!(
+        act!(
             "ACT.LEV.LOGNORMAL",
             3,
             3,
@@ -922,7 +924,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Lognormal limited mean; mu and sigma parameterize the log loss.",
             lev_lognormal
         ),
-        f!(
+        act!(
             "ACT.LEV.PARETO",
             3,
             3,
@@ -932,7 +934,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Limited mean of Pareto II (Lomax), survival (1+x/scale)^(-shape).",
             lev_pareto
         ),
-        f!(
+        act!(
             "ACT.LEV.GAMMA",
             3,
             3,
@@ -942,7 +944,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Gamma limited mean with shape/scale parameterization.",
             lev_gamma
         ),
-        f!(
+        act!(
             "ACT.COMPOUND.PMF",
             5,
             6,
@@ -952,7 +954,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Compound distribution: spill loss, PMF, CDF, omitted-tail mass; no tail normalization.",
             compound_pmf
         ),
-        f!(
+        act!(
             "ACT.COMPOUND.VAR",
             6,
             7,
@@ -962,7 +964,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Compound left-inverse quantile; errors if the enumerated grid cannot reach alpha.",
             compound_var
         ),
-        f!(
+        act!(
             "ACT.COMPOUND.TVAR",
             6,
             7,
@@ -972,7 +974,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Compound upper-tail mean with positive-tail summation and bounded omitted first moment.",
             compound_tvar
         ),
-        f!(
+        act!(
             "ACT.CAPITAL.SD",
             2,
             2,
@@ -982,7 +984,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Portfolio standard deviation with validated positive-semidefinite correlation.",
             capital_sd
         ),
-        f!(
+        act!(
             "ACT.CAPITAL.ALLOCATION",
             2,
             2,
@@ -992,7 +994,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Euler contributions to portfolio standard deviation; may be negative for hedges.",
             capital_allocation
         ),
-        f!(
+        act!(
             "ACT.VAR.NORMAL",
             3,
             3,
@@ -1002,7 +1004,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Analytic normal-model VaR; not a general loss-distribution approximation guarantee.",
             normal_var
         ),
-        f!(
+        act!(
             "ACT.TVAR.NORMAL",
             3,
             3,
@@ -1012,7 +1014,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Analytic normal-model upper-tail mean.",
             normal_tvar
         ),
-        f!(
+        act!(
             "ACT.RUIN.EXPONENTIAL",
             4,
             4,

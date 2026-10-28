@@ -19,7 +19,7 @@ const MAX_CREDIBILITY_CELLS: usize = 65_536;
 /// Register claim-development, credibility and log-link pricing worksheet functions and range masks.
 pub(super) fn specs() -> Vec<FnSpec> {
     vec![
-        f!(
+        act!(
             "ACT.CHAINLADDER.FACTORS",
             1,
             1,
@@ -29,7 +29,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Volume-weighted cumulative development factors (one row).",
             chain_factors
         ),
-        f!(
+        act!(
             "ACT.CHAINLADDER",
             1,
             2,
@@ -39,7 +39,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Per-origin latest, ultimate and reserve; deterministic tail defaults to one.",
             chain_ladder
         ),
-        f!(
+        act!(
             "ACT.BORNHUETTERFERGUSON",
             2,
             3,
@@ -49,7 +49,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Per-origin latest, BF ultimate and reserve from aligned prior ultimate claims.",
             bornhuetter_ferguson
         ),
-        f!(
+        act!(
             "ACT.MACK",
             1,
             2,
@@ -59,7 +59,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Mack latest/ultimate/reserve/process SE/parameter SE/total SE, with final total row.",
             mack
         ),
-        f!(
+        act!(
             "ACT.CREDIBILITY",
             3,
             3,
@@ -69,7 +69,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Buhlmann credibility weight from exposure and supplied variance components.",
             credibility
         ),
-        f!(
+        act!(
             "ACT.BUHLMANNSTRAUB",
             2,
             2,
@@ -79,7 +79,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Group mean/exposure/Z/credibility mean/EPV/VHM using moment estimates.",
             buhlmann_straub
         ),
-        f!(
+        act!(
             "ACT.GROSSPREMIUM",
             4,
             4,
@@ -89,7 +89,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Gross premium with fixed expenses and proportional expenses/profit.",
             gross_premium
         ),
-        f!(
+        act!(
             "ACT.GLM.FIT",
             3,
             5,
@@ -99,7 +99,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Poisson or Gamma log-link coefficients; supply an intercept column explicitly.",
             glm_fit
         ),
-        f!(
+        act!(
             "ACT.GLM.PREDICT",
             2,
             3,
@@ -109,7 +109,7 @@ pub(super) fn specs() -> Vec<FnSpec> {
             "Log-link expected responses from an explicit design matrix and coefficients.",
             glm_predict
         ),
-        f!(
+        act!(
             "ACT.GLM.DEVIANCE",
             3,
             4,
@@ -596,7 +596,7 @@ fn weighted_qr(x: &[f64], n: usize, p: usize, w: &[f64], z: &[f64]) -> R<Vec<f64
 
 /// Fit Poisson/Gamma log-link coefficients using bounded IRLS, scaled QR and step halving.
 /// Singular designs and unconverged fits return errors; no hidden ridge or dropped columns are used.
-fn glm_fit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn glm_fit(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let y = vector(a, 0, MAX_OBSERVATIONS)?;
     let (n, p, x) = design(a, 1)?;
     if y.len() != n || n < p {
@@ -613,6 +613,7 @@ fn glm_fit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut mu = predicted(&x, p, &beta, &offset)?;
     let mut dev = deviance(&y, &mu, &weights, family)?;
     for _ in 0..100 {
+        super::work::charge(ctx, super::work::product(&[n as u64, p as u64, p as u64, 32]))?;
         let working_weights: Vec<f64> = weights
             .iter()
             .zip(&mu)
@@ -628,6 +629,7 @@ fn glm_fit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         let mut step = 1.0;
         let mut accepted = None;
         for _ in 0..30 {
+            super::work::charge(ctx, super::work::product(&[n as u64, p as u64, 32]))?;
             let candidate: Vec<f64> = beta.iter().zip(&next).map(|(b, next)| b + step * (next - b)).collect();
             if let Ok(candidate_mu) = predicted(&x, p, &candidate, &offset)
                 && let Ok(candidate_dev) = deviance(&y, &candidate_mu, &weights, family)

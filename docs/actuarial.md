@@ -241,3 +241,27 @@ Original implementations use published mathematics, not copied package implement
 - [Actuar risk-theory vignette, Panjer mathematics](https://stat.ethz.ch/CRAN/web/packages/actuar/vignettes/risk.pdf).
 - [Statsmodels, GLM families and links](https://www.statsmodels.org/stable/glm.html).
 - [Actuarial model suitability, uncertainty and validation](https://actuary.org/resources/modeling/).
+
+## Cooperative work accounting
+
+The worksheet library exposes the host-neutral `Ctx::charge_work(units)` checkpoint.
+Its default accepts work for compatibility; embedding hosts opt into a shared bank and
+cancellation. No dependency from the functions layer to the engine is introduced.
+
+Every ACT registration checks this hook before parsing, copying input vectors or entering
+its numerical kernel. Estimates depend on input sizes, matrix dimensions and model horizons;
+saturated arithmetic prevents large dimensions from wrapping to a small charge. Adaptive
+GLM/Cox iterations, bootstrap replications/process draws and compound-tail extensions also
+charge before their next expensive block. Generic calls reserve input/output work and check
+each lifted/broadcast kernel, so many small invocations cannot bypass a host's shared bank.
+
+Units are conservative operational estimates, not CPU instruction counts, elapsed-time
+predictions or a real-time responsiveness guarantee. Existing per-model allocation/domain
+caps apply even when the host accepts every charge. A refused charge returns `#NUM!`; an
+analysis host must also retain the failure outside formula evaluation so `IFERROR` cannot
+turn exhaustion or cancellation into a publishable result.
+
+Cancellation is cooperative at these checkpoints. A native indivisible operation must
+return to its next checkpoint; a browser main thread must yield before it can receive a
+new UI cancellation event. The incremental Monte Carlo lifecycle and atomic publication
+boundary are engine responsibilities, validated separately from these worksheet contracts.

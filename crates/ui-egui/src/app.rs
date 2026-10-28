@@ -384,6 +384,23 @@ mod lifecycle_tests {
     }
 
     #[test]
+    /// A language-driven font rebuild also waits while typing is held for the cell's editor an
+    /// input method opened: the gated pass would drop the typing handed over in it.
+    fn an_input_method_handoff_delays_a_font_change() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.fonts_ready = true;
+        app.fonts_han = Some(theme::HanOrder::Chinese);
+        app.ui.language = i18n::Language::Ja;
+        app.grid.ime_handoff = Some(Default::default());
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(app.fonts_ready, "the font rebuild waits for the typing to be handed over");
+        app.grid.ime_handoff = None;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!app.fonts_ready, "once it is handed over the language rebuild proceeds");
+    }
+
+    #[test]
     /// Logic ticks see fresh viewport and DPI information; resizing back to the original size still advances the capture epoch.
     fn a_hidden_logic_tick_sees_fresh_viewport_info_and_keeps_the_epoch_monotonic() {
         /// Runs one logic tick with the requested width and native scale.

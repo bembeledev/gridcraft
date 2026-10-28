@@ -172,6 +172,7 @@ impl Trace {
 /// neither be lost nor arrive before the composition it finishes. They go one input method event
 /// a frame: `TextEdit` takes a composition as such only from the next frame, so a composition and
 /// its commit in one frame would put the word in twice.
+#[derive(Default)]
 pub struct ImeHandoff {
     events: Vec<egui::Event>,
     /// Frames until the editor has the focus.

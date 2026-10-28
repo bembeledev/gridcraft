@@ -533,7 +533,7 @@ impl Pattern {
 fn least_squares(nums: &[f64]) -> (f64, f64, f64) {
     let n = nums.len() as f64;
     let mean_x = (n - 1.0) / 2.0;
-    let mean_y = nums.iter().sum::<f64>() / n;
+    let mean_y = nums.iter().map(|y| y / n).sum::<f64>();
     let mut num = 0.0;
     let mut den = 0.0;
     for (i, y) in nums.iter().enumerate() {

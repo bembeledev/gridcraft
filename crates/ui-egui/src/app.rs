@@ -13,6 +13,7 @@ mod keys;
 mod prefs;
 mod print;
 mod quit;
+pub(crate) mod save_pick;
 mod view;
 
 impl SheetApp {
@@ -27,6 +28,7 @@ impl SheetApp {
             text_box_editor: None,
             dialog: None,
             backstage: None,
+            save_follow: None,
             message: None,
             toast: None,
             notice: None,
@@ -124,8 +126,9 @@ impl SheetApp {
         self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
-        // Files read asynchronously (web file picker, dropped files).
+        // Files read asynchronously (web file picker, dropped files) and macOS sheets.
         self.poll_async_opens();
+        self.poll_save_sheet(ctx);
         self.autosave(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);

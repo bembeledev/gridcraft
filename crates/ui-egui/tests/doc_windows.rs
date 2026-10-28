@@ -233,6 +233,62 @@ fn quit_asks_about_each_unsaved_workbook_in_its_window_and_cancel_stops() {
 }
 
 #[test]
+fn a_pending_save_sheet_holds_close_and_quit() {
+    let mut desk = Desk::new(true);
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    desk.frames(2);
+    let book = desk.app.session.documents()[0].uid;
+    desk.app.services.pick_save_async = Some(Box::new(|_| {}));
+    desk.app.open_dialog("saveAs", json!({}));
+
+    let sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    assert!(desk.app.dialog.is_none(), "quit waits for the save sheet");
+    assert_eq!(desk.app.session.documents().len(), 1);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    assert_eq!(desk.app.message.as_ref().map(|(_, m)| m.as_str()), Some("Finish the save dialog that's already open."));
+
+    desk.app.message = None;
+    desk.app.run_or_alert("file.close", json!({}));
+    assert!(desk.app.dialog.is_none(), "File › Close does not ask over the sheet");
+    assert!(desk.app.session.documents().iter().any(|d| d.uid == book));
+    assert_eq!(desk.app.message.as_ref().map(|(_, m)| m.as_str()), Some("Finish the save dialog that's already open."));
+
+    desk.app.message = None;
+    let w = desk.window_of(0);
+    let sent = desk.close(w);
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::CancelClose), "the window stays up: {sent:?}");
+    assert!(desk.app.dialog.is_none());
+    assert!(desk.app.session.documents().iter().any(|d| d.uid == book));
+
+    // Another window on the same workbook can close. The workbook stays for the sheet.
+    desk.app.message = None;
+    let before = desk.windows.shown_windows();
+    desk.app.run("view.newWindow", json!({})).unwrap();
+    desk.frames(3);
+    let extra = desk.windows.shown_windows().into_iter().find(|w| !before.contains(w)).unwrap();
+    desk.close(extra);
+    assert_eq!(desk.app.session.windows().len(), 1);
+    assert!(desk.app.session.documents().iter().any(|d| d.uid == book));
+    assert!(desk.app.message.is_none(), "closing the extra window is not the workbook");
+
+    // A different workbook still closes.
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let other = desk.window_of(1);
+    desk.close(other);
+    assert_eq!(desk.app.session.documents().len(), 1);
+    assert_eq!(desk.app.session.documents()[0].uid, book);
+    assert!(desk.app.message.is_none());
+
+    // Cancelling the sheet lets quit ask about the unsaved workbook.
+    desk.app.services.picked_save = Some(std::sync::Arc::new(std::sync::Mutex::new(vec![None])));
+    desk.frames(2);
+    desk.app.message = None;
+    desk.frame_with(|app, ctx| app.request_quit(ctx));
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+}
+
+#[test]
 fn the_root_adopts_the_remaining_window_with_its_workbook_and_state() {
     let mut desk = Desk::new(true);
     desk.app.run("file.new", json!({})).unwrap();

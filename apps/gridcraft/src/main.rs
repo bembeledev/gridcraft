@@ -18,6 +18,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+#[cfg(target_os = "macos")]
+mod sheets;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -382,6 +384,9 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                // macOS file panels are sheets. A blocking NSSavePanel inside this callback aborts (#2790).
+                #[cfg(target_os = "macos")]
+                sheets::install(&mut app, cc.egui_ctx.clone());
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
@@ -443,5 +448,17 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+
+    /// The save panel lists a type only when this app exports it (or the system does). `.xlsx`
+    /// is not a system-exported UTI on every macOS, so the bundle has to export it (#2790).
+    #[test]
+    fn macos_exports_the_xlsx_workbook_type() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let exported = plist.split_once("<key>UTExportedTypeDeclarations</key>").map(|(_, rest)| rest).unwrap_or("");
+        assert!(!exported.is_empty(), "Info.plist.in has no UTExportedTypeDeclarations");
+        assert!(exported.contains("org.openxmlformats.spreadsheetml.sheet"), "{exported}");
+        assert!(exported.contains("<string>xlsx</string>"), "{exported}");
+        assert!(exported.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), "{exported}");
     }
 }

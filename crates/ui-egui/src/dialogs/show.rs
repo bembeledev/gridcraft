@@ -272,21 +272,39 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         // A bare name has no folder: written as typed it would land in the
                         // process's working directory (`/` from the Finder, the install folder on
                         // Windows), never where the user looks. The picker chooses the folder.
-                        let pick = app.services.pick_save.as_ref();
-                        let target = if path.is_empty() {
-                            pick.and_then(|f| f(&format!("Copy.{fmt}")))
-                        } else if let Some(f) = pick.filter(|_| std::path::Path::new(&path).is_relative()) {
-                            f(&if path.ends_with(&format!(".{fmt}")) { path } else { format!("{path}.{fmt}") })
+                        let suggested = if path.is_empty() {
+                            format!("Copy.{fmt}")
+                        } else if !path.ends_with(&format!(".{fmt}")) && std::path::Path::new(&path).extension().is_none() {
+                            format!("{path}.{fmt}")
                         } else {
-                            Some(path)
+                            path.clone()
                         };
-                        if let Some(t) = target {
+                        let relative = !path.is_empty() && std::path::Path::new(&path).is_relative();
+                        let has_picker = app.services.pick_save.is_some() || app.services.pick_save_async.is_some();
+                        if (path.is_empty() || relative) && has_picker {
+                            if let Some(doc) = app.session.active().map(|d| d.uid) {
+                                let follow = if fmt == "xlsx" {
+                                    crate::SaveFollow::SaveAs { doc }
+                                } else {
+                                    let command = match fmt.as_str() {
+                                        "csv" => "file.exportCsv",
+                                        "html" => "file.exportHtml",
+                                        _ => "file.saveAs",
+                                    };
+                                    crate::SaveFollow::Export { doc, command: command.to_string(), ext: fmt.clone() }
+                                };
+                                app.start_save(&suggested, follow);
+                            }
+                        } else if relative && app.services.download.is_some() {
+                            // The web host has no picker, and WASM cannot write a relative path.
+                            download_copy(app, &fmt, &suggested);
+                        } else if !path.is_empty() {
                             let id = match fmt.as_str() {
                                 "csv" => "file.exportCsv",
                                 "html" => "file.exportHtml",
                                 _ => "file.saveAs",
                             };
-                            app.run_or_alert(id, json!({"path": t}));
+                            app.run_or_alert(id, json!({"path": suggested}));
                         }
                     }
                 }
@@ -408,6 +426,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.dialog = Some(d);
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
+    }
+}
+
+/// Web Save Copy: the browser downloads the bytes. WASM cannot write the relative path.
+fn download_copy(app: &mut SheetApp, fmt: &str, name: &str) {
+    match app.run("file.saveBytes", json!({"format": fmt})) {
+        Ok(r) => {
+            let bytes = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode);
+            if let (Some(bytes), Some(download)) = (bytes, &app.services.download) {
+                download(name, &bytes);
+            }
+        }
+        Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
     }
 }
 

@@ -586,6 +586,49 @@ fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A relative Save Copy name with no picker used to be dropped. The web host downloads it
+/// (`file.saveBytes`); a filesystem host writes it. An empty name still does nothing.
+#[test]
+fn save_a_copy_of_a_relative_name_without_a_picker_is_not_dropped() {
+    let name = format!("gridcraft-save-copy-rel-{}", std::process::id());
+    let cwd_file = std::path::PathBuf::from(format!("{name}.html"));
+    let _ = std::fs::remove_file(&cwd_file);
+    let save_copy = |h: &mut egui_kittest::Harness<'static, SheetApp>, path: &str| {
+        h.state_mut().open_dialog("saveCopy", serde_json::json!({"format": "html"}));
+        h.run_steps(3);
+        h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), serde_json::json!(path));
+        h.run_steps(2);
+        h.get_by_label("   OK   ").click();
+        h.run_steps(3);
+    };
+
+    let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let capture = downloads.clone();
+    let mut h = harness(Services {
+        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    save_copy(&mut h, &name);
+    assert!(!cwd_file.exists(), "the web host does not write a relative path");
+    let saved = downloads.lock().unwrap();
+    assert_eq!(saved.len(), 1, "the copy is downloaded");
+    assert_eq!(saved[0].0, format!("{name}.html"));
+    assert!(String::from_utf8_lossy(&saved[0].1).contains("42"));
+    drop(saved);
+    save_copy(&mut h, "");
+    assert_eq!(downloads.lock().unwrap().len(), 1, "an empty name downloads nothing");
+    assert!(h.state().message.is_none());
+
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    save_copy(&mut h, &name);
+    let body = std::fs::read_to_string(&cwd_file).unwrap();
+    let _ = std::fs::remove_file(&cwd_file);
+    assert!(body.contains("42"), "a filesystem host writes the relative path");
+    assert!(h.state().message.is_none());
+}
+
 #[test]
 fn new_window_shows_the_same_workbook_and_a_draft_settles_in_its_own_window() {
     let mut h = harness(Services::default());

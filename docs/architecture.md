@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (atomic analysis credit and independent ordinary-command caps) · **Target:** GridCraft native engine, CLI/MCP and WASM
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (bounded rendering, safe import admission and upstream integration) · **Target:** GridCraft native engine, CLI/MCP and WASM
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -146,6 +146,10 @@ commands and uses atomic run counters. What-if trials alone debit the per-workbo
 bank through bounded prepaid blocks, keeping clock/locks out of the per-node hot path.
 Ordinary commands have a separate cap, including file opening without a document. Terminal work failure
 uses the command rollback barrier; report publication stays one atomic undoable edit.
+Imports recalculate a local document and check admission before replacing a blank or adding a
+window. Conditional-formatting formulas have an independent document-owned renderer bank,
+per-cell limit and bounded revision/identity/time-aware cache; painting does not consume the
+analysis allowance. These runtime controls are shared by native and WASM front ends.
 See [`monte-carlo.md`](monte-carlo.md) for limits and the
 reproducibility contract. No plugin host or external runtime is introduced.
 
@@ -166,6 +170,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Bounded conditional-format rendering, safe file-open admission and integration with upstream Clippy conventions |
 | 2026-10-28 | minor | Atomic work accounting, expiring prepaid analysis credit and independent ordinary-command limits |
 | 2026-10-28 | minor | Shared analysis work accounting, atomic terminal rollback and portable progress/cancellation lifecycle |
 | 2026-10-28 | minor | Clarify native GridCraft analysis and document Monte Carlo numerical contracts |

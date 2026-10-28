@@ -10,7 +10,7 @@ use gridcraft_model::{Anchor, Cell, Chart, ChartKind, LegendPos, Series, Sheet, 
 use serde_json::{Value as Json, json};
 
 use super::whatif::Trial;
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, Workbook, bad, cmd, edit, has_doc, split_sheet, str_param};
 
 mod sampling;
 mod statistics;
@@ -560,8 +560,23 @@ impl Job {
         trial.check()?;
         crate::workload::report_capacity(&s.doc()?.wb, report_cells)?;
         trial.meter.cancellation.begin_commit()?;
-        let publication =
-            write_report(s, &name, &config, seed, iterations, keep_samples, &inputs, &outputs, &xs, &ys, &summaries, &sensitivity, &diagnostics);
+        let publication = write_report(
+            s,
+            Report {
+                name: &name,
+                config: &config,
+                seed,
+                iterations,
+                keep_samples,
+                inputs: &inputs,
+                outputs: &outputs,
+                xs: &xs,
+                ys: &ys,
+                summaries: &summaries,
+                sensitivity: &sensitivity,
+                diagnostics: &diagnostics,
+            },
+        );
         trial.meter.cancellation.complete();
         trial.check()?;
         publication?;
@@ -580,24 +595,27 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     job.publish(s)
 }
 
-/// Publishes summary, conditional sensitivity, diagnostics, optional samples and two native
-/// charts in one report-sheet edit. The report becomes active and retains canonical rerun
-/// parameters; the original model's input values and formulas are preserved.
-fn write_report(
-    s: &mut Session,
-    name: &str,
-    config: &Json,
+/// Immutable finalization inputs grouped without copying samples or changing their order.
+struct Report<'a> {
+    name: &'a str,
+    config: &'a Json,
     seed: u64,
     iterations: usize,
     keep_samples: bool,
-    inputs: &[Input],
-    outputs: &[Output],
-    xs: &[Vec<f64>],
-    ys: &[Vec<f64>],
-    summaries: &[Summary],
-    sensitivity: &[Sensitivity],
-    diagnostics: &Diagnostics,
-) -> Result<()> {
+    inputs: &'a [Input],
+    outputs: &'a [Output],
+    xs: &'a [Vec<f64>],
+    ys: &'a [Vec<f64>],
+    summaries: &'a [Summary],
+    sensitivity: &'a [Sensitivity],
+    diagnostics: &'a Diagnostics,
+}
+
+/// Publishes summary, conditional sensitivity, diagnostics, optional samples and two native
+/// charts in one report-sheet edit. The report becomes active and retains canonical rerun
+/// parameters; the original model's input values and formulas are preserved.
+fn write_report(s: &mut Session, report: Report<'_>) -> Result<()> {
+    let Report { name, config, seed, iterations, keep_samples, inputs, outputs, xs, ys, summaries, sensitivity, diagnostics } = report;
     let chart_id = s.doc()?.wb.next_object_id();
     let si = edit(s, |cx| {
         let mut sheet = Sheet::new(name.to_string());

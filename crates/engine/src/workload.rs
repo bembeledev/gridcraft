@@ -61,12 +61,26 @@ struct Window {
 }
 
 /// Window state and its generation share one slow-path lock. Fast charges only read generation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Bank {
     window: Mutex<Window>,
     generation: AtomicU64,
+    capacity: u64,
     #[cfg(test)]
     reservations: AtomicU64,
+}
+
+impl Default for Bank {
+    /// Analysis uses the normal capacity; renderer construction changes only its own bank.
+    fn default() -> Self {
+        Self {
+            window: Mutex::default(),
+            generation: AtomicU64::default(),
+            capacity: MAX_WINDOW_WORK,
+            #[cfg(test)]
+            reservations: AtomicU64::default(),
+        }
+    }
 }
 
 /// A budget shared by all what-if evaluators of an open workbook, including repeated requests.
@@ -74,6 +88,16 @@ struct Bank {
 #[derive(Clone, Debug, Default)]
 pub struct AnalysisBudget(Arc<Bank>);
 impl AnalysisBudget {
+    /// A separate, smaller persistent window for workbook-authored paint expressions.
+    pub(crate) fn rendering() -> Self {
+        Self::with_capacity(1_000_000)
+    }
+
+    /// Keeps capacity construction inside the policy module; callers cannot raise a live bank.
+    fn with_capacity(capacity: u64) -> Self {
+        Self(Arc::new(Bank { capacity, ..Bank::default() }))
+    }
+
     /// Reserves credit only on depletion/epoch changes, with one clock read per slow path.
     fn credit_for(&self, units: u64, credit: u64, generation: u64, future: u64) -> Result<(u64, u64)> {
         self.credit_for_at(units, credit, generation, future, gridcraft_core::date::unix_now_ms())
@@ -92,14 +116,14 @@ impl AnalysisBudget {
         if needed == 0 {
             return Ok((credit - units, current));
         }
-        let available = MAX_WINDOW_WORK.saturating_sub(window.used);
+        let available = self.0.capacity.saturating_sub(window.used);
         if available < needed {
             return Err(EngineError::Other(
                 "Shared analysis work limit reached for this workbook. Wait for the next 60-second window or reduce the model/iterations.".into(),
             ));
         }
         let grant = needed.max(WORK_CHUNK.min(needed.saturating_add(future))).min(available);
-        window.used += grant; // grant <= available, so this sum is bounded by MAX_WINDOW_WORK.
+        window.used += grant; // grant <= available, so this sum is bounded by the bank capacity.
         #[cfg(test)]
         self.0.reservations.fetch_add(1, Ordering::Relaxed);
         Ok((credit.saturating_add(grant) - units, current))
@@ -117,7 +141,7 @@ impl AnalysisBudget {
         if refill(&mut window, gridcraft_core::date::unix_now_ms()) {
             self.0.generation.fetch_add(1, Ordering::AcqRel);
         }
-        Ok(MAX_WINDOW_WORK.saturating_sub(window.used))
+        Ok(self.0.capacity.saturating_sub(window.used))
     }
 }
 

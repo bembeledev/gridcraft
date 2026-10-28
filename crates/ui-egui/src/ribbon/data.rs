@@ -1,5 +1,5 @@
 use super::controls::{act, control_keytip, keytip, menu_items, sep};
-use super::*;
+use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 /// Draws Data-tab controls, dispatching direct commands or opening their parameter dialogs.
 /// Analysis dialogs, including Monte Carlo, defer workbook changes until confirmation.

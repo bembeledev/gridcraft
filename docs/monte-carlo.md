@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** shared work accounting, cooperative progress/cancellation and atomic failure
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** bounded rendering, safe document admission and upstream compatibility
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -165,6 +165,21 @@ Clones retain the analysis bank; reopening creates a new bank. Clock rollback or
 clock does not refill it. These are conservative workload estimates, not measured CPU time or
 a process/tenant security sandbox.
 
+Workbook-authored conditional-formatting formulas have a separate **1,000,000-unit reserved
+window per document** and a **100,000-unit local limit per cell look**. Each frame shares one
+bank-backed meter between uncached looks, retaining its prepaid credit instead of discarding
+a reservation per cell. Charges check the local limit, any ambient policy, then the renderer
+bank; a rejected oversized native kernel does not reserve its rejected charge from the bank.
+Earlier accepted work and unused frame credit are not refunded. Sparse misses across many
+frames can therefore consume reserved capacity faster than their exact accepted work.
+
+A bounded 4,096-entry document cache reuses conditional looks, including `None`, across
+repaints for the same workbook identity/revision and sheet/cell, with a one-second TTL for
+volatile formulas. Cached hits check the ambient policy without reserving renderer credit.
+Weak workbook identity preserves copy-on-write. Missing/backward clocks invalidate results;
+cache invalidation or a new frame never replenishes the renderer bank. Refused evaluations
+omit the conditional look even when a formula handles its numeric error.
+
 Run counters and zero-unit failure/cancellation checks use atomics. Small analysis charges use
 prepaid credit: clock reads and shared-window locking occur only on credit renewal or an
 explicit bank query. A renewal reserves up to 4,096 units, bounded by the run's actual remaining
@@ -210,3 +225,4 @@ unsupported `WEBSERVICE`/`FILTERXML` calls remain worksheet errors rather than n
 | 2026-10-28 | Kept Enter/Shift+Enter inside multiline configuration fields. |
 | 2026-10-28 | Shared work budgets, cooperative jobs/progress/cancellation, growth limits and terminal rollback. |
 | 2026-10-28 | Atomic hot-path counters, bounded prepaid analysis credit and independent ordinary-command caps; expose maxWork in discovery. |
+| 2026-10-28 | Independent conditional-format rendering limits/cache; admit imported documents only after successful recalculation; integrate current upstream rules. |

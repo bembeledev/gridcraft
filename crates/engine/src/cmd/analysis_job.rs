@@ -1,6 +1,6 @@
 //! Incremental, transport-independent analysis lifecycle; no report is written until finish.
 use super::monte_carlo::Job;
-use super::*;
+use super::{CommandSpec, Json, Result, Session, always, bad, cmd, has_doc};
 use serde_json::json;
 
 /// Registers the same job lifecycle for native UI, WASM, CLI and MCP callers.

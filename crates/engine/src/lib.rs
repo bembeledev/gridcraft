@@ -179,6 +179,10 @@ pub struct DocState {
     pub calc: Calc,
     /// Runtime-only work bank shared by isolated analyses, never serialized into the workbook.
     pub analysis_budget: workload::AnalysisBudget,
+    /// Runtime-only renderer bank, separate from both analyses and logical commands.
+    pub render_budget: workload::AnalysisBudget,
+    /// Bounded paint results retained across frames and invalidated by workbook/revision/time.
+    pub render_cache: cf::RenderCache,
     pub selection: Selection,
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
@@ -228,7 +232,13 @@ struct JournalRollback {
     mark: usize,
     bytes: usize,
     recording: Option<usize>,
-    backup: Option<(Vec<(String, Json)>, Vec<usize>)>,
+    backup: Option<JournalBackup>,
+}
+
+/// Original journal entries and their serialized sizes retained only across nested trimming.
+struct JournalBackup {
+    entries: Vec<(String, Json)>,
+    sizes: Vec<usize>,
 }
 
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
@@ -304,6 +314,8 @@ impl DocState {
             wb,
             calc,
             analysis_budget: workload::AnalysisBudget::default(),
+            render_budget: workload::AnalysisBudget::rendering(),
+            render_cache: cf::RenderCache::default(),
             selection: sel,
             undo: vec![],
             redo: vec![],
@@ -595,7 +607,10 @@ impl Session {
             if self.depth > 0 {
                 let mark = self.journal_rollback.as_ref().filter(|checkpoint| checkpoint.backup.is_none()).map(|checkpoint| checkpoint.mark);
                 if let Some(mark) = mark {
-                    let backup = (self.journal.iter().take(mark).cloned().collect(), self.journal_sizes.iter().take(mark).copied().collect());
+                    let backup = JournalBackup {
+                        entries: self.journal.iter().take(mark).cloned().collect(),
+                        sizes: self.journal_sizes.iter().take(mark).copied().collect(),
+                    };
                     if let Some(checkpoint) = &mut self.journal_rollback {
                         checkpoint.backup = Some(backup);
                     }
@@ -619,7 +634,7 @@ impl Session {
     /// Restores the outer command's journal even when nested pushes crossed a trimming boundary.
     fn rollback_journal(&mut self) {
         if let Some(checkpoint) = self.journal_rollback.take() {
-            if let Some((entries, sizes)) = checkpoint.backup {
+            if let Some(JournalBackup { entries, sizes }) = checkpoint.backup {
                 self.journal = entries;
                 self.journal_sizes = sizes;
             } else {

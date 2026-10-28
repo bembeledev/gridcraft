@@ -1,4 +1,5 @@
 use super::*;
+use gridcraft_core::CellRef;
 use std::sync::Arc;
 
 /// Builds deterministic source data and canonical cross-sheet simulation parameters.
@@ -262,4 +263,18 @@ fn nested_handlers_share_work_and_restore_even_a_trimmed_journal() {
     assert_eq!(s.doc().unwrap().undo.len(), undo);
     assert_eq!(s.doc().unwrap().revision, revision);
     assert_eq!(s.journal, journal);
+}
+/// Ordinary dependency recalculation never consumes the analysis bank, even across a large window.
+#[test]
+fn running_total_edits_do_not_spend_analysis_allowance() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = (1..=10_000).map(|n| json!([1, format!("=SUM($A$1:A{n})")])).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range":"A1:B10000","values":rows})).unwrap();
+    let before = s.doc().unwrap().analysis_budget.remaining().unwrap();
+    for n in 2..=8 {
+        s.execute("cell.set", json!({"cell":"A1","input":n.to_string()})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("B10000").unwrap()).as_f64(), Some(9999. + f64::from(n)));
+    }
+    assert_eq!(s.doc().unwrap().analysis_budget.remaining().unwrap(), before);
 }

@@ -306,8 +306,31 @@ impl DocState {
             go_to_recent: vec![],
         }
     }
+    /// Report whether the current workbook differs from the last saved snapshot.
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
+    }
+    /// Reinterprets formula date text in the session's region, preserving the saved state.
+    /// Undo/redo uses this too: a history snapshot must not restore an old application option.
+    pub(crate) fn apply_region(&mut self, region: &'static gridcraft_core::Region) {
+        if *self.wb.region == *region {
+            return;
+        }
+        let dirty = self.is_dirty();
+        let before = self.wb.clone();
+        let mut wb = (*self.wb).clone();
+        wb.region = region;
+        self.calc.recalc_all(&mut wb);
+        self.wb = Arc::new(wb);
+        if !dirty {
+            self.saved = self.wb.clone();
+        }
+        for entry in self.undo.iter_mut().chain(&mut self.redo) {
+            if Arc::ptr_eq(&entry.wb, &before) {
+                entry.wb = self.wb.clone();
+            }
+        }
+        self.revision += 1;
     }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
@@ -366,6 +389,9 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// The region used for date/time formula text, independent of interface language.
+    /// An unknown preference tag reads as en-US; this runtime option is not saved in XLSX.
+    pub region: String,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
 }
@@ -390,6 +416,7 @@ impl Default for StatusBarStats {
 }
 
 impl Default for Prefs {
+    /// Start sessions with canonical interface options and the default en-US formula region.
     fn default() -> Self {
         Prefs {
             enter_direction: "down".into(),
@@ -401,6 +428,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            region: gridcraft_core::region::default_region().tag.into(),
             status_bar: StatusBarStats::default(),
         }
     }
@@ -440,6 +468,11 @@ pub struct Session {
     activation: u64,
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
+    /// Per-launch selection; serialized preferences retain the user's deliberate choice.
+    region_override: Option<&'static gridcraft_core::Region>,
+    /// Running commands' content snapshots, rebound when only their runtime region changes.
+    /// One entry per active execute call; released as that call returns, including on panic.
+    region_frames: Vec<Option<(u64, Arc<Workbook>)>>,
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
@@ -485,9 +518,83 @@ pub struct Session {
     pub text_width: Option<TextWidth>,
 }
 
+/// The region a tag names (`pt-BR`, case and `_` insensitive); an error listing the valid tags
+/// when there is none.
+pub fn find_region(tag: &str) -> Result<&'static gridcraft_core::Region> {
+    gridcraft_core::region::find(tag).ok_or_else(|| {
+        let tags: Vec<&str> = gridcraft_core::region::all().iter().map(|r| r.tag).collect();
+        EngineError::Other(format!("unknown region {tag:?} (use one of {})", tags.join(", ")))
+    })
+}
+
 impl Session {
+    /// Create an empty session with canonical defaults and no launch override.
     pub fn new() -> Session {
         Session::default()
+    }
+    /// Effective formula region: a launch override, the saved preference, then en-US.
+    pub fn region(&self) -> &'static gridcraft_core::Region {
+        self.region_override
+            .unwrap_or_else(|| gridcraft_core::region::find(&self.prefs.region).unwrap_or_else(gridcraft_core::region::default_region))
+    }
+    /// Sets the region (a tag such as `pt-BR`) and recalculates every open document.
+    /// This leaves source formulas, workbook dirty state and PivotTable reports unchanged;
+    /// refresh PivotTables separately after changing their calculated source dates.
+    pub fn set_region(&mut self, tag: &str) -> Result<&'static gridcraft_core::Region> {
+        let region = find_region(tag)?;
+        self.region_override = None;
+        self.prefs.region = region.tag.into();
+        self.apply_region();
+        Ok(region)
+    }
+    /// Selects a per-launch region without changing serialized preferences.
+    /// A later deliberate [`Session::set_region`] choice replaces this override and is persisted.
+    pub fn set_region_override(&mut self, region: &'static gridcraft_core::Region) {
+        self.region_override = Some(region);
+        self.apply_region();
+    }
+    /// Applies the effective region to every open document after startup or preference changes.
+    /// Date/time formula text recalculates; input commands remain canonical en-US.
+    pub fn apply_region(&mut self) {
+        let region = self.region();
+        for doc in &mut self.docs {
+            let before = doc.wb.clone();
+            doc.apply_region(region);
+            Self::rebind_region_snapshots(&mut self.groups, &mut self.group_step, &mut self.region_frames, doc.uid, &before, &doc.wb);
+        }
+    }
+    /// Retains group and running-command snapshot identity when only the runtime region changes.
+    /// Matching aliases move together, so a clean group stays clean and a region-only change
+    /// does not manufacture an undo step. Saved content and unrelated history are untouched.
+    fn rebind_region_snapshots(
+        groups: &mut [OpenGroup],
+        step: &mut Option<GroupStep>,
+        frames: &mut [Option<(u64, Arc<Workbook>)>],
+        uid: u64,
+        before: &Arc<Workbook>,
+        after: &Arc<Workbook>,
+    ) {
+        if Arc::ptr_eq(before, after) {
+            return;
+        }
+        for (doc, snapshot) in frames.iter_mut().flatten() {
+            if *doc == uid && Arc::ptr_eq(snapshot, before) {
+                *snapshot = after.clone();
+            }
+        }
+        for group in groups.iter_mut().filter(|g| g.doc == uid) {
+            if Arc::ptr_eq(&group.wb, before) {
+                group.wb = after.clone();
+            }
+            for entry in &mut group.redo {
+                if Arc::ptr_eq(&entry.wb, before) {
+                    entry.wb = after.clone();
+                }
+            }
+        }
+        if let Some(step) = step.as_mut().filter(|s| s.doc == uid && Arc::ptr_eq(&s.after, before)) {
+            step.after = after.clone();
+        }
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
@@ -522,8 +629,9 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
-    /// Opens a workbook in a new window, which becomes the active one.
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    /// Opens a workbook in a new window, which becomes the active one, using the session region.
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        d.apply_region(self.region());
         let uid = d.uid;
         self.docs.push(d);
         let w = self.push_window(uid);
@@ -547,6 +655,7 @@ impl Session {
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        wb.region = self.region();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
@@ -598,7 +707,7 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
-        let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        let mut before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let (first_group, group_epoch) = (self.next_group, self.group_epoch);
         // Whether a group was open on the document before the command, and how long its history was.
@@ -609,13 +718,13 @@ impl Session {
         // history (`every_query_leaves_the_history_alone` runs each one), so it needs no
         // copy; front ends run queries all the time.
         let query = !spec.journal && !spec.undoable;
-        let history_before = before.as_ref().filter(|_| !query).and_then(|(uid, ..)| {
+        let mut history_before = before.as_ref().filter(|_| !query).and_then(|(uid, ..)| {
             #[cfg(test)]
             tests::HISTORY_COPIES.with(|n| n.set(n.get().saturating_add(1)));
             self.docs.iter().find(|d| d.uid == *uid).map(|d| (d.undo.clone(), d.redo.clone()))
         });
         // The groups open on the document before the command (usually none), for the same reason.
-        let groups_before: Vec<(u64, String, Arc<Workbook>, Selection)> = match &before {
+        let mut groups_before: Vec<(u64, String, Arc<Workbook>, Selection)> = match &before {
             Some((uid, ..)) => {
                 self.groups.iter().filter(|g| g.doc == *uid).map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone())).collect()
             }
@@ -630,9 +739,35 @@ impl Session {
         let requests_before = self.ui_requests.len();
         let marked = doc_uid.zip(start).map(|(uid, (_, len))| (uid, len));
         self.marks.extend(marked);
+        self.region_frames.push(before.as_ref().map(|(uid, wb, _)| (*uid, wb.clone())));
         self.depth = self.depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
+        // A failed command's automatic group rollback can also rebind its starting snapshot.
+        // Keep the command frame alive until that rollback has restored the regional content.
+        if matches!(&result, Ok(Err(_))) {
+            self.rollback_groups_from(first_group);
+        }
+        // A nested app.region call only reinterprets the same content. Carry that identity
+        // into this command's before/rollback snapshots instead of recording a false edit.
+        if let (Some((uid, wb, _)), Some(Some((frame_uid, regional)))) = (&mut before, self.region_frames.pop())
+            && *uid == frame_uid
+            && !Arc::ptr_eq(wb, &regional)
+        {
+            if let Some((undo, redo)) = &mut history_before {
+                for entry in undo.iter_mut().chain(redo) {
+                    if Arc::ptr_eq(&entry.wb, wb) {
+                        entry.wb = regional.clone();
+                    }
+                }
+            }
+            for (_, _, snapshot, _) in &mut groups_before {
+                if Arc::ptr_eq(snapshot, wb) {
+                    *snapshot = regional.clone();
+                }
+            }
+            *wb = regional;
+        }
         if marked.is_some() {
             self.marks.pop();
         }
@@ -676,12 +811,6 @@ impl Session {
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };
-        // A command that fails leaves none of its own undo groups open (a `?` between
-        // `group_begin` and `group_end`): each is rolled back as `group_rollback` does. Only a
-        // command that succeeds keeps a group it opened (a debugger's start).
-        if result.is_err() {
-            self.rollback_groups_from(first_group);
-        }
         if spec.journal && result.is_ok() {
             // A command that started recording is not part of the recording; one that stopped it
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
@@ -892,17 +1021,21 @@ impl Session {
     }
 
     /// Ends an undo group by putting back the workbook, selection, undo and redo history as they
-    /// were when it began.
+    /// were when it began, while retaining the current formula region and save point.
     pub fn group_rollback(&mut self, token: GroupToken) -> Result<()> {
         let g = self.take_group(&token)?;
+        let region = self.region();
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
         if !Arc::ptr_eq(&d.wb, &g.wb) {
             d.wb = g.wb;
-            d.calc.rebuild(&d.wb);
         }
         d.selection = g.selection;
         d.undo.truncate(g.start);
         d.redo = g.redo;
+        let before = d.wb.clone();
+        d.apply_region(region);
+        Self::rebind_region_snapshots(&mut self.groups, &mut self.group_step, &mut self.region_frames, d.uid, &before, &d.wb);
+        d.calc.rebuild(&d.wb);
         d.revision += 1;
         // The record of the last group step stays when the document is back exactly where that
         // step left it (this group began there); otherwise the rollback is where the group ended.

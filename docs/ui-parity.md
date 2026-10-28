@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (one-shot Windows ODBC imports; saved queries deferred to #431) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -184,6 +184,8 @@ Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 ## Revision history
+
+- 2026-10-27: One-shot ODBC import only; saved queries/refresh/XLSX extension preserved on a parked branch pending #431. See [ODBC guide](odbc.md).
 
 | Date | Change | Summary |
 |---|---|---|

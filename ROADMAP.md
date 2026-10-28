@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (one-shot Windows ODBC imports; saved queries deferred to #431) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -239,6 +239,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-05 | Repository created |
 
 ## Revision history
+
+- 2026-10-27: One-shot ODBC import only; saved queries/refresh/XLSX extension preserved on a parked branch pending #431. See [ODBC guide](docs/odbc.md).
 
 | Date | Change | Summary |
 |---|---|---|

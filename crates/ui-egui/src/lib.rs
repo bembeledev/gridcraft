@@ -27,6 +27,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+mod odbc;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -242,6 +243,7 @@ pub struct SheetApp {
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
+    pub(crate) odbc: odbc::State,
     pub(crate) shots: control::Shots,
     /// Monotonic epoch of [`control::CaptureGeometry`]: any resize/DPI/zoom/surface change bumps
     /// it, including a change back to an earlier value, so a capture taken in another layout is

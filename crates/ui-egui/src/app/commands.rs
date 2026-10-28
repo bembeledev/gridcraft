@@ -48,6 +48,11 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let r = self.session.run(id, params);
+        if matches!(id, "data.fromOdbc" | "data.odbcPreview" | "data.odbcTest")
+            && let Ok(result) = &r
+        {
+            odbc::track_job(self, id, result);
+        }
         if id.starts_with("file.") && self.session.active_window() != before {
             // File › New or Open from the Backstage view: the window it was in goes back to its sheet.
             self.backstage = None;

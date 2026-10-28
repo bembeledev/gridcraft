@@ -187,7 +187,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -214,6 +214,7 @@ impl Dialog {
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
         let d = match name {
+            "odbc" => crate::odbc::dialog(app, params.clone()),
             "insertCells" => Dialog::form(
                 "insertCells",
                 "Insert",

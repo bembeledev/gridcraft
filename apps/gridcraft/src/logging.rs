@@ -70,6 +70,10 @@ impl Filter {
 
     /// The level that applies to `target` (the most specific matching directive wins).
     pub fn level_for(&self, target: &str) -> LevelFilter {
+        // Driver diagnostics may contain connection strings, credentials or SQL.
+        if matches("odbc_api", target) || matches("odbc_sys", target) {
+            return LevelFilter::Off;
+        }
         self.directives.iter().filter(|(name, _)| matches(name, target)).max_by_key(|(name, _)| name.len()).map_or(self.default, |(_, level)| *level)
     }
 

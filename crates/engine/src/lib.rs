@@ -15,6 +15,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod odbc;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
@@ -428,6 +429,7 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 
 #[derive(Default)]
 pub struct Session {
+    pub odbc: odbc::OdbcManager,
     docs: Vec<DocState>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
@@ -533,6 +535,7 @@ impl Session {
     /// Closes a workbook and its windows; the most recently active remaining window comes forward.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
+            self.odbc.discard_document(self.docs[i].uid);
             let d = self.docs.remove(i);
             self.groups.retain(|g| g.doc != d.uid);
             self.windows.retain(|w| w.doc_uid != d.uid);

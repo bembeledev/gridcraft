@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (one-shot Windows ODBC imports; saved queries deferred to #431) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -110,6 +110,8 @@ to check our files, and Windows machines with the reported GPU drivers.
 - No `cargo xtask scorecard` or `bench` yet.
 
 ## Revision history
+
+- 2026-10-27: One-shot ODBC import only; saved queries/refresh/XLSX extension preserved on a parked branch pending #431. See [ODBC guide](odbc.md).
 
 | Date | Change | Summary |
 |---|---|---|

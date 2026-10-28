@@ -114,6 +114,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut win_open = true;
     let mut confirm = false;
     let width = match d.name.as_str() {
+        "odbc" => 620.0,
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
@@ -141,6 +142,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "odbc" => crate::odbc::show(app, ui, &mut d, &mut open),
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
@@ -392,6 +394,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             app.return_dialog(home, keep);
         }
         return;
+    }
+    if !open && d.name == "odbc" {
+        crate::odbc::cancel(app);
     }
     if let Some(child) = app.dialog.as_mut() {
         // The body opened another dialog (Name Manager › New…). It takes over; this one waits

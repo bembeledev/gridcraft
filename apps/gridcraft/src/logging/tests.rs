@@ -2,6 +2,15 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
+#[test]
+fn odbc_driver_diagnostics_are_never_written_even_with_trace_enabled() {
+    let filter = Filter::parse("trace,odbc_api=trace,odbc_sys=trace");
+    for target in ["odbc_api", "odbc_api::connection", "odbc_sys", "odbc_sys::handles"] {
+        assert_eq!(filter.level_for(target), LevelFilter::Off);
+    }
+    assert_eq!(filter.level_for("gridcraft_engine"), LevelFilter::Trace);
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let d = std::env::temp_dir().join(format!("gridcraft-logging-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));

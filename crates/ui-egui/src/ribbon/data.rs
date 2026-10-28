@@ -7,6 +7,9 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    if small_button(ui, Icon::Table, "From ODBC", "From ODBC", false).clicked() {
+        app.open_dialog("odbc", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

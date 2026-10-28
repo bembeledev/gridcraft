@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-27 · **Change:** minor (one-shot Windows ODBC imports; saved queries deferred to #431) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -113,7 +113,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
+- One-shot Windows ODBC database imports are available; no saved connections or ODBC refresh.
+- No Power Query editor, From Web/folder sources, relationships or
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
@@ -180,6 +181,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
 
 ## Revision history
+
+- 2026-10-27: One-shot ODBC import only; saved queries/refresh/XLSX extension preserved on a parked branch pending #431. See [ODBC guide](odbc.md).
 
 | Date | Change | Summary |
 |---|---|---|

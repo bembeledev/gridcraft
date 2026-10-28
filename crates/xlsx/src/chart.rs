@@ -817,12 +817,19 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             s.push_str(&group_xml(G::Line100 { markers: true }, &stacked, ch, (1, 2), wb, si));
         }
         if !sec.is_empty() {
-            let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                Some(b @ G::Bar { .. }) => b,
-                _ => G::Line { stacked: false, markers: false },
-            };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
-            secondary = Some(g);
+            if let Some(b @ G::Bar { .. }) = sec.first().and_then(|(_, x)| x.kind).map(group_for) {
+                s.push_str(&group_xml(b, &sec, ch, (3, 4), wb, si));
+                secondary = Some(b);
+            } else {
+                let sec_plain: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| !pct(*i, x)).copied().collect();
+                let sec_stacked: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
+                for (g, members) in [(G::Line { stacked: false, markers: false }, sec_plain), (G::Line100 { markers: true }, sec_stacked)] {
+                    if !members.is_empty() {
+                        s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
+                        secondary.get_or_insert(g);
+                    }
+                }
+            }
         }
     } else {
         primary_g = match group_for(ch.kind) {

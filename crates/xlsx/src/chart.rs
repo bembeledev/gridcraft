@@ -228,18 +228,27 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let (first, first_kind) = *groups.first()?;
     let first_axes = axis_ids(first);
     let mut series = vec![];
+    let mut orders = vec![];
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
             let mut ser = read_series(s);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
-                ser.kind = Some(*k);
+                let no_marker = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+                ser.kind = Some(if *k == ChartKind::LineStacked100Markers && no_marker { ChartKind::LineStacked100 } else { *k });
             }
             if gi > 0 {
                 ser.secondary = axis_ids(g) != first_axes;
             }
+            orders.push(s.child_val("order").and_then(|v| v.trim().parse::<u32>().ok()));
             series.push(ser);
         }
+    }
+    // A combo chart lists its series group by group; `c:order` gives the order they are drawn in.
+    if groups.len() > 1 && orders.iter().all(Option::is_some) {
+        let mut keyed: Vec<(Option<u32>, Series)> = orders.into_iter().zip(series).collect();
+        keyed.sort_by_key(|(o, _)| *o);
+        series = keyed.into_iter().map(|(_, s)| s).collect();
     }
     let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
@@ -663,7 +672,17 @@ fn dlbls(show: bool) -> String {
 }
 
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
+    let sers: String = series
+        .iter()
+        .map(|(i, s)| {
+            // In a combo chart's 100% stacked line group, each series writes its own markers.
+            let sg = match (g, s.kind.map(group_for)) {
+                (G::Line100 { .. }, Some(own @ G::Line100 { .. })) if ch.kind == ChartKind::Combo => own,
+                _ => g,
+            };
+            series_xml(s, *i, sg, wb, si)
+        })
+        .collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -787,8 +806,15 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
             s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
         }
-        if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+        // 100% stacked line series share one percentStacked group, each with its own markers.
+        let pct = |i: usize, x: &Series| matches!(kind(i, x).map(group_for), Some(G::Line100 { .. }));
+        let plain: Vec<(usize, &Series)> = lines.iter().filter(|(i, x)| !pct(*i, x)).copied().collect();
+        let stacked: Vec<(usize, &Series)> = lines.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
+        if !plain.is_empty() {
+            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &plain, ch, (1, 2), wb, si));
+        }
+        if !stacked.is_empty() {
+            s.push_str(&group_xml(G::Line100 { markers: true }, &stacked, ch, (1, 2), wb, si));
         }
         if !sec.is_empty() {
             let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {

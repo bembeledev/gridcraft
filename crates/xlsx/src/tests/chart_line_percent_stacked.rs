@@ -35,7 +35,7 @@ fn standard_and_stacked_lines_keep_their_kinds() {
 }
 
 #[test]
-fn a_hundred_percent_stacked_line_series_in_a_combo_chart_is_saved_as_a_line() {
+fn a_hundred_percent_stacked_line_series_in_a_combo_chart_keeps_its_kind_when_saved() {
     let ser =
         |i: usize| format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/><c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>");
     let xml = format!(
@@ -53,5 +53,30 @@ fn a_hundred_percent_stacked_line_series_in_a_combo_chart_is_saved_as_a_line() {
     let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
     let kinds: Vec<Option<ChartKind>> = again.series.iter().map(|s| s.kind).collect();
     assert_eq!(kinds.first(), Some(&Some(ChartKind::ColumnClustered)), "{saved}");
-    assert!(kinds.get(1).is_some_and(|k| !matches!(k, Some(ChartKind::ColumnClustered))), "the line series stays out of the column group: {saved}");
+    assert_eq!(kinds, [Some(ChartKind::ColumnClustered), Some(ChartKind::LineStacked100Markers)], "{saved}");
+}
+
+#[test]
+fn combo_line_series_keep_their_kinds_order_and_shared_percent_stack_when_saved() {
+    let ser = |i: usize, marker: &str| {
+        format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{marker}<c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>")
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>\
+         <c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart>\
+         <c:lineChart><c:grouping val=\"standard\"/>{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>\
+         <c:lineChart><c:grouping val=\"percentStacked\"/>{}{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>\
+         </c:plotArea></c:chart></c:chartSpace>",
+        ser(0, ""),
+        ser(2, NO_MARKER),
+        ser(1, ""),
+        ser(3, NO_MARKER)
+    );
+    let want = [Some(ChartKind::ColumnClustered), Some(ChartKind::LineStacked100Markers), Some(ChartKind::Line), Some(ChartKind::LineStacked100)];
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want);
+    let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
+    assert_eq!(saved.matches("percentStacked").count(), 1, "both 100% stacked series share one stack: {saved}");
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    assert_eq!(again.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want, "{saved}");
 }

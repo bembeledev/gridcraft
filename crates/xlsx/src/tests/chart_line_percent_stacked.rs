@@ -132,6 +132,26 @@ fn secondary_columns_lines_and_hundred_percent_stacked_lines_keep_their_kinds_wh
 }
 
 #[test]
+fn a_hundred_percent_stacked_line_group_with_mixed_markers_keeps_each_series_markers() {
+    let ser = |i: usize, marker: &str| {
+        format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{marker}<c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>")
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>\
+         <c:lineChart><c:grouping val=\"percentStacked\"/>{}{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>\
+         </c:plotArea></c:chart></c:chartSpace>",
+        ser(0, ""),
+        ser(1, NO_MARKER)
+    );
+    let want = [Some(ChartKind::LineStacked100Markers), Some(ChartKind::LineStacked100)];
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want);
+    let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    assert_eq!(again.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want, "{saved}");
+}
+
+#[test]
 fn combo_areas_marked_lines_and_mixed_column_groupings_keep_their_kinds_when_saved() {
     let ser = |i: usize, marker: &str| {
         format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{marker}<c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>")

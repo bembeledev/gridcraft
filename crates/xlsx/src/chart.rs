@@ -227,15 +227,18 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
     let (first, first_kind) = *groups.first()?;
     let first_axes = axis_ids(first);
+    let no_marker = |s: &El| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+    // A 100% stacked line group whose series differ in markers opens as a combo chart, so each series keeps its own.
+    let mixed = first_kind == ChartKind::LineStacked100Markers && first.kids("ser").any(no_marker) && !first.kids("ser").all(no_marker);
+    let combo = groups.len() > 1 || mixed;
     let mut series = vec![];
     let mut orders = vec![];
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
             let mut ser = read_series(s);
-            if groups.len() > 1 {
+            if combo {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
-                let no_marker = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
-                ser.kind = Some(if *k == ChartKind::LineStacked100Markers && no_marker { ChartKind::LineStacked100 } else { *k });
+                ser.kind = Some(if *k == ChartKind::LineStacked100Markers && no_marker(s) { ChartKind::LineStacked100 } else { *k });
             }
             if gi > 0 {
                 ser.secondary = axis_ids(g) != first_axes;
@@ -245,12 +248,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         }
     }
     // A combo chart lists its series group by group; `c:order` gives the order they are drawn in.
-    if groups.len() > 1 && orders.iter().all(Option::is_some) {
+    if combo && orders.iter().all(Option::is_some) {
         let mut keyed: Vec<(Option<u32>, Series)> = orders.into_iter().zip(series).collect();
         keyed.sort_by_key(|(o, _)| *o);
         series = keyed.into_iter().map(|(_, s)| s).collect();
     }
-    let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
+    let kind = if combo { ChartKind::Combo } else { first_kind };
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();

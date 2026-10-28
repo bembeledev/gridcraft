@@ -215,3 +215,8 @@ versions to 0.13.0; the final gate below was rerun against that release.
 The policy is based on the operation, not document trust. A high finite edit allowance does
 not exempt a nested query or establish a CPU deadline. See [the operational contract](monte-carlo.md#operational-limits-and-atomic-failure)
 for separate screen-rendering and print/PDF allowances and embedding responsibilities.
+
+An optional end-to-end 50,000-row CLI/MCP experiment reached its 180-second watchdog
+during model setup. No final value, explicit recalculation, edit or import result was
+obtained; that experiment is not counted as a pass or a quota-refusal control. The
+50,000-row gate above validates conservative accounting policy, not completion time.

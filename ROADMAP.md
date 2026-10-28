@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (cache-preserving imported formula open, explicit recalculation, cache warnings and synthetic lifecycle coverage) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -238,10 +238,20 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-06 | M0–M13 first pass: engine, 478 functions, XLSX/CSV, egui UI, charts, PivotTables with XLSX round-trip, PDF and printing, what-if, spelling, Draw, task panes, MCP, CLI, web build, release packaging |
 | 2026-10-05 | Repository created |
 
+## Compatibility hardening: imported values (#2770)
+
+Cache-preserving open, missing-result calculation, an explicit full-recalc opt-in and a
+stale-cache warning build on #2308. A missing function no longer makes its call implicitly volatile on every edit;
+argument edits and supported dynamic references continue to recalculate. Eight synthetic
+engine lifecycle regressions cover this scope. Structural edits still perform a full
+recalc; readiness estimates and migration qualification are unchanged.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |

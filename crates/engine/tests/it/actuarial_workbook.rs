@@ -151,3 +151,99 @@ fn independent_scientific_reference_oracles_are_preserved_at_engine_boundary() {
         compare(&actual, &case["expected"], case["relative_tolerance"].as_f64().unwrap(), case["label"].as_str().unwrap());
     }
 }
+
+/// Uses a supplied mortality model through the same command path as CLI/MCP clients.
+fn operational_fixture() -> (Session, serde_json::Value) {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell":"A1","input":"0.05"})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"=ACT.ANNUITY({0.2;0.5;1},A1,,0)"})).unwrap();
+    let p = json!({"inputs":[{"cell":"Sheet1!A1","distribution":"uniform","min":0.01,"max":0.1}],"outputs":["Sheet1!B1"],"iterations":16,"seed":42,"samples":true});
+    (s, p)
+}
+
+/// Allows bounded preparation steps without assuming that one step always completes a trial.
+fn advance_actuarial_job(s: &mut Session, id: &serde_json::Value, target: u64) -> serde_json::Value {
+    for _ in 0..64 {
+        let progress = s.execute("analysis.step", json!({"job":id,"trials":1})).unwrap();
+        if progress["completed"].as_u64().unwrap() >= target {
+            return progress;
+        }
+    }
+    panic!("small actuarial job did not reach its bounded target");
+}
+
+/// Progress is observable while cancellation preserves source data, journal and undo history.
+#[test]
+fn actuarial_incremental_progress_and_cancel_preserve_the_workbook() {
+    let (mut s, params) = operational_fixture();
+    let source = s.doc().unwrap().wb.clone();
+    let undo = s.doc().unwrap().undo.len();
+    let journal = s.journal.len();
+    let before = s.execute("analysis.status", json!({})).unwrap()["sharedWorkRemaining"].as_u64().unwrap();
+    let id = s.execute("analysis.start", json!({"params":params.clone()})).unwrap()["job"].clone();
+    let progress = advance_actuarial_job(&mut s, &id, 1);
+    assert_eq!(progress["total"], 16);
+    assert!(progress["progress"].as_f64().unwrap() > 0.0);
+    assert!(progress["progress"].as_f64().unwrap() < 1.0);
+    assert!(progress["workUsed"].as_u64().unwrap() > 0);
+    assert_eq!(s.execute("analysis.status", json!({"job":id})).unwrap()["completed"], progress["completed"]);
+    let cancelled = s.execute("analysis.cancel", json!({"job":id})).unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    assert!(std::sync::Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+    assert_eq!(s.journal.len(), journal);
+    assert!(s.execute("analysis.finish", json!({"job":id})).is_err());
+    let after = s.execute("analysis.status", json!({})).unwrap()["sharedWorkRemaining"].as_u64().unwrap();
+    assert!(after < before, "cancelled work must remain charged to the workbook bank");
+    let newer = s.execute("analysis.start", json!({"params":params})).unwrap()["job"].clone();
+    advance_actuarial_job(&mut s, &newer, 1);
+    s.execute("analysis.cancel", json!({"job":newer})).unwrap();
+    let remaining = s.execute("analysis.status", json!({})).unwrap()["sharedWorkRemaining"].as_u64().unwrap();
+    assert!(remaining < after, "starting a second job must not reset the shared bank");
+    assert!(std::sync::Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+    assert_eq!(s.journal.len(), journal);
+}
+
+/// Cooperative completion and the synchronous command preserve the same seeded estimands.
+#[test]
+fn actuarial_incremental_finish_matches_synchronous_statistics_and_one_undo() {
+    let (mut synchronous, params) = operational_fixture();
+    let expected = synchronous.execute("data.monteCarlo", params.clone()).unwrap();
+    let (mut s, _) = operational_fixture();
+    let source = s.doc().unwrap().wb.clone();
+    let undo = s.doc().unwrap().undo.len();
+    let id = s.execute("analysis.start", json!({"params":params})).unwrap()["job"].clone();
+    advance_actuarial_job(&mut s, &id, 16);
+    assert!(std::sync::Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+    let actual = s.execute("analysis.finish", json!({"job":id})).unwrap();
+    assert_eq!(actual["outputs"], expected["outputs"]);
+    assert_eq!(actual["tornado"], expected["tornado"]);
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    close(&s, "Sheet1", "A1", 0.05);
+    close(&s, "Sheet1", "B1", 0.8 / 1.05 + 0.4 / 1.05_f64.powi(2));
+}
+
+/// A caught worksheet error cannot turn a refused lifted ACT calculation into a report.
+#[test]
+fn lifted_actuarial_work_exhaustion_is_terminal_even_when_iferror_catches_num() {
+    let (mut control, mut params) = operational_fixture();
+    params["iterations"] = json!(2);
+    params["maxWork"] = json!(1000);
+    control.execute("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+    assert!(control.execute("data.monteCarlo", params.clone()).is_ok(), "small trial must fit the same budget");
+    let (mut s, _) = operational_fixture();
+    s.execute("cell.set", json!({"cell":"B1","input":"=IFERROR(SUM(ACT.ANNUITY({0.2;0.5;1},A1+SEQUENCE(1,64,0,0),3,0)),7)"})).unwrap();
+    assert!(numeric(&s, "Sheet1", "B1") > 7.0);
+    let source = s.doc().unwrap().wb.clone();
+    let undo = s.doc().unwrap().undo.len();
+    let journal = s.journal.len();
+    let error = s.execute("data.monteCarlo", params).expect_err("native/lifted work must exhaust the host bank");
+    assert!(error.to_string().to_lowercase().contains("work"), "{error}");
+    assert!(std::sync::Arc::ptr_eq(&source, &s.doc().unwrap().wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+    assert_eq!(s.journal.len(), journal);
+}

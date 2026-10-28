@@ -1,8 +1,10 @@
 # Actuarial validation evidence
 
-Final verification completed 2026-10-28: **PASS** for the documented implemented scope.
+Latest integrated verification completed 2026-10-28: **PASS** for the documented implemented scope.
+The final `cargo xtask ci` passed all ten gates with 2,677 native tests across 24 binaries
+(one preexisting ignored test), including WASM compilation.
 
-Integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
+Initial numerical integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
 `feat/actuarial-pack`. The supported estimands/domains are defined in
 [the pack contracts](actuarial.md) and [scientific-method contracts](actuarial-scientific.md).
 Validation applies to those implemented domains, not every actuarial model or a particular
@@ -36,7 +38,7 @@ limit, extreme Gamma credible endpoints, undefined KM confidence bounds at survi
 and IPCW event/censor tie ordering. The pre-fix executable was preserved outside the repo as
 a RED control, and the same oracle cases are run against the corrected executable.
 
-## Gates and completion checklist
+## Initial mathematical-pack gate (`0a16c19`)
 
 - [x] Implement all 95 worksheet functions with explicit contracts and no duplicate RNG.
 - [x] Ship two synthetic replay scripts and source-level analytic/regression tests.
@@ -95,9 +97,10 @@ engine failures (`ACT.*` names unavailable). It is not counted as a pass. Rebuil
 independent target passed all four actuarial engine tests, including all 62 reference cases;
 the copied target was cleaned before the final full-gate run.
 
-## Requested integration: shared budgets, progress and cancellation
+## Integrated analysis controls (MC.5)
 
-- [ ] Integrate the separately owned operational-limits/job-lifecycle implementation once committed.
+- [x] Integrate only MC.5 `536679cb973fdb910fd795c1edfe8e9f6567f568` as `e941e9b`,
+  retaining the existing equivalent WORK.1/WORK.2 commits without duplicating them.
 - [x] Implement the L1 `Ctx::charge_work` contract, generic/native/lift checkpoints and
   saturating ACT estimates with adaptive GLM/Cox/bootstrap/compound-tail checkpoints.
   All 249 function-library tests and all-target Clippy passed. An independent reviewer
@@ -106,12 +109,39 @@ the copied target was cleaned before the final full-gate run.
   distinguish closed copula formulas from elliptical quadrature, including family aliases.
   Two isolated source-mutation RED controls fail as expected when the ACT reservation or
   final-broadcast latch check is removed; the production checkout was unchanged.
-- [ ] Connect and validate the shared L1→calc→engine meter across native/lifted calls and
+- [x] Connect and validate the shared L1→calc→engine meter across native/lifted calls and
   Monte Carlo trials, retaining failure outside formula error handling.
-- [ ] Verify progress, cooperative cancellation, exhausted budgets and atomic report publication
+- [x] Verify progress, cooperative cancellation, exhausted budgets and atomic report publication
   with actuarial workbook formulas, including the unchanged synchronous command path.
-- [ ] Review independently and pass the complete gate for the final integrated revision.
+- [x] Pass the final integrated `cargo xtask ci`: 10/10 gates, 2,677 native tests across
+  24 binaries, including all 249 function-library tests and seven actuarial engine tests.
+- [x] Independent integrated runtime review: 126 direct tests (seven actuarial engine,
+  101 ACT, eight lift, nine analysis-job and one calc-work), eight real MCP checks and
+  three CLI controls passed. MCP discovers 95 ACT functions and verifies an independent
+  GPD oracle, invalid PSD rejection, ordinary mathematical `IFERROR`, terminal quota
+  rejection through `IFERROR`, and successful subsequent commands. The old CLI publishes
+  the over-budget lifted model; the final CLI exits with a work-limit error and creates
+  no XLSX. The cheap model fits the same 1,000-unit budget and creates its report.
 
-The L1 accounting layer is implemented; the engine/UI integration remains pending and is not
-validated by the earlier 95-function numerical evidence. Cancellation latency must be described in terms of actual
-checkpoints, not an unconditional interruption guarantee.
+The seven actuarial engine tests include seeded synchronous/incremental equivalence,
+one-action undo, source/history/journal protection, progress and cancellation,
+non-refunded shared work across cancelled jobs, and a lifted annuity hidden by `IFERROR`.
+A simple `A1*2` model fits the same 1,000-unit budget that rejects that lifted model.
+The original CLI publishes the latter model without enforcing this limit (RED); the new
+engine rejects it before publication (GREEN). All 62 independent numerical fixtures pass.
+
+Operational defaults are 100 million estimated units per run and 300 million per workbook
+in a fixed 60-second window; `maxWork` can tighten the run ceiling. Report growth is bounded
+at 128 sheets and two million stored cells including the source. Cancelled/failed work is
+not refunded. Job ids, stale sources and the atomic publication boundary are checked;
+publication creates one canonical `data.monteCarlo` undo action. The synchronous command
+remains available alongside `analysis.start/status/step/cancel/finish`.
+
+Cancellation occurs at actual checkpoints. Trial batches yield between trials after a soft
+~8 ms/250,000-unit target (at most 2,048 trials), with sampling/finalization checks. These are
+operational estimates and cooperative boundaries, not guaranteed latency or interruption of
+an indivisible native kernel. Browser UI events require control to return to the event loop.
+
+Only already-completed native UI test executables were removed during the final run to make
+space for WASM metadata; source, libraries and engine/function review binaries were retained.
+This cleanup did not replace or skip a gate.

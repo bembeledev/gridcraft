@@ -338,12 +338,21 @@ pub struct Ctx<'a> {
     /// The command applied sheet protection itself (row/column inserts and deletes the
     /// protection allows), so cells it shifts aren't refused as edits of locked cells.
     pub protection_checked: bool,
+    /// A table grew, so its structured references cover more cells: the dependency graph is built
+    /// again before the usual recalculation of what the changed cells feed (only the edited
+    /// formulas in manual mode). The edit isn't structural, so legacy arrays are still checked.
+    pub rebuild_deps: bool,
+    /// The command enters data (typing, setValues, fill, paste): the cells it filled next to a
+    /// table grow it. Other commands that rewrite or move cells (sort, Format Painter, checkboxes)
+    /// leave tables as they are.
+    pub entry: bool,
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     let d = s.doc_mut()?;
     commit(d, |cx| {
         let r = f(cx)?;
+        crate::tables::auto_expand_tables(cx);
         crate::tables::sync_headers(cx);
         Ok(r)
     })
@@ -355,9 +364,18 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     #[allow(clippy::disallowed_methods)]
     let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
+    let mut ctx = Ctx {
+        wb: (*d.wb).clone(),
+        changed: Vec::new(),
+        structural: false,
+        sel: &mut sel,
+        fit_rows: Vec::new(),
+        protection_checked: false,
+        rebuild_deps: false,
+        entry: false,
+    };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, rebuild_deps, .. } = ctx;
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
@@ -372,6 +390,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural {
         d.calc.recalc_all(&mut wb);
+    } else if rebuild_deps {
+        d.calc.rebuild(&wb);
+        d.calc.cells_changed(&mut wb, &changed);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }

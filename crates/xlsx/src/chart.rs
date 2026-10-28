@@ -817,17 +817,21 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             s.push_str(&group_xml(G::Line100 { markers: true }, &stacked, ch, (1, 2), wb, si));
         }
         if !sec.is_empty() {
-            if let Some(b @ G::Bar { .. }) = sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                s.push_str(&group_xml(b, &sec, ch, (3, 4), wb, si));
-                secondary = Some(b);
-            } else {
-                let sec_plain: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| !pct(*i, x)).copied().collect();
-                let sec_stacked: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
-                for (g, members) in [(G::Line { stacked: false, markers: false }, sec_plain), (G::Line100 { markers: true }, sec_stacked)] {
-                    if !members.is_empty() {
-                        s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
-                        secondary.get_or_insert(g);
-                    }
+            // Secondary bars, lines and 100% stacked lines each get their own group.
+            let bar_of = |x: &Series| match x.kind.map(group_for) {
+                Some(b @ G::Bar { .. }) => Some(b),
+                _ => None,
+            };
+            let sec_bars: Vec<(usize, &Series)> = sec.iter().filter(|(_, x)| bar_of(x).is_some()).copied().collect();
+            let sec_plain: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| bar_of(x).is_none() && !pct(*i, x)).copied().collect();
+            let sec_stacked: Vec<(usize, &Series)> = sec.iter().filter(|(i, x)| pct(*i, x)).copied().collect();
+            let bar_g = sec_bars.first().and_then(|(_, x)| bar_of(x)).unwrap_or(G::Bar { bar: false, grouping: "clustered" });
+            for (g, members) in
+                [(bar_g, sec_bars), (G::Line { stacked: false, markers: false }, sec_plain), (G::Line100 { markers: true }, sec_stacked)]
+            {
+                if !members.is_empty() {
+                    s.push_str(&group_xml(g, &members, ch, (3, 4), wb, si));
+                    secondary.get_or_insert(g);
                 }
             }
         }

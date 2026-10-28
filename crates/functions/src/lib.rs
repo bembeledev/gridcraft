@@ -103,8 +103,8 @@ impl Arg {
 /// Services a function may need from the host.
 pub trait Ctx {
     /// Charges conservative work units before native calculation or allocation. Returning false
-    /// stops the call with `#NUM!`. Hosts may retain the failure even if a formula catches that
-    /// error. This cooperative checkpoint does not interrupt an indivisible native operation.
+    /// stops the call with `#NUM!`. Budgeted hosts must latch refusals through the logical run,
+    /// including zero-unit checks and formula error handling. This cooperative checkpoint does not interrupt an indivisible native operation.
     /// The default preserves existing hosts without imposing an engine dependency.
     fn charge_work(&mut self, _units: u64) -> bool {
         true

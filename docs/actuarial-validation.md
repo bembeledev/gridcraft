@@ -1,7 +1,7 @@
 # Actuarial validation evidence
 
 Latest integrated verification completed 2026-10-28: **PASS** for the documented implemented scope.
-The final `cargo xtask ci` passed all ten gates with 2,677 native tests across 24 binaries
+The final `cargo xtask ci` passed all ten gates with 2,693 native tests across 24 binaries
 (one preexisting ignored test), including WASM compilation.
 
 Initial numerical integration base: `02e4d50088e532f81a96f80eab539cabf77da7e4`, local branch
@@ -145,3 +145,40 @@ an indivisible native kernel. Browser UI events require control to return to the
 Only already-completed native UI test executables were removed during the final run to make
 space for WASM metadata; source, libraries and engine/function review binaries were retained.
 This cleanup did not replace or skip a gate.
+
+## MC.6 and conditional-formatting review integration
+
+MC.6 source commit `666aa7e408559d91ba548cfe1c19d540019f78b8` is integrated on the
+actuarial base `51f5877` by `20f1cdb`. Its separate ten-step CI passed before this integration;
+the final combined gate below is distinct from that earlier result.
+
+- [x] Preserve MC.6 atomic accounting and prepaid analysis credit. Ordinary commands,
+  including standalone CLI/MCP formula queries and opening without an active document,
+  have a separate one-billion-unit command cap and do not consume the analysis window.
+- [x] Bound conditional-formatting formulas with a persistent renderer bank and a local
+  cell limit; share frame credit across misses and reject oversized kernel charges locally
+  before reserving renderer credit. Cache results with bounded storage, weak workbook
+  identity, revision and TTL. The precise reservation contract is in [Monte Carlo](monte-carlo.md#operational-limits-and-atomic-failure).
+- [x] Author focal verification: 35 tests passed (13 conditional-formatting, 13 analysis-job,
+  eight workload and one import-atomicity regression). The analysis suite includes seven edits
+  of a 10,000-row running-total model without spending the analysis bank.
+- [x] Prepare imported documents off-session and check work refusal before replacing a blank
+  workbook or adding windows. The regression covers empty, blank and multi-document sessions,
+  retained history/journal/selection/revision and a successful subsequent import.
+- [x] Independent focal review: all 35 tests passed. Five isolated negative controls
+  reproduced the failures when cache reuse, local-before-bank charging, import preparation,
+  ordinary-command independence or render metering was disabled. Original-source positive
+  reruns remained green after the controls.
+- [x] Final combined `cargo xtask ci`: all ten steps passed, including Clippy, 2,693 native
+  tests across 24 binaries (one preexisting ignored test), doctests, assets, layers, native UI,
+  WASM, command parity and generated keytips. This gate used the combined ACT + MC.6 + renderer
+  and import-atomicity source, with local-socket permission enabled.
+- [x] Final compiled CLI/MCP: 11 checks passed, including discovery of all 95 ACT functions,
+  a closed-form GPD oracle, invalid PSD rejection, ordinary IFERROR, terminal one-billion-unit
+  refusal through IFERROR, subsequent-command recovery, the scientific XLSX example and
+  atomic rejection/success controls using the same 1,000-unit simulation budget.
+
+Render cache hits do not reserve new credit. Unused frame credit is not refunded, so sparse
+misses in many frames can consume reserved capacity faster than accepted formula work. These
+controls provide cooperative workload containment; they do not establish a CPU deadline or
+cross-tenant hosting isolation.

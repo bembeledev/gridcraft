@@ -179,6 +179,10 @@ pub struct DocState {
     pub calc: Calc,
     /// Runtime-only work bank shared by isolated analyses, never serialized into the workbook.
     pub analysis_budget: workload::AnalysisBudget,
+    /// Runtime-only renderer bank, separate from both analyses and logical commands.
+    pub render_budget: workload::AnalysisBudget,
+    /// Bounded paint results retained across frames and invalidated by workbook/revision/time.
+    pub render_cache: cf::RenderCache,
     pub selection: Selection,
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
@@ -304,6 +308,8 @@ impl DocState {
             wb,
             calc,
             analysis_budget: workload::AnalysisBudget::default(),
+            render_budget: workload::AnalysisBudget::rendering(),
+            render_cache: cf::RenderCache::default(),
             selection: sel,
             undo: vec![],
             redo: vec![],

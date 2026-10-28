@@ -2,11 +2,11 @@ use super::editor::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
 use super::menus::set_fill_tag;
-use super::selection::select_ranges;
+use super::selection::{add_mode_base, select_ranges};
 use super::tables::{is_filter_button, table_headings};
 use super::{
-    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook,
-    json, pos2, vec2,
+    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, SelectionMode, Sheet, SheetApp, Stroke, Tokens,
+    Workbook, json, pos2, vec2,
 };
 
 // ------------------------------------------------------------------ interaction
@@ -24,6 +24,7 @@ struct InteractionInput<'a> {
     press_origin: Option<Pos2>,
     any_pointer_down: bool,
     modifiers: egui::Modifiers,
+    selection_modifiers: egui::Modifiers,
     position: Option<Pos2>,
     primary_clicked: bool,
     in_cells: bool,
@@ -59,6 +60,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let primary_clicked = resp.clicked_by(egui::PointerButton::Primary);
     let pointer = ctx.input(|i| i.pointer.clone());
     let mods = ctx.input(|i| i.modifiers);
+    let mut selection_modifiers = mods;
+    match app.grid.selection_mode {
+        SelectionMode::Extend => selection_modifiers.shift = true,
+        SelectionMode::Add => selection_modifiers.command = true,
+        SelectionMode::Off => {}
+    }
     // Hit-testing works in logical coordinates (see `Geo::rtl`).
     let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
@@ -83,6 +90,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         press_origin: pointer.press_origin(),
         any_pointer_down: pointer.any_down(),
         modifiers: mods,
+        selection_modifiers,
         position: pos,
         primary_clicked,
         in_cells,
@@ -295,7 +303,7 @@ fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bo
 
 fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: Pos2) {
     let (geo, sh, wb, sel) = (input.geo, input.sheet, input.workbook, &input.selection);
-    let mods = input.modifiers;
+    let mods = input.selection_modifiers;
     let resp = input.response;
     let in_col_header = input.in_column_header;
     if in_col_header {
@@ -324,6 +332,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+        app.grid.header_drag_base = add_mode_base(app);
         select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
         app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
     }
@@ -331,7 +340,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
 
 fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: Pos2) {
     let (geo, sh, wb, sel) = (input.geo, input.sheet, input.workbook, &input.selection);
-    let mods = input.modifiers;
+    let mods = input.selection_modifiers;
     let in_row_header = input.in_row_header;
     if in_row_header {
         if let Some((r, y)) = row_edge(geo, sh, p.y) {
@@ -343,6 +352,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+        app.grid.header_drag_base = add_mode_base(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
     }
@@ -351,6 +361,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
+    let sel_mods = input.selection_modifiers;
     let (primary_clicked, in_cells, in_col_header, in_row_header, in_corner) =
         (input.primary_clicked, input.in_cells, input.in_column_header, input.in_row_header, input.in_corner);
     let (freeze_cols, freeze_rows) = (input.freeze_columns, input.freeze_rows);
@@ -463,15 +474,29 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     app.grid.last_click = Some((c, now));
-    if mods.shift {
+    if sel_mods.shift {
+        app.grid.header_drag_base = add_mode_base(app);
+        let mut ranges = app.grid.header_drag_base.clone();
+        if let Some(pending) = app.grid.add_pending.take()
+            && ranges.last().is_some_and(|r| r == &pending.a1())
+        {
+            ranges.pop();
+        }
+        ranges.push(RangeRef::new(sel.anchor, c).a1());
+        let _ = app.session.run("selection.set", json!({"range": ranges.join(","), "active": sel.active.a1()}));
+        if let Some(d) = app.session.active_mut() {
+            d.selection.anchor = sel.anchor;
+        }
+    } else if mods.shift {
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
             d.selection.anchor = sel.anchor;
         }
-    } else if mods.command {
+    } else if mods.command || sel_mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
             && primary_clicked
+            && mods.command
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
@@ -605,14 +630,16 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::Rows(anchor) => {
                 let r = geo.row_at(sh, p.y);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::rows(anchor.min(r), anchor.max(r)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::rows(anchor.min(r), anchor.max(r)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let c = geo.col_at(sh, p.x);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::cols(anchor.min(c), anchor.max(c)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::MoveCols { source, .. } => {

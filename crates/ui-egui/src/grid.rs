@@ -180,6 +180,17 @@ pub struct ImeHandoff {
 }
 
 impl ImeHandoff {
+    /// Typing for the editor that has the focus now: handed over in the next frame.
+    #[cfg(test)]
+    pub(crate) fn last_frame(events: Vec<egui::Event>) -> Self {
+        Self { events, frames: 1 }
+    }
+
+    /// Whether all the typing went to the editor.
+    fn handed_over(&self) -> bool {
+        self.frames == 0 && self.events.is_empty()
+    }
+
     /// Whether `ev` is typing the editor takes over.
     pub(crate) fn holds(ev: &egui::Event) -> bool {
         matches!(ev, egui::Event::Ime(_) | egui::Event::Text(_) | egui::Event::Key { .. })
@@ -199,10 +210,18 @@ impl GridState {
             let n = h.events.iter().position(|e| matches!(e, egui::Event::Ime(_))).map_or(h.events.len(), |i| i + 1);
             raw.events.extend(h.events.drain(..n));
         }
-        if h.frames == 0 && h.events.is_empty() {
-            self.ime_handoff = None;
-        } else {
+        // Handed over: the handoff stays until the `ui` pass that takes the last of it is over
+        // ([`Self::end_typing_handoff`]), so this frame's `logic` cannot start a font change that
+        // gates that pass.
+        if !h.handed_over() {
             ctx.request_repaint();
+        }
+    }
+
+    /// Ends a handoff whose typing a completed `ui` pass has taken.
+    pub(crate) fn end_typing_handoff(&mut self) {
+        if self.ime_handoff.as_ref().is_some_and(ImeHandoff::handed_over) {
+            self.ime_handoff = None;
         }
     }
 }

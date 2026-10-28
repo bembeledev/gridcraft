@@ -120,3 +120,37 @@ fn imported_prefix_does_not_retarget_a_new_local_lambda_call() {
     assert!(!xml.contains("_xlfn.SYNTHETICFUTURE("));
     assert!(xml.contains("_xlpm.SYNTHETICFUTURE("));
 }
+
+/// Filling same-style cells must keep each destination's imported namespace independently.
+fn range_fill_keeps_destination_namespaces(prefixed_row: usize) {
+    let mut wb = Workbook::new();
+    for row in 1..=2 {
+        let mut formula = Formula::new(&format!("SYNTHETICFUTURE(A{row})"));
+        if row == prefixed_row {
+            formula.file_functions.insert("SYNTHETICFUTURE".into(), vec![Some(FileFunctionPrefix::Xlfn)]);
+        }
+        wb.sheet_mut(0).unwrap().set_cell(CellRef::parse(&format!("B{row}")).unwrap(), Cell::formula(formula));
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name":"synthetic-fill-prefixes.xlsx","base64":gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+    s.execute("selection.set", json!({"range":"B1:B2","active":"B1"})).unwrap();
+    s.execute("range.fill", json!({"range":"B1:B2","input":"=SYNTHETICFUTURE(A1)"})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert_eq!(xml.matches("_xlfn.SYNTHETICFUTURE(").count(), 1);
+    assert!(xml.contains(&format!(">_xlfn.SYNTHETICFUTURE(A{prefixed_row})</f>")));
+    let bare_row = 3 - prefixed_row;
+    assert!(xml.contains(&format!(">SYNTHETICFUTURE(A{bare_row})</f>")));
+}
+
+/// A prefixed first destination must not spread its namespace through the style cache.
+#[test]
+fn range_fill_prefixed_first_does_not_tag_bare_destinations() {
+    range_fill_keeps_destination_namespaces(1);
+}
+
+/// A bare first destination must not strip a later destination's imported namespace.
+#[test]
+fn range_fill_bare_first_does_not_strip_prefixed_destinations() {
+    range_fill_keeps_destination_namespaces(2);
+}

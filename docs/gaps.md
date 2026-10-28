@@ -2,7 +2,16 @@
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (preserve imported function namespaces through cell edits and XLSX saves) · **Target:** Microsoft Excel (Microsoft 365)
 
-### Imported cell-function namespaces (#2775)
+Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
+using GridCraft for real work first). This is the work list: pick from the top, check the open
+PRs first (50 open on 2026-10-10; several already address entries here), and update the entry
+when you land work. Estimates are Opus 5.5 agent-hours. Area detail lives in the linked parity
+docs; the summary is in [target-app-parity.md](target-app-parity.md).
+
+Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · **L** localization ·
+**P** performance · **S** stability.
+
+## Imported cell-function namespaces (#2775)
 
 Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
 cannot recreate. The evaluator still sees normalized names; this does not implement the
@@ -14,15 +23,6 @@ not yet carry equivalent metadata. Per-name call-count changes drop ambiguous me
 LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
 call. Synthetic regression checks do not qualify arbitrary
 Excel-authored workbooks or native Excel calculation.
-
-Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
-using GridCraft for real work first). This is the work list: pick from the top, check the open
-PRs first (50 open on 2026-10-10; several already address entries here), and update the entry
-when you land work. Estimates are Opus 5.5 agent-hours. Area detail lives in the linked parity
-docs; the summary is in [target-app-parity.md](target-app-parity.md).
-
-Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · **L** localization ·
-**P** performance · **S** stability.
 
 ## Beta blockers
 

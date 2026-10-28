@@ -2,19 +2,6 @@
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (preserve imported function namespaces through cell edits and XLSX saves) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
-### Imported cell-function namespaces (#2775)
-
-Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
-cannot recreate. The evaluator still sees normalized names; this does not implement the
-functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
-structural edits and sheet/table renaming retain the metadata. New replacement expressions
-keep only prefixes for calls still present. This complements #2793's default spellings for
-newly entered functions. Defined-name, validation and conditional-format formula strings do
-not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
-LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
-call. Synthetic regression checks do not qualify arbitrary
-Excel-authored workbooks or native Excel calculation.
-
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
 (estimated).
@@ -26,6 +13,19 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
+
+## Imported cell-function namespaces (#2775)
+
+Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
+cannot recreate. The evaluator still sees normalized names; this does not implement the
+functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
+structural edits and sheet/table renaming retain the metadata. New replacement expressions
+keep only prefixes for calls still present. This complements #2793's default spellings for
+newly entered functions. Defined-name, validation and conditional-format formula strings do
+not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
+LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
+call. Synthetic regression checks do not qualify arbitrary
+Excel-authored workbooks or native Excel calculation.
 
 ## Workbook formats
 

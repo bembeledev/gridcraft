@@ -259,9 +259,9 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        // Each cell gets what typing the input there gives: the automatic number format where
-        // it's General, its own format otherwise, text where it's Text. That depends only on
-        // the cell's style, so the input is parsed once per style.
+        // Automatic number formatting and Text input depend only on the destination style.
+        // Formula input also preserves a destination's imported namespaces: parse those cells
+        // independently, without reading or populating the shared style cache.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
             if r.count() > 2_000_000 {
@@ -269,12 +269,18 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
             }
             for at in r.iter() {
                 let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
-                let base = match by_style.get(&style) {
-                    Some(c) => c.clone(),
-                    None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
-                        by_style.insert(style, c.clone());
-                        c
+                let has_imported_namespaces =
+                    cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()).is_some_and(|f| !f.file_functions.is_empty());
+                let base = if has_imported_namespaces {
+                    input_to_cell(&input, sheet, at, &mut cx.wb)?
+                } else {
+                    match by_style.get(&style) {
+                        Some(c) => c.clone(),
+                        None => {
+                            let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                            by_style.insert(style, c.clone());
+                            c
+                        }
                     }
                 };
                 let mut cell = base.unwrap_or_default();

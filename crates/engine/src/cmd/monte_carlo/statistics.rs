@@ -2,6 +2,7 @@
 use super::sampling::worksheet_number;
 use super::*;
 
+/// Accumulates bounded finite terms using Neumaier compensation to retain rounding residuals.
 fn sum(values: impl Iterator<Item = f64>) -> f64 {
     let (mut total, mut correction) = (0.0_f64, 0.0_f64);
     for x in values {
@@ -12,6 +13,9 @@ fn sum(values: impl Iterator<Item = f64>) -> f64 {
     total + correction
 }
 
+/// Returns the mean and sample SD (n − 1 denominator) for at least two finite observations.
+/// Compensated centering preserves large offsets and mixed-sign cancellation; scaled squared
+/// deviations avoid unnecessary overflow. Unrepresentable final statistics return an error.
 pub(super) fn moments(values: &[f64]) -> Result<(f64, f64)> {
     if values.len() < 2 || values.iter().any(|x| !x.is_finite()) {
         return Err(bad(CMD, "statistics need at least two finite samples"));
@@ -34,6 +38,8 @@ pub(super) fn moments(values: &[f64]) -> Result<(f64, f64)> {
     }
     Ok((mean, sd))
 }
+/// Returns dimensionless centered deviations and their scale for validated finite samples.
+/// If direct subtraction would overflow, normalization precedes centering; constants use scale 0.
 fn centered(values: &[f64], mean: f64) -> (Vec<f64>, f64) {
     let safe = values.iter().all(|x| (x - mean).is_finite());
     let scale =
@@ -43,6 +49,8 @@ fn centered(values: &[f64], mean: f64) -> (Vec<f64>, f64) {
     }
     (values.iter().map(|x| if safe { (x - mean) / scale } else { x / scale - mean / scale }).collect(), scale)
 }
+/// Estimates Pearson correlation using scaled centered products, clamping rounding drift to ±1.
+/// Returns None for unequal lengths, constant data or nonrepresentable underlying moments.
 pub(super) fn correl(a: &[f64], b: &[f64]) -> Option<f64> {
     if a.len() != b.len() {
         return None;
@@ -60,13 +68,17 @@ pub(super) fn correl(a: &[f64], b: &[f64]) -> Option<f64> {
     let r = ab / aa.sqrt() / bb.sqrt();
     r.is_finite().then_some(r.clamp(-1.0, 1.0))
 }
+/// Obtains the two-sided 95% Student t critical value from the worksheet implementation.
 fn t_critical(df: usize) -> Result<f64> {
     worksheet_number("T.INV.2T", &[Value::Number(0.05), Value::Number(df as f64)])
 }
+/// Builds symmetric bounds, returning None when either endpoint is not representable.
 fn interval(mean: f64, half: f64) -> Option<(f64, f64)> {
     let (a, b) = (mean - half, mean + half);
     (a.is_finite() && b.is_finite()).then_some((a, b))
 }
+/// Computes 95% Wilson score bounds for a validated binomial count with nonzero n.
+/// Zero/all observed events retain a non-degenerate interval instead of implying certainty.
 fn wilson(successes: usize, n: usize) -> Result<(f64, f64)> {
     let z = worksheet_number("NORM.S.INV", &[Value::Number(0.975)])?;
     let n = n as f64;
@@ -91,6 +103,10 @@ pub(super) struct Accuracy {
     method: &'static str,
 }
 impl Accuracy {
+    /// Estimates finite-simulation error for a complete prefix of random trials or LHS replicas.
+    /// IID means use t intervals and probabilities use Wilson bounds; LHS uses variation between
+    /// independent replica summaries. A constant LHS proportion has no reported probability CI.
+    /// Incomplete replicas and overflowing mean intervals are errors.
     fn calculate(label: &str, values: &[f64], plan: &Plan, replicas: usize) -> Result<Self> {
         let n = values.len();
         let (mean, sd) = moments(values)?;
@@ -128,6 +144,8 @@ impl Accuracy {
         }
         Ok(Self { label: label.into(), n, mean, se, mean_ci, prob, prob_se, prob_ci, units, method })
     }
+    /// Serializes error estimates and explicitly distinguishes unavailable probability bounds
+    /// from zero tail risk. Relative mean error is absent for zero/unrepresentable denominators.
     fn json(&self) -> Json {
         json!({"cell":self.label,"samples":self.n,"independentUnits":self.units,"mean":self.mean,"meanMCSE":self.se,"meanCI95":self.mean_ci,"probabilityAboveZero":self.prob,"probabilityMCSE":self.prob_se,"probabilityCI95":self.prob_ci,"method":self.method,"probabilityIntervalAvailable":self.prob_ci.is_some(),"probabilityIntervalNote":if self.prob_ci.is_none(){Some("Replica proportions have no observed variation; confidence interval unavailable. This does not prove zero tail risk.")}else{None},"relativeMeanMCSE":if self.mean!=0.0{(self.se/self.mean.abs()).is_finite().then_some(self.se/self.mean.abs())}else{None}})
     }
@@ -146,6 +164,9 @@ pub(super) struct Diagnostics {
     latin: bool,
 }
 impl Diagnostics {
+    /// Builds per-output accuracy and complete-prefix convergence traces, plus pairwise observed
+    /// input correlations. LHS trace points end on independent replica boundaries, never midway
+    /// through dependent rows; construction propagates any invalid numeric diagnostic.
     pub fn new(plan: &Plan, inputs: &[Input], outputs: &[Output], xs: &[Vec<f64>], ys: &[Vec<f64>]) -> Result<Self> {
         let mut accuracy = Vec::new();
         let mut trace = Vec::new();
@@ -183,13 +204,18 @@ impl Diagnostics {
         }
         Ok(Self { accuracy, trace, pairs, latin: plan.latin })
     }
+    /// Returns sampling-error summaries for all configured formula outputs.
     pub fn accuracy_json(&self) -> Vec<Json> {
         self.accuracy.iter().map(Accuracy::json).collect()
     }
+    /// Returns only the first output's convergence points for the command's compact response.
     pub fn first_trace_json(&self) -> Vec<Json> {
         let first = self.accuracy.first().map(|a| a.label.as_str());
         self.trace.iter().filter(|a| Some(a.label.as_str()) == first).map(Accuracy::json).collect()
     }
+    /// Writes static accuracy, convergence and dependence tables through the report cell sink.
+    /// Returns the next free row and the inclusive first-output trace row bounds for charting.
+    /// LHS probability-interval warnings keep absent bounds visible as a statistical limitation.
     pub fn write(&self, put: &mut dyn FnMut(u32, u32, Value, StyleId), start: u32, bold: StyleId) -> (u32, u32, u32) {
         let mut r = start;
         let normal = StyleId::DEFAULT;
@@ -301,6 +327,7 @@ impl Diagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Compares mean/t and boundary-count Wilson intervals with independent NIST reference values.
     #[test]
     fn monte_carlo_mean_error_and_wilson_match_reference_values() {
         let plan = Plan::parse(&json!({}), 1, 5).unwrap();

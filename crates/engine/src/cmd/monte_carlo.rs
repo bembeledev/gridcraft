@@ -23,6 +23,7 @@ const MAX_OUTPUTS: usize = 64;
 const MAX_ITERATIONS: u64 = 100_000;
 const MAX_SAMPLE_CELLS: usize = 1_000_000;
 
+/// Registers the generic, undoable Monte Carlo command for UI and programmatic callers.
 pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "data.monteCarlo",
@@ -45,6 +46,7 @@ enum Distribution {
 /// SplitMix64, as used by the evolutionary solver; no platform RNG or new dependency.
 struct Rng(u64);
 impl Rng {
+    /// Advances SplitMix64 with wrapping arithmetic so the seed sequence is platform independent.
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -52,9 +54,12 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
+    /// Uses 53 random bits to produce a uniform value in the half-open interval `[0, 1)`.
     fn uniform(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
+    /// Draws an unbiased shuffle index below `n` using bounded rejection sampling.
+    /// Rejects an empty range or failure to find an acceptable draw within 16 attempts.
     fn below(&mut self, n: usize) -> Result<usize> {
         let bound = n as u64;
         if bound == 0 {
@@ -71,6 +76,8 @@ impl Rng {
     }
 }
 impl Distribution {
+    /// Parses finite marginal parameters, allowing degenerate constants but rejecting
+    /// reversed/non-finite widths, out-of-range triangular modes and negative deviations.
     fn parse(p: &Json) -> Result<Self> {
         let num = |k: &str| p.get(k).and_then(Json::as_f64).filter(|n| n.is_finite()).ok_or_else(|| bad(CMD, format!("missing or invalid `{k}`")));
         match str_param(p, "distribution").unwrap_or("uniform") {
@@ -99,6 +106,8 @@ impl Distribution {
             _ => Err(bad(CMD, "distribution must be uniform, triangular or normal")),
         }
     }
+    /// Maps a driving probability in `[0, 1]` to this marginal; normal endpoints are
+    /// clamped by the shared inverse-normal helper. Non-finite results are errors.
     fn inverse_cdf(&self, u: f64) -> Result<f64> {
         let x = match *self {
             Self::Uniform(a, b) => a + (b - a) * u,
@@ -112,6 +121,8 @@ impl Distribution {
         };
         if x.is_finite() { Ok(x) } else { Err(bad(CMD, "distribution produced a non-finite value")) }
     }
+    /// Draws an independent marginal sample, using Box–Muller for normals.
+    /// The caller validates finiteness before applying the value to a workbook trial.
     fn sample(&self, rng: &mut Rng) -> f64 {
         let u = rng.uniform();
         match *self {
@@ -140,6 +151,8 @@ struct Output {
     label: String,
 }
 
+/// Resolves a cell against its named sheet or the active sheet and returns a canonical
+/// quoted reference. Missing sheets and invalid/out-of-grid cell addresses are errors.
 fn address(wb: &Workbook, text: &str) -> Result<(usize, CellRef, String)> {
     let (name, body) = split_sheet(text);
     let si = match name {
@@ -151,6 +164,8 @@ fn address(wb: &Workbook, text: &str) -> Result<(usize, CellRef, String)> {
     Ok((si, cell, format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), cell.a1())))
 }
 
+/// Reads a non-negative integer with a missing-value default and an inclusive resource cap.
+/// A present value with the wrong type, sign or magnitude is rejected rather than defaulted.
 fn integer(p: &Json, key: &str, default: u64, max: u64) -> Result<u64> {
     let n = match p.get(key) {
         None => default,
@@ -171,11 +186,14 @@ fn quantile(sorted: &[f64], p: f64) -> f64 {
     // Weighted average avoids overflowing b-a for opposite extreme finite values.
     a * (1.0 - k.fract()) + b * k.fract()
 }
+/// Copies finite samples into total numeric order without changing their trial order.
 fn sorted(values: &[f64]) -> Vec<f64> {
     let mut v = values.to_vec();
     v.sort_by(f64::total_cmp);
     v
 }
+/// Returns zero-based average ranks in original sample order, assigning tied values
+/// the same rank so constant inputs have undefined rather than spurious Spearman correlation.
 fn ranks(values: &[f64]) -> Vec<f64> {
     let mut order: Vec<usize> = (0..values.len()).collect();
     order.sort_by(|a, b| values.get(*a).unwrap_or(&0.0).total_cmp(values.get(*b).unwrap_or(&0.0)));
@@ -196,6 +214,7 @@ fn ranks(values: &[f64]) -> Vec<f64> {
     }
     out
 }
+/// Delegates to the stable Pearson estimator; rank-transformed samples yield Spearman's rho.
 fn correlation(a: &[f64], b: &[f64]) -> Option<f64> {
     statistics::correl(a, b)
 }
@@ -213,6 +232,7 @@ struct Summary {
     above: f64,
 }
 impl Summary {
+    /// Serializes descriptive outcome statistics, distinct from sampling-error intervals.
     fn json(&self) -> Json {
         json!({"cell":self.label,"mean":self.mean,"stdDev":self.sd,"min":self.min,"p10":self.p10,"p50":self.median,"p90":self.p90,"max":self.max,"probabilityAboveZero":self.above})
     }
@@ -230,11 +250,15 @@ struct Sensitivity {
     span: f64,
 }
 impl Sensitivity {
+    /// Serializes conditional decile-group effects and sizes; these are not causal OAT effects.
     fn json(&self) -> Json {
         json!({"input":self.input,"lowMedian":self.low,"highMedian":self.high,"lowCount":self.low_n,"highCount":self.high_n,"spearman":self.spearman,"adverse":self.adverse,"favorable":self.favorable,"span":self.span})
     }
 }
 
+/// Validates the bounded simulation plan, evaluates isolated what-if trials, and publishes
+/// a static report only after all finite-output and diagnostic checks succeed. Errors leave
+/// source cells unchanged; report publication is one undoable edit.
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     if d.wb.protected_structure {
@@ -387,6 +411,9 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     )
 }
 
+/// Publishes summary, conditional sensitivity, diagnostics, optional samples and two native
+/// charts in one report-sheet edit. The report becomes active and retains canonical rerun
+/// parameters; the original model's input values and formulas are preserved.
 fn write_report(
     s: &mut Session,
     name: &str,

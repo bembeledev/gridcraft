@@ -209,6 +209,8 @@ impl Dialog {
         }
     }
 
+    /// Builds a named dialog using the current workbook selection and command-specific defaults.
+    /// Returns None for unknown names; confirming a constructed dialog follows its command path.
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();

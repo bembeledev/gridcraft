@@ -129,6 +129,7 @@ macro_rules! cmd {
 }
 pub(crate) use cmd;
 
+/// Lazily assembles the shared engine command registry used by UI, CLI, control and MCP callers.
 pub fn command_specs() -> &'static [CommandSpec] {
     static SPECS: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
     SPECS.get_or_init(|| {

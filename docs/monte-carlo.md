@@ -1,6 +1,6 @@
 # Monte Carlo simulation
 
-> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** initial implementation
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** document numerical contracts and LHS-only replica controls
 
 **Data → Monte Carlo** samples numeric input cells, recalculates the workbook's own formulas,
 and creates a static report. The same command is available through CLI, the control channel,
@@ -15,10 +15,11 @@ or financial-model template is required.
    (minimum/mode/maximum), or **normal** (mean/standard deviation).
 3. Enter output cells, one per line. They may be on different sheets. Outputs must evaluate to
    finite numbers in every trial.
-4. Choose random Monte Carlo or Latin Hypercube sampling (LHS), iterations, independent
-   replicas, and a non-negative seed. LHS defaults to eight replicas and needs at least two.
-   Iterations are the **total**, must be divisible by replica count, and each replica needs
-   at least two samples. Optionally omit the raw sample table.
+4. Choose random Monte Carlo or Latin Hypercube sampling (LHS), total iterations, and a
+   non-negative seed. The dialog additionally shows independent replicas for LHS: the default
+   is eight and the minimum is two. LHS iterations must be divisible by replica count, with at
+   least two samples per replica. The random dialog uses IID trials without a replica-count
+   restriction. Optionally omit the raw sample table.
 5. Optionally enter a correlation matrix: rows on separate lines, numbers separated by spaces.
    The matrix follows input order and specifies **latent Gaussian correlation**, not the
    Pearson correlation of non-normal sampled variables.
@@ -116,7 +117,7 @@ References (mathematical descriptions, no implementation code copied):
 - What-if trials always recalculate, including in manual calculation mode, without changing the
   workbook's calculation setting. Trial failures and non-finite sampled/results values abort
   without modifying the workbook. Report creation is refused when structure is protected.
-- Results and charts round-trip as ordinary XLSX data, not an executable Excel add-in.
+- Results and charts round-trip as ordinary XLSX data. Simulation runs in GridCraft's Rust engine.
 
 ## Implementation
 
@@ -125,3 +126,15 @@ incremental recalculation. `crates/ui-egui/src/dialogs/monte_carlo.rs` is a thin
 Distribution moments, analytic covariance, singular/invalid matrices, LHS strata, NIST interval
 reference values, high-offset numerical stability, repeatability, cross-sheet/manual recalculation, error atomicity, undo/redo and
 XLSX round-trip tests use synthetic workbooks built in Rust.
+
+## Follow-up hardening
+
+These are planned shared analysis improvements; the current command remains synchronous with
+the per-run limits above.
+
+- [ ] Define a shared workload budget for expensive analysis commands, including formula
+  evaluation cost and repeated automation requests.
+- [ ] Add cooperative cancellation and progress at a shared evaluator boundary. Cancellation
+  before report publication must preserve source cells and leave no partial report.
+- [ ] Exercise cumulative report/history growth and end-to-end interruption through the
+  control/MCP paths, including the behavior of volatile or externally backed formulas.

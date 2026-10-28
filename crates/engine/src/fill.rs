@@ -86,24 +86,7 @@ fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -
 /// fill from `src` to `target`: every source cell holds a number, and for Growth Trend the numbers
 /// of each lane are all above zero or all below zero.
 pub fn trend_applies(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef, growth: bool) -> bool {
-    let Some(sh) = wb.sheet(sheet) else { return false };
-    let vertical = fills_vertically(src, target);
-    let (lanes, len) = if vertical { (src.start.col..=src.end.col, src.height()) } else { (src.start.row..=src.end.row, src.width()) };
-    for lane in lanes {
-        let (mut above, mut below) = (false, false);
-        for i in 0..len {
-            let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
-            let Some(n) = sh.cell(c).filter(|cell| cell.formula.is_none() && cell.value.is_number()).and_then(|cell| cell.value.as_f64()) else {
-                return false;
-            };
-            above |= n > 0.0;
-            below |= n < 0.0;
-            if growth && (n == 0.0 || (above && below)) {
-                return false;
-            }
-        }
-    }
-    true
+    numeric_lanes(wb, sheet, src, target).is_some_and(|lanes| !growth || lanes.iter().all(|nums| Pattern::growth(nums).is_some()))
 }
 
 /// Whether a number format shows a calendar date (`YYYY-MM-DD` and `m/d/yyyy h:mm` do; `0 "days"`

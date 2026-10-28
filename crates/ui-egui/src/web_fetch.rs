@@ -36,6 +36,15 @@ impl SheetApp {
         if self.fetch.as_ref().is_some_and(|f| f.urls == urls && f.command.0 == command.0 && f.command.1 == command.1) {
             return;
         }
+        // A different fetch while one runs would drop the running one's handle (its result lost,
+        // its dialog left claiming "No tables were found"), so refuse it instead. One deliberate
+        // exception: Load before Go replaces this dialog's own preview for the same address —
+        // the preview's result is worthless once its import is on the way.
+        let replaces_own_preview = self.fetch.as_ref().is_some_and(|f| f.command.0 == "data.webPreview" && command.0 == "data.fromWeb" && f.urls == urls);
+        if self.fetching() && !replaces_own_preview {
+            self.message = Some(("From Web".into(), "A page is still loading. Try again when it finishes.".into()));
+            return;
+        }
         let source = match self.session.web_source.clone() {
             Some(s) => s,
             None => {

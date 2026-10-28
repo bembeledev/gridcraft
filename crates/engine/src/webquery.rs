@@ -162,6 +162,13 @@ pub fn extract_tables(html: &str, max_rows: usize, max_cols: usize) -> Vec<WebTa
                     t.end_row_group();
                 }
             }
+            // Line breaks and block boundaries separate words in the cell text; `collapse_ws`
+            // folds the result, so a `<br>` between two words reads as a space, as in Excel.
+            ("br" | "p" | "div" | "li", _) => {
+                if let Some(t) = current.as_mut() {
+                    t.push_text(" ");
+                }
+            }
             _ => {}
         }
     }
@@ -477,6 +484,15 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].rows[0][0].len(), MAX_TEXT);
         assert!(t[0].rows[0][0].chars().all(|c| c == '&'));
+    }
+
+    #[test]
+    /// A `<br>` (or a block tag) inside a cell separates words with a space, like Excel's
+    /// import of the same cell — `New York<br>USA` must not join into `New YorkUSA`.
+    fn a_line_break_inside_a_cell_separates_words() {
+        let html = "<table><tr><td>A<br>B</td><td><p>C</p><div>D</div><li>E</li></td></tr></table>";
+        let t = extract_tables(html, 100, 100);
+        assert_eq!(t[0].rows, vec![vec!["A B", "C D E"]]);
     }
 
     #[test]

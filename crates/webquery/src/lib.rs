@@ -48,15 +48,9 @@ pub fn redact(url: &str) -> String {
 fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, String> {
     use std::io::Read;
 
-    if !req.url.trim_start().starts_with("https://") {
-        return Err("Only https:// addresses can be imported.".into());
-    }
-    // Userinfo (`https://user:pass@host/`) would be sent as basic auth: check it here too, so
-    // the provider never forwards an embedded credential even if a caller skipped validation.
-    let authority = req.url.trim_start().trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.contains('@') {
-        return Err("Web addresses with user and password (`user:pass@host`) can't be imported: the secret would be saved with the workbook.".into());
-    }
+    // The same gate every caller applies (https, no userinfo), kept here so the provider never
+    // forwards an embedded credential even if a caller skipped its own validation.
+    gridcraft_engine::webquery::validate_url(&req.url)?;
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder().max_redirects(0).timeout_global(Some(std::time::Duration::from_secs(30))).build(),
     );
@@ -69,6 +63,13 @@ fn http_get(req: &gridcraft_engine::webquery::WebRequest) -> Result<String, Stri
             ureq::Error::StatusCode(code) => format!("The page answered {code} and could not be imported."),
             other => other.to_string(),
         })?;
+    // No redirects are followed, so a 3xx arrives as a normal response: name it as one before
+    // the content-type gate, or a redirect body would come back as "No tables were found". The
+    // target is redacted like every other URL that reaches a message.
+    if resp.status().is_redirection() {
+        let target = resp.headers().get("location").and_then(|v| v.to_str().ok()).map_or_else(|| "an unspecified address".into(), redact);
+        return Err(format!("The page moved to {target}; redirects are not followed."));
+    }
     let content_type = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     if !content_type.is_empty() && !content_type.contains("html") && !content_type.contains("xml") && !content_type.contains("text") {
         return Err(format!("The address serves {content_type}, not a web page."));

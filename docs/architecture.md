@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (engine building blocks for multi-command actions; cache-preserving calculation and dynamic-cycle reporting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (cache-preserving imported formula open, explicit recalculation, cache warnings and synthetic lifecycle coverage) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -58,6 +58,18 @@ including tests, 2026-10-10.
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+
+### Imported formula results
+
+`file.open` now uses `DocState::from_cached`: saved nonempty results are kept, missing
+formula results are calculated with `Calc::recalc_missing`, and the full dependency graph
+remains available for edits. The open response and import message warn that saved results
+may be stale. Callers can request `recalculate: true`; Calculate Now also performs the
+existing full recalculation. Neither option makes unsupported functions calculable.
+Unresolved function calls retain their explicit argument dependencies but are not made
+volatile merely because the function is absent. Workbook-defined calls and supported
+dynamic references still recalculate normally. Structural edits still use a full recalc.
+This does not establish cache freshness or reconstruct absent cached spill data.
 
 ## UI building blocks
 
@@ -160,6 +172,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-25 | minor | Retain freshly detected dynamic cycles when cache-preserving calculation restores the full dependency graph |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-22 | minor | Add the opt-in `Calc::recalc_missing` API for cache-preserving read-only calculation; retain normal incremental editing afterwards |

@@ -557,6 +557,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "AutoSave" => "Automatické ukládání",
         "AutoSave: save after every change (workbooks saved to a file)" => "Automatické ukládání: ukládat po každé změně (sešity uložené do souboru)",
         "All sheets" => "Všechny listy",
+        "Minimize" => "Minimalizovat",
+        "Maximize" => "Maximalizovat",
+        "Restore" => "Obnovit",
+        "Use system title bar" => "Použít systémové záhlaví okna",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Zobrazí jednoduché záhlaví okna s tlačítky okna nad záhlavím GridCraftu. GNOME aplikacím záhlaví nekreslí, takže toto nesleduje jeho motiv."
+        }
         _ => return None,
     })
 }

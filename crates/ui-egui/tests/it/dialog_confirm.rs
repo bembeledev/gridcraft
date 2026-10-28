@@ -46,3 +46,21 @@ fn confirming_text_to_columns_splits_on_the_ticked_delimiter() {
     let read = h.state_mut().run("sheet.read", json!({"range": "A1:B2"})).unwrap();
     assert_eq!(read["values"], json!([["a", "b"], ["c", "d"]]), "{read}");
 }
+
+#[test]
+fn monte_carlo_dialog_confirms_a_generic_model_and_preserves_inputs() {
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1","values":[[10]]})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell":"B1","input":"=A1*2"})).unwrap();
+    control(&mut h, "ui.dialog", json!({"name":"monteCarlo"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"inputs","value":[{"cell":"A1","distribution":"uniform","min":5,"max":5}]}));
+    control(&mut h, "ui.dialog.set", json!({"field":"outputs","value":"B1"}));
+    control(&mut h, "ui.dialog.set", json!({"field":"iterations","value":"16"}));
+    let result = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(h.state().dialog.is_none());
+    let d = h.state().session.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 2);
+    assert_eq!(d.wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(0, 0)).as_f64(), Some(10.0));
+    assert_eq!(d.wb.sheet(1).unwrap().charts.len(), 2);
+}

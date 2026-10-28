@@ -23,6 +23,7 @@ mod find;
 mod format_cells;
 mod insert_function;
 mod macros;
+mod monte_carlo;
 mod names;
 mod paste;
 mod show;
@@ -595,6 +596,18 @@ impl Dialog {
                         d.set_value(key, value.clone());
                     }
                 }
+                d
+            }
+            "monteCarlo" => {
+                let mut d = Dialog::custom(
+                    "monteCarlo",
+                    "Monte Carlo Simulation",
+                    json!({
+                        "inputs": [{"cell": active, "distribution": "uniform", "min": "0", "mode": "0.5", "max": "1", "mean": "0", "stdDev": "1"}],
+                        "outputs": "", "iterations": "1000", "seed": "0", "samples": true, "method": "latinHypercube", "replicates": "8", "correlation": "",
+                    }),
+                );
+                d.command = Some("data.monteCarlo");
                 d
             }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),

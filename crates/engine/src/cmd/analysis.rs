@@ -233,7 +233,7 @@ impl gridcraft_functions::Ctx for FnHost {
 }
 
 /// Calls a worksheet function on numeric arguments (and `cumulative` flags as booleans).
-fn call(name: &str, args: &[Value]) -> Value {
+pub(super) fn call(name: &str, args: &[Value]) -> Value {
     let Some(spec) = gridcraft_functions::lookup(name) else { return Value::Error(CellError::Name) };
     if args.iter().any(|a| a.as_f64().is_some_and(|v| !v.is_finite())) {
         return Value::Error(CellError::Num);

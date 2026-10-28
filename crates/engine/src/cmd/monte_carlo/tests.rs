@@ -1,0 +1,254 @@
+use super::*;
+
+fn model() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[[10,20]]})).unwrap();
+    s.execute("cell.set", json!({"cell":"C1","input":"=3*A1-B1"})).unwrap();
+    s
+}
+fn params() -> Json {
+    json!({"inputs":[{"cell":"A1","distribution":"uniform","min":0,"max":100},{"cell":"B1","distribution":"triangular","min":0,"mode":10,"max":20}],"outputs":["C1"],"iterations":1000,"seed":42})
+}
+fn value(s: &Session, sheet: usize, cell: &str) -> Value {
+    s.doc().unwrap().wb.sheet(sheet).unwrap().value(CellRef::parse(cell).unwrap())
+}
+
+#[test]
+fn monte_carlo_reproduces_samples_preserves_model_and_undoes_report() {
+    let mut s = model();
+    let original = s.doc().unwrap().wb.clone();
+    let first = s.execute(CMD, params()).unwrap();
+    assert_eq!(first["iterations"], 1000);
+    assert_eq!(first["static"], true);
+    assert_eq!(value(&s, 0, "A1"), Value::Number(10.0));
+    assert_eq!(value(&s, 0, "C1"), Value::Number(10.0));
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+    let report = s.doc().unwrap().wb.sheet(1).unwrap();
+    assert_eq!(report.charts.len(), 2);
+    let json_config: Json = serde_json::from_str(report.value(CellRef::new(3, 1)).as_text().unwrap()).unwrap();
+    assert_eq!(json_config["inputs"][0]["cell"], "Sheet1!A1");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap(), original.sheet(0).unwrap());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+    s.execute("sheet.activate", json!({"sheet":0})).unwrap();
+    let second = s.execute(CMD, params()).unwrap();
+    assert_eq!(first["outputs"], second["outputs"]);
+    assert_eq!(first["tornado"], second["tornado"]);
+    assert_eq!(first["tornado"][0]["input"], "Sheet1!A1");
+    assert!(first["tornado"][0]["spearman"].as_f64().unwrap() > 0.9);
+    let wb = &s.doc().unwrap().wb;
+    let bytes = gridcraft_xlsx::write_xlsx(wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert_eq!(reopened.sheets.len(), 3);
+    assert_eq!(reopened.sheet(1).unwrap().charts.len(), 2);
+    assert_eq!(reopened.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(10.0));
+}
+
+#[test]
+fn monte_carlo_manual_mode_cross_sheet_and_multiple_outputs() {
+    let mut s = model();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell":"D1","input":"=Sheet1!A1*2"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode":"manual"})).unwrap();
+    let p =
+        json!({"inputs":[{"cell":"Sheet1!A1","distribution":"uniform","min":5,"max":5}],"outputs":["Sheet1!C1","D1"],"iterations":2,"samples":false});
+    let r = s.execute(CMD, p).unwrap();
+    assert_eq!(r["outputs"][0]["mean"], -5.0);
+    assert_eq!(r["outputs"][1]["p50"], 10.0);
+    assert_eq!(r["tornado"][0]["spearman"], Json::Null);
+    assert_eq!(s.doc().unwrap().wb.calc.mode, gridcraft_model::CalcMode::Manual);
+}
+
+#[test]
+fn monte_carlo_rejects_invalid_params_without_changes() {
+    for p in [
+        json!({}),
+        json!({"inputs":[],"outputs":["C1"]}),
+        json!({"inputs":[{"cell":"A1","min":2,"max":1}],"outputs":["C1"]}),
+        json!({"inputs":[{"cell":"C1","min":0,"max":1}],"outputs":["A1"]}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1},{"cell":"$A$1","min":0,"max":1}],"outputs":["C1"]}),
+        json!({"inputs":[{"cell":"A1","distribution":"normal","mean":0,"stdDev":-1}],"outputs":["C1"]}),
+        json!({"inputs":[{"cell":"A1","distribution":"triangular","min":0,"mode":3,"max":1}],"outputs":["C1"]}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"iterations":0}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"iterations":100001}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"seed":-1}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"samples":"false"}),
+        json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"newSheet":"bad[name]"}),
+        json!({"inputs":[{"cell":"XFD1048577","min":0,"max":1}],"outputs":["C1"]}),
+    ] {
+        let mut s = model();
+        let before = s.doc().unwrap().wb.clone();
+        assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+        assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap(), before.sheet(0).unwrap());
+    }
+    let mut s = model();
+    let mut p = params();
+    p["inputs"] = json!((0..33).map(|_| json!({"cell":"A1","min":0,"max":1})).collect::<Vec<_>>());
+    assert!(s.execute(CMD, p).is_err());
+    let mut p = params();
+    p["outputs"] = json!(vec!["C1"; 65]);
+    assert!(s.execute(CMD, p).is_err());
+    let mut p = params();
+    p["inputs"] = json!((1..=16).map(|i| json!({"cell":format!("A{i}"),"min":0,"max":1})).collect::<Vec<_>>());
+    p["iterations"] = json!(100000);
+    assert!(s.execute(CMD, p).is_err());
+}
+
+#[test]
+fn monte_carlo_erroring_trial_is_atomic() {
+    let mut s = model();
+    s.execute("cell.set", json!({"cell":"C1","input":"=1/A1"})).unwrap();
+    let r = s.execute(CMD, json!({"inputs":[{"cell":"A1","min":0,"max":0}],"outputs":["C1"]}));
+    assert!(r.is_err());
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(value(&s, 0, "A1"), Value::Number(10.0));
+}
+
+#[test]
+fn monte_carlo_distribution_moments_and_ranks() {
+    let mut rng = Rng(42);
+    for (d, expected_mean, expected_var) in [
+        (Distribution::Uniform(0., 1.), 0.5, 1. / 12.),
+        (Distribution::Triangular(0., 0.5, 1.), 0.5, 1. / 24.),
+        (Distribution::Normal(5., 2.), 5., 4.),
+    ] {
+        let xs = (0..50000).map(|_| d.sample(&mut rng)).collect::<Vec<_>>();
+        let mean = xs.iter().sum::<f64>() / xs.len() as f64;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
+        assert!((mean - expected_mean).abs() < 0.03);
+        assert!((var - expected_var).abs() < 0.07);
+    }
+    assert_eq!(ranks(&[3., 1., 1., 2.]), vec![3., 0.5, 0.5, 2.]);
+    assert_eq!(quantile(&[0., 10.], 0.1), 1.);
+    assert_eq!(correlation(&[0., 0.], &[1., 2.]), None);
+}
+
+#[test]
+fn monte_carlo_ten_thousand_trials_and_monthly_outputs() {
+    let mut s = model();
+    for month in 1..=24 {
+        s.execute("cell.set", json!({"cell":format!("C{month}"),"input":format!("=A1*{month}-B1")})).unwrap();
+    }
+    let mut p = params();
+    p["iterations"] = json!(10000);
+    p["outputs"] = json!((1..=24).map(|m| format!("C{m}")).collect::<Vec<_>>());
+    p["samples"] = json!(false);
+    let result = s.execute(CMD, p).unwrap();
+    assert_eq!(result["outputs"].as_array().unwrap().len(), 24);
+    assert!((result["outputs"][0]["mean"].as_f64().unwrap() - 40.0).abs() < 2.0);
+    assert!((result["outputs"][23]["mean"].as_f64().unwrap() - 1190.0).abs() < 30.0);
+}
+
+#[test]
+fn monte_carlo_gaussian_correlation_matches_analytic_covariance() {
+    let mut s = model();
+    s.execute("cell.set", json!({"cell":"C1","input":"=A1+B1"})).unwrap();
+    let p = json!({"inputs":[{"cell":"A1","distribution":"normal","mean":0,"stdDev":1},{"cell":"B1","distribution":"normal","mean":0,"stdDev":1}],"outputs":["C1"],"iterations":20000,"seed":123,"samples":false,"correlation":[[1,0.75],[0.75,1]]});
+    let first = s.execute(CMD, p.clone()).unwrap();
+    assert!((first["outputs"][0]["stdDev"].as_f64().unwrap() - 3.5_f64.sqrt()).abs() < 0.04);
+    assert_eq!(first["independentInputs"], false);
+    s.execute("sheet.activate", json!({"sheet":0})).unwrap();
+    let again = s.execute(CMD, p).unwrap();
+    assert_eq!(first["outputs"], again["outputs"]);
+    assert_eq!(first["accuracy"], again["accuracy"]);
+    assert!(first["accuracy"][0]["meanCI95"].is_array());
+}
+
+#[test]
+fn monte_carlo_rejects_invalid_correlation_matrices_and_accepts_singular() {
+    for matrix in [
+        json!([[1]]),
+        json!([[1, 0.5], [0.3, 1]]),
+        json!([[0.9, 0], [0, 1]]),
+        json!([[1, 1.1], [1.1, 1]]),
+        json!([[1, "bad"], ["bad", 1]]),
+        json!([[1, 0, 0], [0, 1, 0]]),
+    ] {
+        let mut s = model();
+        let mut p = params();
+        p["correlation"] = matrix;
+        assert!(s.execute(CMD, p).is_err());
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    }
+    assert!(sampling::Plan::parse(&json!({"correlation":[[1,0.9,0.9],[0.9,1,-0.9],[0.9,-0.9,1]]}), 3, 1000).is_err());
+    for rho in [-1.0, 1.0] {
+        let mut s = model();
+        s.execute("cell.set", json!({"cell":"C1","input":"=A1+B1"})).unwrap();
+        let p = json!({"inputs":[{"cell":"A1","distribution":"normal","mean":0,"stdDev":1},{"cell":"B1","distribution":"normal","mean":0,"stdDev":1}],"outputs":["C1"],"iterations":20000,"samples":false,"correlation":[[1,rho],[rho,1]]});
+        let r = s.execute(CMD, p).unwrap();
+        let sd = r["outputs"][0]["stdDev"].as_f64().unwrap();
+        if rho < 0.0 {
+            assert!(sd < 1e-10);
+        } else {
+            assert!((sd - 2.0).abs() < 0.05);
+        }
+    }
+}
+
+#[test]
+fn monte_carlo_latin_hypercubes_preserve_strata_and_use_replica_error() {
+    let plan = sampling::Plan::parse(&json!({"method":"latinHypercube","replicates":8}), 1, 1024).unwrap();
+    let inputs = [Input { sheet: 0, cell: CellRef::new(0, 0), label: "A1".into(), distribution: Distribution::Uniform(0., 1.) }];
+    let samples = plan.sample(&inputs, 42).unwrap();
+    for replica in samples[0].chunks_exact(128) {
+        let mut bins = replica.iter().map(|x| (x * 128.).floor() as usize).collect::<Vec<_>>();
+        bins.sort();
+        assert_eq!(bins, (0..128).collect::<Vec<_>>());
+    }
+    let mut s = model();
+    s.execute("cell.set", json!({"cell":"C1","input":"=A1"})).unwrap();
+    let p = json!({"inputs":[{"cell":"A1","min":0,"max":1}],"outputs":["C1"],"iterations":1024,"method":"latinHypercube","replicates":8,"seed":42,"samples":false});
+    let r = s.execute(CMD, p).unwrap();
+    assert!((r["outputs"][0]["mean"].as_f64().unwrap() - 0.5).abs() < 0.001);
+    assert_eq!(r["accuracy"][0]["independentUnits"], 8);
+    assert!(r["accuracy"][0]["meanMCSE"].as_f64().unwrap() < 0.001);
+    assert!(r["accuracy"][0]["probabilityCI95"].is_null(), "a constant replica proportion is not a rare-event confidence guarantee");
+    assert_eq!(r["convergence"].as_array().unwrap().last().unwrap()["samples"], 1024);
+    for p in [
+        json!({"method":"latinHypercube","replicates":1}),
+        json!({"method":"latinHypercube","replicates":7}),
+        json!({"replicates":0}),
+        json!({"method":"bad"}),
+    ] {
+        assert!(sampling::Plan::parse(&p, 1, 1000).is_err());
+    }
+}
+
+#[test]
+fn monte_carlo_stable_moments_handle_large_offsets_and_extreme_ranges() {
+    for values in [[1e16, -1e16, 1.0], [1.0, 1e16, -1e16], [-1e16, 1.0, 1e16]] {
+        let (mean, _) = statistics::moments(&values).unwrap();
+        assert!((mean - 1.0 / 3.0).abs() < 1e-15);
+    }
+    let (m, sd) = statistics::moments(&[1e15 + 1., 1e15 + 2., 1e15 + 3.]).unwrap();
+    assert_eq!(m, 1e15 + 2.);
+    assert!((sd - 1.).abs() < 1e-12);
+    let (m, sd) = statistics::moments(&[-1e308, 1e308]).unwrap();
+    assert_eq!(m, 0.);
+    assert!((sd / 1e308 - 2_f64.sqrt()).abs() < 1e-14);
+    let correlation = statistics::correl(&[1e15 + 1., 1e15 + 2., 1e15 + 3.], &[3., 2., 1.]).unwrap();
+    assert!((correlation + 1.).abs() < 1e-12);
+}
+
+#[test]
+fn monte_carlo_correlated_lhs_matches_normal_sum_variance_and_preserves_seed() {
+    let inputs = [
+        Input { sheet: 0, cell: CellRef::new(0, 0), label: "A1".into(), distribution: Distribution::Normal(0., 1.) },
+        Input { sheet: 0, cell: CellRef::new(0, 1), label: "B1".into(), distribution: Distribution::Normal(0., 1.) },
+    ];
+    let p = json!({"method":"latinHypercube","replicates":8,"correlation":[[1,0.75],[0.75,1]]});
+    let plan = sampling::Plan::parse(&p, 2, 8192).unwrap();
+    let x = plan.sample(&inputs, 123).unwrap();
+    let again = plan.sample(&inputs, 123).unwrap();
+    assert_eq!(x, again);
+    let correlation = statistics::correl(&x[0], &x[1]).unwrap();
+    assert!((correlation - 0.75).abs() < 0.03);
+    let total = x[0].iter().zip(&x[1]).map(|(a, b)| a + b).collect::<Vec<_>>();
+    let (mean, sd) = statistics::moments(&total).unwrap();
+    assert!(mean.abs() < 0.01);
+    assert!((sd - 3.5_f64.sqrt()).abs() < 0.03);
+}

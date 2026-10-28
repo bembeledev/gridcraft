@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-27 · **Change:** minor (Monte Carlo trial reuse) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -133,6 +133,15 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
 - MCP: `gridcraft-cli mcp`, headless or `--connect` to a running app, see [`mcp.md`](mcp.md).
 - CLI: [`cli.md`](cli.md).
 
+## Monte Carlo analysis
+
+`data.monteCarlo` reuses `whatif::Trial` for seeded sampling over arbitrary workbook formulas.
+Trials do not modify the source document; only the final static report becomes an undo step.
+The engine owns random/replicated-LHS sampling, Gaussian dependence, stable summaries,
+sampling-error diagnostics and sample-derived tornado sensitivity; the egui dialog
+only edits command parameters. See [`monte-carlo.md`](monte-carlo.md) for limits and the
+reproducibility contract. No plugin host or external runtime is introduced.
+
 ## Platforms and builds
 
 macOS universal, Windows x64/x86/arm64, Linux x86_64/aarch64/riscv64 (AppImage, Flatpak, deb,
@@ -150,6 +159,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Monte Carlo reuses isolated what-if trials; generic command, report and thin UI |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

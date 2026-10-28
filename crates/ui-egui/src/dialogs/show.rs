@@ -19,6 +19,7 @@ use super::*;
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "monteCarlo" => return super::monte_carlo::params(d),
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
                 m.remove("action");
@@ -120,6 +121,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "monteCarlo" => 560.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -159,6 +161,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "monteCarlo" => super::monte_carlo::form(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {

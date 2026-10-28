@@ -414,7 +414,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Draws dialog actions with the default Enter-to-confirm shortcut.
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_with_enter(ui, confirm, open, true);
+}
+
+/// Draws dialog actions, letting multiline editors reserve Enter for line breaks.
+/// Mouse/keyboard activation of the OK button remains available regardless of the shortcut.
+pub(super) fn ok_cancel_with_enter(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enter_confirms: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -423,7 +430,7 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            if ok.clicked() || (enter_confirms && ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {

@@ -106,12 +106,16 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
             .join("\n"),
         _ => String::new(),
     };
-    if ui.add(egui::TextEdit::multiline(&mut matrix).desired_rows(2).desired_width(510.0)).labelled_by(matrix_label.id).changed() {
+    let matrix_response = ui.add(egui::TextEdit::multiline(&mut matrix).desired_rows(2).desired_width(510.0)).labelled_by(matrix_label.id);
+    let mut multiline_focused = matrix_response.has_focus();
+    if matrix_response.changed() {
         d.values.insert("correlation".into(), json!(matrix));
     }
     let outputs_label = ui.label("Output cells, one per line (e.g. Model!F30). Qualify references to other sheets.");
     let mut outputs = d.values.get("outputs").and_then(Json::as_str).unwrap_or("").to_string();
-    if ui.add(egui::TextEdit::multiline(&mut outputs).desired_rows(2).desired_width(510.0)).labelled_by(outputs_label.id).changed() {
+    let outputs_response = ui.add(egui::TextEdit::multiline(&mut outputs).desired_rows(2).desired_width(510.0)).labelled_by(outputs_label.id);
+    multiline_focused |= outputs_response.has_focus();
+    if outputs_response.changed() {
         d.values.insert("outputs".into(), json!(outputs));
     }
     ui.horizontal(|ui| {
@@ -123,7 +127,7 @@ pub(super) fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
         d.values.insert("samples".into(), json!(samples));
     }
     ui.label("Creates a static report with percentiles and a Monte Carlo tornado for the first output. Re-run after changing the model. Large models may take time.");
-    super::show::ok_cancel(ui, confirm, open);
+    super::show::ok_cancel_with_enter(ui, confirm, open, !multiline_focused);
 }
 
 /// Invalid typed numbers stay strings so the engine rejects them instead of silently defaulting.

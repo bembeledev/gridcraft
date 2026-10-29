@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod reports;
 mod show;
 mod spelling;
 mod zoom;
@@ -965,7 +966,8 @@ impl Dialog {
             }
             "evaluateFormula" => {
                 let mut d = Dialog::custom("evaluateFormula", "Evaluate Formula", json!({}));
-                d.result = app.session.run("formulas.evaluateFormula", json!({})).ok();
+                // Kept as a result so the dialog can say why there is nothing to evaluate.
+                d.result = Some(app.session.run("formulas.evaluateFormula", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "spelling" => {

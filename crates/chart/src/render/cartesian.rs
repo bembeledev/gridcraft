@@ -2,7 +2,10 @@ use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
-use super::*;
+use super::{
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Rgba, Scale, SeriesData, TEXT,
+    VAlign, WHITE, clean, fixed_scale, nice_scale,
+};
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -17,6 +20,9 @@ enum Fam {
     AreaStack,
     Area100,
 }
+
+/// Stack accumulator: (axis, family) key with positive and negative running sums.
+type Stack = ((bool, Fam), Vec<f64>, Vec<f64>);
 
 fn family(k: ChartKind) -> Fam {
     use ChartKind::*;
@@ -45,16 +51,7 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack)
 }
 
-pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
-    let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
-    if ncat == 0 {
-        return;
-    }
-    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { plot_kind(chart, s) }).collect();
-    let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
-    let any_primary = data.series.iter().any(|s| !s.secondary);
-    let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
-
+fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
     // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
@@ -81,7 +78,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if t > 0.0 { v / t } else { 0.0 }
     };
     // Stack accumulators keyed by (axis, family): positive and negative running sums.
-    let mut stacks: Vec<((bool, Fam), Vec<f64>, Vec<f64>)> = Vec::new();
+    let mut stacks: Vec<Stack> = Vec::new();
     let mut spans: Vec<Vec<Option<(f64, f64)>>> = Vec::with_capacity(data.series.len());
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
@@ -126,6 +123,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         spans.push(row);
     }
 
+    spans
+}
+
+fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option<(f64, f64)>>]) -> Vec<(Scale, Fmt)> {
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
@@ -151,6 +152,101 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             break;
         }
     }
+    axes
+}
+
+/// The column slots of each series, how many there are, and the subset belonging to the primary
+/// axes — the only ones a mirrored category axis may mirror within (#1895).
+fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32, Vec<usize>) {
+    // Column slots: each clustered series gets one, each stack group shares one.
+    let mut slot_keys: Vec<(bool, Fam, usize)> = Vec::new();
+    let mut slot_of = vec![0usize; fams.len()];
+    for (i, f) in fams.iter().enumerate() {
+        if !is_col(*f) {
+            continue;
+        }
+        let a = sec.get(i).copied().unwrap_or(false);
+        let key = if *f == Fam::Col { (a, *f, i) } else { (a, *f, usize::MAX) };
+        let k = match slot_keys.iter().position(|k| *k == key) {
+            Some(p) => p,
+            None => {
+                slot_keys.push(key);
+                slot_keys.len() - 1
+            }
+        };
+        if let Some(s) = slot_of.get_mut(i) {
+            *s = k;
+        }
+    }
+    // A cluster's slots mirror with the categories, but only the primary ones: the secondary axes are
+    // read and written forward, so flipping across every slot would put a primary bar on top of a
+    // secondary one instead of beside it (#1895 review).
+    let prim_slots: Vec<usize> = (0..slot_keys.len()).filter(|k| !slot_keys[*k].0).collect();
+    (slot_of, slot_keys.len().max(1) as f32, prim_slots)
+}
+
+/// A column's or bar's value label: where it sits across its cluster, where the bar ends, and how
+/// the axes run (#1895).
+#[derive(Clone, Copy)]
+struct BarLabel {
+    /// The bar's own slot across the cluster.
+    at: f32,
+    /// The bar's baseline and tip.
+    ends: (f32, f32),
+    /// Whether the series stacks, so the label is centred in the bar rather than past its tip.
+    stacked: bool,
+    /// Whether the chart is drawn as bars (a horizontal value axis) and whether the value axis is
+    /// mirrored.
+    horizontal: bool,
+    rev: bool,
+    /// The series' colour, which a centred label has to stay readable on.
+    color: Rgba,
+}
+
+impl BarLabel {
+    /// Draws it beyond the bar's tip, whichever way the value axis runs. A zero-length bar (a value
+    /// of 0) has no tip, so it follows the axis's own direction instead of the negative side:
+    /// right for bars, up for columns, mirrored with a reversed axis (#1895 review).
+    fn draw(&self, ctx: &mut Ctx, t: &str) {
+        let (pb, pt) = self.ends;
+        let mid = (pb + pt) / 2.0;
+        let fwd = if self.horizontal { 1.0 } else { -1.0 };
+        let tip = if pt == pb {
+            if self.rev { -fwd } else { fwd }
+        } else if pt > pb {
+            1.0
+        } else {
+            -1.0
+        };
+        if self.horizontal {
+            if self.stacked {
+                ctx.text(mid, self.at, t, LABEL_SIZE, on(self.color), (HAlign::Center, VAlign::Middle));
+            } else {
+                let ha = if tip > 0.0 { HAlign::Left } else { HAlign::Right };
+                ctx.text(pt + 3.0 * tip, self.at, t, LABEL_SIZE, TEXT, (ha, VAlign::Middle));
+            }
+        } else if self.stacked {
+            ctx.text(self.at, mid, t, LABEL_SIZE, on(self.color), (HAlign::Center, VAlign::Middle));
+        } else {
+            let va = if tip > 0.0 { VAlign::Top } else { VAlign::Bottom };
+            ctx.text(self.at, pt + 2.0 * tip, t, LABEL_SIZE, TEXT, (HAlign::Center, va));
+        }
+    }
+}
+
+pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
+    let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
+    if ncat == 0 {
+        return;
+    }
+    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { plot_kind(chart, s) }).collect();
+    let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
+    let any_primary = data.series.iter().any(|s| !s.secondary);
+    let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
+
+    let spans = series_spans(data, &fams, &sec, ncat);
+
+    let axes = axis_scales(data, &fams, &sec, &spans);
     let Some((s1, f1)) = axes.first() else { return };
     let y1 = ValAxis { scale: *s1, fmt: f1 };
     let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
@@ -167,8 +263,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let plot =
-        frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines, chart.cat_reverse, chart.val_reverse);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart);
     if !plot.ok() {
         return;
     }
@@ -187,31 +282,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if horizontal { plot.x + f * plot.w } else { plot.bottom() - f * plot.h }
     };
 
-    // Column slots: each clustered series gets one, each stack group shares one.
-    let mut slot_keys: Vec<(bool, Fam, usize)> = Vec::new();
-    let mut slot_of = vec![0usize; data.series.len()];
-    for (i, f) in fams.iter().enumerate() {
-        if !is_col(*f) {
-            continue;
-        }
-        let a = sec.get(i).copied().unwrap_or(false);
-        let key = if *f == Fam::Col { (a, *f, i) } else { (a, *f, usize::MAX) };
-        let k = match slot_keys.iter().position(|k| *k == key) {
-            Some(p) => p,
-            None => {
-                slot_keys.push(key);
-                slot_keys.len() - 1
-            }
-        };
-        if let Some(s) = slot_of.get_mut(i) {
-            *s = k;
-        }
-    }
-    let nslots = slot_keys.len().max(1) as f32;
-    // A cluster's slots mirror with the categories, but only the primary ones: the secondary axes are
-    // read and written forward, so flipping across every slot would put a primary bar on top of a
-    // secondary one instead of beside it (#1895 review).
-    let prim_slots: Vec<usize> = (0..slot_keys.len()).filter(|k| !slot_keys[*k].0).collect();
+    let (slot_of, nslots, prim_slots) = column_slots(&fams, &sec);
     let bw = cw / (nslots + 1.5);
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
@@ -287,46 +358,17 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let c = center(j, rev_cat);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
+                        // The bar's own slot across the cluster: its label sits at its centre, and
+                        // the bar itself half a slot before it.
+                        let at = if horizontal { c + nslots * bw / 2.0 - (k + 0.5) * bw } else { c - nslots * bw / 2.0 + (k + 0.5) * bw };
                         if horizontal {
-                            let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
+                            ctx.rect(lo, at - bw / 2.0, len, bw, s.color, None);
                         } else {
-                            let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
+                            ctx.rect(at - bw / 2.0, lo, bw, len, s.color, None);
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
-                            let t = fmt.format(v, None);
-                            let stacked = fam != Fam::Col;
-                            let mid = (pb + pt) / 2.0;
-                            // Beyond the bar's tip, whichever way the value axis runs. A zero-length
-                            // bar (a value of 0) has no tip, so it follows the axis's own direction
-                            // instead of the negative side: right for bars, up for columns, mirrored
-                            // with a reversed axis (#1895 review).
-                            let fwd = if horizontal { 1.0 } else { -1.0 };
-                            let tip = if pt == pb {
-                                if rev { -fwd } else { fwd }
-                            } else if pt > pb {
-                                1.0
-                            } else {
-                                -1.0
-                            };
-                            if horizontal {
-                                let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
-                                if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
-                                } else {
-                                    let ha = if tip > 0.0 { HAlign::Left } else { HAlign::Right };
-                                    ctx.text(pt + 3.0 * tip, y, &t, LABEL_SIZE, TEXT, ha, VAlign::Middle);
-                                }
-                            } else {
-                                let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
-                                if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
-                                } else {
-                                    let va = if tip > 0.0 { VAlign::Top } else { VAlign::Bottom };
-                                    ctx.text(x, pt + 2.0 * tip, &t, LABEL_SIZE, TEXT, HAlign::Center, va);
-                                }
-                            }
+                            BarLabel { at, ends: (pb, pt), stacked: fam != Fam::Col, horizontal, rev, color: s.color }
+                                .draw(ctx, &fmt.format(v, None));
                         }
                     }
                 }
@@ -341,7 +383,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
                             if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                             }
                         }
                     }
@@ -350,7 +392,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         }
         for (x, y, t, below) in area_labels.drain(..) {
             let va = if below { VAlign::Top } else { VAlign::Bottom };
-            ctx.text(x, y, &t, LABEL_SIZE, TEXT, HAlign::Center, va);
+            ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, va));
         }
     }
     // Trendlines on top: x is the category number 1..n.
@@ -411,7 +453,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines, false, chart.val_reverse);
+    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart);
     if !plot.ok() {
         return;
     }
@@ -457,7 +499,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if chart.data_labels && pts.len() <= MAX_LABELS {
             for (p, raw) in px.iter().zip(pts) {
                 if let (Some(p), Some((_, y))) = (p, raw) {
-                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                 }
             }
         }

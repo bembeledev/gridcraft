@@ -693,7 +693,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Защита ячеек и скрытие формул действуют только после защиты листа (Рецензирование › Защитить лист)."
         }
         "Lookup & Reference" => "Поиск и ссылки",
-        "Macros" => "Макросы",
         "Macros and scripts in this workbook (Alt+F8)" => "Макросы и сценарии этой книги (Alt+F8)",
         "Make Unconstrained Variables Non-Negative" => "Сделать переменные без ограничений неотрицательными",
         "Markers" => "Маркеры",
@@ -722,7 +721,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "New Comment" => "Новый комментарий",
         "New Name" => "Новое имя",
         "New Worksheet Ply:" => "Новый лист:",
-        "New sheet (⇧F11)" => "Новый лист (⇧F11)",
         "New title (Modify):" => "Новое название (изменить):",
         "New…" => "Создать…",
         "Next month" => "В следующем месяце",
@@ -867,7 +865,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Statistic" => "Статистика",
         "Statistical" => "Статистические",
         "Step value:" => "Шаг:",
-        "Stop" => "Стоп",
         "Stop value:" => "Конечное значение:",
         "Subject to the Constraints:" => "С учётом ограничений:",
         "Subscript" => "Подстрочный",
@@ -880,7 +877,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tab" => "Табуляция",
         "Table (⌘T)" => "Таблица (⌘T)",
         "Table Styles" => "Стили таблиц",
-        "Text Box" => "Текстовое поле",
         "Text length" => "Длина текста",
         "Text to Columns" => "Текст по столбцам",
         "The output range already holds data. Replace it with the report?" => "Выходной диапазон уже содержит данные. Заменить их отчётом?",

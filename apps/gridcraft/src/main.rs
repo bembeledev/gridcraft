@@ -31,6 +31,11 @@ use serde_json::json;
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
+    // App preferences already persist separately; only the native window belongs in eframe storage.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
@@ -339,7 +344,9 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // No-preferences and control-channel runs neither restore nor save the native window, so
+    // control-channel screenshots start from the same window every time.
+    let options = eframe::NativeOptions { viewport, persist_window: prefs_enabled() && control_port.is_none(), ..Default::default() };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut options = options;
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file

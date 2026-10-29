@@ -33,7 +33,8 @@ fn validation_diff(before: &Workbook, after: &Workbook, max_report: usize) -> Ca
 
 #[test]
 fn same_count_rule_formula_range_options_and_messages_changes_are_detected() {
-    let changes: &[(&str, fn(&mut Validation))] = &[
+    type ValidationChange = (&'static str, fn(&mut Validation));
+    let changes: &[ValidationChange] = &[
         ("kind", |v| v.kind = ValidationKind::Decimal),
         ("operator", |v| v.op = CfOperator::NotBetween),
         ("formula1", |v| v.f1 = "2".into()),

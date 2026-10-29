@@ -101,6 +101,8 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // Values show in the interface language's region (`1.234,5` and `31/12/2026` in Spanish).
+        gridcraft_engine::display::set_region(self.ui.language.region());
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.

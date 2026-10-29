@@ -510,6 +510,27 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
     ("Lookup & Reference", "بحث ومرجع"),
     ("Macros", "وحدات الماكرو"),
     ("Macros and scripts in this workbook (Alt+F8)", "وحدات الماكرو والبرامج النصية في هذا المصنف (Alt+F8)"),
+    ("Macros…", "وحدات الماكرو…"),
+    (
+        "Run
+Macro",
+        "تشغيل
+ماكرو",
+    ),
+    ("Run a macro on the selection", "تشغيل ماكرو على التحديد"),
+    ("Record Macro", "تسجيل ماكرو"),
+    ("Stop Recording", "إيقاف التسجيل"),
+    ("Recording", "جارٍ التسجيل"),
+    ("New Macro", "ماكرو جديد"),
+    ("Use Relative References", "استخدام المراجع النسبية"),
+    ("Record your actions as a macro", "تسجيل إجراءاتك كماكرو"),
+    ("Write a macro step by step", "كتابة ماكرو خطوة بخطوة"),
+    (
+        "Record steps relative to the cells selected when recording starts, so the macro works on other data",
+        "تسجيل الخطوات نسبةً إلى الخلايا المحددة عند بدء التسجيل ليعمل الماكرو على بيانات أخرى",
+    ),
+    ("Scroll ribbon left", "تمرير الشريط إلى اليسار"),
+    ("Scroll ribbon right", "تمرير الشريط إلى اليمين"),
     ("Magnification", "التكبير"),
     ("Make Unconstrained Variables Non-Negative", "جعل المتغيرات غير المقيّدة غير سالبة"),
     ("Manual", "يدوي"),

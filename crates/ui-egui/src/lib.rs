@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod ask_agent;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -267,6 +268,8 @@ pub struct SheetApp {
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
     pub started: f64,
+    /// Ask Agent: the control channel request queue and selection bubble.
+    pub ask_agent: ask_agent::AskAgent,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,

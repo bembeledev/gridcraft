@@ -231,3 +231,28 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+
+#[test]
+fn ukrainian_entry_uses_english_names_with_semicolons_and_the_decimal_comma() {
+    use gridcraft_engine::formula::FormulaLocale;
+    assert_eq!(Language::Uk.formula_locale(), FormulaLocale::Semicolon);
+    assert_eq!(Language::En.formula_locale(), FormulaLocale::En);
+    assert_eq!(Language::Es.formula_locale(), FormulaLocale::Es);
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"uk"})).unwrap();
+    assert!(enter(&mut app, "=IF(TRUE;SUM(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=IF(TRUE;SUM(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    // Constants follow the same region and its decimal comma.
+    assert!(enter(&mut app, "-1,5"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(-1.5));
+    // Back in English the stored formula shows the file syntax.
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    assert!(enter(&mut app, "=SUM(1.5,2)"));
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2)");
+}

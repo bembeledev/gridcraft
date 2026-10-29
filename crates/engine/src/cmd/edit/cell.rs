@@ -27,7 +27,11 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
-        let mut cell = Cell::formula(Formula::from_expr(expr));
+        let formula = match wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()) {
+            Some(previous) => previous.rewrite_input_expr(expr),
+            None => Formula::from_expr(expr),
+        };
+        let mut cell = Cell::formula(formula);
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
         if wb.styles.get(style).num_fmt.as_str() == "General" {
@@ -248,15 +252,16 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count}))
 }
 
+/// Fill a range with adjusted formulas while retaining imported call namespaces.
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        // Each cell gets what typing the input there gives: the automatic number format where
-        // it's General, its own format otherwise, text where it's Text. That depends only on
-        // the cell's style, so the input is parsed once per style.
+        // Automatic number formatting and Text input depend only on the destination style.
+        // Formula input also preserves a destination's imported namespaces: parse those cells
+        // independently, without reading or populating the shared style cache.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
             if r.count() > 2_000_000 {
@@ -264,12 +269,18 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
             }
             for at in r.iter() {
                 let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
-                let base = match by_style.get(&style) {
-                    Some(c) => c.clone(),
-                    None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
-                        by_style.insert(style, c.clone());
-                        c
+                let has_imported_namespaces =
+                    cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.as_ref()).is_some_and(|f| !f.file_functions.is_empty());
+                let base = if has_imported_namespaces {
+                    input_to_cell(&input, sheet, at, &mut cx.wb)?
+                } else {
+                    match by_style.get(&style) {
+                        Some(c) => c.clone(),
+                        None => {
+                            let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                            by_style.insert(style, c.clone());
+                            c
+                        }
                     }
                 };
                 let mut cell = base.unwrap_or_default();
@@ -277,7 +288,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewrite_expr(shifted)));
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 sh.set_cell(at, cell);

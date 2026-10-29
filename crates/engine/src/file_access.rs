@@ -304,6 +304,44 @@ mod tests {
         assert!(both.check(&s(base.join("out/new.xlsx")), Access::Write).is_err());
     }
 
+    /// A nested write root permits output without granting writes to the surrounding inputs.
+    #[test]
+    fn write_root_may_be_a_subfolder_of_the_read_root() {
+        let (base, _) = folders("nested");
+        let read = base.join("in");
+        let write = read.join("_artcraft");
+        std::fs::create_dir_all(&write).unwrap();
+        let roots = AutomationRoots::new(Some(&read), Some(&write)).unwrap().unwrap();
+        for path in [read.join("a.csv"), write.join("new.xlsx"), write.join("deeper/new.xlsx")] {
+            assert_eq!(roots.check(&s(path), Access::Read), Ok(()));
+        }
+        for path in [write.clone(), write.join("new.xlsx"), write.join("deeper/new.xlsx")] {
+            assert_eq!(roots.check(&s(path), Access::Write), Ok(()));
+        }
+        for path in [read.join("a.csv"), read.join("new.xlsx"), read.join("_artcraft2/new.xlsx"), write.join("../new.xlsx")] {
+            assert!(roots.check(&s(path), Access::Write).unwrap_err().contains("outside the write root"));
+        }
+        assert!(roots.check(&s(base.join("outside/secret.csv")), Access::Read).is_err());
+        assert_eq!(std::fs::read_to_string(read.join("a.csv")).unwrap(), "a,b");
+    }
+
+    /// Existing case aliases use the filesystem's canonical spelling on macOS.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_existing_case_aliases_follow_the_filesystem() {
+        let (base, roots) = folders("macos-case");
+        let original = base.join("in/MixedCase");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::write(original.join("Input.csv"), "synthetic,7").unwrap();
+        let alias = base.join("IN/mixedcase/input.CSV");
+        if alias.exists() {
+            assert_eq!(roots.check(&s(alias), Access::Read), Ok(()));
+        } else {
+            assert!(roots.check(&s(alias), Access::Read).is_err());
+        }
+        assert_eq!(std::fs::read_to_string(original.join("Input.csv")).unwrap(), "synthetic,7");
+    }
+
     #[test]
     fn a_sibling_with_the_same_prefix_is_outside() {
         let (base, roots) = folders("prefix");

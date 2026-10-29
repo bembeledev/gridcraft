@@ -127,3 +127,33 @@ fn folder_confinement_existing_temporary_file_survives_save_refusal() {
     assert_eq!(std::fs::read(&temporary).unwrap(), b"existing temporary content");
     assert!(!destination.exists());
 }
+
+/// The operator may keep inputs readable while allowing writes only to a nested output folder.
+#[test]
+fn folder_confinement_nested_write_root_preserves_inputs() {
+    let base = fixture("nested");
+    let read = base.join("allowed");
+    let write = read.join("_artcraft");
+    std::fs::create_dir_all(&write).unwrap();
+    let roots = AutomationRoots::new(Some(&read), Some(&write)).unwrap();
+    let mut b = Headless::new().with_automation_roots(roots);
+    let input = read.join("in.csv");
+    execute(&mut b, "file.open", json!({"path":input})).unwrap();
+    execute(&mut b, "cell.set", json!({"cell":"B1","input":"42"})).unwrap();
+    // Implicit Save still points at the input, outside the narrower write root.
+    assert!(execute(&mut b, "file.save", json!({})).unwrap_err().contains("outside the write root"));
+    for path in [read.join("new.xlsx"), read.join("_artcraft2/new.xlsx"), write.join("../new.xlsx"), base.join("outside/new.xlsx")] {
+        assert!(execute(&mut b, "file.saveAs", json!({"path":path})).unwrap_err().contains("outside the write root"));
+        assert!(!path.exists());
+    }
+    let destination = write.join("result.xlsx");
+    execute(&mut b, "file.saveAs", json!({"path":destination})).unwrap();
+    execute(&mut b, "file.open", json!({"path":destination})).unwrap();
+    let sheet = b.call("sheet.read", json!({"range":"A1:B1"})).unwrap();
+    assert!(sheet.to_string().contains("42"), "{sheet}");
+    execute(&mut b, "file.exportCsv", json!({"path":write.join("result.csv")})).unwrap();
+    assert!(std::fs::read_to_string(write.join("result.csv")).unwrap().contains("42"));
+    assert!(execute(&mut b, "file.open", json!({"path":base.join("outside/private.csv")})).unwrap_err().contains("outside the read root"));
+    assert_eq!(std::fs::read_to_string(input).unwrap(), "inside,7\n");
+    assert_eq!(std::fs::read_to_string(base.join("outside/private.csv")).unwrap(), "outside,91\n");
+}

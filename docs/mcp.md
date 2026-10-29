@@ -93,28 +93,25 @@ host.
 
 ## Restrict file access to a folder
 
-Use the in-process server with a folder chosen by the operator:
+Use the in-process server with read and write folders chosen by the operator. For
+example, keep inputs readable and allow outputs only in a nested directory:
 
 ```sh
-gridcraft-cli mcp --root /path/to/project
+gridcraft-cli mcp --automation-read-root /path/to/project --automation-write-root /path/to/project/_artcraft
 ```
 
-`--root DIR` grants read and write access only inside that existing folder. It is a
-shortcut for giving the same directory to `--automation-read-root DIR` and
-`--automation-write-root DIR`. Separate roots can keep inputs read-only and place
-outputs in another folder:
-
-```sh
-gridcraft-cli mcp --automation-read-root /path/to/inputs --automation-write-root /path/to/outputs
-```
+Both folders must already exist. Give the same folder to both options if read and
+write access should have the same boundary; sibling folders also work. The CLI
+uses the separate root flags from DeckCraft and VectorCraft, without a `--root`
+alias. Relative paths keep their working-directory-based meaning.
 
 When either access root is supplied, an omitted read or write root grants no
 access of that kind. With no root options the existing unrestricted behaviour is
 retained; the startup message and MCP initialization say which policy is active.
 Relative paths are relative to the server's working directory, and still have to
 resolve inside the corresponding root. Roots must exist and be directories.
-Duplicate root flags, an empty root, or combining `--root` with separate roots are
-errors. Both `--root DIR` and `--root=DIR` are accepted.
+Duplicate root flags and empty roots are errors. Both `--automation-read-root DIR`
+and `--automation-read-root=DIR` are accepted (likewise for the write root).
 
 The checks apply before `--in FILE` is opened and at the engine's file I/O
 boundary: workbook open/save, CSV and text import, picture import, CSV/HTML/PDF
@@ -130,8 +127,14 @@ Root flags cannot be combined with `--connect`: the desktop control channel does
 not enforce these roots, so the CLI refuses that configuration rather than
 advertising a restriction it cannot provide. This is a file policy for the
 headless MCP server, not an OS sandbox. It does not defend against another local
-process changing symlinks between validation and opening a file. Windows-specific
-path behaviour needs native Windows validation.
+process changing symlinks between validation and opening a file. The path policy
+follows the implementation accepted in [DeckCraft #247](https://github.com/storytold/deckcraft/pull/247).
+On macOS and Linux the containment rule is equivalent. On Windows GridCraft
+compares canonical components exactly rather than applying Unicode lowercasing,
+so distinct directories on case-sensitive volumes cannot be conflated. A casing
+mismatch can conservatively refuse access. Windows path display also preserves
+non-Unicode paths and strips only recognised verbatim disk/UNC prefixes. Native
+Windows validation is still needed.
 
 Example MCP client configuration:
 
@@ -140,12 +143,12 @@ Example MCP client configuration:
   "mcpServers": {
     "gridcraft": {
       "command": "/path/to/gridcraft-cli",
-      "args": ["mcp", "--root", "/path/to/project"]
+      "args": ["mcp", "--automation-read-root", "/path/to/project", "--automation-write-root", "/path/to/project/_artcraft"]
     }
   }
 }
 ```
 
 This implementation adapts Isaac Levine's [PR #480](https://github.com/storytold/gridcraft/pull/480) and additionally checks the
-initial `--in` file, offers the single-folder `--root` option, and covers the
-current command layout. Related issues: #445 and #2172.
+initial `--in` file and the atomic-save temporary path, and covers the current
+command layout. Related issues: #445 and #2172.

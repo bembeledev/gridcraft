@@ -22,14 +22,12 @@ fn folder_confinement_cli_checks_initial_in_before_reading() {
     let root = p.join("allowed");
     let outside = p.join("outside/in.csv");
     let inside = root.join("in.csv");
-    for flag in ["--root", "--automation-read-root"] {
-        let denied = run(&["mcp", flag, root.to_str().unwrap(), "--in", outside.to_str().unwrap()]);
-        assert!(!denied.status.success());
-        assert!(String::from_utf8_lossy(&denied.stderr).contains("outside the read root"));
-        let allowed = run(&["mcp", flag, root.to_str().unwrap(), "--in", inside.to_str().unwrap()]);
-        assert!(allowed.status.success(), "{}", String::from_utf8_lossy(&allowed.stderr));
-    }
-    let inline = format!("--root={}", root.display());
+    let denied = run(&["mcp", "--automation-read-root", root.to_str().unwrap(), "--in", outside.to_str().unwrap()]);
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("outside the read root"));
+    let allowed = run(&["mcp", "--automation-read-root", root.to_str().unwrap(), "--in", inside.to_str().unwrap()]);
+    assert!(allowed.status.success(), "{}", String::from_utf8_lossy(&allowed.stderr));
+    let inline = format!("--automation-read-root={}", root.display());
     assert!(run(&["mcp", &inline, "--in", inside.to_str().unwrap()]).status.success());
 }
 #[test]
@@ -38,16 +36,16 @@ fn folder_confinement_cli_rejects_ambiguous_or_unenforceable_configuration() {
     let root = p.join("allowed");
     let r = root.to_str().unwrap();
     for args in [
-        vec!["mcp", "--root", r, "--root", r],
-        vec!["mcp", "--root", r, "--automation-read-root", r],
-        vec!["mcp", "--connect", "7979", "--root", r],
-        vec!["mcp", "--root", ""],
+        vec!["mcp", "--automation-read-root", r, "--automation-read-root", r],
+        vec!["mcp", "--automation-write-root", r, "--automation-write-root", r],
+        vec!["mcp", "--connect", "7979", "--automation-read-root", r],
+        vec!["mcp", "--automation-read-root", ""],
         vec!["mcp", "--automation-read-root"],
-        vec!["mcp", "--root", "--sample", "sales"],
+        vec!["mcp", "--automation-read-root", "--sample", "sales"],
     ] {
         let o = run(&args);
         assert!(!o.status.success(), "{args:?}");
     }
-    assert!(!run(&["mcp", "--root", p.join("missing").to_str().unwrap()]).status.success());
-    assert!(!run(&["mcp", "--root", root.join("in.csv").to_str().unwrap()]).status.success());
+    assert!(!run(&["mcp", "--automation-read-root", p.join("missing").to_str().unwrap()]).status.success());
+    assert!(!run(&["mcp", "--automation-read-root", root.join("in.csv").to_str().unwrap()]).status.success());
 }

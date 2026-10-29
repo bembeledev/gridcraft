@@ -70,3 +70,16 @@ fn mixed_namespaces_on_the_same_function_remain_distinct() {
         roundtrip_formula(formula);
     }
 }
+
+/// Canonical known functions still need occurrence metadata when bare and prefixed calls mix.
+#[test]
+fn mixed_namespaces_on_known_functions_remain_distinct() {
+    for formula in [
+        "XLOOKUP(B1,C1:C3,D1:D3)+_xlfn.XLOOKUP(B2,C1:C3,D1:D3)",
+        "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)+XLOOKUP(B2,C1:C3,D1:D3)+_xlfn.XLOOKUP(B3,C1:C3,D1:D3)",
+        "FILTER(B1:B3,B1:B3>0)+_xlfn._xlws.FILTER(C1:C3,C1:C3>0)",
+        "_xlfn._xlws.FILTER(B1:B3,B1:B3>0)+FILTER(C1:C3,C1:C3>0)",
+    ] {
+        roundtrip_formula(formula);
+    }
+}

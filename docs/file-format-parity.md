@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (preserve imported function namespaces through cell edits and XLSX saves) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (preserve mixed bare/prefixed known-function calls; #2836 review follow-up) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -15,6 +15,12 @@ Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on sa
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
 ## Imported cell-function namespaces (#2775)
+
+Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
+`_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
+import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
+calls keep their existing behavior; this does not change function calculation support.
+
 
 Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
 cannot recreate. The evaluator still sees normalized names; this does not implement the
@@ -123,6 +129,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
 | 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |

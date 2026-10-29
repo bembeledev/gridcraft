@@ -154,3 +154,37 @@ fn range_fill_prefixed_first_does_not_tag_bare_destinations() {
 fn range_fill_bare_first_does_not_strip_prefixed_destinations() {
     range_fill_keeps_destination_namespaces(2);
 }
+
+/// A known function's mixed spelling survives import, argument edits, copy and a second save.
+#[test]
+fn mixed_known_prefixes_survive_edit_copy_and_reopen() {
+    let mut wb = Workbook::new();
+    let mut formula = Formula::new("XLOOKUP(D1,$A$1:$A$2,$B$1:$B$2)+XLOOKUP(D2,$A$1:$A$2,$B$1:$B$2)");
+    formula.file_functions.insert("XLOOKUP".into(), vec![None, Some(FileFunctionPrefix::Xlfn)]);
+    let sheet = wb.sheet_mut(0).unwrap();
+    for (addr, value) in [("A1", 1.0), ("A2", 2.0), ("B1", 10.0), ("B2", 20.0), ("D1", 1.0), ("D2", 2.0), ("D3", 1.0)] {
+        sheet.set_value(CellRef::parse(addr).unwrap(), Value::Number(value));
+    }
+    sheet.set_cell(CellRef::parse("C1").unwrap(), Cell::formula(formula));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name":"synthetic-mixed-known.xlsx","base64":gridcraft_engine::io::base64_encode(&bytes)})).unwrap();
+    let original = "XLOOKUP(D1,$A$1:$A$2,$B$1:$B$2)+_xlfn.XLOOKUP(D2,$A$1:$A$2,$B$1:$B$2)";
+    assert!(saved_xml(&mut s).contains(original));
+    s.execute("cell.set", json!({"cell":"C1","input":"=XLOOKUP(D2,$A$1:$A$2,$B$1:$B$2)+XLOOKUP(D1,$A$1:$A$2,$B$1:$B$2)"})).unwrap();
+    let edited = "XLOOKUP(D2,$A$1:$A$2,$B$1:$B$2)+_xlfn.XLOOKUP(D1,$A$1:$A$2,$B$1:$B$2)";
+    assert!(saved_xml(&mut s).contains(edited));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(saved_xml(&mut s).contains(original));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(saved_xml(&mut s).contains(edited));
+    s.execute("edit.copy", json!({"range":"C1"})).unwrap();
+    s.execute("edit.paste", json!({"at":"C2"})).unwrap();
+    let shifted = "XLOOKUP(D3,$A$1:$A$2,$B$1:$B$2)+_xlfn.XLOOKUP(D2,$A$1:$A$2,$B$1:$B$2)";
+    assert!(saved_xml(&mut s).contains(shifted));
+    let saved = s.execute("file.saveBytes", json!({"format":"xlsx"})).unwrap();
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name":"synthetic-reopened.xlsx","base64":saved["base64"]})).unwrap();
+    let xml = saved_xml(&mut reopened);
+    assert!(xml.contains(edited) && xml.contains(shifted), "{xml}");
+}

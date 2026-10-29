@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (preserve imported function namespaces through cell edits and XLSX saves) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (preserve mixed bare/prefixed known-function calls; #2836 review follow-up) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -18,6 +18,12 @@ This page is the summary. The detail is in:
 - [`docs/architecture.md`](docs/architecture.md): how it is built
 
 ## Imported cell-function namespaces (#2775)
+
+Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
+`_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
+import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
+calls keep their existing behavior; this does not change function calculation support.
+
 
 Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
 cannot recreate. The evaluator still sees normalized names; this does not implement the
@@ -255,6 +261,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
 | 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |

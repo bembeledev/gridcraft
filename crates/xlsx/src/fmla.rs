@@ -216,6 +216,13 @@ pub(crate) fn cell_from_file(text: &str) -> Formula {
             calls.entry(name).or_default().push(prefix);
         }
     }
+    // Even a known function's canonical prefix needs an override when another occurrence is
+    // bare: otherwise the writer's canonical spelling silently prefixes that bare call too.
+    for (name, sequence) in &calls {
+        if sequence.iter().any(Option::is_none) && sequence.iter().any(Option::is_some) {
+            overrides.insert(name.clone());
+        }
+    }
     formula.file_functions = calls.into_iter().filter(|(name, _)| overrides.contains(name)).collect();
     formula
 }
@@ -380,5 +387,14 @@ mod tests {
         // A LET-bound LAMBDA called by name.
         assert_eq!(to_file(&Formula::new("LET(f,LAMBDA(x,x*2),f(3))")), "_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.F(3))");
         assert_eq!(from_file("_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))"), "LET(f,LAMBDA(x,x*2),F(3))");
+    }
+
+    #[test]
+    fn canonical_known_calls_do_not_need_namespace_overrides() {
+        for text in ["XLOOKUP(B1,C1:C3,D1:D3)", "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)"] {
+            let formula = cell_from_file(text);
+            assert!(formula.file_functions.is_empty(), "{text}");
+            assert_eq!(to_file(&formula), "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)");
+        }
     }
 }

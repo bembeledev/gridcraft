@@ -613,6 +613,7 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
+    crate::file_access::check_read(path).map_err(EngineError::Other)?;
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -638,12 +639,14 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     script_sandbox_check(path)?;
+    crate::file_access::check_write(path).map_err(EngineError::Other)?;
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
     // The temporary file is created exclusively, so an existing file or symlink at that
     // path (planted by another local user) makes the save fail instead of truncating the
     // link's target; and it inherits the destination's access restrictions, so saving a
     // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
+    crate::file_access::check_write(&tmp).map_err(EngineError::Other)?;
     let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -652,10 +655,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         opts.mode(p.mode());
     }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
+    // A failed exclusive open did not create the temporary file; never remove someone else's.
+    let mut f = opts.open(&tmp).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     #[cfg(not(unix))]
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());

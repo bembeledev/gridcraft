@@ -636,7 +636,7 @@ fn custom_pdf_fonts_are_per_export_and_fail_before_writing() {
     assert!(err.contains("limit"), "{err}");
     let sandbox = crate::io::ScriptSandbox::enter();
     let err = s.execute_headless("file.exportPdf", json!({"fonts": {"regular": font}})).unwrap_err().to_string();
-    assert!(err.contains("scripts can't read"), "{err}");
+    assert!(err.contains("can't read or write files"), "{err}");
     drop(sandbox);
     assert!(s.take_ui_requests().is_empty());
     std::fs::remove_dir_all(dir).unwrap();

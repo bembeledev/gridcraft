@@ -184,6 +184,20 @@ pub struct Workbook {
     /// Saved From Web connections (Data ▸ Get Data ▸ From Web), one per imported table.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub web_queries: Vec<crate::features::WebQuery>,
+    /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
+    /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
+    #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
+    pub macros: crate::macros::Macros,
+    /// The `macros` entries of a JSON file as read, before the engine checks each one on its own
+    /// and moves it into `macros`, so one damaged or newer macro doesn't stop the file opening.
+    /// Never written.
+    #[serde(rename = "macros", default, skip_serializing, deserialize_with = "crate::macros::entries")]
+    pub macros_read: Vec<serde_json::Value>,
+    /// Macros in a newer format than this build reads, as the file held them. They are never read,
+    /// listed or run; a save writes them back unchanged, so the newer build gets them back whole.
+    /// Shared between snapshots, as nothing changes them.
+    #[serde(skip)]
+    pub macros_unread: Arc<Vec<serde_json::Value>>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -282,6 +296,9 @@ impl Workbook {
             vba_project: None,
             csv_delimiter: None,
             web_queries: Vec::new(),
+            macros: crate::macros::Macros::default(),
+            macros_read: vec![],
+            macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
             source_path: None,
@@ -443,7 +460,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phonetics_are_additive_in_json() {
+    fn phonetics_are_additive_in_json() -> Result<(), Box<dyn std::error::Error>> {
         let mut wb = Workbook::new();
         assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
         wb.phonetics.push(PhoneticString {
@@ -451,12 +468,13 @@ mod tests {
             runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
             props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
         });
-        let json = serde_json::to_string(&wb).expect("serialize");
-        assert_eq!(serde_json::from_str::<Workbook>(&json).expect("deserialize").phonetics, wb.phonetics);
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.phonetics, wb.phonetics);
         // JSON written before the field existed still loads.
-        let mut value: serde_json::Value = serde_json::from_str(&json).expect("value");
-        value.as_object_mut().expect("an object").remove("phonetics");
-        assert!(serde_json::from_value::<Workbook>(value).expect("older JSON").phonetics.is_empty());
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().ok_or("none")?.remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
     }
 
     #[test]

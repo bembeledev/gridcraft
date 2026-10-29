@@ -1989,6 +1989,8 @@ version = "0.13.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-pdf",
+ "gridcraft-ui-egui",
  "log",
  "quick-xml 0.41.0",
  "serde_json",
@@ -2050,6 +2052,7 @@ name = "gridcraft-mcp"
 version = "0.13.0"
 dependencies = [
  "gridcraft-engine",
+ "gridcraft-pdf",
  "log",
  "serde_json",
 ]
@@ -2089,6 +2092,7 @@ dependencies = [
  "epaint_default_fonts",
  "gridcraft-chart",
  "gridcraft-engine",
+ "gridcraft-pdf",
  "gridcraft-xlsx",
  "image",
  "log",

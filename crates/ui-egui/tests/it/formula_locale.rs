@@ -231,3 +231,75 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+#[test]
+fn russian_entry_roundtrips_through_xlsx_and_keeps_api_canonical() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    assert!(enter(&mut app, "=если(истина;сумм(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"russian.xlsx","base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=ЕСЛИ(ИСТИНА;СУММ(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert!(app.run("cell.set", json!({"cell":"A2","input":"=SUM(1,2)"})).is_ok());
+    assert!(app.run("cell.set", json!({"cell":"A3","input":"=СУММ(1;2)"})).is_err());
+    assert!(enter(&mut app, "=ЕСЛИОШИБКА(#ССЫЛКА!;42)"));
+    assert_eq!(formula(&app), "IFERROR(#REF!,42)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+}
+
+#[test]
+fn russian_constants_and_literal_text_do_not_change_type_when_edited() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    for (typed, expected) in [("#ССЫЛКА!", Value::Error(CellError::Ref)), ("истина", Value::Bool(true)), ("ложь", Value::Bool(false))]
+    {
+        assert!(enter(&mut app, typed));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+        app.begin_edit(None, false);
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+    }
+    for text in ["#ССЫЛКА!", "ИСТИНА", "ЛОЖЬ", "+сумм(1)"] {
+        app.run("cell.set", json!({"cell":"A1","input":format!("'{text}")})).unwrap();
+        app.begin_edit(None, false);
+        assert!(app.editor.as_ref().unwrap().text.starts_with('\''));
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(text));
+    }
+}
+
+#[test]
+fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_ui_egui::editor::EditState;
+    let mut editor = EditState::new(0, 0, CellRef::new(0, 0), "=сче".into(), true, false);
+    editor.locale = FormulaLocale::Ru;
+    editor.update_autocomplete(&["СЧЁТ".into(), "СЧЁТЕСЛИ".into()]);
+    assert_eq!(editor.autocomplete, vec!["СЧЁТ", "СЧЁТЕСЛИ"]);
+    assert!(editor.accept_autocomplete());
+    assert_eq!(editor.text, "=СЧЁТ(");
+    assert_eq!(editor.caret, editor.text.chars().count());
+    assert_eq!(editor.current_function(), Some(("СЧЁТ".into(), 0)));
+    assert!(editor.insert_argument_names(Language::Ru));
+    assert!(editor.text.contains(Language::Ru.function_argument("value").unwrap()));
+}
+
+#[test]
+fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
+    for code in ["es", "ru"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language":code})).unwrap();
+        app.run("home.numberFormat", json!({"format":"@"})).unwrap();
+        let locale = app.ui.language.formula_locale();
+        for text in [locale.function_name("TRUE"), locale.error_name(CellError::Ref)] {
+            assert!(enter(&mut app, text));
+            app.begin_edit(None, false);
+            assert_eq!(app.editor.as_ref().unwrap().text, text);
+            app.editor.as_mut().unwrap().text.push('!');
+            assert!(app.commit_edit(0, 0, false, false));
+            assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(format!("{text}!")));
+        }
+    }
+}

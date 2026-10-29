@@ -7,6 +7,8 @@ use std::cmp::Ordering;
 
 use egui::RichText;
 
+use crate::i18n::Language;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
     pub login: &'static str,
@@ -123,19 +125,21 @@ impl Contributor {
 
     /// One line with everything we know, for tooltips.
     pub fn summary(&self) -> String {
-        format!(
-            "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}",
-            self.login,
-            self.prs,
-            self.commits,
-            group(self.lines_added),
-            group(self.lines_deleted),
-            signed(self.lines_delta()),
-            self.binary_added,
-            self.binary_deleted,
-            day(self.first_commit),
-            day(self.last_commit),
-        )
+        self.localized_summary(Language::En)
+    }
+
+    fn localized_summary(&self, lang: Language) -> String {
+        lang.tr("@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binary_added} / −{binary_deleted} binary assets, {first} – {last}")
+            .replace("{prs}", &self.prs.to_string())
+            .replace("{commits}", &self.commits.to_string())
+            .replace("{added}", &group(self.lines_added))
+            .replace("{deleted}", &group(self.lines_deleted))
+            .replace("{delta}", &signed(self.lines_delta()))
+            .replace("{binary_added}", &self.binary_added.to_string())
+            .replace("{binary_deleted}", &self.binary_deleted.to_string())
+            .replace("{first}", day(self.first_commit))
+            .replace("{last}", day(self.last_commit))
+            .replace("{login}", self.login)
     }
 }
 
@@ -212,42 +216,51 @@ impl Default for View {
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
 pub fn contributors_ui(ui: &mut egui::Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Show");
+        ui.label(lang.tr("Show"));
         for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, m.label()).clicked() {
+            if ui.selectable_label(v.names == m, lang.tr(m.label())).clicked() {
                 v.names = m;
             }
         }
         ui.separator();
-        ui.label("Sort");
-        craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, k.label().0).clicked() {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
+        ui.label(lang.tr("Sort"));
+        craft_ui::ComboBox::from_id_salt("credits_sort")
+            .selected_text(lang.tr(v.key.label().0))
+            .show_ui(ui, |ui| {
+                for k in SortKey::ALL {
+                    if ui.selectable_label(v.key == k, lang.tr(k.label().0)).clicked() {
+                        v.key = k;
+                        v.ascending = k.default_ascending();
+                    }
                 }
-            }
-        });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text("Reverse the order").clicked() {
+            })
+            .response
+            .accessible_name(lang.tr("Sort"));
+        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(lang.tr("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
-        if ui.selectable_label(!v.table, "Grab bag").clicked() {
+        if ui.selectable_label(!v.table, lang.tr("Grab bag")).clicked() {
             v.table = false;
         }
-        if ui.selectable_label(v.table, "Table").clicked() {
+        if ui.selectable_label(v.table, lang.tr("Table")).clicked() {
             v.table = true;
         }
     });
     let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    ui.label(RichText::new(format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().weak());
+    let counts = lang
+        .tr("{contributors} contributors · {commits} commits")
+        .replace("{contributors}", &list.len().to_string())
+        .replace("{commits}", &group(TOTAL_COMMITS));
+    ui.label(RichText::new(counts).small().weak());
     ui.separator();
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
         if list.is_empty() {
-            ui.label("No contributor data was built into this copy.");
+            ui.label(lang.tr("No contributor data was built into this copy."));
         } else if v.table {
             table(ui, &list, &mut v);
         } else {
@@ -256,7 +269,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
                     if i > 0 {
                         ui.label(RichText::new("·").weak());
                     }
-                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.localized_summary(lang));
                 }
             });
         }
@@ -265,10 +278,11 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
 }
 
 fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
+    let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
             let arrow = if v.key == k { if v.ascending { " ▲" } else { " ▼" } } else { "" };
-            if ui.button(RichText::new(format!("{}{arrow}", k.label().1)).strong()).on_hover_text(k.label().0).clicked() {
+            if ui.button(RichText::new(format!("{}{arrow}", lang.tr(k.label().1))).strong()).on_hover_text(lang.tr(k.label().0)).clicked() {
                 if v.key == k {
                     v.ascending = !v.ascending;
                 } else {
@@ -279,7 +293,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
         }
         ui.end_row();
         for c in list {
-            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.localized_summary(lang));
             ui.label(group(c.prs));
             ui.label(group(c.commits));
             ui.label(group(c.lines_added));
@@ -296,15 +310,16 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
 pub fn models_ui(ui: &mut egui::Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     if MODELS.is_empty() {
-        ui.label("No model credits were built into this copy.");
+        ui.label(lang.tr("No model credits were built into this copy."));
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
         egui::Grid::new("credits_models").striped(true).num_columns(6).show(ui, |ui| {
             for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
-                ui.label(RichText::new(h).strong());
+                ui.label(RichText::new(lang.tr(h)).strong());
             }
             ui.end_row();
             for m in MODELS {

@@ -557,9 +557,8 @@ pub fn code_editor(ui: &mut Ui, id: egui::Id, text: &mut String, lang: Lang, max
                 ui.scroll_to_rect(caret, None);
             }
             // The field has no visible label; name it for screen readers and the strict
-            // kittest accessibility check. The editor is a generic code field, so the name is
-            // not part of the UI's translated strings.
-            let mut r = out.response.response.accessible_name("Code Editor");
+            // kittest accessibility check.
+            let mut r = out.response.response.accessible_name(crate::i18n::current(ui.ctx()).tr("Code Editor"));
             if edited.is_some() {
                 r.mark_changed();
             }

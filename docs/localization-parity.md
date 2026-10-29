@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (Turkish UI labels and accessibility wiring) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -83,9 +83,9 @@ separators, number/date formats, machine translation with agent review, and scri
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
-| Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
+| Turkish | tr | 1,618 (~74% of source estimate; 100% of catalog) | dialogs, menus, tooltips, panes, formula help | Latin: yes | community review pending | broad UI coverage | further runtime review needed |
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
+Other shipped languages: Russian (ru), German (de), Czech (cs) and French (fr), menus only.
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
@@ -110,6 +110,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Turkish catalog covers all 1,618 interface keys in this branch; more dialog, ribbon, pane, accessibility, Backstage template and status bar labels now look up translated strings before rendering. Stored command values stay unchanged. Hard-coded literals outside the catalog still require separate UI review |
+| 2026-10-28 | minor | Turkish catalog covers all 1,545 interface keys in this branch; Find/Replace, Sort, Solver, save prompts, and result messages now look up translated labels and templates before rendering. Stored command values stay unchanged |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

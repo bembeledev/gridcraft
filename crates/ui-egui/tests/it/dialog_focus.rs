@@ -2,6 +2,7 @@
 //! column width without clicking into the field first.
 
 use egui::{Event, Key, vec2};
+use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::SheetApp;
@@ -80,4 +81,173 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     let after_page = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
+}
+
+/// Checks platform-specific labels for the Bold and Filter shortcuts.
+#[test]
+fn command_search_shows_shortcuts_for_current_platform() {
+    let mut h = harness();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+
+    h.state_mut().dialog.as_mut().unwrap().search = "bold".into();
+    h.run_steps(3);
+
+    let bold = if h.ctx.os() == egui::os::OperatingSystem::Mac { "Bold  (⌘B)" } else { "Bold  (Ctrl+B)" };
+    h.get_by_label_contains(bold);
+
+    h.state_mut().dialog.as_mut().unwrap().search = "filter".into();
+    h.run_steps(3);
+
+    let filter = if h.ctx.os() == egui::os::OperatingSystem::Mac { "Filter  (⌘⇧F)" } else { "Filter  (Ctrl+Shift+L)" };
+    h.get_by_label_contains(filter);
+}
+
+/// Checks that Paste Special shows a usable shortcut after copying a cell.
+#[test]
+fn command_search_shows_paste_special_shortcut() {
+    let mut h = harness();
+
+    h.state_mut().session.execute("cell.set", json!({"cell": "C3", "input": "copied"})).unwrap();
+    h.state_mut().session.execute("edit.copy", json!({"range": "C3"})).unwrap();
+
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+
+    h.state_mut().dialog.as_mut().unwrap().search = "pasteSpecial".into();
+    h.run_steps(3);
+
+    let expected = if h.ctx.os() == egui::os::OperatingSystem::Mac { "Paste Special…  (Ctrl+Cmd+V)" } else { "Paste Special…  (Ctrl+Alt+V)" };
+
+    h.get_by_label_contains(expected);
+}
+
+/// Checks both OS mappings on one host, including commands with conflicting keys.
+#[test]
+fn command_search_uses_runtime_os_and_verified_shortcuts() {
+    use egui::os::OperatingSystem;
+
+    for (os, bold, filter, flash, paste, left, center) in [
+        (
+            OperatingSystem::Windows,
+            "Bold  (Ctrl+B)",
+            "Filter  (Ctrl+Shift+L)",
+            "Flash Fill  (Ctrl+E)",
+            "Paste Special…  (Ctrl+Alt+V)",
+            "Align Left    Home",
+            "Center    Home",
+        ),
+        (
+            OperatingSystem::Mac,
+            "Bold  (⌘B)",
+            "Filter  (⌘⇧F)",
+            "Flash Fill  (Control+E)",
+            "Paste Special…  (Ctrl+Cmd+V)",
+            "Align Left  (⌘L)",
+            "Center  (⌘E)",
+        ),
+    ] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().session.execute("cell.set", json!({"cell": "C3", "input": "copied"})).unwrap();
+        h.state_mut().session.execute("edit.copy", json!({"range": "C3"})).unwrap();
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        for (query, expected) in [
+            ("bold", bold),
+            ("filter", filter),
+            ("edit.flashFill", flash),
+            ("edit.pasteSpecial", paste),
+            ("home.alignLeft", left),
+            ("home.alignCenter", center),
+        ] {
+            h.state_mut().dialog.as_mut().unwrap().search = query.into();
+            h.run_steps(3);
+            h.get_by_label_contains(expected);
+        }
+    }
+}
+/// Selection shortcuts use the same bindings as the runtime keyboard handler.
+#[test]
+fn command_search_selection_shortcuts_match_runtime_os() {
+    for (os, column_label) in [
+        (egui::os::OperatingSystem::Windows, "Select Entire Column  (Ctrl+Space)"),
+        (egui::os::OperatingSystem::Mac, "Select Entire Column  (Control+Space)"),
+    ] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "selection.row".into();
+        h.run_steps(3);
+        h.get_by_label_contains("Select Entire Row  (Shift+Space)");
+
+        h.state_mut().dialog.as_mut().unwrap().search = "selection.column".into();
+        h.run_steps(3);
+        h.get_by_label_contains(column_label);
+    }
+}
+
+/// Ribbon tooltips and the Command Palette read the same shortcut metadata.
+#[test]
+fn command_palette_and_ribbon_tooltips_share_shortcuts() {
+    use gridcraft_ui_egui::widgets::{command_shortcut, tooltip_shortcut};
+
+    for (id, tip) in [
+        ("file.save", "Save"),
+        ("edit.undo", "Undo"),
+        ("edit.redo", "Redo"),
+        ("edit.copy", "Copy"),
+        ("edit.cut", "Cut"),
+        ("edit.paste", "Paste"),
+        ("home.bold", "Bold"),
+        ("home.italic", "Italic"),
+        ("home.underline", "Underline"),
+        ("formulas.autoSum", "AutoSum"),
+        ("insert.table", "Table"),
+        ("data.filter", "Filter"),
+        ("edit.flashFill", "Flash Fill"),
+        ("formulas.showFormulas", "Show Formulas"),
+    ] {
+        for mac in [false, true] {
+            assert_eq!(command_shortcut(id, mac), tooltip_shortcut(tip, mac), "{id} and {tip} diverged on mac={mac}");
+        }
+    }
+
+    assert_eq!(command_shortcut("edit.flashFill", true), Some("Control+E"));
+    assert_eq!(command_shortcut("home.alignCenter", true), Some("⌘E"));
+    assert_eq!(command_shortcut("home.alignCenter", false), None);
+    assert_eq!(command_shortcut("formulas.showFormulas", true), Some("⌘`"));
+    assert_eq!(command_shortcut("edit.pasteSpecial", false), Some("Ctrl+Alt+V"));
+    assert_eq!(command_shortcut("selection.row", false), Some("Shift+Space"));
+    assert_eq!(command_shortcut("unverified.command", false), None);
+}
+
+/// Current Region must show the physical Control shortcut on both platforms.
+#[test]
+fn command_search_shows_current_region_shortcut() {
+    use egui::os::OperatingSystem;
+
+    for (os, expected) in
+        [(OperatingSystem::Windows, "Select Current Region  (Ctrl+Shift+8)"), (OperatingSystem::Mac, "Select Current Region  (Control+Shift+8)")]
+    {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "selection.currentRegion".into();
+
+        h.run_steps(3);
+        h.get_by_label_contains(expected);
+    }
 }

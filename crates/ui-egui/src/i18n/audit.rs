@@ -228,8 +228,6 @@ fn is_data(label: &str) -> bool {
         || !label.chars().any(|c| c.is_alphabetic())
         // Workbook content that passes through `tr` on its way to the screen.
         || ["Sales", "Book1", "Calibri", "Workbook", "Sheet1"].contains(&label)
-        // A number-format name or a font name shown as it is.
-        || label.contains("{")
 }
 
 #[test]

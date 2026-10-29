@@ -349,9 +349,9 @@ impl Dialog {
                         a.iter()
                             .map(|r| {
                                 let lock = match (r["password"].as_bool(), r["unlocked"].as_bool()) {
-                                    (Some(true), Some(true)) => " (password, unlocked)",
-                                    (Some(true), _) => " (password)",
-                                    _ => "",
+                                    (Some(true), Some(true)) => format!(" ({})", app.ui.language.tr("password, unlocked")),
+                                    (Some(true), _) => format!(" ({})", app.ui.language.tr("password")),
+                                    _ => String::new(),
                                 };
                                 format!("{}: {}{lock}", r["title"].as_str().unwrap_or(""), r["range"].as_str().unwrap_or(""))
                             })
@@ -516,8 +516,12 @@ impl Dialog {
                     "openLink",
                     "Open Hyperlink",
                     "link.open",
-                    vec![Note(format!(
-                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                    // The template is translated before the address goes in, so a real URL cannot hide it from the catalog.
+                    vec![Shown(app.ui.language.tr_with(
+                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.
+
+{url}",
+                        &[("url", &url)],
                     ))],
                     json!({"url": url}),
                 )

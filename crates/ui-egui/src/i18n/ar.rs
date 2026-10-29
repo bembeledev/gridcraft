@@ -531,6 +531,11 @@ Macro",
     ),
     ("Scroll ribbon left", "تمرير الشريط إلى اليسار"),
     ("Scroll ribbon right", "تمرير الشريط إلى اليمين"),
+    ("Scripts in this workbook came from a file and are disabled.", "جاءت البرامج النصية في هذا المصنف من ملف وهي معطّلة."),
+    ("Trust Scripts", "الوثوق بالبرامج النصية"),
+    ("Let this workbook's scripts run for the rest of this session", "السماح بتشغيل البرامج النصية لهذا المصنف حتى نهاية هذه الجلسة"),
+    ("password", "كلمة مرور"),
+    ("password, unlocked", "كلمة مرور، غير مقفلة"),
     ("Magnification", "التكبير"),
     ("Make Unconstrained Variables Non-Negative", "جعل المتغيرات غير المقيّدة غير سالبة"),
     ("Manual", "يدوي"),
@@ -1626,6 +1631,17 @@ mod tests {
             assert!(!arabic.chars().any(indic), "{english:?} uses Arabic-Indic digits");
             assert!(!arabic.chars().any(mark), "{english:?} holds a direction mark; egui orders the text");
         }
+    }
+
+    #[test]
+    fn a_template_is_translated_before_a_real_address_goes_in() {
+        use crate::i18n::Language;
+        let key = "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}";
+        let url = "https://example.org/a?b=1";
+        let shown = Language::Ar.tr_with(key, &[("url", url)]);
+        assert_ne!(shown, Language::En.tr_with(key, &[("url", url)]));
+        assert!(shown.ends_with(url), "{shown}");
+        assert!(shown.chars().any(|c| ('\u{600}'..='\u{6FF}').contains(&c)), "{shown}");
     }
 
     #[test]

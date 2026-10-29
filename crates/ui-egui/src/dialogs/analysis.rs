@@ -322,7 +322,7 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         ui.label(lang.tr("Reports:"));
         for (key, label) in [("answerReport", "Answer"), ("limitsReport", "Limits")] {
             let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            if crate::rtl::checkbox(ui, &mut on, label).changed() {
+            if crate::rtl::checkbox(ui, &mut on, lang.tr(label)).changed() {
                 d.values.insert(key.into(), json!(on));
             }
         }

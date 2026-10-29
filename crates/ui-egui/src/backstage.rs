@@ -397,10 +397,11 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
     let known = bs.recent.known(ui.ctx(), &app.ui.recent);
     // The web build has no files to ask about, and a narrow window leaves the names their room.
     let modified_w = if cfg!(target_arch = "wasm32") || width < 420.0 { 0.0 } else { MODIFIED_W };
+    let rtl = crate::rtl::on(ui.ctx());
     if modified_w > 0.0 {
         let (head, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
         ui.painter().text(
-            pos2(head.right() - modified_w, head.center().y),
+            pos2(if rtl { head.left() } else { head.right() - modified_w }, head.center().y),
             Align2::LEFT_CENTER,
             lang.tr("Modified"),
             theme::ui_font(11.5),
@@ -412,7 +413,6 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
         let (name, folder) = split_path(&path);
         let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-        let rtl = crate::rtl::on(ui.ctx());
         let p = ui.painter();
         if resp.hovered() {
             p.rect_filled(rect, 4.0, t.hover);

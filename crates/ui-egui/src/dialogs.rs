@@ -70,6 +70,10 @@ pub struct Dialog {
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
     focus_initialized: bool,
+    /// Save/Don't Save answer on release, before quitting can move focus to another viewport.
+    save_changes_armed: Option<Key>,
+    /// A chosen answer waits for every Y/N key to be up before this window can close.
+    save_changes_pending: Option<crate::SaveAnswer>,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
 }
@@ -97,6 +101,14 @@ struct RefPick {
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Input can lose focus during a font-gated pass that never draws the dialog.
+    pub(crate) fn cancel_unfocused_save_changes(&mut self, ctx: &egui::Context) {
+        if self.name == "saveChanges" && !ctx.input(save_changes_focused) {
+            self.save_changes_armed = None;
+            self.save_changes_pending = None;
+        }
     }
 
     /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom`
@@ -182,6 +194,8 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            save_changes_armed: None,
+            save_changes_pending: None,
             pick: None,
         }
     }
@@ -203,6 +217,8 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            save_changes_armed: None,
+            save_changes_pending: None,
             pick: None,
         }
     }
@@ -1020,6 +1036,11 @@ impl Dialog {
         };
         Some(d)
     }
+}
+
+fn save_changes_focused(input: &egui::InputState) -> bool {
+    // Windows can synthesize releases before focus loss; judge the whole batch.
+    input.focused && !input.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ pub fn to_file(f: &Formula) -> String {
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
         Some(e) if f.file_functions.is_empty() && !needs_file_spelling(&e) => gridcraft_formula::print(&e),
-        Some(e) => restore_call_prefixes(&expr_to_file(Expr::clone(&e)), &f.file_functions),
+        Some(e) => expr_to_file_with_prefixes(Expr::clone(&e), &f.file_functions),
         None => f.text.clone(),
     }
 }
@@ -103,12 +103,17 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
 
 /// Canonical file spelling for formulas that have no imported namespace overrides.
 fn expr_to_file(e: Expr) -> String {
+    expr_to_file_with_prefixes(e, &BTreeMap::new())
+}
+
+fn expr_to_file_with_prefixes(e: Expr, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> String {
     let e = prefix_params(e, &[]);
+    let mut imported = imported_call_names(&e, prefixes).into_iter();
     let e = e.map(&mut |x| match x {
-        Expr::Call(name, args) => match crate::tables::file_function_name(&name) {
-            Some(n) => Expr::Call(n, args),
-            None => Expr::Call(name, args),
-        },
+        Expr::Call(name, args) => {
+            let name = imported.next().flatten().unwrap_or_else(|| crate::tables::file_function_name(&name).unwrap_or(name));
+            Expr::Call(name, args)
+        }
         // Files have no `#` operator: Excel writes `A1#` as `_xlfn.ANCHORARRAY(A1)`, and a spill
         // reference that became `#REF!` (its cell was deleted) as plain `#REF!`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) if matches!(*r, Expr::Error(_)) => *r,
@@ -143,48 +148,66 @@ fn call_key(raw: &str) -> String {
     strip_param_prefix(gridcraft_formula::normalize_function_name(raw)).to_ascii_uppercase()
 }
 
-/// Restore namespaces per occurrence after standard file spelling and LET/LAMBDA rewriting.
-fn restore_call_prefixes(text: &str, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> String {
+/// Resolve namespaces against original calls in source order, then emit the choices in the
+/// bottom-up order used by `Expr::map`. Operator-generated calls (for example TRIMRANGE) do not
+/// occur in this list and cannot consume an imported call's namespace. An explicit stack also
+/// keeps long operator chains off the Rust call stack.
+fn imported_call_names(e: &Expr, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> Vec<Option<String>> {
     if prefixes.is_empty() {
-        return text.to_string();
+        return Vec::new();
     }
-    let Ok(tokens) = gridcraft_formula::lexer::tokenize(text) else { return text.to_string() };
+    let mut totals: BTreeMap<String, usize> = BTreeMap::new();
+    e.walk(&mut |node| {
+        if let Expr::Call(raw, _) = node {
+            let count = totals.entry(call_key(raw)).or_default();
+            *count = count.saturating_add(1);
+        }
+    });
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    for token in tokens {
-        let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
-        let name = call_key(&raw);
-        let Some(sequence) = prefixes.get(&name) else { continue };
-        let index = counts.entry(name.clone()).or_default();
-        let prefix = sequence.get(*index);
-        *index = index.saturating_add(1);
-        let Some(prefix) = prefix else { continue };
-        let replacement = match prefix {
-            Some(prefix) => prefix.apply(&name),
-            None if raw.to_ascii_uppercase().starts_with("_XLPM.") => raw.clone(),
-            None => name,
-        };
-        if replacement == raw {
+    let mut names = Vec::new();
+    let mut pending = vec![(e, false, None)];
+    while let Some((node, finished, replacement)) = pending.pop() {
+        if finished {
+            names.push(replacement);
             continue;
         }
-        let Some(end) = token.start.checked_add(raw.len()) else { return text.to_string() };
-        let (Some(before), Some(original)) = (text.get(cursor..token.start), text.get(token.start..end)) else { return text.to_string() };
-        if original != raw {
-            return text.to_string();
+        match node {
+            Expr::Call(raw, args) => {
+                let key = call_key(raw);
+                let replacement = prefixes.get(&key).filter(|sequence| totals.get(&key) == Some(&sequence.len())).and_then(|sequence| {
+                    let index = counts.entry(key.clone()).or_default();
+                    let prefix = sequence.get(*index);
+                    *index = index.saturating_add(1);
+                    prefix.map(|prefix| match prefix {
+                        Some(prefix) => prefix.apply(&key),
+                        None if raw.to_ascii_uppercase().starts_with("_XLPM.") => raw.clone(),
+                        None => key,
+                    })
+                });
+                pending.push((node, true, replacement));
+                pending.extend(args.iter().rev().map(|a| (a, false, None)));
+            }
+            Expr::Array(rows) => pending.extend(rows.iter().flatten().rev().map(|a| (a, false, None))),
+            Expr::Unary(_, x) | Expr::Paren(x) => pending.push((x, false, None)),
+            Expr::Binary(_, a, b) => {
+                pending.push((b, false, None));
+                pending.push((a, false, None));
+            }
+            Expr::Invoke(callee, args) => {
+                pending.extend(args.iter().rev().map(|a| (a, false, None)));
+                pending.push((callee, false, None));
+            }
+            _ => {}
         }
-        out.push_str(before);
-        out.push_str(&replacement);
-        cursor = end;
     }
-    let Some(rest) = text.get(cursor..) else { return text.to_string() };
-    out.push_str(rest);
-    out
+    names
 }
 
 /// Read a cell formula and retain explicit namespaces the known-function table cannot recreate.
 pub(crate) fn cell_from_file(text: &str) -> Formula {
-    let mut formula = Formula::new(&from_file(text));
+    let source = parse_model_expr(text);
+    let model_text = source.as_ref().map_or_else(|| text.strip_prefix('=').unwrap_or(text).to_string(), gridcraft_formula::print);
+    let mut formula = Formula::new(&model_text);
     if formula.expr.is_none()
         || text.len() > gridcraft_formula::MAX_FORMULA_LEN
         || !text.as_bytes().windows(b"_xlfn.".len()).any(|part| part.eq_ignore_ascii_case(b"_xlfn."))
@@ -192,7 +215,6 @@ pub(crate) fn cell_from_file(text: &str) -> Formula {
         return formula;
     }
     let mut calls: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
-    let mut overrides = std::collections::BTreeSet::new();
     if let Ok(tokens) = gridcraft_formula::lexer::tokenize(text) {
         for token in tokens {
             let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
@@ -208,18 +230,20 @@ pub(crate) fn cell_from_file(text: &str) -> Formula {
             } else {
                 None
             };
-            if let Some(prefix) = prefix
-                && crate::tables::file_function_name(&name).as_deref() != Some(prefix.apply(&name).as_str())
-            {
-                overrides.insert(name.clone());
-            }
             calls.entry(name).or_default().push(prefix);
         }
     }
-    // Even a known function's canonical prefix needs an override when another occurrence is
-    // bare: otherwise the writer's canonical spelling silently prefixes that bare call too.
+    // Printing a non-range trim operand already turns it into TRIMRANGE in the model text.
+    // Align the metadata with those model calls too, before testing which sequences need it.
+    if let Some(source) = source.as_ref() {
+        calls = model_call_prefixes(source, &calls);
+    }
+    let mut overrides = std::collections::BTreeSet::new();
     for (name, sequence) in &calls {
-        if sequence.iter().any(Option::is_none) && sequence.iter().any(Option::is_some) {
+        let canonical = crate::tables::file_function_name(name);
+        let different = sequence.iter().flatten().any(|p| canonical.as_deref() != Some(p.apply(name).as_str()));
+        let mixed = sequence.iter().any(Option::is_none) && sequence.iter().any(Option::is_some);
+        if different || mixed {
             overrides.insert(name.clone());
         }
     }
@@ -229,15 +253,51 @@ pub(crate) fn cell_from_file(text: &str) -> Formula {
 
 /// Formula text read from a file → model text (strips prefixes when it parses).
 pub fn from_file(text: &str) -> String {
-    let body = text.strip_prefix('=').unwrap_or(text);
-    match gridcraft_formula::parse(body) {
-        Ok(e) => gridcraft_formula::print(&e.map(&mut |x| match x {
+    parse_model_expr(text).as_ref().map_or_else(|| text.strip_prefix('=').unwrap_or(text).to_string(), gridcraft_formula::print)
+}
+
+fn parse_model_expr(text: &str) -> Option<Expr> {
+    gridcraft_formula::parse(text.strip_prefix('=').unwrap_or(text)).ok().map(|e| {
+        e.map(&mut |x| match x {
             Expr::Name(n) => Expr::Name(strip_param_prefix(n)),
             Expr::Call(n, args) => Expr::Call(strip_param_prefix(n), args),
             other => other,
-        })),
-        Err(_) => body.to_string(),
-    }
+        })
+    })
+}
+
+/// Model printing uses a call for trim operands that have no reference-operator spelling.
+/// Insert its canonical namespace in source order without consuming a real imported call.
+fn model_call_prefixes(
+    source: &Expr,
+    original: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>,
+) -> BTreeMap<String, Vec<Option<FileFunctionPrefix>>> {
+    let mut mapped: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    source.walk(&mut |node| match node {
+        Expr::Call(raw, _) => {
+            let key = call_key(raw);
+            if let Some(sequence) = original.get(&key) {
+                let index = counts.entry(key.clone()).or_default();
+                if let Some(prefix) = sequence.get(*index) {
+                    mapped.entry(key).or_default().push(*prefix);
+                }
+                *index = index.saturating_add(1);
+            }
+        }
+        Expr::Unary(gridcraft_formula::UnOp::Trim(_), x) => {
+            let becomes_call = match &**x {
+                Expr::Ref(r) => matches!(r.kind, gridcraft_formula::RefKind::Cell(_)),
+                Expr::Binary(gridcraft_formula::BinOp::Range, _, _) | Expr::Error(_) => false,
+                _ => true,
+            };
+            if becomes_call {
+                mapped.entry("TRIMRANGE".into()).or_default().push(Some(FileFunctionPrefix::Xlfn));
+            }
+        }
+        _ => {}
+    });
+    mapped
 }
 
 #[cfg(test)]
@@ -396,5 +456,13 @@ mod tests {
             assert!(formula.file_functions.is_empty(), "{text}");
             assert_eq!(to_file(&formula), "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)");
         }
+    }
+
+    /// Older JSON or externally supplied metadata with another call count must not retarget it.
+    #[test]
+    fn mismatched_occurrence_metadata_uses_canonical_spelling_without_guessing() {
+        let mut formula = Formula::new("TRIMRANGE(A1:B2,3,3)+TRIMRANGE(C1:D2,1,1)+TRIMRANGE(E1:F2,1,1)");
+        formula.file_functions.insert("TRIMRANGE".into(), vec![None, Some(FileFunctionPrefix::XlfnXlws)]);
+        assert_eq!(to_file(&formula), "_xlfn.TRIMRANGE(A1:B2,3,3)+_xlfn.TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)");
     }
 }

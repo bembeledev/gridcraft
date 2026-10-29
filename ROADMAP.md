@@ -23,6 +23,9 @@ Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
 `_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
 import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
 calls keep their existing behavior; this does not change function calculation support.
+Namespaces are assigned to the original expression calls before file-only operator calls are
+generated. Model-normalized trim calls are aligned on import; mismatched occurrence counts
+fall back to canonical spelling instead of attaching a namespace to another call.
 
 
 Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table

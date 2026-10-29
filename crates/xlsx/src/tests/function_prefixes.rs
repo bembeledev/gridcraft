@@ -83,3 +83,29 @@ fn mixed_namespaces_on_known_functions_remain_distinct() {
         roundtrip_formula(formula);
     }
 }
+
+/// Operator-generated TRIMRANGE calls do not consume imported call occurrence metadata.
+#[test]
+fn generated_trim_calls_do_not_steal_imported_namespaces() {
+    for (source, expected) in [
+        (
+            "_xlfn._TRO_ALL(A1:B2)+TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)",
+            "_xlfn.TRIMRANGE(A1:B2,3,3)+TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)",
+        ),
+        (
+            "TRIMRANGE(C1:D2,1,1)+_xlfn._TRO_ALL(A1:B2)+_xlfn.TRIMRANGE(E1:F2,1,1)",
+            "TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(A1:B2,3,3)+_xlfn.TRIMRANGE(E1:F2,1,1)",
+        ),
+        ("TRIMRANGE(_xlfn._TRO_ALL(A1:B2),1,1)+_xlfn.TRIMRANGE(C1:D2,1,1)", "TRIMRANGE(_xlfn.TRIMRANGE(A1:B2,3,3),1,1)+_xlfn.TRIMRANGE(C1:D2,1,1)"),
+        ("_xlfn._TRO_ALL(TRIMRANGE(A1:B2,1,1))+_xlfn.TRIMRANGE(C1:D2,1,1)", "_xlfn.TRIMRANGE(TRIMRANGE(A1:B2,1,1),3,3)+_xlfn.TRIMRANGE(C1:D2,1,1)"),
+        ("A1.:.B2+TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)", "_xlfn.TRIMRANGE(A1:B2,3,3)+TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)"),
+    ] {
+        let xml = format!(r#"<sheetData><row r="1"><c r="A1"><f>{source}</f><v>7</v></c></row></sheetData>"#);
+        let mut bytes = minimal(&xml, &[], "", "");
+        for _ in 0..2 {
+            let (wb, _) = crate::read_xlsx(&bytes).unwrap();
+            bytes = crate::write_xlsx(&wb).unwrap();
+            assert_eq!(formulas(&bytes)["A1"], expected, "source: {source}");
+        }
+    }
+}

@@ -2114,6 +2114,7 @@ dependencies = [
  "log",
  "rfd",
  "serde_json",
+ "sha2 0.11.1",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

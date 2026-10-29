@@ -1089,3 +1089,106 @@ fn params_docs_parse_into_keys() {
         assert!(find_command(id).is_some(), "CURATED names unknown command `{id}`");
     }
 }
+
+#[test]
+fn legacy_array_clearing_copied_spill_matches_full_recalculation() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample":"grades"})).expect("sample opens");
+    for (id, params) in [
+        ("home.mergeCells", json!({"range":"F:H"})),
+        ("cell.set", json!({"cell":"J54","input":"=SEQUENCE(5)*C6"})),
+        ("selection.set", json!({"range":"15:15"})),
+        ("sheet.move", json!({"copy":true,"sheet":0,"to":1})),
+        ("selection.set", json!({"range":"D3:J54"})),
+        ("cell.set", json!({"array":true,"cell":"D3","input":"=SUM('Q4 2026'!J54#)"})),
+    ] {
+        s.execute(id, params).expect("reported command succeeds");
+        assert_eq!(recalc_diff(wb_of(&s)), Ok(()), "after {id}");
+    }
+    let spill = CellRef::parse("J55").expect("cell");
+    assert_eq!(wb_of(&s).sheets[0].value(spill), Value::Number(190.0));
+    assert!(wb_of(&s).sheets[1].value(spill).is_empty());
+    s.execute("edit.undo", json!({})).expect("undo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert_eq!(wb_of(&s).sheets[1].value(spill), Value::Number(190.0));
+    s.execute("edit.redo", json!({})).expect("redo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert!(wb_of(&s).sheets[1].value(spill).is_empty());
+}
+
+#[test]
+fn legacy_array_clearing_spill_anchor_invalidates_spill_tail() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).expect("new workbook");
+    s.execute("cell.set", json!({"cell":"D1","input":"=SEQUENCE(5)"})).expect("spill formula");
+    s.execute("selection.set", json!({"range":"A1:F1"})).expect("select spill anchor");
+    s.execute("cell.set", json!({"array":true,"cell":"A1","input":"187"})).expect("array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    for row in 1..5 {
+        assert!(wb_of(&s).sheets[0].value(CellRef::new(row, 3)).is_empty());
+    }
+    s.execute("edit.undo", json!({})).expect("undo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert_eq!(wb_of(&s).sheets[0].value(CellRef::new(4, 3)), Value::Number(5.0));
+    s.execute("edit.redo", json!({})).expect("redo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert!(wb_of(&s).sheets[0].value(CellRef::new(4, 3)).is_empty());
+}
+
+#[test]
+fn legacy_array_clearing_spill_anchor_recalculates_dependents() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).expect("new workbook");
+    s.execute("cell.set", json!({"cell":"J54","input":"=SEQUENCE(5)"})).expect("spill formula");
+    s.execute("cell.set", json!({"cell":"L1","input":"=SUM(J55:J58)"})).expect("spill dependent");
+    let spill = CellRef::parse("J55").expect("spill cell");
+    let dependent = CellRef::parse("L1").expect("dependent cell");
+    assert_eq!(wb_of(&s).sheets[0].value(spill), Value::Number(2.0));
+    assert_eq!(wb_of(&s).sheets[0].value(dependent), Value::Number(14.0));
+    s.execute("selection.set", json!({"range":"A50:K54"})).expect("select spill anchor");
+    s.execute("cell.set", json!({"array":true,"cell":"A50","input":"=1"})).expect("array entry");
+    for row in 54..58 {
+        assert!(wb_of(&s).sheets[0].value(CellRef::new(row, 9)).is_empty());
+    }
+    assert_eq!(wb_of(&s).sheets[0].value(dependent), Value::Number(0.0));
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    s.execute("edit.undo", json!({})).expect("undo array entry");
+    assert_eq!(wb_of(&s).sheets[0].value(spill), Value::Number(2.0));
+    assert_eq!(wb_of(&s).sheets[0].value(dependent), Value::Number(14.0));
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    s.execute("edit.redo", json!({})).expect("redo array entry");
+    assert!(wb_of(&s).sheets[0].value(spill).is_empty());
+    assert_eq!(wb_of(&s).sheets[0].value(dependent), Value::Number(0.0));
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+}
+
+#[test]
+fn clearing_styled_and_unstyled_blockers_unblocks_near_and_distant_spills() {
+    for styled in [false, true] {
+        for rows in [3, 100] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({})).unwrap();
+            let blocker = format!("A{rows}");
+            s.execute("cell.set", json!({"cell":blocker,"input":"9"})).unwrap();
+            if styled {
+                s.execute("home.bold", json!({"range":blocker})).unwrap();
+            }
+            s.execute("cell.set", json!({"cell":"A1","input":format!("=SEQUENCE({rows})")})).unwrap();
+            s.execute("cell.set", json!({"cell":"C1","input":format!("=SUM(A2:A{rows})")})).unwrap();
+            let anchor = CellRef::new(0, 0);
+            let dependent = CellRef::new(0, 2);
+            assert_eq!(wb_of(&s).sheets[0].value(anchor), Value::Error(gridcraft_engine::core::CellError::Spill));
+            s.execute("edit.clearContents", json!({"range":blocker})).unwrap();
+            let expected = Value::Number(f64::from(rows * (rows + 1) / 2 - 1));
+            assert_eq!(wb_of(&s).sheets[0].value(dependent), expected);
+            assert_eq!(wb_of(&s).sheets[0].value(CellRef::new(rows - 1, 0)), Value::Number(f64::from(rows)));
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(wb_of(&s).sheets[0].value(anchor), Value::Error(gridcraft_engine::core::CellError::Spill));
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(wb_of(&s).sheets[0].value(dependent), expected);
+            assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+        }
+    }
+}

@@ -37,11 +37,21 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    #[cfg(test)]
+    nearby_scan_visits: usize,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            #[cfg(test)]
+            nearby_scan_visits: 0,
+        }
     }
 }
 
@@ -203,6 +213,10 @@ impl Calc {
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
+        #[cfg(test)]
+        {
+            self.nearby_scan_visits = 0;
+        }
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
@@ -249,12 +263,19 @@ impl Calc {
                         seeds.push((k.0, *anchor));
                     }
                 }
-                for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
-                    if c != k.1 && cell.value == Value::Error(CellError::Spill) {
-                        seeds.push((k.0, c));
+                // Empty cells (including styled blanks) are handled by the per-sheet pass below.
+                // Avoid repeatedly visiting stored styled blanks in overlapping neighborhoods.
+                if sh.cells.has(k.1) {
+                    for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
+                        #[cfg(test)]
+                        {
+                            self.nearby_scan_visits += 1;
+                        }
+                        if c != k.1 && cell.value == Value::Error(CellError::Spill) {
+                            seeds.push((k.0, c));
+                        }
                     }
-                }
-                if !sh.cells.has(k.1) {
+                } else {
                     match emptied.iter_mut().find(|x| x.0 == k.0) {
                         Some(x) => x.1 = CellRef::new(x.1.row.max(k.1.row), x.1.col.max(k.1.col)),
                         None => emptied.push(k),
@@ -531,6 +552,48 @@ pub(crate) mod tests {
     use gridcraft_model::{Cell, Formula, Workbook};
 
     use super::{Calc, HashMap, Host, Intervals, Key, PassHost};
+
+    #[test]
+    fn cleared_cells_skip_repeated_nearby_spill_scans() {
+        let mut counts = Vec::new();
+        for styled in [false, true] {
+            let mut wb = Workbook::new();
+            let mut style = gridcraft_model::Style::default();
+            style.font.bold = styled;
+            let style = wb.styles.intern(style);
+            let sh = wb.sheet_mut(0).unwrap();
+            let mut changed = Vec::new();
+            for row in 0..64 {
+                for col in 0..64 {
+                    let c = CellRef::new(row, col);
+                    sh.cells.set(c, Cell { style, ..Cell::default() });
+                    changed.push((0, c));
+                }
+            }
+            let anchor = CellRef::new(0, 0);
+            sh.set_value(anchor, Value::Number(1.0));
+            let mut calc = Calc::new();
+            calc.cells_changed(&mut wb, &changed);
+            eprintln!("styled={styled}: {} nearby stored-cell visits", calc.nearby_scan_visits);
+            counts.push(calc.nearby_scan_visits);
+        }
+        assert_eq!(counts, vec![1, 1], "4095 empty notifications must not rescan their neighborhoods");
+    }
+
+    #[test]
+    fn nonempty_changes_keep_nearby_blocked_spill_detection() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("=SEQUENCE(3,2)")));
+        sh.set_value(CellRef::new(1, 1), Value::Number(1.0));
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Error(super::CellError::Spill));
+        wb.sheet_mut(0).unwrap().set_value(CellRef::new(1, 1), Value::Number(2.0));
+        calc.cells_changed(&mut wb, &[(0, CellRef::new(1, 1))]);
+        assert_eq!(calc.nearby_scan_visits, 2, "nonempty edits still scan the anchor and blocker");
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Error(super::CellError::Spill));
+    }
 
     /// xorshift64 for repeatable pseudo-random cases.
     fn rng(state: &mut u64) -> u64 {

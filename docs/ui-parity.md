@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (worksheet scrollbar capture cleanup, #2748; earlier: AutoSum over a selected row puts its total to the right; earlier: macro interface on the Automate tab; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -71,6 +71,7 @@ this logic, with one undo step.
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
+| Worksheet scrollbar capture | Both axes end a drag on observed button-up or focus loss, including when the window only runs logic. Native Wayland also cancels on `PointerGone`: the pinned bridge can drop an outside release and keep reporting the button down. This fallback can end a held drag at the window edge on Wayland; Windows, macOS, X11 and web keep capture across pointer exit (#2748). Ubuntu/Wayland runtime behavior is unverified. |
 | Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
 
 ## Keyboard
@@ -190,6 +191,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Worksheet scrollbar capture cleanup and the native Wayland pointer-exit fallback (#2748) |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |

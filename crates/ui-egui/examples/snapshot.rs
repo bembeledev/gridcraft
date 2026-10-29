@@ -1,7 +1,7 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|zh|ja|ko|ru|pt|cs|ar]
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr|ar]
 //!  [--dialog 'name={json}'] [--backstage home|new|open|info|saveAs|print|export|options] [--hf-edit header|footer]
 //!  [--click x,y]... [--rclick x,y]... out.png` (clicks use window pixels at scale 1 and run in order)
 
@@ -93,6 +93,9 @@ fn main() {
         }
         i += 1;
     }
+    // Catalog the installed fonts first (the app scans in the background from its first frame), so
+    // the workbook's fonts are drawn in their own faces, not a substitute.
+    let _ = gridcraft_ui_egui::fonts::catalog();
     let mut session = Session::new();
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
@@ -136,7 +139,7 @@ fn main() {
                     app.open_backstage(page);
                 }
                 // Page Layout view: edit the first page's centre header (or footer) section.
-                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet, s)));
+                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet(), s)));
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
@@ -144,7 +147,9 @@ fn main() {
                 app
             },
         );
-    harness.run_steps(8);
+    // The workbook's installed fonts bind once the font scan is done; frames past the first few
+    // apply them, so the snapshot shows them as the app does.
+    harness.run_steps(14);
     for (pos, button) in clicks {
         harness.event(egui::Event::PointerMoved(pos));
         harness.run_steps(2);

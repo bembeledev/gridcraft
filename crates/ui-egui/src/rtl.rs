@@ -143,29 +143,57 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// unbounded, which a right-to-left row cannot start from, so the row is given a width (the
 /// view's, or last frame's content if wider) and the scroll position is kept as a distance from
 /// the right, where reading starts. Left to right this is a plain scroll area.
-pub fn scroll_row(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, area: egui::ScrollArea, add: impl FnOnce(&mut Ui)) {
+///
+/// `target` asks for a scroll position (in the usual distance from the left); the area is returned
+/// so the caller can read where it ended up. A row that `fill`s its view starts at the view's right
+/// edge however little it holds (the ribbon); one that does not is as wide as its items (the
+/// sheet tabs, which sit beside a button that follows them).
+pub fn scroll_row(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    area: egui::ScrollArea,
+    target: Option<f32>,
+    fill: bool,
+    add: impl FnOnce(&mut Ui),
+) -> egui::scroll_area::ScrollAreaOutput<()> {
     if !on(ui.ctx()) {
-        area.show(ui, |ui| {
+        let area = match target {
+            Some(x) => area.horizontal_scroll_offset(x),
+            None => area,
+        };
+        return area.show(ui, |ui| {
             ui.horizontal(add);
         });
-        return;
     }
-    let view_w = ui.available_width();
-    let row_id = ui.id().with(("rtl_scroll_row", salt));
-    let (content_w, from_right) = ui.data(|d| d.get_temp::<(f32, f32)>(row_id)).unwrap_or((0.0, 0.0));
+    let row_id = ui.scope_id().with(("rtl_scroll_row", salt));
+    let (content_w, mut from_right) = ui.data(|d| d.get_temp::<(f32, f32)>(row_id)).unwrap_or((0.0, 0.0));
+    let room = ui.available_width();
+    // A row that does not fill its view takes the width of its items (all there is while they are
+    // unknown, or too wide to fit): the area is not left to shrink, because it would shrink towards
+    // the left, away from where the row starts.
+    let view_w = if fill || content_w <= 0.0 { room } else { content_w.min(room) };
     let over = (content_w - view_w).max(0.0);
+    if let Some(x) = target {
+        from_right = (over - x).clamp(0.0, over);
+    }
     let mut measured = content_w;
-    let scroll = area.horizontal_scroll_offset((over - from_right).max(0.0)).show(ui, |ui| {
-        let size = vec2(content_w.max(view_w), ui.available_size_before_wrap().y);
-        measured = ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), add).response.rect.width();
-    });
+    let height = ui.available_size_before_wrap().y;
+    let scroll = ui
+        .allocate_ui_with_layout(vec2(view_w, height), Layout::top_down(Align::Min), |ui| {
+            area.horizontal_scroll_offset((over - from_right).max(0.0)).show(ui, |ui| {
+                let size = vec2(if fill { content_w.max(view_w) } else { content_w }, ui.available_size_before_wrap().y);
+                measured = ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), add).response.rect.width();
+            })
+        })
+        .inner;
     let over_now = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
-    let from_right = (over_now - scroll.state.offset.x).max(0.0).min(over_now);
+    let from_right = (over_now - scroll.state.clamped_offset().x).max(0.0).min(over_now);
     let measured = if measured.is_finite() { measured } else { content_w };
     if (measured - content_w).abs() > 0.5 {
         ui.ctx().request_repaint();
     }
     ui.data_mut(|d| d.insert_temp(row_id, (measured, from_right)));
+    scroll
 }
 
 /// `grid.show(ui, add)`. egui's `Grid` cannot be laid out from the right (it places cells from a
@@ -179,7 +207,7 @@ pub fn grid<R>(ui: &mut Ui, grid: egui::Grid, add: impl FnOnce(&mut Ui) -> R) ->
 /// so a mirrored row puts its text at the right end (`right_text`) instead.
 pub fn item<'a>(ui: &Ui, text: &'a str, min_size: egui::Vec2) -> egui::Button<'a> {
     let button = if flows(ui) { egui::Button::new("").right_text(text) } else { egui::Button::new(text) };
-    button.frame(false).min_size(min_size)
+    button.frame_when_inactive(false).min_size(min_size)
 }
 
 /// `ui.checkbox`, with the box on the side reading starts from: egui always draws it on the left.
@@ -187,9 +215,12 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<egui::WidgetTex
     if !flows(ui) {
         return ui.checkbox(checked, text);
     }
+    let text = text.into();
+    // The box carries no text of its own: name it for assistive technology.
+    let name = text.text().to_owned();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mut mark = ui.checkbox(checked, "");
+        let mut mark = ui.checkbox(checked, "").accessible_name(name);
         let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
         if label.clicked() {
             *checked = !*checked;
@@ -205,9 +236,11 @@ pub fn radio_value<V: PartialEq>(ui: &mut Ui, current: &mut V, alternative: V, t
     if !flows(ui) {
         return ui.radio_value(current, alternative, text);
     }
+    let text = text.into();
+    let name = text.text().to_owned();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mut mark = ui.radio(*current == alternative, "");
+        let mut mark = ui.radio(*current == alternative, "").accessible_name(name);
         let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
         if (mark.clicked() || label.clicked()) && *current != alternative {
             *current = alternative;
@@ -223,9 +256,11 @@ pub fn radio(ui: &mut Ui, selected: bool, text: impl Into<egui::WidgetText>) -> 
     if !flows(ui) {
         return ui.radio(selected, text);
     }
+    let text = text.into();
+    let name = text.text().to_owned();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
-        let mark = ui.radio(selected, "");
+        let mark = ui.radio(selected, "").accessible_name(name);
         let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
         mark.union(label)
     })

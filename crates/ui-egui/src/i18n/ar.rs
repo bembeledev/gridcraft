@@ -1,10 +1,10 @@
 //! Arabic (العربية) translations for the interface strings in i18n.rs.
 //!
 //! Modern Standard Arabic, Western digits, count-neutral wording (`عدد الخلايا: 3`, so no plural
-//! forms are needed). Write every entry in normal typing (logical) order, as in any editor: the
-//! table is put into display order when it first loads ([`super::display`]), because egui lays
-//! words out left to right. Never reorder words by hand here. `{name}` placeholders must appear in
-//! both columns; product, format and key names (GridCraft, PDF, CSV, Enter) stay in Latin letters.
+//! forms are needed). Write every entry in normal typing (logical) order, as in any editor: egui
+//! lays the text out right to left itself, so never reorder words by hand here. `{name}`
+//! placeholders must appear in both columns; product, format and key names (GridCraft, PDF, CSV,
+//! Enter) stay in Latin letters.
 //!
 //! Clean room: every entry was written from the plain meaning of the English label in ordinary
 //! Arabic computing vocabulary. No Microsoft (or other product) localisation, string table or
@@ -1501,19 +1501,70 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
         "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}",
         "يطلب هذا المصنف فتح العنوان التالي. قد تؤدي الارتباطات إلى مواقع ضارة أو تشغيل برامج أخرى: افتحه فقط إذا كنت تثق بالمصنف.\n\n{url}",
     ),
+    // Keys the catalogs gained with GridCraft 0.12 (written from the meaning of the English).
+    ("100% Stacked Area", "مساحي مكدّس 100%"),
+    ("3 Arrows", "3 أسهم"),
+    ("3 Symbols", "3 رموز"),
+    ("3 Traffic Lights", "3 إشارات مرور"),
+    ("4 Ratings", "4 تقييمات"),
+    ("5 Arrows", "5 أسهم"),
+    ("5 Quarters", "5 أرباع"),
+    ("Account", "الحساب"),
+    ("Align with Page Margins", "محاذاة مع هوامش الصفحة"),
+    ("Cell Editor", "محرر الخلية"),
+    ("Circular References", "مراجع دائرية"),
+    ("Convert to Number", "تحويل إلى رقم"),
+    ("Error checking options", "خيارات فحص الأخطاء"),
+    ("Fit selection", "ملاءمة التحديد"),
+    ("Format Chart Area…", "تنسيق منطقة المخطط…"),
+    ("Hex", "Hex"),
+    ("Insert Link", "إدراج ارتباط"),
+    ("Licence", "الترخيص"),
+    ("Maximum Change must be a number of 0 or more.", "يجب أن يكون الحد الأقصى للتغيير رقمًا يساوي 0 أو أكثر."),
+    ("Maximum Change:", "الحد الأقصى للتغيير:"),
+    ("Maximum Iterations must be a whole number from 1 to 32767.", "يجب أن يكون الحد الأقصى للتكرارات عددًا صحيحًا من 1 إلى 32767."),
+    ("Maximum Iterations:", "الحد الأقصى للتكرارات:"),
+    ("More Colors…", "ألوان أخرى…"),
+    ("Name Box", "مربع الاسم"),
+    ("Number Stored as Text", "رقم مخزّن كنص"),
+    ("Paste formulas that refer to the copied cells", "لصق صيغ تشير إلى الخلايا المنسوخة"),
+    ("Platform", "المنصة"),
+    ("Print What", "ما سيُطبع"),
+    ("Product Information", "معلومات المنتج"),
+    ("Recent Colors", "الألوان الأخيرة"),
+    ("Scale with Document", "تغيير الحجم مع المستند"),
+    ("Search commands", "البحث في الأوامر"),
+    // More keys new in 0.12 (written from the meaning of the English).
+    ("Advanced", "خيارات متقدمة"),
+    ("Advanced Filter", "تصفية متقدمة"),
+    ("Arrange\nAll", "ترتيب\nالكل"),
+    ("Check for\nUpdates…", "التحقق من\nالتحديثات…"),
+    ("Close Window", "إغلاق النافذة"),
+    ("Constraint Cell Reference", "مرجع خلية القيد"),
+    ("Constraint Operator", "عامل القيد"),
+    ("Constraint Value", "قيمة القيد"),
+    ("Look for a newer GridCraft release", "البحث عن إصدار أحدث من GridCraft"),
+    ("New\nWindow", "نافذة\nجديدة"),
+    ("Outline Settings", "إعدادات المخطط التفصيلي"),
+    ("Range:", "النطاق:"),
+    ("Remove level", "إزالة المستوى"),
+    ("Row height (points):", "ارتفاع الصف (نقاط):"),
+    ("Select locked cells", "تحديد الخلايا المقفلة"),
+    ("Select unlocked cells", "تحديد الخلايا غير المقفلة"),
+    ("Settings", "الإعدادات"),
+    ("Sort On", "الفرز على"),
+    ("Split tabs", "تقسيم علامات التبويب"),
+    ("Switch\nWindows", "تبديل\nالنوافذ"),
+    ("Windows", "النوافذ"),
+    // From PR #721 (hasan-sdaif): two plain labels, wording kept as submitted.
+    ("Delete columns", "حذف أعمدة"),
+    ("Insert columns", "إدراج أعمدة"),
 ];
 
-/// The Arabic for `text`, in display order, or `None` while it has no entry.
+/// The Arabic for `text`, or `None` while it has no entry.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
-    static DISPLAY: OnceLock<HashMap<&'static str, String>> = OnceLock::new();
-    let table = DISPLAY.get_or_init(|| ENTRIES.iter().map(|(english, arabic)| (*english, super::display::label(arabic))).collect());
-    table.get(text).map(String::as_str)
-}
-
-/// The Arabic for `text` in typing order, for matching what the user types in a search box.
-pub(super) fn logical(text: &str) -> Option<&'static str> {
-    static TYPING: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    TYPING.get_or_init(|| ENTRIES.iter().copied().collect()).get(text).copied()
+    static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    TABLE.get_or_init(|| ENTRIES.iter().copied().collect()).get(text).copied()
 }
 
 #[cfg(test)]
@@ -1552,7 +1603,7 @@ mod tests {
             let indic = |c: char| ('\u{0660}'..='\u{0669}').contains(&c) || ('\u{06F0}'..='\u{06F9}').contains(&c);
             let mark = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
             assert!(!arabic.chars().any(indic), "{english:?} uses Arabic-Indic digits");
-            assert!(!arabic.chars().any(mark), "{english:?} holds a direction mark; the loader adds them");
+            assert!(!arabic.chars().any(mark), "{english:?} holds a direction mark; egui orders the text");
         }
     }
 
@@ -1560,15 +1611,23 @@ mod tests {
     fn every_label_the_other_catalogs_translate_is_translated_here() {
         // Each catalog is Rust source of `"English" => "…"` arms: read their keys from the source,
         // so a label added to any language shows up here until Arabic has it too.
-        const SOURCES: [&str; 9] = [
+        const SOURCES: [&str; 17] = [
             include_str!("cs.rs"),
             include_str!("de.rs"),
+            include_str!("el.rs"),
             include_str!("es.rs"),
             include_str!("fr.rs"),
+            include_str!("it.rs"),
             include_str!("ko.rs"),
+            include_str!("nl.rs"),
+            include_str!("pl.rs"),
             include_str!("pt.rs"),
+            include_str!("ro.rs"),
             include_str!("ru.rs"),
             include_str!("sr.rs"),
+            include_str!("tr.rs"),
+            include_str!("uk.rs"),
+            include_str!("vi.rs"),
             include_str!("zh.rs"),
         ];
         let mut missing = Vec::new();
@@ -1589,10 +1648,9 @@ mod tests {
     }
 
     #[test]
-    fn labels_come_out_in_display_order() {
-        assert_eq!(translate("Freeze Panes"), Some("الأجزاء تجميد"));
-        assert_eq!(translate("Page {page} of {pages}"), Some("{pages} من {page} الصفحة"));
-        assert_eq!(logical("Freeze Panes"), Some("تجميد الأجزاء"));
+    fn labels_are_kept_in_typing_order() {
+        assert_eq!(translate("Freeze Panes"), Some("تجميد الأجزاء"));
+        assert_eq!(translate("Page {page} of {pages}"), Some("الصفحة {page} من {pages}"));
         assert_eq!(translate("Sheet1!A1"), None);
     }
 }

@@ -1,7 +1,8 @@
 //! Counts drawing occurrences per worksheet before import and after export. It intentionally
 //! does not compare geometry, styles, relationship IDs or shared media part names.
 
-use super::{Category, Diffs, MAX_ENTRIES, MAX_XML_PART, Zip, part_key, resolve_target};
+use super::package::{MAX_ENTRIES, MAX_XML_PART, Zip, part_key, resolve_target};
+use super::{Category, Diffs};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 

@@ -10,6 +10,11 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn editing(formula: &str) -> Harness {
+    editing_with(formula, |_| {})
+}
+
+/// `editing`, with `setup` run on the app before the edit starts.
+fn editing_with(formula: &str, setup: impl FnOnce(&mut SheetApp)) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "C1", "input": formula})).unwrap();
@@ -23,6 +28,8 @@ fn editing(formula: &str) -> Harness {
         SheetApp::new(session, Default::default()),
     );
     h.run_steps(4);
+    setup(h.state_mut());
+    h.run_steps(2);
     // F2: edit the existing formula, caret at the end (not in point mode).
     h.state_mut().begin_edit(None, false);
     h.run_steps(2);
@@ -47,6 +54,10 @@ fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
 
 fn drag_with(h: &mut Harness, button: PointerButton, from: Pos2, to: Pos2) {
     let moves = if from == to { vec![] } else { vec![Event::PointerMoved(from + egui::vec2(6.0, 6.0)), Event::PointerMoved(to)] };
+    send(h, button, from, to, moves);
+}
+
+fn send(h: &mut Harness, button: PointerButton, from: Pos2, to: Pos2, moves: Vec<Event>) {
     let press = Event::PointerButton { pos: from, button, pressed: true, modifiers: Modifiers::NONE };
     let release = Event::PointerButton { pos: to, button, pressed: false, modifiers: Modifiers::NONE };
     for event in [Event::PointerMoved(from), press].into_iter().chain(moves).chain([release]) {
@@ -115,4 +126,41 @@ fn a_right_drag_leaves_the_reference_alone() {
     let (from, to) = (center(&h, "B5"), center(&h, "B4"));
     drag_with(&mut h, PointerButton::Secondary, from, to);
     assert!(!text(&h).contains("B4"), "only the primary button drags a reference");
+}
+
+#[test]
+fn a_drag_released_right_after_one_move_still_moves_the_reference() {
+    let mut h = editing("=A1*B5");
+    let (from, to) = (center(&h, "B5"), center(&h, "B3"));
+    send(&mut h, PointerButton::Primary, from, to, vec![Event::PointerMoved(to)]);
+    assert_eq!(text(&h), "=A1*B3");
+}
+
+#[test]
+fn a_released_reference_stays_put_and_the_next_click_commits() {
+    let mut h = editing("=A1*B5");
+    let (from, to) = (center(&h, "B5"), center(&h, "B3"));
+    drag(&mut h, from, to);
+    let at = center(&h, "E8");
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(2);
+    assert_eq!(text(&h), "=A1*B3", "the reference no longer follows the pointer");
+    drag(&mut h, at, at);
+    assert!(h.state().editor.is_none(), "a click after the drag commits the edit");
+}
+
+#[test]
+fn a_reference_scrolled_under_frozen_rows_is_not_grabbed_there() {
+    // Row 1 frozen, scrolled two rows: B3:B10 is drawn under the frozen B1, but isn't in that pane.
+    let mut h = editing_with("=SUM(B3:B10)", |app| {
+        app.session.run("view.freezeTopRow", json!({})).unwrap();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let rows = (sheet.row_top(3) - sheet.row_top(1)) as f32;
+        app.view_mut().unwrap().scroll.y = rows;
+    });
+    let b1 = rect(&h, "B1");
+    assert!(rect(&h, "B3:B10").contains(b1.center()), "the range lies under B1");
+    let to = b1.center() + egui::vec2(0.0, b1.height() * 4.0);
+    drag(&mut h, b1.center(), to);
+    assert!(h.state().editor.is_none() || text(&h) == "=SUM(B3:B10)", "got {}", text(&h));
 }

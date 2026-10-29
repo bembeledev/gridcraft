@@ -675,7 +675,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 scroll_by(app, auto);
             }
             drag @ Drag::Ref { .. } => {
-                move_ref(app, drag, pc);
+                app.grid.drag = move_ref(app, drag, pc);
                 scroll_by(app, auto);
             }
             Drag::Object { kind, id, start, orig, resize } => {
@@ -753,6 +753,12 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::MoveCols { source, before: Some(before) } => {
                 if let Err(e) = app.run("sheet.moveColumns", json!({"cols": source.a1(), "before": before})) {
                     app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                }
+            }
+            // A drag released one frame after it started has had no move to apply yet.
+            drag @ Drag::Ref { .. } => {
+                if let Some(p) = pos {
+                    move_ref(app, drag, drag_cell(geo, sh, p));
                 }
             }
             _ => {}
@@ -899,33 +905,34 @@ fn drag_cell(geo: &Geo, sh: &Sheet, p: Pos2) -> CellRef {
     )
 }
 
-/// Rewrites the dragged reference for the pointer over `pc`.
-fn move_ref(app: &mut SheetApp, drag: Drag, pc: CellRef) {
-    let Drag::Ref { span, grab, orig, anchor } = drag else { return };
+/// Rewrites the dragged reference for the pointer over `pc` and returns the drag with its new span.
+fn move_ref(app: &mut SheetApp, drag: Drag, pc: CellRef) -> Drag {
+    let Drag::Ref { span, grab, orig, anchor } = drag else { return drag };
     let (dr, dc) = (pc.row as i64 - grab.row as i64, pc.col as i64 - grab.col as i64);
     // Moving keeps the size, so it stops at the sheet's edge.
     let to = match anchor {
         Some(a) => Some(RangeRef::new(a, pc)),
         None => orig.start.offset(dr, dc).zip(orig.end.offset(dr, dc)).map(|(s, e)| RangeRef::new(s, e)),
     };
-    if let Some(to) = to
-        && let Some(span) = app.editor.as_mut().and_then(|ed| ed.replace_ref(span, to))
-    {
-        app.grid.drag = Drag::Ref { span, grab, orig, anchor };
-    }
+    let span = to.and_then(|to| app.editor.as_mut().and_then(|ed| ed.replace_ref(span, to))).unwrap_or(span);
+    Drag::Ref { span, grab, orig, anchor }
 }
 
 /// The coloured reference (of the formula being edited) under `p`: its span, range and, on a
 /// corner, the opposite corner to resize around. Its border always grabs it; its inside only
 /// outside point mode, where a drag inside a cell points a new range instead. Whole rows and
-/// columns aren't draggable.
+/// columns aren't draggable, and a reference only counts in the panes that show it.
 pub(super) fn ref_hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Drag> {
     let ed = app.editor.as_ref().filter(|ed| ed.is_formula())?;
     let inside = !ed.can_point();
     let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
     let grab = geo.cell_at(sh, p);
     crate::editor::formula_refs(&ed.text).into_iter().find_map(|(start, end, r, sheet, _)| {
-        if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) || r.is_full_rows() || r.is_full_cols() {
+        if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name)
+            || r.is_full_rows()
+            || r.is_full_cols()
+            || !geo.range_panes(r).iter().any(|pane| pane.contains(p))
+        {
             return None;
         }
         let rr = geo.range_rect(sh, r);

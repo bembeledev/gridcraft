@@ -1052,10 +1052,15 @@ fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
     fill(&mut s, "S1:S2", "S1:S6", "growthTrend").unwrap();
     let Value::Number(s6) = v(&s, "S6") else { panic!("S6 is {:?}", v(&s, "S6")) };
     assert!((s6 / 1e300 - 1.0).abs() < 1e-9, "S6 = {s6}");
-    // Two numbers near the largest double repeat without their sum overflowing.
-    s.execute("range.setValues", json!({"range": "T1", "values": [[1e308], [1e308]]})).unwrap();
+    // Numbers near the largest double continue their line without a sum overflowing: two equal
+    // numbers repeat, and 1e308 four times then 0 fit a step of -2e307 and continue at 2e307.
+    s.execute("range.setValues", json!({"range": "T1", "values": [[1e308, 1e308], [1e308, 1e308], [0, 1e308], [0, 1e308], [0, 0]]})).unwrap();
     fill(&mut s, "T1:T2", "T1:T3", "linearTrend").unwrap();
-    assert_eq!(v(&s, "T3"), Value::Number(1e308));
+    fill(&mut s, "U1:U5", "U1:U6", "linearTrend").unwrap();
+    for (cell, want) in [("T3", 1e308), ("U6", 2e307)] {
+        let Value::Number(got) = v(&s, cell) else { panic!("{cell} is {:?}", v(&s, cell)) };
+        assert!((got / want - 1.0).abs() < 1e-9, "{cell} = {got}");
+    }
     // A lone number repeats, and dates a month apart step by their days, not by months.
     s.execute("cell.set", json!({"cell": "M1", "input": "7"})).unwrap();
     fill(&mut s, "M1", "M1:M2", "linearTrend").unwrap();

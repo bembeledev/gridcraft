@@ -528,20 +528,27 @@ impl Pattern {
     }
 }
 
+/// 2^600 and 2^-600, both exact.
+const TWO_POW_600: f64 = f64::from_bits((1023 + 600) << 52);
+const TWO_POW_MINUS_600: f64 = f64::from_bits((1023 - 600) << 52);
+
 /// The least-squares line through `nums` at positions 0, 1, 2…: its values at the first and last
-/// positions, and its step. A lone number gives a step of zero.
+/// positions, and its step. A lone number gives a step of zero. When a number is larger than 2^600,
+/// the fit runs on the numbers multiplied by 2^-600 and its results are multiplied by 2^600, so the
+/// sums stay finite for numbers up to the largest double.
 fn least_squares(nums: &[f64]) -> (f64, f64, f64) {
+    let (down, up) = if nums.iter().any(|y| y.abs() > TWO_POW_600) { (TWO_POW_MINUS_600, TWO_POW_600) } else { (1.0, 1.0) };
     let n = nums.len() as f64;
     let mean_x = (n - 1.0) / 2.0;
-    let mean_y = nums.iter().map(|y| y / n).sum::<f64>();
+    let mean_y = nums.iter().map(|y| y * down / n).sum::<f64>();
     let mut num = 0.0;
     let mut den = 0.0;
     for (i, y) in nums.iter().enumerate() {
-        num += (i as f64 - mean_x) * (y - mean_y);
+        num += (i as f64 - mean_x) * (y * down - mean_y);
         den += (i as f64 - mean_x).powi(2);
     }
     let step = if den == 0.0 { 0.0 } else { num / den };
-    (mean_y - step * mean_x, mean_y + step * (n - 1.0 - mean_x), step)
+    ((mean_y - step * mean_x) * up, (mean_y + step * (n - 1.0 - mean_x)) * up, step * up)
 }
 
 /// Whether `serial` falls on Monday to Friday; `None` outside the supported date range.

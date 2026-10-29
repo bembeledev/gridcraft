@@ -512,7 +512,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     // Recent Colors: the custom colours picked below, newest first.
     let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
     if !recent.is_empty() {
-        ui.label(egui::RichText::new("Recent Colors").small());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Recent Colors")).small());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for hex in &recent {
@@ -532,7 +532,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     if more_colors {
         ui.separator();
     }
-    if more_colors && ui.button("More Colors…").clicked() {
+    if more_colors && ui.button(crate::i18n::current(ui.ctx()).tr("More Colors…")).clicked() {
         let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
         more = Some(MoreColors::new(start));
     }

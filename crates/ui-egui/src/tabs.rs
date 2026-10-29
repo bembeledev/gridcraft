@@ -75,9 +75,16 @@ fn dragged_share(x: f32, bar: (f32, f32), right: f32) -> f32 {
     ((x - left) / width).clamp(min, max)
 }
 
+/// `x` as it would be in a left-to-right bar: in a mirrored window the tabs start at the bar's right
+/// edge, so a point's distance from that edge is what [`dragged_share`] measures.
+fn from_leading_edge(rtl: bool, bar: (f32, f32), x: f32) -> f32 {
+    if rtl { 2.0 * bar.0 + bar.1 - x } else { x }
+}
+
 /// The handle at the left edge of the horizontal scrollbar: dragging it gives the sheet tabs more
 /// or less of the bar, as in Excel, for the workbook `uid`.
 fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32), right: f32, uid: u64, t: &Tokens) {
+    let rtl = crate::rtl::on(ui.ctx());
     app.grid.tab_split = Some(split);
     let resp = ui.interact(split, ui.scope_id().with("tab_split"), Sense::drag());
     let name = app.ui.language.tr("Split tabs");
@@ -88,7 +95,7 @@ fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32
     if resp.dragged()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        app.grid.tab_shares.insert(uid, dragged_share(p.x - SPLIT_WIDTH / 2.0, bar, right));
+        app.grid.tab_shares.insert(uid, dragged_share(from_leading_edge(rtl, bar, p.x) - SPLIT_WIDTH / 2.0, bar, right));
         ui.ctx().request_repaint();
     }
     let color = if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled };
@@ -132,7 +139,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 let uid = d.uid;
                 // The track ends where the grid does, so it stops under the vertical scrollbar. A share
                 // dragged in a wider window is held to the same limits as a drag at this width.
-                let bar_right = app.grid.rect.map_or(bar_left + bar_width, |r| r.right()).min(bar_left + bar_width);
+                // In a mirrored window the track runs to the far (left) end of the bar, which no scrollbar crosses.
+                let bar_right =
+                    if rtl { bar_left + bar_width } else { app.grid.rect.map_or(bar_left + bar_width, |r| r.right()).min(bar_left + bar_width) };
                 let share = app.grid.tab_shares.get(&uid).map(|&share| dragged_share(bar_left + bar_width * share, (bar_left, bar_width), bar_right));
                 let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
                     d.wb.sheets
@@ -313,11 +322,20 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 let right = app.grid.rect.map_or(avail.right(), |r| r.right()).min(avail.right());
                 // The handle sits at the track's left edge. With a dragged share, the room the tabs
                 // don't fill stays empty before it.
-                let split_left =
-                    share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()));
+                let split_left = if rtl {
+                    // The tabs start at the right edge, so the handle sits at their far end and the track runs left from it.
+                    let end = avail.right() - SPLIT_WIDTH;
+                    share.map_or(end, |share| (bar_left + bar_width * (1.0 - share) - SPLIT_WIDTH).max(avail.left() + MIN_TRACK).min(end))
+                } else {
+                    share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()))
+                };
                 let split = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_left + SPLIT_WIDTH, avail.bottom()));
-                tab_split_handle(app, ui, split, (bar_left, bar_width), right, uid, &t);
-                let track = Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
+                tab_split_handle(app, ui, split, (bar_left, bar_width), bar_right, uid, &t);
+                let track = if rtl {
+                    Rect::from_min_max(pos2(avail.left(), avail.center().y - 7.0), pos2(split.left(), avail.center().y + 7.0))
+                } else {
+                    Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0))
+                };
                 crate::grid::horizontal_scrollbar(app, ui, track, &t);
             });
         })
@@ -511,7 +529,8 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop,
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, from_leading_edge, navigator_items,
+        rename_needs_focus, tab_drop,
     };
     use crate::SheetApp;
     use egui::Modifiers;
@@ -621,6 +640,20 @@ mod tests {
         assert_eq!(app.session.active().unwrap().wb.active_sheet(), 1, "the corrected value commits and the sheet changes");
         let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
         assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
+    }
+
+    #[test]
+    fn in_a_mirrored_bar_the_share_is_measured_from_the_right_edge() {
+        let bar = (100.0, 1000.0);
+        // The handle's right edge at x = 300 leaves the tabs 800 of the bar's 1000 points, from the right.
+        let x = from_leading_edge(true, bar, 300.0 - SPLIT_WIDTH / 2.0) - SPLIT_WIDTH / 2.0;
+        assert_eq!(dragged_share(x, bar, 1100.0), 0.8);
+        // Dragged all the way to the left end, the track keeps its minimum.
+        let x = from_leading_edge(true, bar, 100.0) - SPLIT_WIDTH / 2.0;
+        assert_eq!(dragged_share(x, bar, 1100.0), (1000.0 - SPLIT_WIDTH - MIN_TRACK) / 1000.0);
+        // To the right end, New sheet stays shown.
+        assert_eq!(dragged_share(from_leading_edge(true, bar, 1100.0), bar, 1100.0), NEW_SHEET_WIDTH / 1000.0);
+        assert_eq!(from_leading_edge(false, bar, 300.0), 300.0, "left to right is unchanged");
     }
 
     #[test]

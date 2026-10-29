@@ -138,3 +138,66 @@ fn local_names_match_aliases_in_any_case_like_the_evaluator() {
     assert!(!gridcraft_formula::same_name("ı", "I"));
     assert!(!gridcraft_formula::same_name("a", "b"));
 }
+
+#[test]
+fn every_spanish_function_name_round_trips() {
+    let es = FormulaLocale::Es;
+    let pairs = gridcraft_formula::spanish_function_names();
+    for &(en, name) in pairs {
+        // Typed in Spanish (any case) it is stored in English, and it is shown in Spanish again.
+        for typed in [name.to_string(), name.to_lowercase()] {
+            let expr = parse_input(&format!("={typed}(1;2,5)"), es, |_| false).unwrap_or_else(|e| panic!("{typed}: {e:?}"));
+            assert_eq!(print(&expr), format!("{en}(1,2.5)"), "{typed}");
+            assert_eq!(print_input(&expr, es, |_| false).unwrap(), format!("{name}(1;2,5)"), "{typed}");
+        }
+        assert_eq!(es.function_name(en), name);
+        assert_eq!(es.canonical_name(name), en);
+    }
+    // One row per function, and no Spanish name stands for two functions.
+    let mut english: Vec<&str> = pairs.iter().map(|p| p.0).collect();
+    let mut spanish: Vec<String> = pairs.iter().map(|p| p.1.to_uppercase()).collect();
+    english.sort_unstable();
+    spanish.sort_unstable();
+    let count = pairs.len();
+    english.dedup();
+    spanish.dedup();
+    assert_eq!((english.len(), spanish.len()), (count, count));
+    // A Spanish name that is also an English one stands for the function Spanish Excel means.
+    assert_eq!(input("DECIMAL(1,5;1)"), "FIXED(1.5,1)");
+    assert_eq!(input("CONV.DECIMAL(\"FF\";16)"), "DECIMAL(\"FF\",16)");
+    // English names still work when they are not Spanish names of something else.
+    assert_eq!(input("SUM(1;2)+BUSCARX(1;A:A;B:B)+año(HOY())"), "SUM(1,2)+XLOOKUP(1,A:A,B:B)+YEAR(TODAY())");
+}
+
+#[test]
+fn a_function_given_by_name_as_an_argument_is_translated() {
+    let es = FormulaLocale::Es;
+    assert_eq!(input("MAP({1;4};RAIZ)"), "MAP({1;4},SQRT)");
+    assert_eq!(input("BYROW(A1:B2;suma)"), "BYROW(A1:B2,SUM)");
+    assert_eq!(print_input(&parse("MAP({1;4},SQRT)").unwrap(), es, |_| false).unwrap(), "MAP({1;4};RAIZ)");
+    // Bindings, defined names, booleans and names that are no function's keep their spelling.
+    assert_eq!(input("LET(RAIZ;LAMBDA(x;x);MAP(A1:A2;RAIZ))"), "LET(RAIZ,LAMBDA(x,x),MAP(A1:A2,RAIZ))");
+    assert_eq!(print(&parse_input("MAP(A1:A2;RAIZ)", es, |n| n == "RAIZ").unwrap()), "MAP(A1:A2,RAIZ)");
+    assert_eq!(input("SI(FALSO;total;1)"), "IF(FALSE,total,1)");
+    let shown = print_input(&parse("LET(RAIZ,1,MAP(A1:A2,SQRT))").unwrap(), es, |_| false).unwrap();
+    assert_eq!(shown, "LET(RAIZ;1;MAP(A1:A2;SQRT))");
+    assert_eq!(print(&parse_input(&shown, es, |_| false).unwrap()), "LET(RAIZ,1,MAP(A1:A2,SQRT))");
+    // A bare name outside an argument list stays a name.
+    assert_eq!(input("RAIZ+1"), "RAIZ+1");
+}
+
+#[test]
+fn a_shadowed_alias_never_reads_back_as_another_function() {
+    let es = FormulaLocale::Es;
+    // DECIMAL (the base converter) is CONV.DECIMAL in Spanish; with CONV.DECIMAL bound, the
+    // English DECIMAL would read back as FIXED, so the formula is not shown in Spanish.
+    for english in ["LET(CONV.DECIMAL,1,DECIMAL(\"FF\",16)+CONV.DECIMAL)", "LET(CONV.DECIMAL,1,MAP(A1:A2,DECIMAL))"] {
+        assert!(print_input(&parse(english).unwrap(), es, |_| false).is_err(), "{english}");
+    }
+    // FIXED keeps its English name when DECIMAL is bound, and reads back as FIXED.
+    let expr = parse("LET(DECIMAL,1,FIXED(1.5,1)&DECIMAL)").unwrap();
+    let shown = print_input(&expr, es, |_| false).unwrap();
+    assert_eq!(shown, "LET(DECIMAL;1;FIXED(1,5;1)&DECIMAL)");
+    assert_eq!(print(&parse_input(&shown, es, |_| false).unwrap()), print(&expr));
+    assert_eq!(es.function_name("COVARIANCE.P"), "COVARIANZA.P");
+}

@@ -24,6 +24,7 @@ mod pivotchart_link;
 mod range_fill_formats;
 mod row_autofit;
 mod sheet_name_quoting;
+mod spanish_function_names;
 mod sparse_clear_invalidation;
 mod stored_list_shape;
 mod table_resize_overlap;

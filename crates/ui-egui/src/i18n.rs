@@ -187,6 +187,7 @@ impl Language {
         }
     }
 
+    /// Selects formula syntax for the interface language; languages without alias tables use English.
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         match self {
             Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
@@ -233,6 +234,8 @@ impl Language {
         self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))
     }
 
+    /// Translates known fixed or templated diagnostics after removing engine command wrappers.
+    /// Unrecognized messages retain their cleaned text, and captured user data stays literal.
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
             crate::clean_error(message)
@@ -544,6 +547,7 @@ mod tests {
 #[cfg(test)]
 mod russian_tests {
     use super::*;
+    /// Checks Russian diagnostics remove command wrappers while preserving captured names and unknown messages.
     #[test]
     fn russian_error_messages_preserve_data_and_clean_command_wrappers() {
         let ru = Language::Ru;

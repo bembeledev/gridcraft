@@ -124,6 +124,8 @@ fn spelling_prefix<'a>(source: &'a str, spelling: &str) -> &'a str {
     source.get(..end).unwrap_or("")
 }
 
+/// Consumes a canonical or localized error literal and records its original UTF-8 byte span.
+/// Returns the next character index, or a lexical error for an unknown error spelling.
 fn error_literal(
     src: &str,
     chars: &[(usize, char)],
@@ -228,6 +230,8 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
     Ok(j)
 }
 
+/// Emits a word, function, Boolean, or sheet token using the locale and array context.
+/// Returns the character index immediately after the consumed token.
 fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, i: usize, start: usize, out: &mut Vec<Token>) -> usize {
     let ch = |index| char_at(chars, index);
     let mut j = i;
@@ -264,6 +268,7 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
     }
 }
 
+/// Whether the colon begins a sheet-range qualifier rather than a cell range or array delimiter.
 fn sheet_range_end(chars: &[(usize, char)], locale: crate::FormulaLocale, array_depth: usize, value: &str, colon: usize, out: &[Token]) -> bool {
     let ch = |index| char_at(chars, index);
     let mut end = colon + 1;
@@ -404,6 +409,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
 
 #[cfg(test)]
 mod error_prefix_tests {
+    /// Checks error-token spans when equivalent case variants occupy different UTF-8 byte lengths.
     #[test]
     fn literal_prefixes_do_not_assume_equal_utf8_case_lengths() {
         assert_eq!(super::spelling_prefix("#id!+1", "#İD!"), "#id!");

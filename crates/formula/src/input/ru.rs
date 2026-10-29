@@ -233,6 +233,7 @@ pub(super) const ERRORS: &[(gridcraft_core::CellError, &str)] = &[
 mod tests {
     use super::*;
     use crate::FormulaLocale;
+    /// Checks every Russian alias for unique canonical/folded names and parse/print round trips.
     #[test]
     fn every_russian_alias_is_unique_and_round_trips() {
         let mut canonical = std::collections::HashSet::new();

@@ -30,6 +30,7 @@ pub(super) fn format_message(message: &str, language: super::Language) -> Option
     translate_template(message, language)
 }
 
+/// Tries translated templates in order and returns the first whole-message match.
 fn translate_template(message: &str, language: super::Language) -> Option<String> {
     TEMPLATES.iter().find_map(|source| fill(message, source, language.translation(source)?, language))
 }
@@ -72,6 +73,7 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
 mod tests {
     use super::*;
 
+    /// Checks captured parameters remain literal and partial or unknown messages are not translated.
     #[test]
     fn parameters_are_literal_and_messages_are_anchored() {
         assert_eq!(format_message("bad number `abc`", super::super::Language::En), None);
@@ -92,6 +94,7 @@ mod tests {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+    /// Checks every available template translation preserves the source set of named placeholders.
     #[test]
     fn translated_templates_preserve_slots_for_every_catalog() {
         let names = |text: &str| {
@@ -108,6 +111,7 @@ mod contract_tests {
         }
     }
 
+    /// Checks real canonical parser errors are translated only at the UI boundary.
     #[test]
     fn actual_parser_diagnostics_are_translated_without_changing_the_parser() {
         for input in ["=1+", "=#UNKNOWN!", "=1e999", "=SUM(1;2)", "=SUM({1;})"] {

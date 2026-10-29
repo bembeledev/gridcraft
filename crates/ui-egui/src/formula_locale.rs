@@ -3,6 +3,8 @@ use crate::i18n::Language;
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
+/// Converts editor input to canonical engine syntax using the selected formula locale.
+/// Preserves quoted text and explicit Text formatting, and resolves workbook names before aliases.
 pub(crate) fn canonical(
     text: &str,
     locale: FormulaLocale,
@@ -46,10 +48,13 @@ pub(crate) fn canonical(
     Ok(text.to_string())
 }
 
+/// Recognizes explicit formulas and signed expression starts without treating ordinary signed numbers as formulas.
 fn is_formula_entry(text: &str) -> bool {
     text.starts_with('=') || ((text.starts_with('+') || text.starts_with('-')) && text.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
 }
 
+/// Localizes a stored canonical formula for display, preserving the original text on parse failure.
+/// Workbook names keep precedence over aliases; user-defined call prefixes are hidden for presentation.
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
     // English (and every language without a formula table) shows the stored text, `_xludf.`
     // prefixes aside, and skips a parse per frame.
@@ -220,6 +225,7 @@ mod tests {
 #[cfg(test)]
 mod russian_help_tests {
     use super::*;
+    /// Checks Russian help combines current catalog signatures with the chosen formula syntax.
     #[test]
     fn russian_help_uses_catalog_signature_and_selected_syntax() {
         let translated_number = Language::Ru.function_argument("number").unwrap();

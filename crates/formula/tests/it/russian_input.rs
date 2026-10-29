@@ -1,9 +1,11 @@
 use gridcraft_formula::{FormulaLocale, parse, parse_input, print, print_input};
 
+/// Parses Russian input without workbook-defined names and prints canonical file syntax.
 fn input(src: &str) -> String {
     print(&parse_input(src, FormulaLocale::Ru, |_| false).unwrap())
 }
 
+/// Checks Russian aliases, case folding, and argument separators against canonical formulas.
 #[test]
 fn russian_aliases_and_argument_separators() {
     for (src, expected) in [
@@ -30,6 +32,7 @@ fn russian_aliases_and_argument_separators() {
     }
 }
 
+/// Checks that Russian entry retains sheet, structured-reference, and array semantics.
 #[test]
 fn russian_input_preserves_reference_and_array_syntax() {
     for (src, expected) in [
@@ -48,6 +51,7 @@ fn russian_input_preserves_reference_and_array_syntax() {
     assert!(parse("{ИСТИНА}").is_err());
 }
 
+/// Checks workbook names and LET/LAMBDA bindings take precedence over translated aliases.
 #[test]
 fn russian_input_preserves_defined_and_local_names() {
     let known = |name: &str| ["СУММ", "ЛОЖЬ"].iter().any(|n| n.to_lowercase() == name.to_lowercase());
@@ -63,6 +67,7 @@ fn russian_input_preserves_defined_and_local_names() {
     }
 }
 
+/// Checks the locale supplies decimal, argument, array-row, and array-column separators.
 #[test]
 fn russian_locale_controls_decimal_list_array_separators_and_display() {
     let ru = FormulaLocale::Ru;
@@ -82,6 +87,7 @@ fn russian_locale_controls_decimal_list_array_separators_and_display() {
     assert_eq!(print(&parse_input(&shown, ru, |_| false).unwrap()), print(&expr));
 }
 
+/// Checks separators inside quoted text survive localized printing and reparsing.
 #[test]
 fn russian_display_round_trips_text_containing_separators() {
     let ru = FormulaLocale::Ru;
@@ -91,6 +97,7 @@ fn russian_display_round_trips_text_containing_separators() {
     assert_eq!(print(&parse_input(&shown, ru, |_| false).unwrap()), print(&expr));
 }
 
+/// Checks the public Russian alias mappings do not collide after locale case folding.
 #[test]
 fn russian_table_has_unique_names() {
     let mut seen = std::collections::HashSet::new();
@@ -103,6 +110,7 @@ fn russian_table_has_unique_names() {
     assert_eq!(FormulaLocale::Ru.canonical_name("UNKNOWN"), "UNKNOWN");
 }
 
+/// Checks Unicode LET/LAMBDA names retain their existing case-insensitive identity.
 #[test]
 fn russian_bound_names_keep_unicode_case_identity() {
     assert_eq!(input("LET(ЛОЖЬ;7;ложь)"), "LET(ЛОЖЬ,7,ложь)");
@@ -111,6 +119,7 @@ fn russian_bound_names_keep_unicode_case_identity() {
     assert_eq!(FormulaLocale::Ru.canonical_name("поискпозx"), "XMATCH");
 }
 
+/// Checks localized error literals round-trip while canonical file spellings remain accepted.
 #[test]
 fn russian_errors_parse_print_and_preserve_canonical_file_syntax() {
     use gridcraft_core::CellError;
@@ -130,6 +139,7 @@ fn russian_errors_parse_print_and_preserve_canonical_file_syntax() {
     assert_eq!(input("\"#ССЫЛКА!\""), "\"#ССЫЛКА!\"");
 }
 
+/// Checks long flat formulas remain valid without consuming recursive nesting depth.
 #[test]
 fn russian_locale_keeps_flat_chains_iterative() {
     let source = std::iter::repeat_n("СУММ(1)", 400).collect::<Vec<_>>().join("+");

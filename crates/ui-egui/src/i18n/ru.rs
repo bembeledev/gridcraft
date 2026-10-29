@@ -1,5 +1,7 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Looks up a Russian interface label or diagnostic template by its English catalog key.
+/// Returns `None` for unknown keys so the shared lookup can apply its English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",

@@ -231,6 +231,7 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+/// Checks Russian editor entry and display survive XLSX round trips while engine/API syntax stays canonical.
 #[test]
 fn russian_entry_roundtrips_through_xlsx_and_keeps_api_canonical() {
     let mut app = app();
@@ -249,6 +250,7 @@ fn russian_entry_roundtrips_through_xlsx_and_keeps_api_canonical() {
     assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
 }
 
+/// Checks localized Boolean/error values and similar literal text retain their types through editing.
 #[test]
 fn russian_constants_and_literal_text_do_not_change_type_when_edited() {
     let mut app = app();
@@ -270,6 +272,7 @@ fn russian_constants_and_literal_text_do_not_change_type_when_edited() {
     }
 }
 
+/// Checks Russian autocomplete and argument insertion place the caret at valid Unicode positions.
 #[test]
 fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
     use gridcraft_engine::formula::FormulaLocale;
@@ -286,6 +289,7 @@ fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
     assert!(editor.text.contains(Language::Ru.function_argument("value").unwrap()));
 }
 
+/// Checks explicit Text formatting protects localized-looking input in both supported translated syntaxes.
 #[test]
 fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
     for code in ["es", "ru"] {

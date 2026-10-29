@@ -47,6 +47,7 @@ fn normalize_function_case(name: &str, fold: fn(&str) -> String) -> String {
 }
 
 impl FormulaLocale {
+    /// Returns the static syntax tables and alias cache for this formula locale.
     fn data(self) -> &'static LocaleData {
         match self {
             Self::En => &en::DATA,
@@ -72,6 +73,7 @@ impl FormulaLocale {
         self.data().separators.array_row
     }
 
+    /// Whether a character separates either rows or columns in a localized array constant.
     pub(crate) fn is_array_separator(self, character: char) -> bool {
         character == self.array_column_separator() || character == self.array_row_separator()
     }
@@ -185,6 +187,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     Ok(out)
 }
 
+/// Resolves a localized Boolean alias; English literals are handled by the canonical parser.
 pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
     if locale == FormulaLocale::En {
         return None;
@@ -196,6 +199,8 @@ pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
     }
 }
 
+/// Rewrites aliases between canonical and display forms while preserving workbook and local bindings.
+/// Bounds nested expressions and walks flat binary chains iteratively; display selects the direction.
 fn normalize(
     expr: &mut Expr,
     locale: FormulaLocale,
@@ -292,9 +297,11 @@ fn normalize(
 mod case_rule_tests {
     use super::normalize_function_case;
 
+    /// Verifies token normalization preserves distinctions required by a locale-specific case fold.
     #[test]
     fn locale_case_rules_survive_token_normalization() {
         // A data-only example of a case rule where ASCII upper-casing loses information.
+        /// Models dotted-I alias folding to exercise a case distinction lost by ASCII uppercasing.
         fn dotted_i_fold(name: &str) -> String {
             name.chars().flat_map(|c| if c == 'i' { 'İ'.to_uppercase() } else { c.to_uppercase() }).collect()
         }

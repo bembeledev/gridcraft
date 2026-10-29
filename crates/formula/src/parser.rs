@@ -277,6 +277,8 @@ impl Parser {
         Ok(args)
     }
 
+    /// Parses a prefix operand, including localized literals, calls, arrays, and references.
+    /// The surrounding expression controls whether top-level reference unions are permitted.
     fn prefix(&mut self, allow_union: bool) -> Result<Expr, ParseError> {
         match self.next() {
             Tok::Number(n) => Ok(Expr::Number(n)),
